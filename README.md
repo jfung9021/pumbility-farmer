@@ -1,49 +1,85 @@
 # Pumbility Farmer
 
-Pumbility Farmer is a PIU Phoenix 2 scoring-difficulty analyzer and Vercel web UI. It produces completely independent Singles and Doubles rankings for every official chart at level 20 or above. Player baselines and top-100 ranks use each eligible player's complete mode history, including levels below 20.
+Pumbility Farmer is a PIU Phoenix 1 and Phoenix 2 scoring-difficulty analyzer and Vercel web UI. The version toggle selects an independent dataset. Phoenix 1 is a frozen, privacy-safe chart aggregate generated on August 7, 2026; it is never refreshed. Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Within either version, Singles and Doubles rankings are completely independent. Player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 20.
 
 ## Analysis method
 
 Each mode is processed separately:
 
 1. Deduplicate to a player's best score per chart.
-2. Rank that player's valid scores within Singles or Doubles by Pumbility.
-3. Require at least 30 scores in that mode.
+2. Exclude broken, non-finite, zero, and negative Pumbility rows, then rank the
+   remaining scores within Singles or Doubles.
+3. Require at least 30 positive-Pumbility scores in that mode.
 4. Use the mean of ranks 11–30 as the player's mode-specific skill baseline.
-5. Retain only ranks 1–100 from that player and mode for chart analysis.
+5. Select both the top 20% of that player's valid scores by Pumbility and the
+   most recent 20% by `recordedAt` within the mode. The two windows use the same
+   rounded-up per-player limit and are deduplicated by player/chart before chart
+   analysis. If their union contains fewer than 100 scores, use the player's top
+   100 by Pumbility instead (or all available scores when the player has fewer
+   than 100).
 6. Calculate a signed residual between each retained chart and the player's baseline.
 7. Within each mode, compare a chart only with measured charts at the exact same official level; the median chart residual is that folder's reference.
-8. Calibrate residual Pumbility into continuous level units independently for Singles and Doubles.
-9. Anchor the typical official level `L` chart at `L + 0.5` and shrink low-evidence estimates toward that reference.
+8. Estimate Pumbility per level independently for Singles and Doubles by comparing
+   scores from the same player in narrow raw-score bands. Calibration never uses
+   chart residuals and never silently falls back to the former `50` divisor. Its
+   positive empirical scale is version-specific, which supports the larger
+   Phoenix 1 Pumbility scale without applying Phoenix 2 bounds.
+9. Estimate mode-wide empirical-Bayes shrinkage from within-chart noise and
+   between-chart variance.
+10. Anchor the typical official level `L` chart at `L + 0.5` and shrink
+    low-evidence estimates toward that reference.
 
-The displayed difference is:
+The displayed difference uses 40% of the calibrated residual conversion. This
+scales the previous formula's output by `0.8` (`+1.00` becomes `+0.80`):
 
 ```text
-estimated scoring difficulty - (official level + 0.5)
+difficulty difference = -0.4 × shrunk Pumbility residual / Pumbility per level
+estimated scoring difficulty = official level + 0.5 + difficulty difference
 ```
 
 A negative value is easier to score than the typical chart in the same mode and official level. Continuous estimates are not hard-clamped to the official folder, but the `L + 0.5` center and evidence shrinkage mean that an estimate below `L` requires an unusually strong within-folder signal.
 
 The analyzer does not use the chart catalog's existing `scoringLevel` or an existing tier list.
 
-## Relative scoring groups
+## Magnitude bands and relative ranks
 
-Groups are midpoint-percentile deciles within the exact mode and official level. The easiest measured S23 charts are placed in group 1 relative to other S23s, and the hardest measured S23 charts are placed in group 10. Small folders use the same midpoint rule, which avoids labeling either of only two measured charts as an extreme.
+The primary scoring tiers use nine fixed level-unit thresholds. The extreme
+bands begin at `±0.75`, making them more restrictive than the previous `±0.50`
+definition, while Slightly Easy and Slightly Hard preserve detail near Typical.
+
+The bands are not filled by quota: a folder may contain several charts in a band
+or none when its measured charts genuinely have similar scoring difficulty.
+
+| Difficulty difference | Effect band |
+| ---: | --- |
+| `≤ −0.75` | Extremely Easy |
+| `−0.75 to −0.50` | Very Easy |
+| `−0.50 to −0.25` | Easy |
+| `−0.25 to −0.10` | Slightly Easy |
+| `−0.10 to +0.10` | Typical |
+| `+0.10 to +0.25` | Slightly Hard |
+| `+0.25 to +0.50` | Hard |
+| `+0.50 to +0.75` | Very Hard |
+| `≥ +0.75` | Extremely Hard |
+
+Midpoint-percentile deciles remain available as a separate within-folder rank.
+Their labels are deliberately descriptive rather than semantic:
 
 | Within-level percentile | Group |
 | ---: | --- |
-| `0–10%` | Extremely Easy |
-| `10–20%` | Very Easy |
-| `20–30%` | Clearly Easy |
-| `30–40%` | Moderately Easy |
-| `40–50%` | Slightly Easy |
-| `50–60%` | Typical |
-| `60–70%` | Slightly Hard |
-| `70–80%` | Moderately Hard |
-| `80–90%` | Very Hard |
-| `90–100%` | Extremely Hard |
+| `0–10%` | Easiest 10% |
+| `10–20%` | 10–20% percentile |
+| `20–30%` | 20–30% percentile |
+| `30–40%` | 30–40% percentile |
+| `40–50%` | 40–50% percentile |
+| `50–60%` | 50–60% percentile |
+| `60–70%` | 60–70% percentile |
+| `70–80%` | 70–80% percentile |
+| `80–90%` | 80–90% percentile |
+| `90–100%` | Hardest 10% |
 
-The percentile tier and the numerical difficulty answer different questions: the tier shows placement among charts in the folder, while the numerical difference preserves the estimated effect size in level units.
+The percentile and numerical effect answer different questions: percentile shows
+placement in the folder, while the effect band preserves magnitude in level units.
 
 ## Python CLI
 
@@ -63,6 +99,7 @@ Analyze a cached snapshot:
 
 ```bash
 python piu_misgrade_analyzer.py cache \
+  --mix phoenix2 \
   --raw-dir ./piu_phoenix_run/raw \
   --output-dir ./piu_analysis
 ```
@@ -83,6 +120,56 @@ Primary outputs include:
 - `player_baselines_pseudonymous.csv`: separate player-mode baselines with hashed IDs.
 - `folders/*.csv`: one export for every level-20+ folder found in the catalog.
 
+## Private local snapshot and visual analysis
+
+Local methodology work can use privacy-minimized snapshots of Phoenix 2 best scores visible to
+the configured credential. A community-tool key can read only players who explicitly
+shared data with that tool; this is not a global PIU Scores export.
+
+The live local dataset lives under `.local-data/piu-scores/phoenix2/`. Raw player IDs and scores
+are never served to the browser. The local dashboard reads only its chart-level aggregate from
+`analysis/web_results.json`. A legacy Phoenix 2 aggregate at
+`.local-data/piu-scores/analysis/web_results.json` remains readable until it is replaced.
+
+Set the credential in the current PowerShell process and capture a complete snapshot:
+
+```powershell
+$env:PIU_SCORES_API_KEY = "piu_scores_live_..."
+npm run snapshot:local
+Remove-Item Env:PIU_SCORES_API_KEY
+```
+
+`snapshot:local` remains a Phoenix 2 alias. `snapshot:phoenix2` is the only version-specific
+capture command; Phoenix 1 has no update command.
+
+The capture follows every API cursor, uses the shared rate limiter and retry behavior, strips
+profile fields, validates references and uniqueness, and promotes staged files only after the
+snapshot passes validation. An interrupted capture can resume from its private staging file; use
+`python scripts/capture_private_score_snapshot.py --restart` to discard that checkpoint.
+
+Analyze the cached data without network access and launch the existing dashboard:
+
+```powershell
+npm run analyze:local
+npm run dev:local
+```
+
+Use `npm run analyze:phoenix2` explicitly when working on the live version.
+
+Open `http://localhost:3000`. Local mode is enabled by the ignored `.env.local` file. The dashboard
+shows a **Local snapshot** badge and its refresh button reloads the aggregate from disk instead of
+starting a production job. After changing the methodology, run `npm run analyze:local` again and
+click **Reload local results**; another API pull is needed only when fresher score data is desired.
+
+For a fast deterministic iteration, call the cache command directly with `--bootstrap-samples 0`.
+Use the production bootstrap setting before accepting a methodology change. Chart jacket URLs are
+not cached, so images still require network access even though the ranking analysis does not.
+
+The leading dot and Git ignore protect against accidental discovery and commits, not unauthorized
+local access or disk theft. On Windows, `attrib +H .local-data` can additionally hide the directory
+in Explorer, but it is not a security control. Delete `.local-data/piu-scores` to remove all locally
+captured private data.
+
 ## Web application
 
 Install frontend dependencies and build:
@@ -93,18 +180,24 @@ npm run typecheck
 npm run build
 ```
 
-The frontend is a Next.js application. The Python function at `/api/analyze` supports:
+The frontend is a Next.js application. Phoenix 1 loads the versioned public artifact at
+`/data/phoenix1-20260807.json`; `/api/analyze?mix=phoenix1` redirects to that canonical copy.
+Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 
-- `GET /api/analyze`: load the latest successful `AnalysisPayload` from private Vercel Blob.
-- `GET /api/analyze?jobId=...`: load a 24-hour queue-job status from Vercel Runtime Cache.
-- `POST /api/analyze`: return immediately with a queued/existing job. The successful-run cooldown is temporarily disabled.
-- `POST /api/deploy`: accept signed Vercel `deployment.promoted` events and enqueue one full synchronization per production deployment.
+- `GET /api/analyze?mix=phoenix2`: load the latest successful `AnalysisPayload`.
+- `GET /api/analyze?mix=phoenix2&jobId=...`: load a matching 24-hour queue-job status.
+- `POST /api/analyze?mix=phoenix2`: queue or follow a Phoenix 2 refresh.
+- `POST /api/deploy?mix=phoenix2`: accept a signed deployment event for Phoenix 2.
+
+Phoenix 1 POST, cron, deployment, worker, and publisher paths reject updates as archived.
 
 The response contracts are:
 
 ```text
 200 { outcome: "fresh", generatedAtUtc, nextAllowedAtUtc }
 202 { outcome: "started" | "existing", job }
+409 { outcome: "busy", activeMix, error }
+409 { outcome: "archived", archiveUrl, error }
 ```
 
 The `fresh` response shape remains compatible for when the cooldown is restored, but it is not emitted while the successful-run freshness window is zero.
@@ -113,10 +206,12 @@ The browser polls active jobs every two seconds (ten seconds in a hidden tab), d
 
 The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as a private-data backend in Vercel Services; the Next.js UI remains the frontend service. The subscriber uses Vercel Queues through the `vercel://` broker. Vercel Runtime Cache stores job status, and the worker stores only private JSON objects in Vercel Blob:
 
-- `analysis/latest.json` — current aggregate returned through the API.
+- `analysis/phoenix2/latest.json` — current Phoenix 2 aggregate.
 - `analysis/private/phoenix2-current.json` — private, privacy-minimized incremental snapshot.
-- `analysis/staging/<job>.json` — resumable 50-player checkpoints, deleted after success or after 24 hours.
-- `analysis/runs/*.json` — the latest ten immutable aggregate runs.
+- `analysis/phoenix2/staging/<job>.json` — resumable 50-player checkpoints.
+- `analysis/phoenix2/runs/*.json` — the latest ten immutable Phoenix 2 aggregate runs.
+
+The old `analysis/latest.json` is a read-only Phoenix 2 fallback and is no longer written.
 
 For combined Next.js, Python-function, and in-process queue development, use `vercel dev`. A Python-only worker test can set `PIU_ANALYSIS_RAW_DIR` to an existing snapshot directory instead of configuring a live credential.
 
@@ -132,9 +227,9 @@ Configure these server-side variables:
 - `ANALYSIS_BOOTSTRAP_SAMPLES` — optional; defaults to 500.
 - `VERCEL_DEPLOY_WEBHOOK_SECRET` — required in Production; generated when creating the project-scoped deployment webhook.
 
-The daily cron is defined in `vercel.json` at `06:00 UTC`. Manual and scheduled requests retain global-active-job deduplication and the five-minute failed-retry rule, but the one-hour successful-run cooldown is temporarily disabled. The worker has an 800-second function backstop.
+The only daily cron in `vercel.json` refreshes Phoenix 2 at `06:00 UTC`. The five-minute failed-retry rule remains in place, while the one-hour successful-run cooldown is temporarily disabled. The worker has an 800-second function backstop.
 
-A project-scoped Vercel account webhook listens for `deployment.promoted` and targets `/api/deploy`. The endpoint validates Vercel's HMAC-SHA1 `x-vercel-signature`, derives a deterministic job ID from the deployment ID, and requests a full player synchronization rather than an incremental one. If another refresh is active, it returns a non-2xx response so Vercel retries the promotion event with backoff.
+Project-scoped Vercel account webhooks may target `/api/deploy?mix=phoenix2`. The endpoint validates Vercel's HMAC-SHA1 `x-vercel-signature`, derives a deterministic job ID from the deployment ID, and requests a full player synchronization rather than an incremental one. Phoenix 1 deployment events are rejected as archived.
 
 Set the linked Vercel project's Framework Preset to **Services** and its Default Max Duration to **800 seconds**. The backend's generated Celery subscriber inherits that project default; `vercel.json` also applies 800 seconds explicitly to source-backed Python functions.
 
@@ -142,15 +237,16 @@ Never expose server-side secrets through a `NEXT_PUBLIC_` variable. The private 
 
 ## Synchronization behavior
 
-Every worker run fetches the consented `/api/v2/players` list and the complete `mix=Phoenix2` chart catalog. Six score workers share a 125 ms request-start limiter and any `Retry-After` backoff. Known players use `recordedAfter`, new players receive a full fetch, and previously empty players are rechecked only after 24 hours. Revoked players are removed immediately.
+Every worker run fetches the consented `/api/v2/players` list and the complete Phoenix 2 catalog. Six score workers share a 125 ms request-start limiter and any `Retry-After` backoff. Known players use `recordedAfter`, new players receive a full fetch, and previously empty players are rechecked only after 24 hours. Revoked players are removed immediately.
 
-Valid rows are merged deterministically by player/chart, retaining the best Pumbility/score. Players with no Phoenix 2 rows are excluded, and only players with at least 30 valid Singles or 30 valid Doubles scores are passed to the analyzer. No `minLevel` score filter is used.
+Valid rows are merged deterministically by player/chart within the selected version, retaining the best Pumbility/score. Players with no rows for that version are excluded, and only players with at least 30 valid Singles or 30 valid Doubles scores are passed to the analyzer. Calibration and shrinkage are recalculated independently for each version and mode. No `minLevel` score filter is used.
 
 ## Verification
 
 ```bash
 python -m unittest discover -s tests -v
 npm run test:frontend
+npm run verify:phoenix1-archive
 npm run typecheck
 npm run build
 ```
@@ -170,6 +266,7 @@ For an authorized in-memory end-to-end check against the private current snapsho
 - **Published:** at least 10 contributing players.
 - **Provisional:** 5–9 contributing players.
 - **Insufficient:** 1–4 contributing players.
-- **Unrated:** the chart was not present in any eligible player's top 100 for that mode.
+- **Unrated:** the chart was not selected for any eligible player under either
+  the deduplicated two-window rule or its top-100 fallback.
 
 The local sample snapshots contain one player. They are useful for functional testing, but their measured charts remain correctly labeled **Insufficient**.

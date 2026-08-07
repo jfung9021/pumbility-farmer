@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from analysis_runtime import PrivateBlobStore, RuntimeJobStore, request_refresh
+from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 from worker.celery import QUEUE_NAME
 from worker.tasks import refresh_analysis
 
@@ -21,7 +22,15 @@ def start_or_reuse_analysis(
     deterministic_job_id: str | None = None,
     full_sync: bool = False,
     trigger: str = "manual",
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> tuple[int, dict[str, Any]]:
+    mix_spec = resolve_mix(mix)
+    if mix_spec.archived:
+        return 409, {
+            "outcome": "archived",
+            "error": f"{mix_spec.label} is an archived snapshot and cannot be refreshed.",
+            "archiveUrl": mix_spec.archive_url,
+        }
     return request_refresh(
         PrivateBlobStore(),
         RuntimeJobStore(),
@@ -30,4 +39,5 @@ def start_or_reuse_analysis(
         deterministic_job_id=deterministic_job_id,
         full_sync=full_sync,
         trigger=trigger,
+        mix=mix_spec,
     )

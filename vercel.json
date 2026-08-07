@@ -32,7 +32,7 @@
   ],
   "crons": [
     {
-      "path": "/api/cron",
+      "path": "/api/cron/phoenix2",
       "schedule": "0 6 * * *"
     }
   ]
