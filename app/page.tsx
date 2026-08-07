@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { demoPayloads } from "../lib/demo-data";
 import { readJsonResponse } from "../lib/api-response";
 import {
+  applyPhoenix1Rerates,
+  type Phoenix1ReratePayload,
+} from "../lib/phoenix1-rerates";
+import {
   DEFAULT_MIX,
   MIXES,
   mixFromSearchParams,
@@ -89,6 +93,7 @@ function refreshAge(value: string, nowMs: number): string {
 
 function ChartCard({ chart }: { chart: ChartResult }) {
   const delta = chart.difficultyDelta;
+  const rerate = chart.phoenix2Rerate;
   return (
     <article className="chart-card">
       <div className="jacket" aria-hidden="true">
@@ -99,6 +104,16 @@ function ChartCard({ chart }: { chart: ChartResult }) {
           <h3>{chart.songName}</h3>
           <span className={`evidence evidence-${chart.evidenceStatus.toLowerCase()}`}>{chart.evidenceStatus}</span>
         </div>
+        {rerate ? (
+          <div
+            aria-label={`Phoenix 2 ${rerate.direction} this chart from ${rerate.from} to ${rerate.to}`}
+            className={`chart-rerate rerate-${rerate.direction}`}
+            title={`Phoenix 2 ${rerate.direction}: ${rerate.from} → ${rerate.to}`}
+          >
+            <b>{rerate.direction === "uprated" ? "↑ Uprated" : "↓ Downrated"}</b>
+            <span>in Phoenix 2 · {rerate.from} → {rerate.to}</span>
+          </div>
+        ) : null}
         <p>
           {chart.stepArtist || "Unknown step artist"}
           {chart.noteCount ? ` · ${chart.noteCount.toLocaleString()} notes` : ""}
@@ -181,16 +196,25 @@ export default function Home() {
     if (showLoading) setLoadingMix(mix);
     try {
       const archive = MIXES[mix].archive;
-      const response = await fetch(archive?.url ?? `/api/analyze?mix=${mix}`, {
-        cache: archive ? "force-cache" : "no-store",
-      });
+      const [response, reratesResponse] = await Promise.all([
+        fetch(archive?.url ?? `/api/analyze?mix=${mix}`, {
+          cache: archive ? "force-cache" : "no-store",
+        }),
+        archive
+          ? fetch(archive.reratesUrl, { cache: "force-cache" })
+          : Promise.resolve(null),
+      ]);
       if (response.status === 404) {
         setPayloads((current) => ({ ...current, [mix]: undefined }));
         return false;
       }
-      const latest = await readJsonResponse<AnalysisPayload>(response);
+      let latest = await readJsonResponse<AnalysisPayload>(response);
       if (latest.mix && latest.mix.key !== mix) {
         throw new Error(`The server returned ${latest.mix.label} data for ${MIXES[mix].label}.`);
+      }
+      if (reratesResponse) {
+        const rerates = await readJsonResponse<Phoenix1ReratePayload>(reratesResponse);
+        latest = applyPhoenix1Rerates(latest, rerates);
       }
       setPayloads((current) => ({ ...current, [mix]: latest }));
       setIsDemo(false);

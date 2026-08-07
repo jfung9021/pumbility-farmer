@@ -9,6 +9,7 @@ export interface MixInfo {
 export interface MixDefinition extends MixInfo {
   archive: {
     url: string;
+    reratesUrl: string;
     frozenAtUtc: string;
     sha256: string;
   } | null;
@@ -23,6 +24,7 @@ export const MIXES: Record<MixKey, MixDefinition> = {
     label: "Phoenix 1",
     archive: {
       url: "/data/phoenix1-20260807.json",
+      reratesUrl: "/data/phoenix1-rerates-20260807.json",
       frozenAtUtc: "2026-08-07T06:10:30.378Z",
       sha256: "95e8c4faf522e034702ea1be67bfd8b05302b714415aeb17f905a6930426d91a",
     },

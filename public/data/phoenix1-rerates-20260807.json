@@ -1,0 +1,1227 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "workbook": "PIU Phoenix 2 chart rerates & removals.xlsx",
+    "worksheet": "Phoenix 2 build",
+    "sha256": "ea8fcba45ee85588d1cf387d0d5590a76dbef64f31097bfb8b8ad1adc382b165"
+  },
+  "phoenix1ArchiveSha256": "95e8c4faf522e034702ea1be67bfd8b05302b714415aeb17f905a6930426d91a",
+  "rerates": [
+    {
+      "chartId": "0d01e1bc-a81d-42b7-b790-3c42b6bb4c68",
+      "from": "S20",
+      "to": "S19",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 4
+    },
+    {
+      "chartId": "2fcf91a5-a9a2-4011-a759-419d16bf814e",
+      "from": "S22",
+      "to": "S21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 5
+    },
+    {
+      "chartId": "edbf56e8-c8a7-4648-a7b0-4bb418c443e7",
+      "from": "D20",
+      "to": "D19",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 6
+    },
+    {
+      "chartId": "7f2b2983-1760-4244-8075-445d8da0bd6f",
+      "from": "D24",
+      "to": "D25",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 9
+    },
+    {
+      "chartId": "630c7449-6c0b-4803-b5a4-baa8b1bfe475",
+      "from": "D24",
+      "to": "D25",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 11
+    },
+    {
+      "chartId": "36f7c4ee-9bdd-4a84-93e2-45be2df42940",
+      "from": "S21",
+      "to": "S20",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 18
+    },
+    {
+      "chartId": "a6b36993-1cea-43ac-a252-1f2fce41afc9",
+      "from": "D20",
+      "to": "D19",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 19
+    },
+    {
+      "chartId": "6763c99a-cc73-4758-9e4f-ef64d87ebff4",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 20
+    },
+    {
+      "chartId": "bff60c66-b648-4d43-a9e4-cffd42c2d915",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 22
+    },
+    {
+      "chartId": "bf83f3e7-a523-48d2-b38a-b953b44d7110",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 23
+    },
+    {
+      "chartId": "ab61cb97-9ddf-43dd-9f6e-cba7cec6bd03",
+      "from": "D22",
+      "to": "D21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 24
+    },
+    {
+      "chartId": "3ed8419f-1301-4d02-b2bd-11e43ccae155",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 28
+    },
+    {
+      "chartId": "44b89c86-1782-4471-aef9-e37b8044ec51",
+      "from": "D21",
+      "to": "D20",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 30
+    },
+    {
+      "chartId": "59fb241f-5636-4fa6-9790-78583f036730",
+      "from": "S21",
+      "to": "S20",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 31
+    },
+    {
+      "chartId": "18054066-8091-42f8-a288-0ecb89f2530a",
+      "from": "S21",
+      "to": "S20",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 32
+    },
+    {
+      "chartId": "eb802deb-93b2-41e7-bc10-4b2335513181",
+      "from": "S22",
+      "to": "S23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 34
+    },
+    {
+      "chartId": "3613a095-6169-4d16-acc2-aca92f2251b5",
+      "from": "D20",
+      "to": "D19",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 36
+    },
+    {
+      "chartId": "dc07cfb1-1ff3-4e3a-be31-54466f1114a8",
+      "from": "D22",
+      "to": "D21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 37
+    },
+    {
+      "chartId": "6812f63b-efac-479b-a4d9-26177acdcaa0",
+      "from": "D20",
+      "to": "D19",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 38
+    },
+    {
+      "chartId": "23e79c3d-aef0-4a14-9105-a62c40295588",
+      "from": "D23",
+      "to": "D22",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 39
+    },
+    {
+      "chartId": "ef3f4e4e-2b75-44b4-b8a4-7d36073837f0",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 40
+    },
+    {
+      "chartId": "08603efa-a00a-4191-81b5-e41bf3e42a16",
+      "from": "D24",
+      "to": "D25",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 43
+    },
+    {
+      "chartId": "a7961355-965b-408a-ac86-881342873ea5",
+      "from": "D27",
+      "to": "D28",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 44
+    },
+    {
+      "chartId": "60988724-dccc-4e9d-9d8b-fd04cbddcbe6",
+      "from": "D22",
+      "to": "D21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 45
+    },
+    {
+      "chartId": "57499742-722e-4ca3-af7f-3b0ad30cf2c9",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 46
+    },
+    {
+      "chartId": "2e327194-343f-47b1-96bd-6461ef81dc98",
+      "from": "S20",
+      "to": "S19",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 50
+    },
+    {
+      "chartId": "4db5c31f-eb96-4c90-9fa5-45862223c295",
+      "from": "S20",
+      "to": "S19",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 51
+    },
+    {
+      "chartId": "4fe6afe2-71e2-4312-94b0-9c16f6f8487f",
+      "from": "S22",
+      "to": "S21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 52
+    },
+    {
+      "chartId": "2bdfccb1-403f-4927-8bf0-d17aae5c48e3",
+      "from": "D22",
+      "to": "D21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 53
+    },
+    {
+      "chartId": "7d5655b3-0e24-45a1-a99c-b9a8310637dd",
+      "from": "D23",
+      "to": "D22",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 56
+    },
+    {
+      "chartId": "ce61094f-75de-490d-b5ea-603db80cf346",
+      "from": "S22",
+      "to": "S23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 58
+    },
+    {
+      "chartId": "61d85e3c-3508-4a2d-bd2b-4782b6b155d0",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 59
+    },
+    {
+      "chartId": "8a563209-cf5b-4be3-a23f-43e9a54642aa",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 59
+    },
+    {
+      "chartId": "25702825-13fd-4770-96db-8614185cb79c",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 60
+    },
+    {
+      "chartId": "2f040426-0e9c-4001-a4fa-723e9fc10b99",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 61
+    },
+    {
+      "chartId": "88c6ee66-7ac3-4237-a6a6-39979af5d9f4",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 63
+    },
+    {
+      "chartId": "2969f7be-d795-4731-abc7-0226a91905f7",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 64
+    },
+    {
+      "chartId": "502eef8d-e911-4b4d-b1ee-706ef72ab190",
+      "from": "D22",
+      "to": "D21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 65
+    },
+    {
+      "chartId": "4f5a3d9b-b7b8-45a9-ba79-789719019e48",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 66
+    },
+    {
+      "chartId": "a3bf6ee9-503e-41e0-97bc-811de99b73df",
+      "from": "S22",
+      "to": "S23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 67
+    },
+    {
+      "chartId": "4d2499ae-e2c9-49a6-934d-66b1c992560e",
+      "from": "D21",
+      "to": "D20",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 70
+    },
+    {
+      "chartId": "e6c35e14-0870-4e4b-a1ed-144a08cb13f9",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 74
+    },
+    {
+      "chartId": "014475d5-ea40-446e-ac95-d2e14e26f3e8",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 80
+    },
+    {
+      "chartId": "fbf0c346-ab65-4277-92be-4c58f82dbcb2",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 81
+    },
+    {
+      "chartId": "a5bb0728-8181-4a03-9e9c-0423bf058276",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 82
+    },
+    {
+      "chartId": "66fa1084-41a4-46e5-baa6-4601755c948f",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 83
+    },
+    {
+      "chartId": "59bd2ce0-f7c2-4549-bd80-4e0e866a11bb",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 89
+    },
+    {
+      "chartId": "819003ed-d755-47c6-bbc7-ada53187ff9d",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 95
+    },
+    {
+      "chartId": "e84417dc-733c-4501-b8e0-b4e82db7477f",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 101
+    },
+    {
+      "chartId": "4b0439b1-c6de-4997-a580-573ee34e791f",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 110
+    },
+    {
+      "chartId": "897a9820-02f2-4177-b274-68feb509da23",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 112
+    },
+    {
+      "chartId": "b75d74fa-6a81-43db-b854-6373a5168c5b",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 116
+    },
+    {
+      "chartId": "671679c3-12b5-4228-873d-c3ab0ddf7c6c",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 122
+    },
+    {
+      "chartId": "f3d7d79e-2b1b-42b6-bb20-45594722e34a",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 123
+    },
+    {
+      "chartId": "d7a1a295-5f39-40c6-a12c-a93283be9f52",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 131
+    },
+    {
+      "chartId": "90ef9653-03f6-45ae-9057-55f823150d10",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 133
+    },
+    {
+      "chartId": "d5bcf69d-2bf8-4654-83e2-1bae76642357",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 133
+    },
+    {
+      "chartId": "7dbd095b-3694-4b48-a6a1-400153e72c2a",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 136
+    },
+    {
+      "chartId": "b05a5877-bf94-4045-a2a5-3b71a8fc34c4",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 137
+    },
+    {
+      "chartId": "38c523a6-0e5f-49cf-8797-3b1bf6a5bd7a",
+      "from": "D20",
+      "to": "D22",
+      "delta": 2,
+      "direction": "uprated",
+      "sourceRow": 139
+    },
+    {
+      "chartId": "c5353022-c624-4f67-a664-af0ccc1e14d4",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 140
+    },
+    {
+      "chartId": "3c565d13-4eab-4a7f-876b-9fece840b962",
+      "from": "S20",
+      "to": "S19",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 141
+    },
+    {
+      "chartId": "52a1c17d-d72b-4919-b68f-87e3458271db",
+      "from": "S21",
+      "to": "S22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 144
+    },
+    {
+      "chartId": "4eaf4963-db77-4b80-85ba-6d247986bdac",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 145
+    },
+    {
+      "chartId": "a5977102-0d04-4c0a-891d-d5cd3b81f42d",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 147
+    },
+    {
+      "chartId": "9e010479-01b8-4216-94cb-863d9ac14284",
+      "from": "S21",
+      "to": "S22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 155
+    },
+    {
+      "chartId": "99e9bed2-3c4a-47e3-a058-accae532f117",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 156
+    },
+    {
+      "chartId": "e79ed16f-5f3d-4b9c-8235-e7828fce4dba",
+      "from": "S23",
+      "to": "S24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 159
+    },
+    {
+      "chartId": "56aecd0e-c91a-4511-a413-1062fdf38e96",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 160
+    },
+    {
+      "chartId": "53666dcc-55f0-4fcb-9a78-e8fba8337e86",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 169
+    },
+    {
+      "chartId": "8c75c10a-b536-41d8-9a42-7422c82189c6",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 171
+    },
+    {
+      "chartId": "4288ade1-0197-4c99-95da-8b9ec7c7589b",
+      "from": "S22",
+      "to": "S23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 173
+    },
+    {
+      "chartId": "b1ea2fe7-e5fe-4510-83d4-3595e4a7736a",
+      "from": "S21",
+      "to": "S22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 173
+    },
+    {
+      "chartId": "d28dd267-75df-42f3-b7df-9509c66c2e63",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 174
+    },
+    {
+      "chartId": "9ec4675c-6eba-46fb-9276-7bcbe3acb426",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 176
+    },
+    {
+      "chartId": "54e2d9cd-46f4-4637-b3b8-20f70a84b3d7",
+      "from": "D24",
+      "to": "D25",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 177
+    },
+    {
+      "chartId": "0a1cdbbd-5cbc-486d-81bc-1ac04e9484c7",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 182
+    },
+    {
+      "chartId": "39906454-7b27-4d7b-ad1f-946b534a858b",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 182
+    },
+    {
+      "chartId": "284cb432-6826-4385-959d-f479a01f7635",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 184
+    },
+    {
+      "chartId": "11210b0b-7002-4d43-bfc4-2902dd3d09c3",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 185
+    },
+    {
+      "chartId": "16b1bd90-b259-45dd-b900-b62ea9ed5ff2",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 194
+    },
+    {
+      "chartId": "34eb9e3b-6a3a-49d3-b32f-46168cff9e4d",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 202
+    },
+    {
+      "chartId": "77f600eb-19b7-45f3-9275-1924793c3c22",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 202
+    },
+    {
+      "chartId": "508f61e7-732c-4df3-b0d2-c09ae107e4b0",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 205
+    },
+    {
+      "chartId": "06ed87a5-b080-4136-9591-fd7a92390eed",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 206
+    },
+    {
+      "chartId": "a7716543-af58-4873-a82a-a252aa52d8c0",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 206
+    },
+    {
+      "chartId": "3146c01e-ebf0-4098-825e-993e7d08e8e3",
+      "from": "S21",
+      "to": "S22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 208
+    },
+    {
+      "chartId": "a5ca5ab4-de62-4c9e-b28c-3e205fbf0d53",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 213
+    },
+    {
+      "chartId": "10b583ca-8164-46d9-bca5-531a62c4a145",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 219
+    },
+    {
+      "chartId": "f7232203-55f5-4ec0-aab7-f4b9a16bdad1",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 220
+    },
+    {
+      "chartId": "5d47f71d-2f99-4a04-8179-7c8cfc46b29f",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 223
+    },
+    {
+      "chartId": "0a98a4a9-2bda-4c9a-9b58-322e9631e481",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 224
+    },
+    {
+      "chartId": "a3f0942c-09a3-4ced-b885-898532ce42ac",
+      "from": "S21",
+      "to": "S20",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 225
+    },
+    {
+      "chartId": "96dcc489-b35c-4fa2-aad9-db30f5e9b9ec",
+      "from": "D21",
+      "to": "D20",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 226
+    },
+    {
+      "chartId": "f2906fb3-3f2a-4315-9fb7-5bde23121cbc",
+      "from": "S22",
+      "to": "S23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 228
+    },
+    {
+      "chartId": "76be7c89-6e17-454b-9420-40f6369d290e",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 229
+    },
+    {
+      "chartId": "9fd1ed6d-2144-44aa-94f5-3efa0aaf360f",
+      "from": "D24",
+      "to": "D25",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 230
+    },
+    {
+      "chartId": "36a779ed-1da9-4836-9a48-20c08315fff1",
+      "from": "S22",
+      "to": "S21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 231
+    },
+    {
+      "chartId": "f7b48a7b-1541-4f33-95c7-3d4823aa55ee",
+      "from": "D23",
+      "to": "D22",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 232
+    },
+    {
+      "chartId": "e106cb73-44db-4ccb-aea6-f6352e3eeb8b",
+      "from": "D22",
+      "to": "D21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 233
+    },
+    {
+      "chartId": "a89cd889-f9f0-4c35-a9aa-2e636ee61d40",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 234
+    },
+    {
+      "chartId": "c9861338-16bc-4788-be97-e85850a812fc",
+      "from": "D22",
+      "to": "D21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 238
+    },
+    {
+      "chartId": "b3fb969b-658b-4105-8794-1663489db211",
+      "from": "S23",
+      "to": "S22",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 239
+    },
+    {
+      "chartId": "bf880af7-0be3-41b2-86c4-bc77df6a8547",
+      "from": "S21",
+      "to": "S20",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 240
+    },
+    {
+      "chartId": "8f741f37-560b-4646-8ebb-bc1cfe2caccb",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 242
+    },
+    {
+      "chartId": "b0a1e1d0-073d-4d99-ac2c-bf8c6671652b",
+      "from": "D21",
+      "to": "D20",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 243
+    },
+    {
+      "chartId": "ce46b7f0-9d16-44ab-b3e4-1a76691b7a9c",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 245
+    },
+    {
+      "chartId": "6ded9263-169d-457e-8753-5846c50241f3",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 247
+    },
+    {
+      "chartId": "050ba6a1-8a76-49d4-b46e-a974828f3672",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 248
+    },
+    {
+      "chartId": "22ee894e-8601-4b55-9d04-c31187f8fa22",
+      "from": "D25",
+      "to": "D26",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 251
+    },
+    {
+      "chartId": "26654179-6824-45ec-8c9c-da112c95beaa",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 253
+    },
+    {
+      "chartId": "c7b41589-7ffb-4786-a265-5efd1bedd7ad",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 257
+    },
+    {
+      "chartId": "8d4d1bd5-2a73-4bf4-8232-7facde4c4e01",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 259
+    },
+    {
+      "chartId": "8e7e8b23-39a9-40f5-903b-787956373cda",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 261
+    },
+    {
+      "chartId": "d1f04b59-1f89-4869-a530-b16cc082c358",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 265
+    },
+    {
+      "chartId": "7d5c5175-7a32-4b2a-a930-455e222139db",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 268
+    },
+    {
+      "chartId": "0b3a08c9-3558-4a08-9141-b6b794a619a1",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 273
+    },
+    {
+      "chartId": "a04c2a3a-8448-44f4-acef-e022563a45bf",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 274
+    },
+    {
+      "chartId": "59309db9-4e9e-469d-b5cb-751436702f98",
+      "from": "S21",
+      "to": "S22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 280
+    },
+    {
+      "chartId": "691eaa5a-e02d-4cc1-9a2c-7685163980b2",
+      "from": "D20",
+      "to": "D19",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 281
+    },
+    {
+      "chartId": "249334ea-9f9b-4844-ae5d-9cfa75ff4217",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 282
+    },
+    {
+      "chartId": "39f99dc5-332b-4a01-807f-b980f9f47478",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 285
+    },
+    {
+      "chartId": "20d55a47-851d-40b5-bd35-4bf454f43eb2",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 286
+    },
+    {
+      "chartId": "acb1befd-60c6-4044-805b-09e157360b32",
+      "from": "D24",
+      "to": "D25",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 288
+    },
+    {
+      "chartId": "57d99748-2df1-4938-98f8-649f7d9aa067",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 294
+    },
+    {
+      "chartId": "5982a6d1-08d0-4c0c-86d5-fe7a695acecd",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 296
+    },
+    {
+      "chartId": "1146bf77-92a0-4a8e-a387-26b17f6929e4",
+      "from": "S21",
+      "to": "S20",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 299
+    },
+    {
+      "chartId": "b82813ff-90dd-46c8-9426-21723a0dbd8f",
+      "from": "S22",
+      "to": "S21",
+      "delta": -1,
+      "direction": "downrated",
+      "sourceRow": 299
+    },
+    {
+      "chartId": "d78f8436-5882-4f9e-8c04-2fbe80d76545",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 300
+    },
+    {
+      "chartId": "d57a8403-12d4-41cc-8040-6cbf828f8fc0",
+      "from": "S21",
+      "to": "S22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 303
+    },
+    {
+      "chartId": "0bf3c3e8-c612-4f76-8f3c-0af516ef6117",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 304
+    },
+    {
+      "chartId": "57dc8fd7-9fd2-4830-9ef6-3c1e7ca27d3a",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 306
+    },
+    {
+      "chartId": "e7114b7d-a353-441f-a007-77b68265a396",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 307
+    },
+    {
+      "chartId": "acb1bbdf-accb-4340-b399-333ae5a29e94",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 308
+    },
+    {
+      "chartId": "ac0b4ffb-bc37-4b3a-8f68-7b4f2770bff0",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 309
+    },
+    {
+      "chartId": "0e78e17b-a697-46b6-beaf-b398894562df",
+      "from": "S22",
+      "to": "S23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 311
+    },
+    {
+      "chartId": "006d4a84-4301-44b9-a04d-a2ac0f5c18aa",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 312
+    },
+    {
+      "chartId": "0af4692c-dbcd-462e-bd5b-75061dd718d5",
+      "from": "D20",
+      "to": "D21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 313
+    },
+    {
+      "chartId": "bbc92e59-eb32-44d0-827c-2dd0c69b9d10",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 313
+    },
+    {
+      "chartId": "0dc7ead5-e61c-473d-aec1-848f21799547",
+      "from": "S22",
+      "to": "S23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 314
+    },
+    {
+      "chartId": "5b13b85d-4541-404e-a0c8-70ef1cbc3faa",
+      "from": "D23",
+      "to": "D24",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 315
+    },
+    {
+      "chartId": "3ecc24be-e1ff-4232-9ca1-96a6ddb094f4",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 316
+    },
+    {
+      "chartId": "c3375e47-9272-4e65-ac5e-260110b5a7da",
+      "from": "S20",
+      "to": "S21",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 318
+    },
+    {
+      "chartId": "cbbb81bd-f545-4dc9-9be1-a3d7fe995757",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 320
+    },
+    {
+      "chartId": "49c14bfa-e3c4-4876-8e0d-933dfa2933d5",
+      "from": "S22",
+      "to": "S23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 322
+    },
+    {
+      "chartId": "634476a2-8910-4029-bda7-69f41d0179de",
+      "from": "D24",
+      "to": "D25",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 323
+    },
+    {
+      "chartId": "7b73ec67-d4a8-45c8-8c32-638a7ce01df6",
+      "from": "S21",
+      "to": "S22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 327
+    },
+    {
+      "chartId": "4ef45349-efc1-48b6-9326-9f7a65058a59",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 328
+    },
+    {
+      "chartId": "c1d9751a-4dc0-4d13-a228-3f734a0a096b",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 329
+    },
+    {
+      "chartId": "47c86e70-0087-4d03-b780-a9bc587b31bb",
+      "from": "D22",
+      "to": "D23",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 330
+    },
+    {
+      "chartId": "c68ef4c8-0df9-4396-a9b2-7dd6e015e551",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 331
+    },
+    {
+      "chartId": "153d6469-378b-42db-bd2e-19518277a09a",
+      "from": "D21",
+      "to": "D22",
+      "delta": 1,
+      "direction": "uprated",
+      "sourceRow": 332
+    }
+  ]
+}
