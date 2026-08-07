@@ -125,6 +125,8 @@ Configure these server-side variables:
 
 The daily cron is defined in `vercel.json` at `06:00 UTC` and applies exactly the same one-hour freshness, global-active-job, deterministic-ID, and five-minute failed-retry rules as the public run button. The worker has an 800-second function backstop.
 
+Set the linked Vercel project's Framework Preset to **Services** and its Default Max Duration to **800 seconds**. The backend's generated Celery subscriber inherits that project default; `vercel.json` also applies 800 seconds explicitly to source-backed Python functions.
+
 Never expose either secret through a `NEXT_PUBLIC_` variable. The private snapshot allowlists only player IDs, analysis-required chart/score fields, and per-player sync timestamps. It never stores usernames, game tags, API credentials, or other profile fields, and no raw snapshot route exists.
 
 ## Synchronization behavior
