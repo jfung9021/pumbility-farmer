@@ -191,6 +191,19 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 
 Phoenix 1 POST, cron, deployment, worker, and publisher paths reject updates as archived.
 
+The Phoenix 1 chart cards also show official-rating changes in Phoenix 2. A separate versioned
+annotation file maps chart IDs to their Phoenix 1 and Phoenix 2 ratings, so these labels do not
+modify the frozen scoring analysis. The current import contains 152 level-20+ changes from the
+`Phoenix 2 build` worksheet: 118 uprates and 34 downrates. Regenerate the annotation layer from
+an updated copy of the source workbook with:
+
+```powershell
+python scripts/import_phoenix2_rerates.py "C:\path\to\PIU Phoenix 2 chart rerates & removals.xlsx"
+```
+
+The importer pairs multi-chart rows, resolves documented title aliases, matches the frozen archive
+by song and Phoenix 1 difficulty, and fails instead of publishing partial or ambiguous matches.
+
 The response contracts are:
 
 ```text

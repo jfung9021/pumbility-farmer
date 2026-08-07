@@ -3,6 +3,14 @@ import type { MixInfo, MixKey } from "./mixes";
 export type ModeKey = "singles" | "doubles";
 export type EvidenceStatus = "Published" | "Provisional" | "Insufficient" | "Unrated";
 
+export interface ChartRerate {
+  from: string;
+  to: string;
+  delta: number;
+  direction: "uprated" | "downrated";
+  sourceRow: number;
+}
+
 export interface ChartResult {
   mode: "Singles" | "Doubles";
   modeRank: number | null;
@@ -32,6 +40,7 @@ export interface ChartResult {
   nContributors: number;
   nPlayersScored: number;
   evidenceStatus: EvidenceStatus;
+  phoenix2Rerate?: ChartRerate;
 }
 
 export interface FolderSummary {

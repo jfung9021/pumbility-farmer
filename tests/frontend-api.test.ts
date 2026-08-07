@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +12,11 @@ import {
   readLocalAnalysisPayload,
 } from "../lib/local-analysis.ts";
 import { MIXES, mixFromSearchParams } from "../lib/mixes.ts";
+import {
+  applyPhoenix1Rerates,
+  type Phoenix1ReratePayload,
+} from "../lib/phoenix1-rerates.ts";
+import type { AnalysisPayload } from "../lib/types.ts";
 
 
 test("uses a JSON error when the backend supplies one", async () => {
@@ -50,8 +55,59 @@ test("Phoenix 2 is the default and Phoenix 1 is URL-addressable", () => {
 
 test("Phoenix 1 is a versioned archive while Phoenix 2 remains refreshable", () => {
   assert.equal(MIXES.phoenix1.archive?.url, "/data/phoenix1-20260807.json");
+  assert.equal(
+    MIXES.phoenix1.archive?.reratesUrl,
+    "/data/phoenix1-rerates-20260807.json",
+  );
   assert.equal(MIXES.phoenix1.archive?.sha256.length, 64);
   assert.equal(MIXES.phoenix2.archive, null);
+});
+
+test("annotates the frozen Phoenix 1 charts with Phoenix 2 rerates", async () => {
+  const [archiveRaw, reratesRaw] = await Promise.all([
+    readFile(path.join(process.cwd(), "public", "data", "phoenix1-20260807.json"), "utf8"),
+    readFile(
+      path.join(process.cwd(), "public", "data", "phoenix1-rerates-20260807.json"),
+      "utf8",
+    ),
+  ]);
+  const archive = JSON.parse(archiveRaw) as AnalysisPayload;
+  const rerates = JSON.parse(reratesRaw) as Phoenix1ReratePayload;
+  const annotated = applyPhoenix1Rerates(archive, rerates);
+  const charts = [...annotated.singles, ...annotated.doubles];
+  const changed = charts.filter((chart) => chart.phoenix2Rerate);
+  const kugutsu = charts.find((chart) => chart.songName === "Kugutsu" && chart.difficulty === "D21");
+  const halloween = charts.find(
+    (chart) => chart.songName === "Halloween Party ~Multiverse~" && chart.difficulty === "D21",
+  );
+
+  assert.equal(changed.length, 152);
+  assert.equal(changed.filter((chart) => chart.phoenix2Rerate?.direction === "uprated").length, 118);
+  assert.equal(changed.filter((chart) => chart.phoenix2Rerate?.direction === "downrated").length, 34);
+  assert.deepEqual(kugutsu?.phoenix2Rerate, {
+    from: "D21",
+    to: "D20",
+    delta: -1,
+    direction: "downrated",
+    sourceRow: 30,
+  });
+  assert.equal(halloween?.phoenix2Rerate?.to, "D22");
+});
+
+test("rejects rerates built for a different Phoenix 1 archive", async () => {
+  const archive = JSON.parse(
+    await readFile(path.join(process.cwd(), "public", "data", "phoenix1-20260807.json"), "utf8"),
+  ) as AnalysisPayload;
+  const rerates = JSON.parse(
+    await readFile(
+      path.join(process.cwd(), "public", "data", "phoenix1-rerates-20260807.json"),
+      "utf8",
+    ),
+  ) as Phoenix1ReratePayload;
+  assert.throws(
+    () => applyPhoenix1Rerates(archive, { ...rerates, phoenix1ArchiveSha256: "wrong" }),
+    /do not match the archived dataset/,
+  );
 });
 
 test("reads a privacy-safe local aggregate", async () => {
