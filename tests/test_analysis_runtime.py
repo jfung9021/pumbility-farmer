@@ -4,6 +4,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
 from analysis_runtime import (
     CURRENT_SNAPSHOT_PATH,
     FAILED_RETRY_DELAY,
@@ -21,6 +23,7 @@ from analysis_runtime import (
     update_job,
 )
 from api.cron import cron_authorized
+from api_service import app as api_app
 from phoenix2_sync import analyzer_input
 from piu_misgrade_analyzer import (
     AnalysisConfig,
@@ -31,6 +34,7 @@ from piu_misgrade_analyzer import (
 
 
 NOW = datetime(2026, 8, 7, 6, 30, tzinfo=timezone.utc)
+API_CLIENT = TestClient(api_app)
 
 
 def latest_payload(generated: datetime) -> dict:
@@ -120,6 +124,38 @@ class CoordinatorTests(unittest.TestCase):
         self.assertTrue(cron_authorized("Bearer secret-value", "secret-value"))
         self.assertFalse(cron_authorized("secret-value", "secret-value"))
         self.assertFalse(cron_authorized("Bearer secret-value", ""))
+
+
+class ApiRouteTests(unittest.TestCase):
+    def test_missing_latest_and_unauthorized_cron_are_json(self) -> None:
+        blobs = MemoryBlobStore()
+        with patch("api.analyze.PrivateBlobStore", return_value=blobs):
+            latest = API_CLIENT.get("/api/analyze")
+        cron = API_CLIENT.get("/api/cron")
+        self.assertEqual((latest.status_code, latest.json()["error"]), (
+            404, "No completed analysis is stored yet."
+        ))
+        self.assertEqual((cron.status_code, cron.json()["error"]), (
+            401, "Unauthorized cron request."
+        ))
+
+    def test_post_returns_async_refresh_contract(self) -> None:
+        job = new_job("analysis-20260807T06", NOW)
+        with patch("api.analyze.start_or_reuse_analysis", return_value=(
+            202, {"outcome": "started", "job": job}
+        )):
+            response = API_CLIENT.post("/api/analyze")
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["outcome"], "started")
+
+    def test_backend_exception_is_a_safe_json_error(self) -> None:
+        with patch("api.analyze.PrivateBlobStore", side_effect=RuntimeError("private detail")):
+            response = API_CLIENT.get("/api/analyze")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json(),
+            {"error": "The latest analysis service is temporarily unavailable."},
+        )
 
 
 def chart(index: int) -> dict:

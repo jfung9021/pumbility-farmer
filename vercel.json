@@ -1,11 +1,35 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "**/*.py": {
-      "maxDuration": 800,
-      "excludeFiles": "{piu_live_run/**,piu_phoenix_run/**,synthetic_demo/**,tests/**,__pycache__/**}"
+  "services": {
+    "frontend": {
+      "root": ".",
+      "framework": "nextjs"
+    },
+    "backend": {
+      "root": ".",
+      "entrypoint": "pyproject.toml",
+      "functions": {
+        "**/*.py": {
+          "maxDuration": 800,
+          "excludeFiles": "{piu_live_run/**,piu_phoenix_run/**,synthetic_demo/**,tests/**,__pycache__/**}"
+        }
+      }
     }
   },
+  "rewrites": [
+    {
+      "source": "/api(/.*)?",
+      "destination": {
+        "service": "backend"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "frontend"
+      }
+    }
+  ],
   "crons": [
     {
       "path": "/api/cron",
