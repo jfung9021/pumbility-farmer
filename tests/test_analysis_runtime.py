@@ -27,6 +27,7 @@ from api_service import app as api_app
 from phoenix2_sync import analyzer_input
 from piu_misgrade_analyzer import (
     AnalysisConfig,
+    SCRIPT_VERSION,
     analyze_snapshot,
     build_web_payload,
     make_synthetic_snapshot,
@@ -40,7 +41,7 @@ API_CLIENT = TestClient(api_app)
 def latest_payload(generated: datetime) -> dict:
     return {
         "generatedAtUtc": isoformat_utc(generated),
-        "summary": {"modes": {}},
+        "summary": {"scriptVersion": SCRIPT_VERSION, "modes": {}},
         "singles": [],
         "doubles": [],
         "relativeGroups": [],
@@ -58,6 +59,17 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(body["outcome"], "fresh")
         self.assertEqual(enqueued, [])
         self.assertEqual(body["nextAllowedAtUtc"], isoformat_utc(NOW + timedelta(minutes=1)))
+
+    def test_fresh_result_from_old_method_enqueues_recalculation(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        old_payload = latest_payload(NOW - timedelta(minutes=1))
+        old_payload["summary"]["scriptVersion"] = "2.1.0-phoenix2-incremental"
+        blobs.put_json(LATEST_BLOB_PATH, old_payload)
+        enqueued: list[str] = []
+        status, body = request_refresh(blobs, jobs, enqueued.append, now=NOW)
+        self.assertEqual((status, body["outcome"]), (202, "started"))
+        self.assertEqual(enqueued, ["analysis-20260807T06"])
 
     def test_active_job_is_deduplicated(self) -> None:
         blobs = MemoryBlobStore()

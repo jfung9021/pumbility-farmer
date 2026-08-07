@@ -22,6 +22,7 @@ from piu_misgrade_analyzer import (
     AnalysisConfig,
     ApiError,
     PiuScoresClient,
+    SCRIPT_VERSION,
     analyze_snapshot,
     build_web_payload,
     load_snapshot,
@@ -304,6 +305,9 @@ def deterministic_hourly_job_id(now: datetime, attempt: int = 0) -> str:
 
 
 def _fresh_result(payload: Mapping[str, Any] | None, now: datetime) -> tuple[str, str] | None:
+    summary = payload.get("summary") if payload else None
+    if not isinstance(summary, Mapping) or summary.get("scriptVersion") != SCRIPT_VERSION:
+        return None
     generated = parse_utc(payload.get("generatedAtUtc")) if payload else None
     if generated is None:
         return None

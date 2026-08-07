@@ -8,9 +8,11 @@ Singles and Doubles are analyzed as completely independent populations:
   3. Retain only ranks 1 through 100 from that player and mode.
   4. For every level-20+ chart in that set, compute the signed residual from the
      player's mode-specific baseline.
-  5. Calibrate residual Pumbility into continuous level units and anchor the
-     average official level L at L + 0.5. Negative differences are easier to
-     score than average and positive differences are harder.
+  5. Compare every chart only with measured charts in its exact mode and
+     official level, using that folder's median residual as the reference.
+  6. Calibrate residual Pumbility into continuous level units and anchor the
+     typical official level L chart at L + 0.5. Negative differences are easier
+     within that folder and positive differences are harder.
 
 The script deliberately does NOT consume PIU Scores' existing scoring-level or tier-list fields.
 It uses only player best scores, the API-computed Phoenix 2 Pumbility value for each score,
@@ -78,7 +80,7 @@ RELATIVE_GROUPS = (
     "Extremely Hard",
 )
 KEY_RE = re.compile(r"^(?:piu_scores_live_|pst_live_)[0-9a-f]{64}$")
-SCRIPT_VERSION = "2.1.0-phoenix2-incremental"
+SCRIPT_VERSION = "3.0.0-within-level"
 
 
 class ApiError(RuntimeError):
@@ -452,30 +454,11 @@ def _bootstrap_mean_ci(values: np.ndarray, samples: int, rng: np.random.Generato
     return float(low), float(high)
 
 
-def relative_difficulty_group(delta: float) -> tuple[int, str]:
-    """Return the stable, absolute scoring-difference group for a level delta."""
-    if not math.isfinite(delta):
-        raise ValueError("A relative-difficulty group requires a finite delta.")
-    if delta <= -3.0:
-        rank = 1
-    elif delta <= -2.0:
-        rank = 2
-    elif delta <= -1.25:
-        rank = 3
-    elif delta <= -0.75:
-        rank = 4
-    elif delta < -0.25:
-        rank = 5
-    elif delta <= 0.25:
-        rank = 6
-    elif delta <= 0.75:
-        rank = 7
-    elif delta <= 1.25:
-        rank = 8
-    elif delta < 2.0:
-        rank = 9
-    else:
-        rank = 10
+def relative_difficulty_group(level_percentile: float) -> tuple[int, str]:
+    """Return a decile group from a chart's midpoint percentile in its folder."""
+    if not math.isfinite(level_percentile) or not 0.0 <= level_percentile <= 1.0:
+        raise ValueError("A relative-difficulty group requires a percentile from 0 to 1.")
+    rank = min(10, max(1, int(math.floor(level_percentile * 10.0)) + 1))
     return rank, RELATIVE_GROUPS[rank - 1]
 
 
@@ -503,10 +486,14 @@ def _fit_level_calibration(chart_stats: pd.DataFrame) -> tuple[float, float]:
     return slope, intercept
 
 
-def _apply_chart_ranks(result: pd.DataFrame) -> pd.DataFrame:
+def _apply_chart_ranks_and_groups(result: pd.DataFrame) -> pd.DataFrame:
     result = result.copy()
     result["modeRank"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
     result["levelRank"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+    result["levelPercentile"] = np.nan
+    result["levelComparisonCharts"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+    result["relativeGroupRank"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+    result["relativeGroup"] = pd.Series(pd.NA, index=result.index, dtype="string")
     measured = result[result["difficultyDelta"].notna()].sort_values(
         ["difficultyDelta", "nContributors", "songName", "chartId"],
         ascending=[True, False, True, True],
@@ -517,10 +504,63 @@ def _apply_chart_ranks(result: pd.DataFrame) -> pd.DataFrame:
             np.arange(1, len(measured) + 1), dtype="Int64"
         )
     for _, group in measured.groupby("folder", sort=False):
+        count = len(group)
         result.loc[group.index, "levelRank"] = pd.array(
-            np.arange(1, len(group) + 1), dtype="Int64"
+            np.arange(1, count + 1), dtype="Int64"
         )
+        result.loc[group.index, "levelComparisonCharts"] = count
+        tied_ranks = group["difficultyDelta"].rank(method="average", ascending=True)
+        percentiles = (tied_ranks - 0.5) / count
+        result.loc[group.index, "levelPercentile"] = percentiles
+        for row_index, percentile in percentiles.items():
+            group_rank, group_name = relative_difficulty_group(float(percentile))
+            result.at[row_index, "relativeGroupRank"] = group_rank
+            result.at[row_index, "relativeGroup"] = group_name
     return result
+
+
+def apply_within_level_difficulty(
+    result: pd.DataFrame,
+    pumbility_per_level: float,
+    config: AnalysisConfig,
+) -> pd.DataFrame:
+    """Center estimates and tier categories within each exact mode-level folder."""
+    result = result.copy()
+    if not math.isfinite(pumbility_per_level) or pumbility_per_level <= 0:
+        raise ValueError("Pumbility-per-level calibration must be positive and finite.")
+
+    # The median represents a typical chart without allowing a sparse outlier to
+    # shift the whole folder. Every reference is computed within the current mode.
+    result["levelReferenceResidualPb"] = result.groupby("folder", sort=False)[
+        "meanResidualPb"
+    ].transform("median")
+    # Retain the established output field as a compatibility alias.
+    result["expectedResidualPb"] = result["levelReferenceResidualPb"]
+    result["rawEasePb"] = (
+        result["meanResidualPb"] - result["levelReferenceResidualPb"]
+    )
+    weight = result["nContributors"] / (
+        result["nContributors"] + config.shrinkage_k
+    )
+    result["reliabilityWeight"] = weight
+    result["shrunkEasePb"] = np.where(
+        result["meanResidualPb"].notna(), weight * result["rawEasePb"], np.nan
+    )
+    result["pumbilityPerLevel"] = pumbility_per_level
+    result["averageDifficulty"] = result["level"].astype(float) + 0.5
+    result["difficultyDelta"] = -result["shrunkEasePb"] / pumbility_per_level
+    result["estimatedDifficulty"] = (
+        result["averageDifficulty"] + result["difficultyDelta"]
+    )
+    delta_ci_low = -weight * (
+        result["residualCi95HighPb"] - result["levelReferenceResidualPb"]
+    ) / pumbility_per_level
+    delta_ci_high = -weight * (
+        result["residualCi95LowPb"] - result["levelReferenceResidualPb"]
+    ) / pumbility_per_level
+    result["difficultyCi95Low"] = result["averageDifficulty"] + delta_ci_low
+    result["difficultyCi95High"] = result["averageDifficulty"] + delta_ci_high
+    return _apply_chart_ranks_and_groups(result)
 
 
 def analyze_snapshot(
@@ -696,7 +736,7 @@ def analyze_snapshot(
         stats = stats.merge(
             chart_df[["chartId", "level"]], on="chartId", how="left", validate="one_to_one"
         )
-        slope, intercept = _fit_level_calibration(stats)
+        slope, _ = _fit_level_calibration(stats)
 
         mode_catalog = target_catalog[target_catalog["type"] == chart_type].copy()
         if mode_catalog.empty:
@@ -711,25 +751,6 @@ def analyze_snapshot(
             result["nContributors"] / result["nPlayersScored"],
             np.nan,
         )
-        result["expectedResidualPb"] = intercept + slope * result["level"].astype(float)
-        result["rawEasePb"] = result["meanResidualPb"] - result["expectedResidualPb"]
-        weight = result["nContributors"] / (result["nContributors"] + config.shrinkage_k)
-        result["reliabilityWeight"] = weight
-        result["shrunkEasePb"] = np.where(
-            result["meanResidualPb"].notna(), weight * result["rawEasePb"], np.nan
-        )
-        result["pumbilityPerLevel"] = slope
-        result["averageDifficulty"] = result["level"].astype(float) + 0.5
-        result["difficultyDelta"] = -result["shrunkEasePb"] / slope
-        result["estimatedDifficulty"] = result["averageDifficulty"] + result["difficultyDelta"]
-        delta_ci_low = -weight * (
-            result["residualCi95HighPb"] - result["expectedResidualPb"]
-        ) / slope
-        delta_ci_high = -weight * (
-            result["residualCi95LowPb"] - result["expectedResidualPb"]
-        ) / slope
-        result["difficultyCi95Low"] = result["averageDifficulty"] + delta_ci_low
-        result["difficultyCi95High"] = result["averageDifficulty"] + delta_ci_high
         result["evidenceStatus"] = np.select(
             [
                 result["nContributors"] >= config.published_contributors,
@@ -739,13 +760,7 @@ def analyze_snapshot(
             ["Published", "Provisional", "Insufficient"],
             default="Unrated",
         )
-        result["relativeGroupRank"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
-        result["relativeGroup"] = pd.Series(pd.NA, index=result.index, dtype="string")
-        for row_index, delta in result["difficultyDelta"].dropna().items():
-            group_rank, group_name = relative_difficulty_group(float(delta))
-            result.at[row_index, "relativeGroupRank"] = group_rank
-            result.at[row_index, "relativeGroup"] = group_name
-        result = _apply_chart_ranks(result)
+        result = apply_within_level_difficulty(result, slope, config)
         mode_results.append(result)
 
     if not any(not frame.empty for frame in baseline_frames):
@@ -756,12 +771,14 @@ def analyze_snapshot(
 
     result = pd.concat(mode_results, ignore_index=True)
     output_columns = [
-        "mode", "modeRank", "levelRank", "folder", "relativeGroupRank", "relativeGroup",
+        "mode", "modeRank", "levelRank", "levelPercentile", "levelComparisonCharts",
+        "folder", "relativeGroupRank", "relativeGroup",
         "songName", "difficulty", "type", "level", "chartId", "imageUrl", "noteCount",
         "stepArtist", "estimatedDifficulty", "averageDifficulty", "difficultyDelta",
         "difficultyCi95Low", "difficultyCi95High", "pumbilityPerLevel", "rawEasePb",
         "shrunkEasePb", "meanResidualPb", "medianResidualPb", "residualStdPb",
-        "residualCi95LowPb", "residualCi95HighPb", "expectedResidualPb",
+        "residualCi95LowPb", "residualCi95HighPb", "levelReferenceResidualPb",
+        "expectedResidualPb",
         "nContributors", "nPlayersScored", "top100AppearanceRate", "reliabilityWeight",
         "meanContributorBaselinePb", "evidenceStatus",
     ]
@@ -797,8 +814,10 @@ def analyze_snapshot(
             "baselineRanks": [config.baseline_start_rank, config.baseline_end_rank],
             "analyzedRanks": [1, config.analysis_end_rank],
             "chartMetric": "signed player-normalized Pumbility residual",
+            "levelReference": "median measured chart residual within the exact mode and official level",
             "difficultyDelta": "estimatedDifficulty - (officialLevel + 0.5)",
-            "negativeDeltaMeaning": "easier to score than the average chart at that level",
+            "negativeDeltaMeaning": "easier to score than the typical chart at that exact mode and level",
+            "relativeGrouping": "midpoint-percentile deciles within the exact mode and official level",
             "modeSeparation": "Singles and Doubles use independent eligibility, baselines, calibration, and ranks",
             "usesExistingPiuScoresTierList": False,
             "shrinkageK": config.shrinkage_k,

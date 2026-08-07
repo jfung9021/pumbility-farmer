@@ -1,6 +1,6 @@
 [project]
 name = "pumbility-farmer"
-version = "2.1.0"
+version = "3.0.0"
 description = "Phoenix 2 scoring-difficulty analysis with durable Vercel queue workers"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

@@ -12,8 +12,9 @@ Each mode is processed separately:
 4. Use the mean of ranks 11–30 as the player's mode-specific skill baseline.
 5. Retain only ranks 1–100 from that player and mode for chart analysis.
 6. Calculate a signed residual between each retained chart and the player's baseline.
-7. Calibrate residual Pumbility into continuous level units independently for Singles and Doubles.
-8. Anchor the average official level `L` at `L + 0.5` and shrink low-evidence estimates toward that average.
+7. Within each mode, compare a chart only with measured charts at the exact same official level; the median chart residual is that folder's reference.
+8. Calibrate residual Pumbility into continuous level units independently for Singles and Doubles.
+9. Anchor the typical official level `L` chart at `L + 0.5` and shrink low-evidence estimates toward that reference.
 
 The displayed difference is:
 
@@ -21,24 +22,28 @@ The displayed difference is:
 estimated scoring difficulty - (official level + 0.5)
 ```
 
-A negative value is easier to score than average. For example, a D24 estimated at D21.2 has a difference of `21.2 - 24.5 = -3.3`. Continuous estimates are not confined to the official folder, so an S20 can be estimated below S20.
+A negative value is easier to score than the typical chart in the same mode and official level. Continuous estimates are not hard-clamped to the official folder, but the `L + 0.5` center and evidence shrinkage mean that an estimate below `L` requires an unusually strong within-folder signal.
 
 The analyzer does not use the chart catalog's existing `scoringLevel` or an existing tier list.
 
 ## Relative scoring groups
 
-| Difference | Group |
+Groups are midpoint-percentile deciles within the exact mode and official level. The easiest measured S23 charts are placed in group 1 relative to other S23s, and the hardest measured S23 charts are placed in group 10. Small folders use the same midpoint rule, which avoids labeling either of only two measured charts as an extreme.
+
+| Within-level percentile | Group |
 | ---: | --- |
-| `≤ -3.00` | Extremely Easy |
-| `-3.00 to -2.00` | Very Easy |
-| `-2.00 to -1.25` | Clearly Easy |
-| `-1.25 to -0.75` | Moderately Easy |
-| `-0.75 to -0.25` | Slightly Easy |
-| `-0.25 to +0.25` | Typical |
-| `+0.25 to +0.75` | Slightly Hard |
-| `+0.75 to +1.25` | Moderately Hard |
-| `+1.25 to +2.00` | Very Hard |
-| `≥ +2.00` | Extremely Hard |
+| `0–10%` | Extremely Easy |
+| `10–20%` | Very Easy |
+| `20–30%` | Clearly Easy |
+| `30–40%` | Moderately Easy |
+| `40–50%` | Slightly Easy |
+| `50–60%` | Typical |
+| `60–70%` | Slightly Hard |
+| `70–80%` | Moderately Hard |
+| `80–90%` | Very Hard |
+| `90–100%` | Extremely Hard |
+
+The percentile tier and the numerical difficulty answer different questions: the tier shows placement among charts in the folder, while the numerical difference preserves the estimated effect size in level units.
 
 ## Python CLI
 
@@ -145,6 +150,14 @@ npm run build
 ```
 
 The suite includes incremental merge/pruning/recheck/checkpoint tests, shared rate-limit tests, queue-state and cron tests, eager Celery execution, optimized/full payload equivalence, JSON fallback handling, and a mocked 809-player bounded-concurrency benchmark.
+
+`tests/fixtures/production-chart-aggregates-20260807.json` contains all 1,294 chart-level aggregates captured from the public production API for the within-level methodology regression. Its schema is allowlisted and contains no player identifiers, raw scores, usernames, game tags, or credentials. Refresh it explicitly with:
+
+```bash
+python scripts/capture_public_analysis_fixture.py
+```
+
+For an authorized in-memory end-to-end check against the private current snapshot, run `scripts/validate_private_snapshot.py` through `vercel env run -e production`. The validator prints aggregate counts only and never persists raw rows.
 
 ## Evidence labels
 

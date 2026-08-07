@@ -15,28 +15,28 @@ const groupNames = [
 
 const demoRows: Record<ModeKey, Array<[string, number, number | null, number, number]>> = {
   singles: [
-    ["Lucid Dream", 21, -3.32, 34, 1],
-    ["Becouse of You", 21, -2.38, 28, 2],
-    ["Conflict", 22, -1.54, 25, 3],
-    ["Vector", 20, -0.98, 22, 4],
-    ["Orbit Stabilizer", 23, -0.43, 19, 5],
-    ["Bar Bar Bar", 20, -0.08, 18, 6],
-    ["District 1", 22, 0.42, 16, 7],
-    ["Rising Star", 24, 0.91, 14, 8],
-    ["Crossing Delta", 25, 1.58, 12, 9],
-    ["Final Audition", 26, 2.34, 11, 10],
+    ["Lucid Dream", 21, -0.58, 34, 1],
+    ["Becouse of You", 21, -0.36, 28, 2],
+    ["Conflict", 22, -0.24, 25, 3],
+    ["Vector", 20, -0.14, 22, 4],
+    ["Orbit Stabilizer", 23, -0.05, 19, 5],
+    ["Bar Bar Bar", 20, 0.01, 18, 6],
+    ["District 1", 22, 0.07, 16, 7],
+    ["Rising Star", 24, 0.16, 14, 8],
+    ["Crossing Delta", 25, 0.29, 12, 9],
+    ["Final Audition", 26, 0.53, 11, 10],
   ],
   doubles: [
-    ["Slam", 24, -3.3, 38, 1],
-    ["8 6 - FULL SONG -", 23, -2.47, 31, 2],
-    ["Tomboy", 22, -1.62, 29, 3],
-    ["Energy Synergy Matrix", 22, -1.02, 24, 4],
-    ["After LIKE", 23, -0.51, 22, 5],
-    ["Another Truth", 21, 0.03, 20, 6],
-    ["Point Zero One", 22, 0.39, 18, 7],
-    ["Le Grand Bleu", 25, 0.89, 16, 8],
-    ["Demon of Laplace", 27, 1.69, 13, 9],
-    ["PARADOXX", 28, 2.51, 10, 10],
+    ["Slam", 24, -0.55, 38, 1],
+    ["8 6 - FULL SONG -", 23, -0.34, 31, 2],
+    ["Tomboy", 22, -0.22, 29, 3],
+    ["Energy Synergy Matrix", 22, -0.13, 24, 4],
+    ["After LIKE", 23, -0.04, 22, 5],
+    ["Another Truth", 21, 0.02, 20, 6],
+    ["Point Zero One", 22, 0.08, 18, 7],
+    ["Le Grand Bleu", 25, 0.17, 16, 8],
+    ["Demon of Laplace", 27, 0.31, 13, 9],
+    ["PARADOXX", 28, 0.51, 10, 10],
   ],
 };
 
@@ -47,7 +47,9 @@ function makeChart(mode: ModeKey, row: [string, number, number | null, number, n
   return {
     mode: mode === "singles" ? "Singles" : "Doubles",
     modeRank: delta === null ? null : index + 1,
-    levelRank: delta === null ? null : 1,
+    levelRank: delta === null ? null : group,
+    levelPercentile: delta === null ? null : (group - 0.5) / 10,
+    levelComparisonCharts: delta === null ? null : 10,
     folder: `${prefix}${level}`,
     relativeGroupRank: delta === null ? null : group,
     relativeGroup: delta === null ? null : groupNames[group - 1],
@@ -73,7 +75,7 @@ function makeChart(mode: ModeKey, row: [string, number, number | null, number, n
 export const demoPayload: AnalysisPayload = {
   generatedAtUtc: "2026-08-07T04:20:00Z",
   summary: {
-    scriptVersion: "2.0.0-mode-separated",
+    scriptVersion: "3.0.0-within-level",
     method: {},
     coverage: { playersReturnedByCredential: 52 },
     modes: {

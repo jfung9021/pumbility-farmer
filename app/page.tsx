@@ -89,6 +89,9 @@ function ChartCard({ chart }: { chart: ChartResult }) {
           <span><b>{chart.difficulty}</b> official</span>
           <span><b>{chartGrade(chart)}</b> estimated</span>
           <span><b>{chart.nContributors}</b> contributors</span>
+          {chart.levelRank !== null && chart.levelComparisonCharts !== null ? (
+            <span><b>#{chart.levelRank}</b> of {chart.levelComparisonCharts} in {chart.difficulty}</span>
+          ) : null}
         </div>
       </div>
       <div className={`delta ${delta !== null && delta < 0 ? "delta-easy" : "delta-hard"}`}>
@@ -108,7 +111,7 @@ function TierSection({ rank, name, charts }: { rank: number; name: string; chart
       <header className="tier-header">
         <div className="tier-rank">{String(rank).padStart(2, "0")}</div>
         <div>
-          <p>Relative scoring difficulty</p>
+          <p>Within-level scoring difficulty</p>
           <h2 id={`tier-${rank}`}>{name}</h2>
         </div>
         <span className="tier-count">{charts.length} chart{charts.length === 1 ? "" : "s"}</span>
@@ -399,7 +402,7 @@ export default function Home() {
         <div className="results-heading">
           <div>
             <p>{activeMode} · easiest first</p>
-            <h2>Relative scoring tiers</h2>
+            <h2>Within-level scoring tiers</h2>
           </div>
           <p><b>−</b> easier to score <span /> <b>+</b> harder to score</p>
         </div>
@@ -424,7 +427,8 @@ export default function Home() {
 
       <footer>
         <p><b>How it works</b> Player skill is the mean Pumbility of ranks 11–30 within each mode. Only each player’s top 100 mode scores contribute to chart estimates.</p>
-        <p>Negative difference = easier than the average official level. Results with fewer than 10 contributors are clearly labeled.</p>
+        <p>Every chart is compared only with charts of the same mode and official level. Tiers are within-level deciles; the numerical estimate is centered on the typical chart at that level.</p>
+        <p>Results with fewer than 10 contributors are clearly labeled.</p>
       </footer>
     </main>
   );
