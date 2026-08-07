@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import time
 import unittest
@@ -15,6 +17,7 @@ from analysis_runtime import (
     MemoryBlobStore,
     MemoryJobStore,
     cleanup_abandoned_staging,
+    deterministic_deployment_job_id,
     execute_analysis_job,
     isoformat_utc,
     new_job,
@@ -24,7 +27,7 @@ from analysis_runtime import (
 )
 from api.cron import cron_authorized
 from api_service import app as api_app
-from phoenix2_sync import analyzer_input
+from phoenix2_sync import analyzer_input, synchronize_phoenix2_snapshot
 from piu_misgrade_analyzer import (
     AnalysisConfig,
     SCRIPT_VERSION,
@@ -32,8 +35,6 @@ from piu_misgrade_analyzer import (
     build_web_payload,
     make_synthetic_snapshot,
 )
-
-
 NOW = datetime(2026, 8, 7, 6, 30, tzinfo=timezone.utc)
 API_CLIENT = TestClient(api_app)
 
@@ -49,27 +50,91 @@ def latest_payload(generated: datetime) -> dict:
 
 
 class CoordinatorTests(unittest.TestCase):
-    def test_fresh_result_suppresses_enqueue_for_one_hour(self) -> None:
+    def test_successful_result_has_no_manual_refresh_cooldown(self) -> None:
         blobs = MemoryBlobStore()
         jobs = MemoryJobStore()
-        blobs.put_json(LATEST_BLOB_PATH, latest_payload(NOW - timedelta(minutes=59)))
-        enqueued: list[str] = []
-        status, body = request_refresh(blobs, jobs, enqueued.append, now=NOW)
-        self.assertEqual(status, 200)
-        self.assertEqual(body["outcome"], "fresh")
-        self.assertEqual(enqueued, [])
-        self.assertEqual(body["nextAllowedAtUtc"], isoformat_utc(NOW + timedelta(minutes=1)))
-
-    def test_fresh_result_from_old_method_enqueues_recalculation(self) -> None:
-        blobs = MemoryBlobStore()
-        jobs = MemoryJobStore()
-        old_payload = latest_payload(NOW - timedelta(minutes=1))
-        old_payload["summary"]["scriptVersion"] = "2.1.0-phoenix2-incremental"
-        blobs.put_json(LATEST_BLOB_PATH, old_payload)
+        blobs.put_json(LATEST_BLOB_PATH, latest_payload(NOW - timedelta(seconds=1)))
         enqueued: list[str] = []
         status, body = request_refresh(blobs, jobs, enqueued.append, now=NOW)
         self.assertEqual((status, body["outcome"]), (202, "started"))
         self.assertEqual(enqueued, ["analysis-20260807T06"])
+
+    def test_deployment_refresh_is_full_and_deduplicated_by_deployment(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        job_id = deterministic_deployment_job_id("dpl_example")
+        enqueued: list[str] = []
+        status, body = request_refresh(
+            blobs,
+            jobs,
+            enqueued.append,
+            now=NOW,
+            force_refresh=True,
+            deterministic_job_id=job_id,
+            full_sync=True,
+            trigger="deployment",
+        )
+        self.assertEqual((status, body["outcome"]), (202, "started"))
+        self.assertEqual(enqueued, [job_id])
+        self.assertTrue(body["job"]["fullSync"])
+        self.assertEqual(body["job"]["trigger"], "deployment")
+
+        update_job(jobs, job_id, now=NOW, status="completed")
+        jobs.set_active_job_id(None)
+        status, duplicate = request_refresh(
+            blobs,
+            jobs,
+            enqueued.append,
+            now=NOW + timedelta(minutes=1),
+            force_refresh=True,
+            deterministic_job_id=job_id,
+            full_sync=True,
+            trigger="deployment",
+        )
+        self.assertEqual((status, duplicate["outcome"]), (202, "existing"))
+        self.assertEqual(enqueued, [job_id])
+
+    def test_failed_deployment_refresh_reuses_id_after_retry_delay(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        job_id = deterministic_deployment_job_id("dpl_retry")
+        failed = new_job(job_id, NOW, full_sync=True, trigger="deployment")
+        jobs.save(failed)
+        update_job(
+            jobs,
+            job_id,
+            now=NOW,
+            status="failed",
+            retryAllowedAtUtc=isoformat_utc(NOW + FAILED_RETRY_DELAY),
+        )
+        enqueued: list[str] = []
+        _, waiting = request_refresh(
+            blobs,
+            jobs,
+            enqueued.append,
+            now=NOW + timedelta(minutes=1),
+            force_refresh=True,
+            deterministic_job_id=job_id,
+            full_sync=True,
+            trigger="deployment",
+        )
+        self.assertEqual(waiting["job"]["status"], "failed")
+        self.assertEqual(enqueued, [])
+
+        _, retry = request_refresh(
+            blobs,
+            jobs,
+            enqueued.append,
+            now=NOW + timedelta(minutes=6),
+            force_refresh=True,
+            deterministic_job_id=job_id,
+            full_sync=True,
+            trigger="deployment",
+        )
+        self.assertEqual(retry["outcome"], "started")
+        self.assertEqual(retry["job"]["id"], job_id)
+        self.assertEqual(retry["job"]["attempt"], 1)
+        self.assertEqual(enqueued, [job_id])
 
     def test_active_job_is_deduplicated(self) -> None:
         blobs = MemoryBlobStore()
@@ -150,6 +215,81 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual((cron.status_code, cron.json()["error"]), (
             401, "Unauthorized cron request."
         ))
+        deploy = API_CLIENT.post("/api/deploy", content=b"{}")
+        self.assertEqual((deploy.status_code, deploy.json()["error"]), (
+            401, "Unauthorized webhook."
+        ))
+
+    def test_promoted_deployment_webhook_starts_deduplicated_full_refresh(self) -> None:
+        secret = "deployment-secret"
+        event = {
+            "id": "evt_1",
+            "type": "deployment.promoted",
+            "payload": {
+                "deployment": {"id": "dpl_example"},
+                "project": {"id": "prj_example"},
+            },
+        }
+        raw = json.dumps(event, separators=(",", ":")).encode()
+        signature = hmac.new(secret.encode(), raw, hashlib.sha1).hexdigest()
+        job_id = deterministic_deployment_job_id("dpl_example")
+        job = new_job(job_id, NOW, full_sync=True, trigger="deployment")
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "VERCEL_DEPLOY_WEBHOOK_SECRET": secret,
+                    "VERCEL_PROJECT_ID": "prj_example",
+                },
+            ),
+            patch(
+                "api.deploy.start_or_reuse_analysis",
+                return_value=(202, {"outcome": "started", "job": job}),
+            ) as start,
+        ):
+            response = API_CLIENT.post(
+                "/api/deploy",
+                content=raw,
+                headers={"x-vercel-signature": signature},
+            )
+        self.assertEqual((response.status_code, response.json()["outcome"]), (202, "started"))
+        start.assert_called_once_with(
+            force_refresh=True,
+            deterministic_job_id=job_id,
+            full_sync=True,
+            trigger="deployment",
+        )
+
+    def test_deployment_webhook_retries_while_another_job_is_active(self) -> None:
+        secret = "deployment-secret"
+        raw = json.dumps({
+            "type": "deployment.promoted",
+            "payload": {
+                "deployment": {"id": "dpl_example"},
+                "project": {"id": "prj_example"},
+            },
+        }, separators=(",", ":")).encode()
+        signature = hmac.new(secret.encode(), raw, hashlib.sha1).hexdigest()
+        other = new_job("analysis-manual", NOW)
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "VERCEL_DEPLOY_WEBHOOK_SECRET": secret,
+                    "VERCEL_PROJECT_ID": "prj_example",
+                },
+            ),
+            patch(
+                "api.deploy.start_or_reuse_analysis",
+                return_value=(202, {"outcome": "existing", "job": other}),
+            ),
+        ):
+            response = API_CLIENT.post(
+                "/api/deploy",
+                content=raw,
+                headers={"x-vercel-signature": signature},
+            )
+        self.assertEqual(response.status_code, 503)
 
     def test_post_returns_async_refresh_contract(self) -> None:
         job = new_job("analysis-20260807T06", NOW)
@@ -230,6 +370,33 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn("gameTag", serialized)
         self.assertIsNone(blobs.get_json(f"{STAGING_PREFIX}{job['id']}.json"))
         self.assertIsNone(jobs.active_job_id())
+
+    def test_deployment_job_discards_current_snapshot_for_full_sync(self) -> None:
+        blobs = MemoryBlobStore()
+        blobs.put_json(CURRENT_SNAPSHOT_PATH, {
+            "players": [{"playerId": "old-player"}],
+            "charts": [],
+            "scores": [],
+        })
+        jobs = MemoryJobStore()
+        job = new_job(
+            "analysis-deploy-test", NOW, full_sync=True, trigger="deployment"
+        )
+        jobs.save(job)
+        jobs.set_active_job_id(job["id"])
+        with patch(
+            "analysis_runtime.synchronize_phoenix2_snapshot",
+            wraps=synchronize_phoenix2_snapshot,
+        ) as synchronize:
+            result = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+            )
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNone(synchronize.call_args.args[1])
 
     def test_failed_worker_has_safe_error_and_five_minute_retry(self) -> None:
         blobs = MemoryBlobStore()

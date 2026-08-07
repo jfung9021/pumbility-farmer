@@ -97,7 +97,8 @@ The frontend is a Next.js application. The Python function at `/api/analyze` sup
 
 - `GET /api/analyze`: load the latest successful `AnalysisPayload` from private Vercel Blob.
 - `GET /api/analyze?jobId=...`: load a 24-hour queue-job status from Vercel Runtime Cache.
-- `POST /api/analyze`: return immediately with a fresh-result response or a queued/existing job.
+- `POST /api/analyze`: return immediately with a queued/existing job. The successful-run cooldown is temporarily disabled.
+- `POST /api/deploy`: accept signed Vercel `deployment.promoted` events and enqueue one full synchronization per production deployment.
 
 The response contracts are:
 
@@ -105,6 +106,8 @@ The response contracts are:
 200 { outcome: "fresh", generatedAtUtc, nextAllowedAtUtc }
 202 { outcome: "started" | "existing", job }
 ```
+
+The `fresh` response shape remains compatible for when the cooldown is restored, but it is not emitted while the successful-run freshness window is zero.
 
 The browser polls active jobs every two seconds (ten seconds in a hidden tab), displays the synchronization stage and player progress, then reloads the latest rankings after completion. All responses are read as text before conditional JSON parsing so a platform-generated timeout page is shown as a useful message instead of a JSON syntax error.
 
@@ -127,12 +130,15 @@ Configure these server-side variables:
 - `BLOB_READ_WRITE_TOKEN` — required; automatically provided after connecting a **private** Vercel Blob store.
 - `CRON_SECRET` — required; a sensitive random value of at least 16 characters used for the secured daily cron route.
 - `ANALYSIS_BOOTSTRAP_SAMPLES` — optional; defaults to 500.
+- `VERCEL_DEPLOY_WEBHOOK_SECRET` — required in Production; generated when creating the project-scoped deployment webhook.
 
-The daily cron is defined in `vercel.json` at `06:00 UTC` and applies exactly the same one-hour freshness, global-active-job, deterministic-ID, and five-minute failed-retry rules as the public run button. The worker has an 800-second function backstop.
+The daily cron is defined in `vercel.json` at `06:00 UTC`. Manual and scheduled requests retain global-active-job deduplication and the five-minute failed-retry rule, but the one-hour successful-run cooldown is temporarily disabled. The worker has an 800-second function backstop.
+
+A project-scoped Vercel account webhook listens for `deployment.promoted` and targets `/api/deploy`. The endpoint validates Vercel's HMAC-SHA1 `x-vercel-signature`, derives a deterministic job ID from the deployment ID, and requests a full player synchronization rather than an incremental one. If another refresh is active, it returns a non-2xx response so Vercel retries the promotion event with backoff.
 
 Set the linked Vercel project's Framework Preset to **Services** and its Default Max Duration to **800 seconds**. The backend's generated Celery subscriber inherits that project default; `vercel.json` also applies 800 seconds explicitly to source-backed Python functions.
 
-Never expose either secret through a `NEXT_PUBLIC_` variable. The private snapshot allowlists only player IDs, analysis-required chart/score fields, and per-player sync timestamps. It never stores usernames, game tags, API credentials, or other profile fields, and no raw snapshot route exists.
+Never expose server-side secrets through a `NEXT_PUBLIC_` variable. The private snapshot allowlists only player IDs, analysis-required chart/score fields, and per-player sync timestamps. It never stores usernames, game tags, API credentials, or other profile fields, and no raw snapshot route exists.
 
 ## Synchronization behavior
 

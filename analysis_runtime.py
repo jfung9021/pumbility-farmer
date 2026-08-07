@@ -34,7 +34,8 @@ CURRENT_SNAPSHOT_PATH = "analysis/private/phoenix2-current.json"
 RUNS_PREFIX = "analysis/runs/"
 STAGING_PREFIX = "analysis/staging/"
 JOB_TTL_SECONDS = 24 * 60 * 60
-FRESHNESS = timedelta(hours=1)
+# Temporarily disabled: successful runs do not impose a manual-refresh cooldown.
+FRESHNESS = timedelta(0)
 FAILED_RETRY_DELAY = timedelta(minutes=5)
 STAGING_MAX_AGE = timedelta(hours=24)
 RUN_RETENTION = 10
@@ -256,7 +257,14 @@ class MemoryJobStore:
             self.latest = job_id
 
 
-def new_job(job_id: str, now: datetime, *, attempt: int = 0) -> dict[str, Any]:
+def new_job(
+    job_id: str,
+    now: datetime,
+    *,
+    attempt: int = 0,
+    full_sync: bool = False,
+    trigger: str = "manual",
+) -> dict[str, Any]:
     timestamp = isoformat_utc(now)
     return {
         "id": job_id,
@@ -276,6 +284,8 @@ def new_job(job_id: str, now: datetime, *, attempt: int = 0) -> dict[str, Any]:
         "retryAllowedAtUtc": None,
         "error": None,
         "attempt": attempt,
+        "fullSync": full_sync,
+        "trigger": trigger,
     }
 
 
@@ -304,7 +314,16 @@ def deterministic_hourly_job_id(now: datetime, attempt: int = 0) -> str:
     return base if attempt <= 0 else f"{base}-r{attempt}"
 
 
+def deterministic_deployment_job_id(deployment_id: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_-]", "-", deployment_id.strip())[:80]
+    if not normalized:
+        raise ValueError("A deployment refresh requires a deployment ID.")
+    return f"analysis-deploy-{normalized}"
+
+
 def _fresh_result(payload: Mapping[str, Any] | None, now: datetime) -> tuple[str, str] | None:
+    if FRESHNESS <= timedelta(0):
+        return None
     summary = payload.get("summary") if payload else None
     if not isinstance(summary, Mapping) or summary.get("scriptVersion") != SCRIPT_VERSION:
         return None
@@ -326,18 +345,13 @@ def request_refresh(
     enqueue: Enqueue,
     *,
     now: datetime | None = None,
+    force_refresh: bool = False,
+    deterministic_job_id: str | None = None,
+    full_sync: bool = False,
+    trigger: str = "manual",
 ) -> tuple[int, dict[str, Any]]:
     """Apply freshness, global-active, and failed-retry rules before enqueueing."""
     effective_now = now or utc_now()
-    latest_payload = blobs.get_json(LATEST_BLOB_PATH)
-    if fresh := _fresh_result(latest_payload, effective_now):
-        generated_at, next_allowed_at = fresh
-        return 200, {
-            "outcome": "fresh",
-            "generatedAtUtc": generated_at,
-            "nextAllowedAtUtc": next_allowed_at,
-        }
-
     active_id = jobs.active_job_id()
     active = jobs.get(active_id) if active_id else None
     if active and active.get("status") in {"queued", "running"}:
@@ -345,23 +359,44 @@ def request_refresh(
     if active_id:
         jobs.set_active_job_id(None)
 
+    deterministic_existing = jobs.get(deterministic_job_id) if deterministic_job_id else None
+    if deterministic_existing and deterministic_existing.get("status") in {
+        "queued", "running", "completed"
+    }:
+        return 202, {"outcome": "existing", "job": deterministic_existing}
+
+    latest_payload = blobs.get_json(LATEST_BLOB_PATH)
+    if not force_refresh and (fresh := _fresh_result(latest_payload, effective_now)):
+        generated_at, next_allowed_at = fresh
+        return 200, {
+            "outcome": "fresh",
+            "generatedAtUtc": generated_at,
+            "nextAllowedAtUtc": next_allowed_at,
+        }
+
     latest_job_id = jobs.latest_job_id()
-    previous = jobs.get(latest_job_id) if latest_job_id else None
+    previous = deterministic_existing or (jobs.get(latest_job_id) if latest_job_id else None)
     if previous and previous.get("status") == "failed":
         retry_at = parse_utc(previous.get("retryAllowedAtUtc"))
         if retry_at is not None and effective_now < retry_at:
             return 202, {"outcome": "existing", "job": previous}
 
-    attempt = 0
-    if previous:
+    attempt = int(previous.get("attempt") or 0) + 1 if deterministic_existing else 0
+    if previous and not deterministic_job_id:
         previous_base = deterministic_hourly_job_id(effective_now)
         if str(previous.get("id", "")).startswith(previous_base):
             attempt = int(previous.get("attempt") or 0) + 1
-    job_id = deterministic_hourly_job_id(effective_now, attempt)
-    while jobs.get(job_id) is not None:
+    job_id = deterministic_job_id or deterministic_hourly_job_id(effective_now, attempt)
+    while not deterministic_job_id and jobs.get(job_id) is not None:
         attempt += 1
         job_id = deterministic_hourly_job_id(effective_now, attempt)
-    job = new_job(job_id, effective_now, attempt=attempt)
+    job = new_job(
+        job_id,
+        effective_now,
+        attempt=attempt,
+        full_sync=full_sync,
+        trigger=trigger,
+    )
     jobs.save(job)
     jobs.set_latest_job_id(job_id)
     jobs.set_active_job_id(job_id)
@@ -553,7 +588,7 @@ def execute_analysis_job(
 
             snapshot, _ = synchronize_phoenix2_snapshot(
                 effective_client,
-                current,
+                None if existing.get("fullSync") else current,
                 job_id=job_id,
                 resume_staging=resume,
                 workers=6,

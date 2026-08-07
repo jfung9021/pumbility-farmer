@@ -136,7 +136,6 @@ export default function Home() {
   const [message, setMessage] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
   const [job, setJob] = useState<AnalysisJobStatus | null>(null);
-  const [nextAllowedAtUtc, setNextAllowedAtUtc] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(0);
   const [tabVisible, setTabVisible] = useState(true);
 
@@ -151,8 +150,6 @@ export default function Home() {
       const latest = await readJsonResponse<AnalysisPayload>(response);
       setPayload(latest);
       setIsDemo(false);
-      const generated = new Date(latest.generatedAtUtc).getTime();
-      setNextAllowedAtUtc(Number.isNaN(generated) ? null : new Date(generated + 3_600_000).toISOString());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load the latest analysis.");
     } finally {
@@ -231,7 +228,6 @@ export default function Home() {
       const response = await fetch("/api/analyze", { method: "POST" });
       const body = await readJsonResponse<AnalysisRefreshResponse>(response);
       if (body.outcome === "fresh") {
-        setNextAllowedAtUtc(body.nextAllowedAtUtc);
         setMessage("The current rankings are still fresh; no new job was started.");
         await loadLatest();
         return;
@@ -244,13 +240,10 @@ export default function Home() {
     }
   };
 
-  const cooldownMs = nextAllowedAtUtc && nowMs
-    ? Math.max(0, new Date(nextAllowedAtUtc).getTime() - nowMs)
-    : 0;
   const failedRetryMs = job?.status === "failed" && job.retryAllowedAtUtc && nowMs
     ? Math.max(0, new Date(job.retryAllowedAtUtc).getTime() - nowMs)
     : 0;
-  const runDisabled = jobIsActive || cooldownMs > 0 || failedRetryMs > 0;
+  const runDisabled = jobIsActive || failedRetryMs > 0;
 
   const modeCharts = payload?.[activeMode] || [];
   const modeSummary = payload?.summary.modes[activeMode];
@@ -288,11 +281,9 @@ export default function Home() {
           : "No stored analysis yet. Run one to create the first ranking.");
   const buttonLabel = jobIsActive
     ? "Refreshing…"
-    : cooldownMs > 0
-      ? `Ready in ${durationLabel(cooldownMs)}`
-      : failedRetryMs > 0
-        ? `Retry in ${durationLabel(failedRetryMs)}`
-        : "Refresh rankings";
+    : failedRetryMs > 0
+      ? `Retry in ${durationLabel(failedRetryMs)}`
+      : "Refresh rankings";
 
   return (
     <main>
@@ -325,7 +316,6 @@ export default function Home() {
         </div>
         <div className="refresh-meta" aria-live="polite">
           {payload && nowMs ? <span>Refresh age: <b>{refreshAge(payload.generatedAtUtc, nowMs)}</b></span> : null}
-          {cooldownMs > 0 ? <span>Next refresh: <b>{durationLabel(cooldownMs)}</b></span> : null}
           {job?.status === "failed" && failedRetryMs > 0
             ? <span>Retry available in <b>{durationLabel(failedRetryMs)}</b></span>
             : null}

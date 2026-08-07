@@ -15,9 +15,19 @@ def enqueue_analysis(job_id: str) -> None:
     )
 
 
-def start_or_reuse_analysis() -> tuple[int, dict[str, Any]]:
+def start_or_reuse_analysis(
+    *,
+    force_refresh: bool = False,
+    deterministic_job_id: str | None = None,
+    full_sync: bool = False,
+    trigger: str = "manual",
+) -> tuple[int, dict[str, Any]]:
     return request_refresh(
         PrivateBlobStore(),
         RuntimeJobStore(),
         enqueue_analysis,
+        force_refresh=force_refresh,
+        deterministic_job_id=deterministic_job_id,
+        full_sync=full_sync,
+        trigger=trigger,
     )
