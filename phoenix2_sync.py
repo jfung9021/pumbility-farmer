@@ -1,0 +1,440 @@
+"""Incremental, privacy-minimized Phoenix 2 snapshot synchronization."""
+
+from __future__ import annotations
+
+import math
+from collections import Counter, defaultdict
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Mapping, Protocol, Sequence
+
+
+MIX = "Phoenix2"
+SNAPSHOT_SCHEMA_VERSION = 1
+DEFAULT_WORKERS = 6
+DEFAULT_CHECKPOINT_EVERY = 50
+EMPTY_RECHECK_AFTER = timedelta(days=1)
+
+CHART_FIELDS = (
+    "id",
+    "songName",
+    "type",
+    "level",
+    "difficulty",
+    "imageUrl",
+    "noteCount",
+    "stepArtist",
+)
+SCORE_FIELDS = (
+    "playerId",
+    "chartId",
+    "pumbility",
+    "score",
+    "recordedAt",
+    "isBroken",
+)
+
+ProgressCallback = Callable[[int, int, str], None]
+CheckpointCallback = Callable[[dict[str, Any]], None]
+
+
+class CollectionClient(Protocol):
+    def fetch_page_collection(
+        self,
+        initial_path: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> list[dict[str, Any]]: ...
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def isoformat_utc(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def parse_utc(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def sanitize_chart(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    chart_id = row.get("id")
+    if chart_id is None or str(chart_id).strip() == "":
+        return None
+    sanitized = {field: row.get(field) for field in CHART_FIELDS}
+    sanitized["id"] = str(chart_id)
+    return sanitized
+
+
+def sanitize_score(row: Mapping[str, Any], player_id: str | None = None) -> dict[str, Any] | None:
+    effective_player_id = player_id if player_id is not None else row.get("playerId")
+    chart_id = row.get("chartId")
+    pumbility = _finite_number(row.get("pumbility"))
+    if (
+        effective_player_id is None
+        or str(effective_player_id).strip() == ""
+        or chart_id is None
+        or str(chart_id).strip() == ""
+        or pumbility is None
+        or bool(row.get("isBroken", False))
+    ):
+        return None
+    score = _finite_number(row.get("score"))
+    sanitized = {
+        "playerId": str(effective_player_id),
+        "chartId": str(chart_id),
+        "pumbility": pumbility,
+        "score": score,
+        "recordedAt": str(row.get("recordedAt") or ""),
+        "isBroken": False,
+    }
+    return sanitized
+
+
+def _score_priority(row: Mapping[str, Any]) -> tuple[float, float, str, str]:
+    return (
+        _finite_number(row.get("pumbility")) or -math.inf,
+        _finite_number(row.get("score")) or -math.inf,
+        str(row.get("recordedAt") or ""),
+        str(row.get("chartId") or ""),
+    )
+
+
+def merge_best_scores(
+    existing: Sequence[Mapping[str, Any]],
+    incoming: Sequence[Mapping[str, Any]],
+    *,
+    player_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Merge deterministically by player/chart and retain the best valid row."""
+    best: dict[tuple[str, str], dict[str, Any]] = {}
+    for source in (existing, incoming):
+        for raw in source:
+            row = sanitize_score(raw, player_id=player_id)
+            if row is None:
+                continue
+            key = (row["playerId"], row["chartId"])
+            current = best.get(key)
+            if current is None or _score_priority(row) > _score_priority(current):
+                best[key] = row
+    return [best[key] for key in sorted(best)]
+
+
+def sanitize_snapshot(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
+    source = snapshot if isinstance(snapshot, Mapping) else {}
+    charts = [
+        sanitized
+        for raw in source.get("charts", [])
+        if isinstance(raw, Mapping) and (sanitized := sanitize_chart(raw)) is not None
+    ]
+    scores = merge_best_scores(
+        [],
+        [raw for raw in source.get("scores", []) if isinstance(raw, Mapping)],
+    )
+    players: list[dict[str, Any]] = []
+    seen_players: set[str] = set()
+    for raw in source.get("players", []):
+        if not isinstance(raw, Mapping):
+            continue
+        raw_id = raw.get("playerId", raw.get("userId"))
+        if raw_id is None or str(raw_id).strip() == "":
+            continue
+        player_id = str(raw_id)
+        if player_id in seen_players:
+            continue
+        seen_players.add(player_id)
+        players.append(
+            {
+                "playerId": player_id,
+                "lastSyncedAtUtc": str(raw.get("lastSyncedAtUtc") or ""),
+                "lastScoreRecordedAtUtc": (
+                    str(raw.get("lastScoreRecordedAtUtc"))
+                    if raw.get("lastScoreRecordedAtUtc")
+                    else None
+                ),
+            }
+        )
+    return {
+        "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
+        "mix": MIX,
+        "generatedAtUtc": str(source.get("generatedAtUtc") or ""),
+        "players": sorted(players, key=lambda row: row["playerId"]),
+        "charts": sorted(charts, key=lambda row: row["id"]),
+        "scores": scores,
+    }
+
+
+def _last_score_recorded_at(rows: Sequence[Mapping[str, Any]]) -> str | None:
+    values = sorted(str(row.get("recordedAt") or "") for row in rows if row.get("recordedAt"))
+    return values[-1] if values else None
+
+
+def _staging_payload(
+    *,
+    job_id: str,
+    created_at: str,
+    updated_at: str,
+    run_started_at: str,
+    consented_player_ids: Sequence[str],
+    completed_player_ids: set[str],
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "jobId": job_id,
+        "createdAtUtc": created_at,
+        "updatedAtUtc": updated_at,
+        "runStartedAtUtc": run_started_at,
+        "consentedPlayerIds": sorted(consented_player_ids),
+        "completedPlayerIds": sorted(completed_player_ids),
+        "snapshot": sanitize_snapshot(snapshot),
+    }
+
+
+def synchronize_phoenix2_snapshot(
+    client: CollectionClient,
+    current_snapshot: Mapping[str, Any] | None,
+    *,
+    job_id: str,
+    resume_staging: Mapping[str, Any] | None = None,
+    workers: int = DEFAULT_WORKERS,
+    checkpoint_every: int = DEFAULT_CHECKPOINT_EVERY,
+    empty_recheck_after: timedelta = EMPTY_RECHECK_AFTER,
+    progress: ProgressCallback | None = None,
+    checkpoint: CheckpointCallback | None = None,
+    now: Callable[[], datetime] = utc_now,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Fetch consent and charts, then incrementally synchronize player scores."""
+    run_started = now()
+    run_started_iso = isoformat_utc(run_started)
+    players_full = client.fetch_page_collection("api/v2/players", {"limit": 100})
+    consented_ids = sorted(
+        {
+            str(row["userId"])
+            for row in players_full
+            if row.get("userId") is not None and str(row.get("userId")).strip()
+        }
+    )
+    if not consented_ids:
+        from piu_misgrade_analyzer import ApiError
+
+        raise ApiError(
+            "The PIU Scores credential returned no consented players for this tool."
+        )
+    if progress:
+        progress(0, len(consented_ids), f"Discovered {len(consented_ids):,} consented players.")
+
+    charts_full = client.fetch_page_collection("api/v2/charts", {"mix": MIX, "limit": 100})
+    charts = [
+        sanitized
+        for raw in charts_full
+        if (sanitized := sanitize_chart(raw)) is not None
+    ]
+    charts.sort(key=lambda row: row["id"])
+    if not charts:
+        from piu_misgrade_analyzer import ApiError
+
+        raise ApiError("The Phoenix 2 chart catalog was empty.")
+    valid_chart_ids = {row["id"] for row in charts}
+
+    current = sanitize_snapshot(current_snapshot)
+    resume = resume_staging if isinstance(resume_staging, Mapping) else {}
+    can_resume = resume.get("jobId") == job_id and isinstance(resume.get("snapshot"), Mapping)
+    working = sanitize_snapshot(resume.get("snapshot") if can_resume else current)
+    consented_set = set(consented_ids)
+    working_scores = [
+        row
+        for row in working["scores"]
+        if row["playerId"] in consented_set and row["chartId"] in valid_chart_ids
+    ]
+    scores_by_player: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in working_scores:
+        scores_by_player[row["playerId"]].append(row)
+
+    current_player_meta = {row["playerId"]: row for row in current["players"]}
+    working_player_meta = {
+        row["playerId"]: row
+        for row in working["players"]
+        if row["playerId"] in consented_set
+    }
+    completed = (
+        {
+            str(player_id)
+            for player_id in resume.get("completedPlayerIds", [])
+            if str(player_id) in consented_set
+        }
+        if can_resume
+        else set()
+    )
+    created_at = (
+        str(resume.get("createdAtUtc"))
+        if can_resume and resume.get("createdAtUtc")
+        else run_started_iso
+    )
+    boundary_iso = (
+        str(resume.get("runStartedAtUtc"))
+        if can_resume and resume.get("runStartedAtUtc")
+        else run_started_iso
+    )
+
+    def build_working_snapshot() -> dict[str, Any]:
+        players: list[dict[str, Any]] = []
+        all_scores: list[dict[str, Any]] = []
+        for player_id in consented_ids:
+            rows = merge_best_scores([], scores_by_player.get(player_id, []), player_id=player_id)
+            all_scores.extend(rows)
+            metadata = working_player_meta.get(player_id) or current_player_meta.get(player_id) or {}
+            players.append(
+                {
+                    "playerId": player_id,
+                    "lastSyncedAtUtc": str(metadata.get("lastSyncedAtUtc") or ""),
+                    "lastScoreRecordedAtUtc": _last_score_recorded_at(rows),
+                }
+            )
+        return {
+            "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
+            "mix": MIX,
+            "generatedAtUtc": boundary_iso,
+            "players": players,
+            "charts": charts,
+            "scores": all_scores,
+        }
+
+    def save_checkpoint() -> dict[str, Any]:
+        payload = _staging_payload(
+            job_id=job_id,
+            created_at=created_at,
+            updated_at=isoformat_utc(now()),
+            run_started_at=boundary_iso,
+            consented_player_ids=consented_ids,
+            completed_player_ids=completed,
+            snapshot=build_working_snapshot(),
+        )
+        if checkpoint:
+            checkpoint(payload)
+        return payload
+
+    completed_since_checkpoint = 0
+    for player_id in consented_ids:
+        if player_id in completed:
+            continue
+        previous = current_player_meta.get(player_id)
+        if previous is None or scores_by_player.get(player_id):
+            continue
+        last_synced = parse_utc(previous.get("lastSyncedAtUtc"))
+        if last_synced is not None and run_started - last_synced < empty_recheck_after:
+            working_player_meta[player_id] = dict(previous)
+            completed.add(player_id)
+            completed_since_checkpoint += 1
+            if progress:
+                progress(
+                    len(completed),
+                    len(consented_ids),
+                    "Skipping recently checked players with no Phoenix 2 scores.",
+                )
+            if checkpoint_every > 0 and completed_since_checkpoint >= checkpoint_every:
+                save_checkpoint()
+                completed_since_checkpoint = 0
+
+    def fetch_player(player_id: str) -> tuple[str, list[dict[str, Any]]]:
+        params: dict[str, Any] = {"mix": MIX, "limit": 100}
+        previous = current_player_meta.get(player_id)
+        if previous is not None and scores_by_player.get(player_id):
+            recorded_after = str(previous.get("lastSyncedAtUtc") or "").strip()
+            if recorded_after:
+                params["recordedAfter"] = recorded_after
+        rows = client.fetch_page_collection(f"api/v2/players/{player_id}/scores", params)
+        return player_id, rows
+
+    remaining = [player_id for player_id in consented_ids if player_id not in completed]
+    executor = ThreadPoolExecutor(max_workers=max(1, int(workers)), thread_name_prefix="phoenix2")
+    futures: dict[Future[tuple[str, list[dict[str, Any]]]], str] = {
+        executor.submit(fetch_player, player_id): player_id for player_id in remaining
+    }
+    try:
+        for future in as_completed(futures):
+            player_id, incoming = future.result()
+            scores_by_player[player_id] = merge_best_scores(
+                scores_by_player.get(player_id, []), incoming, player_id=player_id
+            )
+            working_player_meta[player_id] = {
+                "playerId": player_id,
+                "lastSyncedAtUtc": boundary_iso,
+                "lastScoreRecordedAtUtc": _last_score_recorded_at(scores_by_player[player_id]),
+            }
+            completed.add(player_id)
+            completed_since_checkpoint += 1
+            if progress:
+                progress(
+                    len(completed),
+                    len(consented_ids),
+                    f"Synchronized {len(completed):,} of {len(consented_ids):,} players.",
+                )
+            if checkpoint_every > 0 and completed_since_checkpoint >= checkpoint_every:
+                save_checkpoint()
+                completed_since_checkpoint = 0
+    except Exception:
+        for future in futures:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
+
+    final_snapshot = sanitize_snapshot(build_working_snapshot())
+    final_snapshot["generatedAtUtc"] = boundary_iso
+    final_staging = save_checkpoint()
+    return final_snapshot, final_staging
+
+
+def analyzer_input(
+    snapshot: Mapping[str, Any],
+    *,
+    minimum_scores_per_mode: int = 30,
+    eligible_only: bool = True,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return deterministic analyzer rows, excluding empty/ineligible players."""
+    clean = sanitize_snapshot(snapshot)
+    chart_type = {str(row["id"]): str(row.get("type") or "") for row in clean["charts"]}
+    counts: Counter[tuple[str, str]] = Counter()
+    nonempty: set[str] = set()
+    for row in clean["scores"]:
+        mode = chart_type.get(row["chartId"])
+        if mode not in {"Single", "Double"}:
+            continue
+        player_id = row["playerId"]
+        nonempty.add(player_id)
+        counts[(player_id, mode)] += 1
+    if eligible_only:
+        selected = {
+            player_id
+            for player_id in nonempty
+            if counts[(player_id, "Single")] >= minimum_scores_per_mode
+            or counts[(player_id, "Double")] >= minimum_scores_per_mode
+        }
+    else:
+        selected = nonempty
+    players = [{"userId": player_id} for player_id in sorted(selected)]
+    scores = [row for row in clean["scores"] if row["playerId"] in selected]
+    return players, clean["charts"], scores

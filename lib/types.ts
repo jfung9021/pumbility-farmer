@@ -54,3 +54,36 @@ export interface AnalysisPayload {
   doubles: ChartResult[];
   relativeGroups: Array<{ rank: number; name: string }>;
 }
+
+export type AnalysisJobState = "queued" | "running" | "completed" | "failed";
+export type AnalysisJobStage = "discovering" | "syncing" | "analyzing" | "publishing";
+
+export interface AnalysisJobStatus {
+  id: string;
+  status: AnalysisJobState;
+  stage: AnalysisJobStage;
+  progress: {
+    current: number;
+    total: number;
+    percent: number;
+    message: string;
+  };
+  createdAtUtc: string;
+  updatedAtUtc: string;
+  startedAtUtc: string | null;
+  completedAtUtc: string | null;
+  generatedAtUtc: string | null;
+  retryAllowedAtUtc: string | null;
+  error: string | null;
+}
+
+export type AnalysisRefreshResponse =
+  | {
+      outcome: "fresh";
+      generatedAtUtc: string;
+      nextAllowedAtUtc: string;
+    }
+  | {
+      outcome: "started" | "existing";
+      job: AnalysisJobStatus;
+    };

@@ -1,8 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { demoPayload } from "../lib/demo-data";
-import type { AnalysisPayload, ChartResult, EvidenceStatus, ModeKey } from "../lib/types";
+import { readJsonResponse } from "../lib/api-response";
+import type {
+  AnalysisJobStatus,
+  AnalysisPayload,
+  AnalysisRefreshResponse,
+  ChartResult,
+  EvidenceStatus,
+  ModeKey,
+} from "../lib/types";
 
 type FilterState = {
   query: string;
@@ -40,6 +48,25 @@ function formatRunTime(value: string): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+}
+
+function durationLabel(milliseconds: number): string {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function refreshAge(value: string, nowMs: number): string {
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) return "unknown age";
+  const elapsed = Math.max(0, nowMs - timestamp);
+  if (elapsed < 60_000) return "just now";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
+  return `${Math.floor(elapsed / 3_600_000)}h ago`;
 }
 
 function ChartCard({ chart }: { chart: ChartResult }) {
@@ -102,11 +129,33 @@ export default function Home() {
     singles: { ...initialFilter },
     doubles: { ...initialFilter },
   });
-  const [runKey, setRunKey] = useState("");
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
+  const [job, setJob] = useState<AnalysisJobStatus | null>(null);
+  const [nextAllowedAtUtc, setNextAllowedAtUtc] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(0);
+  const [tabVisible, setTabVisible] = useState(true);
+
+  const loadLatest = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
+    try {
+      const response = await fetch("/api/analyze", { cache: "no-store" });
+      if (response.status === 404) {
+        setPayload(null);
+        return;
+      }
+      const latest = await readJsonResponse<AnalysisPayload>(response);
+      setPayload(latest);
+      setIsDemo(false);
+      const generated = new Date(latest.generatedAtUtc).getTime();
+      setNextAllowedAtUtc(Number.isNaN(generated) ? null : new Date(generated + 3_600_000).toISOString());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not load the latest analysis.");
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     const useDemo = new URLSearchParams(window.location.search).get("demo") === "1"
@@ -117,37 +166,88 @@ export default function Home() {
       setLoading(false);
       return;
     }
-    fetch("/api/analyze", { cache: "no-store" })
-      .then(async (response) => {
-        if (response.status === 404) return null;
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.error || "Could not load the latest analysis.");
-        return body as AnalysisPayload;
-      })
-      .then(setPayload)
-      .catch((error: Error) => setMessage(error.message))
-      .finally(() => setLoading(false));
+    void loadLatest(true);
+    const storedJobId = window.localStorage.getItem("analysisJobId");
+    if (storedJobId) {
+      fetch(`/api/analyze?jobId=${encodeURIComponent(storedJobId)}`, { cache: "no-store" })
+        .then((response) => readJsonResponse<AnalysisJobStatus>(response))
+        .then(setJob)
+        .catch(() => window.localStorage.removeItem("analysisJobId"));
+    }
+  }, [loadLatest]);
+
+  useEffect(() => {
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    const onVisibility = () => setTabVisible(document.visibilityState === "visible");
+    onVisibility();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
+  const jobIsActive = job?.status === "queued" || job?.status === "running";
+  useEffect(() => {
+    if (!job?.id || !jobIsActive) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/analyze?jobId=${encodeURIComponent(job.id)}`, {
+          cache: "no-store",
+        });
+        const status = await readJsonResponse<AnalysisJobStatus>(response);
+        if (cancelled) return;
+        setJob(status);
+        if (status.status === "completed") {
+          setMessage("Analysis complete. Both ranking sets have been refreshed.");
+          window.localStorage.removeItem("analysisJobId");
+          await loadLatest();
+          return;
+        }
+        if (status.status === "failed") return;
+      } catch (error) {
+        if (!cancelled) {
+          setMessage(error instanceof Error ? error.message : "Could not read analysis progress.");
+        }
+      }
+      if (!cancelled) timer = window.setTimeout(poll, tabVisible ? 2000 : 10_000);
+    };
+    timer = window.setTimeout(poll, 0);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [job?.id, jobIsActive, loadLatest, tabVisible]);
+
   const runAnalysis = async () => {
-    setRunning(true);
-    setMessage("Pulling shared scores and calculating separate mode rankings. This may take a few minutes.");
+    setMessage("Starting a background refresh…");
     try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: runKey ? { "X-Run-Secret": runKey } : undefined,
-      });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "Analysis failed.");
-      setPayload(body as AnalysisPayload);
-      setIsDemo(false);
-      setMessage("Analysis complete. Both ranking sets have been refreshed.");
+      const response = await fetch("/api/analyze", { method: "POST" });
+      const body = await readJsonResponse<AnalysisRefreshResponse>(response);
+      if (body.outcome === "fresh") {
+        setNextAllowedAtUtc(body.nextAllowedAtUtc);
+        setMessage("The current rankings are still fresh; no new job was started.");
+        await loadLatest();
+        return;
+      }
+      setJob(body.job);
+      window.localStorage.setItem("analysisJobId", body.job.id);
+      setMessage(body.outcome === "existing" ? "Following the refresh already in progress." : null);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Analysis failed.");
-    } finally {
-      setRunning(false);
     }
   };
+
+  const cooldownMs = nextAllowedAtUtc && nowMs
+    ? Math.max(0, new Date(nextAllowedAtUtc).getTime() - nowMs)
+    : 0;
+  const failedRetryMs = job?.status === "failed" && job.retryAllowedAtUtc && nowMs
+    ? Math.max(0, new Date(job.retryAllowedAtUtc).getTime() - nowMs)
+    : 0;
+  const runDisabled = jobIsActive || cooldownMs > 0 || failedRetryMs > 0;
 
   const modeCharts = payload?.[activeMode] || [];
   const modeSummary = payload?.summary.modes[activeMode];
@@ -174,6 +274,23 @@ export default function Home() {
     }));
   };
 
+  const statusText = loading
+    ? "Loading the latest analysis…"
+    : jobIsActive && job
+      ? `${job.stage[0].toUpperCase()}${job.stage.slice(1)}: ${job.progress.message}`
+      : job?.status === "failed"
+        ? `Refresh failed: ${job.error || "The worker did not complete."}`
+        : message || (payload
+          ? `Last completed ${formatRunTime(payload.generatedAtUtc)}`
+          : "No stored analysis yet. Run one to create the first ranking.");
+  const buttonLabel = jobIsActive
+    ? "Refreshing…"
+    : cooldownMs > 0
+      ? `Ready in ${durationLabel(cooldownMs)}`
+      : failedRetryMs > 0
+        ? `Retry in ${durationLabel(failedRetryMs)}`
+        : "Refresh rankings";
+
   return (
     <main>
       <div className="ambient ambient-one" />
@@ -184,16 +301,9 @@ export default function Home() {
           <span>Pumbility <b>Farmer</b></span>
         </a>
         <div className="run-area">
-          <details className="run-key">
-            <summary>Run access</summary>
-            <label>
-              Optional run key
-              <input value={runKey} onChange={(event) => setRunKey(event.target.value)} type="password" />
-            </label>
-          </details>
-          <button className="run-button" disabled={running} onClick={runAnalysis} type="button">
-            <span className={running ? "spinner" : "run-icon"}>{running ? "" : "↻"}</span>
-            {running ? "Analyzing…" : "Run analysis"}
+          <button className="run-button" disabled={runDisabled} onClick={runAnalysis} type="button">
+            <span className={jobIsActive ? "spinner" : "run-icon"}>{jobIsActive ? "" : "↻"}</span>
+            {buttonLabel}
           </button>
         </div>
       </header>
@@ -206,15 +316,31 @@ export default function Home() {
           Singles and Doubles are modeled, calibrated, and ranked independently.
         </p>
         <div className="run-status" aria-live="polite">
-          <span className={running ? "status-live" : "status-dot"} />
-          {loading ? "Loading the latest analysis…" : message || (payload
-            ? `Last completed ${formatRunTime(payload.generatedAtUtc)}`
-            : "No stored analysis yet. Run one to create the first ranking.")}
+          <span className={jobIsActive ? "status-live" : "status-dot"} />
+          <span>{statusText}</span>
           {isDemo ? <b>Demo data</b> : null}
         </div>
+        <div className="refresh-meta" aria-live="polite">
+          {payload && nowMs ? <span>Refresh age: <b>{refreshAge(payload.generatedAtUtc, nowMs)}</b></span> : null}
+          {cooldownMs > 0 ? <span>Next refresh: <b>{durationLabel(cooldownMs)}</b></span> : null}
+          {job?.status === "failed" && failedRetryMs > 0
+            ? <span>Retry available in <b>{durationLabel(failedRetryMs)}</b></span>
+            : null}
+        </div>
+        {jobIsActive && job ? (
+          <div className="job-progress" aria-label={`${job.progress.percent}% complete`}>
+            <div style={{ width: `${Math.max(0, Math.min(100, job.progress.percent))}%` }} />
+            <span>
+              {job.progress.total > 0
+                ? `${job.progress.current.toLocaleString()} / ${job.progress.total.toLocaleString()} players`
+                : "Preparing player synchronization"}
+              <b>{job.progress.percent}%</b>
+            </span>
+          </div>
+        ) : null}
       </section>
 
-      <section className="dashboard" aria-busy={loading || running}>
+      <section className="dashboard" aria-busy={loading || jobIsActive}>
         <div className="mode-tabs" role="tablist" aria-label="Chart mode">
           {(["singles", "doubles"] as ModeKey[]).map((mode) => (
             <button
