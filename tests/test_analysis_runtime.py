@@ -256,6 +256,22 @@ class ApiRouteTests(unittest.TestCase):
                 "schemaVersion": 1,
                 "generatedAtUtc": isoformat_utc(NOW),
                 "method": {"baselineRanks": [11, 30]},
+                "charts": [
+                    {
+                        "chartId": "single-easy-farm",
+                        "songName": "Easy Farm",
+                        "type": "Single",
+                        "level": 22,
+                        "estimatedDifficulty": 21.75,
+                    },
+                    {
+                        "chartId": "single-too-hard",
+                        "songName": "Too Hard",
+                        "type": "Single",
+                        "level": 23,
+                        "estimatedDifficulty": 23.01,
+                    },
+                ],
                 "players": [
                     {
                         "playerKey": "public-key",
@@ -282,6 +298,7 @@ class ApiRouteTests(unittest.TestCase):
         with patch("api.recommendations.PrivateBlobStore", return_value=blobs):
             players = API_CLIENT.get("/api/recommendations/players")
             selected = API_CLIENT.get("/api/recommendations?playerKey=public-key")
+            manual = API_CLIENT.get("/api/recommendations?rating=22.5")
             missing = API_CLIENT.get("/api/recommendations?playerKey=missing")
         self.assertEqual(players.status_code, 200)
         self.assertEqual(players.json()["players"][0]["username"], "PLAYER")
@@ -291,14 +308,29 @@ class ApiRouteTests(unittest.TestCase):
         )
         self.assertNotIn("modes", players.json()["players"][0])
         self.assertEqual(selected.json()["player"]["playerKey"], "public-key")
+        self.assertEqual(manual.status_code, 200)
+        self.assertTrue(manual.json()["player"]["manual"])
+        self.assertEqual(
+            [
+                row["chartId"]
+                for row in manual.json()["player"]["modes"]["singles"]["candidates"]
+            ],
+            ["single-easy-farm"],
+        )
+        self.assertEqual(
+            manual.json()["player"]["modes"]["singles"]["candidateRange"],
+            [None, 23.0],
+        )
         self.assertEqual(missing.status_code, 404)
 
     def test_recommendations_require_a_player_key_and_generated_index(self) -> None:
         blobs = MemoryBlobStore()
         with patch("api.recommendations.PrivateBlobStore", return_value=blobs):
             no_key = API_CLIENT.get("/api/recommendations")
+            invalid_rating = API_CLIENT.get("/api/recommendations?rating=not-a-number")
             no_index = API_CLIENT.get("/api/recommendations/players")
         self.assertEqual(no_key.status_code, 400)
+        self.assertEqual(invalid_rating.status_code, 400)
         self.assertEqual(no_index.status_code, 404)
 
     def test_mix_specific_cron_route_rejects_archived_phoenix1(self) -> None:
