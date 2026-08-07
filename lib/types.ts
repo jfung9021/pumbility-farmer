@@ -5,6 +5,8 @@ export interface ChartResult {
   mode: "Singles" | "Doubles";
   modeRank: number | null;
   levelRank: number | null;
+  levelPercentile: number | null;
+  levelComparisonCharts: number | null;
   folder: string;
   relativeGroupRank: number | null;
   relativeGroup: string | null;

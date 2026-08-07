@@ -1,7 +1,12 @@
+import json
 import unittest
+from pathlib import Path
+
+import pandas as pd
 
 from piu_misgrade_analyzer import (
     AnalysisConfig,
+    apply_within_level_difficulty,
     analyze_snapshot,
     folder_for,
     make_synthetic_snapshot,
@@ -41,9 +46,37 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(folder_for("Single", 27), "S27")
         self.assertEqual(folder_for("Double", 31), "D31")
         self.assertIsNone(folder_for("Single", 19))
-        self.assertEqual(relative_difficulty_group(-3.3), (1, "Extremely Easy"))
-        self.assertEqual(relative_difficulty_group(0.0), (6, "Typical"))
-        self.assertEqual(relative_difficulty_group(2.2), (10, "Extremely Hard"))
+        self.assertEqual(relative_difficulty_group(0.02), (1, "Extremely Easy"))
+        self.assertEqual(relative_difficulty_group(0.5), (6, "Typical"))
+        self.assertEqual(relative_difficulty_group(0.98), (10, "Extremely Hard"))
+
+    def test_each_folder_uses_its_own_reference_and_percentile_groups(self) -> None:
+        frame = pd.DataFrame([
+            {
+                "folder": folder,
+                "level": level,
+                "chartId": f"{folder}-{index}",
+                "songName": f"{folder} {index}",
+                "meanResidualPb": base + offset,
+                "residualCi95LowPb": base + offset,
+                "residualCi95HighPb": base + offset,
+                "nContributors": 10,
+            }
+            for folder, level, base in (("S22", 22, 0.0), ("S23", 23, 100.0))
+            for index, offset in enumerate((-10.0, 10.0))
+        ])
+        result = apply_within_level_difficulty(
+            frame, 50.0, AnalysisConfig(bootstrap_samples=0)
+        )
+        for folder, reference in (("S22", 0.0), ("S23", 100.0)):
+            rows = result[result["folder"] == folder].sort_values("difficultyDelta")
+            self.assertTrue((rows["levelReferenceResidualPb"] == reference).all())
+            self.assertAlmostEqual(float(rows["difficultyDelta"].sum()), 0.0)
+            self.assertEqual(list(rows["relativeGroupRank"]), [3, 8])
+        self.assertGreater(
+            float(result[result["folder"] == "S23"]["estimatedDifficulty"].min()),
+            23.0,
+        )
 
     def test_top_100_cutoff_excludes_rank_101(self) -> None:
         charts = [chart(f"single-{index:03d}", "Single", 20) for index in range(101)]
@@ -97,6 +130,54 @@ class AnalyzerTests(unittest.TestCase):
         self.assertTrue(validation["passed"])
         easiest_s20 = results[results["folder"] == "S20"].sort_values("difficultyDelta").iloc[0]
         self.assertLess(float(easiest_s20["estimatedDifficulty"]), 20.0)
+        self.assertEqual(int(easiest_s20["relativeGroupRank"]), 1)
+
+    def test_production_aggregate_reclassifies_every_folder_locally(self) -> None:
+        fixture_path = (
+            Path(__file__).parent
+            / "fixtures"
+            / "production-chart-aggregates-20260807.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(fixture["rows"]), 1294)
+        serialized = json.dumps(fixture)
+        self.assertNotIn('"playerId"', serialized)
+        self.assertNotIn('"username"', serialized)
+        self.assertNotIn('"gameTag"', serialized)
+
+        frame = pd.DataFrame(fixture["rows"])
+        measured = frame[frame["meanResidualPb"].notna()].copy()
+        rescored_modes = []
+        for _, mode_rows in measured.groupby("mode", sort=True):
+            slope = float(mode_rows["pumbilityPerLevel"].dropna().iloc[0])
+            rescored_modes.append(
+                apply_within_level_difficulty(
+                    mode_rows, slope, AnalysisConfig(bootstrap_samples=0)
+                )
+            )
+        rescored = pd.concat(rescored_modes, ignore_index=True)
+
+        s23 = rescored[rescored["folder"] == "S23"]
+        self.assertTrue((s23["difficultyDelta"] < 0).any())
+        self.assertTrue((s23["difficultyDelta"] > 0).any())
+        self.assertEqual(int(s23["relativeGroupRank"].min()), 1)
+        self.assertEqual(int(s23["relativeGroupRank"].max()), 10)
+        self.assertTrue((s23["estimatedDifficulty"] >= 23.0).all())
+
+        below_folder = rescored[
+            rescored["estimatedDifficulty"] < rescored["level"].astype(float)
+        ]
+        self.assertLessEqual(len(below_folder), 1)
+        self.assertTrue((below_folder["relativeGroupRank"] == 1).all())
+
+        comparison = rescored[["chartId", "relativeGroupRank"]].merge(
+            measured[["chartId", "relativeGroupRank"]],
+            on="chartId",
+            suffixes=("New", "Old"),
+            validate="one_to_one",
+        )
+        changed = comparison["relativeGroupRankNew"] != comparison["relativeGroupRankOld"]
+        self.assertGreater(float(changed.mean()), 0.5)
 
 
 if __name__ == "__main__":
