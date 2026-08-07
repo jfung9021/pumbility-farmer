@@ -1,6 +1,12 @@
 __pycache__/
 *.py[cod]
 .env
+.env.local
+.env.*.local
+node_modules/
+.next/
+.vercel/
+*.tsbuildinfo
 
 # Generated analyses and API snapshots can contain user-derived data.
 piu_*_run/
