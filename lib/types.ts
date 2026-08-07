@@ -1,4 +1,4 @@
-import type { MixInfo, MixKey } from "./mixes";
+import type { CombinedMixInfo, MixInfo, MixKey } from "./mixes";
 
 export type ModeKey = "singles" | "doubles";
 export type EvidenceStatus = "Published" | "Provisional" | "Insufficient" | "Unrated";
@@ -39,6 +39,8 @@ export interface ChartResult {
   difficultyCi95High: number | null;
   nContributors: number;
   nPlayersScored: number;
+  phoenix1Contributors?: number;
+  phoenix2Contributors?: number;
   evidenceStatus: EvidenceStatus;
   phoenix2Rerate?: ChartRerate;
 }
@@ -65,7 +67,7 @@ export interface ModeSummary {
 
 export interface AnalysisPayload {
   generatedAtUtc: string;
-  mix: MixInfo;
+  mix: MixInfo | CombinedMixInfo;
   summary: {
     scriptVersion: string;
     method: Record<string, unknown>;
@@ -146,8 +148,8 @@ export interface RecommendationChart extends RecommendationChartEstimate {
   distanceFromRating: number;
   farmEdge: number;
   existingPumbility: number | null;
-  expectedPumbility: number;
-  projectedGain: number;
+  expectedPumbility: number | null;
+  projectedGain: number | null;
   projectedScore: number | null;
   played: boolean;
 }
@@ -157,15 +159,26 @@ export interface RecommendationModeResult {
   manual?: boolean;
   validScoreCount: number;
   requiredScoreCount?: number;
+  phoenix2ScoreCount?: number;
+  phoenix2ScoreThreshold?: number;
+  ratingSource?: "phoenix1" | "phoenix2" | null;
+  ratingSourceScoreCount?: number;
+  ratingBaselineRanks?: [number, number];
+  ratingBaselineLabel?: string;
   reason?: string;
   baselineRanks?: [number, number];
   baselineLabel?: string;
   baselineScoreCount?: number;
-  baselinePumbility?: number;
+  baselinePumbility?: number | null;
   baselineScore?: number | null;
   scoringRating?: number;
   ratingFallbackCharts?: number;
-  pumbilityPerLevel?: number;
+  projectionBaselineRanks?: [number, number] | null;
+  projectionBaselineLabel?: string | null;
+  projectionFallbackCharts?: number;
+  projectionRating?: number | null;
+  projectionAvailable?: boolean;
+  pumbilityPerLevel?: number | null;
   scorePointsPerDifficulty?: number | null;
   currentTop50Pumbility?: number;
   candidateRange?: [number | null, number];

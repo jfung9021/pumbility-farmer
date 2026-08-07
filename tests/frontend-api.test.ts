@@ -11,6 +11,7 @@ import {
   LocalAnalysisValidationError,
   localAnalysisEnabled,
   readLocalAnalysisPayload,
+  validateLocalAnalysisPayload,
 } from "../lib/local-analysis.ts";
 import { archiveForMix, MIXES, mixFromSearchParams } from "../lib/mixes.ts";
 import {
@@ -223,6 +224,23 @@ test("validates local aggregates against the requested Phoenix version", async (
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("accepts the combined tier-list identity", () => {
+  const payload = {
+    generatedAtUtc: "2026-08-08T00:00:00Z",
+    mix: { key: "combined", apiValue: "Phoenix+Phoenix2", label: "Phoenix 1 + 2" },
+    summary: { scriptVersion: "test", method: {}, coverage: {}, modes: {} },
+    singles: [],
+    doubles: [],
+    relativeGroups: [],
+    effectBands: [],
+  };
+  assert.equal(validateLocalAnalysisPayload(payload, "combined").mix.key, "combined");
+  assert.throws(
+    () => validateLocalAnalysisPayload(payload, "phoenix2"),
+    /does not contain Phoenix 2 data/,
+  );
 });
 
 test("reports a missing local analysis without exposing a path", async () => {

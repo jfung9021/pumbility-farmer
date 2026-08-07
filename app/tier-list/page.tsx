@@ -1,19 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { demoPayloads } from "../../lib/demo-data";
+
 import { readJsonResponse } from "../../lib/api-response";
-import {
-  applyPhoenix1Rerates,
-  type Phoenix1ReratePayload,
-} from "../../lib/phoenix1-rerates";
-import {
-  archiveForMix,
-  DEFAULT_MIX,
-  MIXES,
-  mixFromSearchParams,
-  type MixKey,
-} from "../../lib/mixes";
+import { demoPayload } from "../../lib/demo-data";
 import type {
   AnalysisJobStatus,
   AnalysisPayload,
@@ -22,6 +13,7 @@ import type {
   EvidenceStatus,
   ModeKey,
 } from "../../lib/types";
+
 
 const LOCAL_ANALYSIS = process.env.NEXT_PUBLIC_LOCAL_ANALYSIS === "1";
 
@@ -50,13 +42,13 @@ function signedBoundary(value: number): string {
 }
 
 function effectRange(low: number | null, high: number | null): string {
-  if (low === null) return `difference ≤ ${signedBoundary(high ?? -1.0)}`;
-  if (high === null) return `difference ≥ ${signedBoundary(low)}`;
+  if (low === null) return `difference <= ${signedBoundary(high ?? -1)}`;
+  if (high === null) return `difference >= ${signedBoundary(low)}`;
   return `${signedBoundary(low)} to ${signedBoundary(high)}`;
 }
 
 function chartGrade(chart: ChartResult): string {
-  if (chart.estimatedDifficulty === null) return "—";
+  if (chart.estimatedDifficulty === null) return "-";
   const prefix = chart.type === "Single" ? "S" : "D";
   return `${prefix}${chart.estimatedDifficulty.toFixed(1)}`;
 }
@@ -77,10 +69,8 @@ function durationLabel(milliseconds: number): string {
   const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 function refreshAge(value: string, nowMs: number): string {
@@ -94,7 +84,6 @@ function refreshAge(value: string, nowMs: number): string {
 
 function ChartCard({ chart }: { chart: ChartResult }) {
   const delta = chart.difficultyDelta;
-  const rerate = chart.phoenix2Rerate;
   return (
     <article className="chart-card">
       <div className="jacket" aria-hidden="true">
@@ -105,24 +94,17 @@ function ChartCard({ chart }: { chart: ChartResult }) {
           <h3>{chart.songName}</h3>
           <span className={`evidence evidence-${chart.evidenceStatus.toLowerCase()}`}>{chart.evidenceStatus}</span>
         </div>
-        {rerate ? (
-          <div
-            aria-label={`Phoenix 2 ${rerate.direction} this chart from ${rerate.from} to ${rerate.to}`}
-            className={`chart-rerate rerate-${rerate.direction}`}
-            title={`Phoenix 2 ${rerate.direction}: ${rerate.from} → ${rerate.to}`}
-          >
-            <b>{rerate.direction === "uprated" ? "↑ Uprated" : "↓ Downrated"}</b>
-            <span>in Phoenix 2 · {rerate.from} → {rerate.to}</span>
-          </div>
-        ) : null}
         <p>
           {chart.stepArtist || "Unknown step artist"}
-          {chart.noteCount ? ` · ${chart.noteCount.toLocaleString()} notes` : ""}
+          {chart.noteCount ? ` - ${chart.noteCount.toLocaleString()} notes` : ""}
         </p>
         <div className="chart-meta">
           <span><b>{chart.difficulty}</b> official</span>
           <span><b>{chartGrade(chart)}</b> estimated</span>
           <span><b>{chart.nContributors}</b> contributors</span>
+          {chart.phoenix1Contributors !== undefined && chart.phoenix2Contributors !== undefined ? (
+            <span><b>{chart.phoenix1Contributors}/{chart.phoenix2Contributors}</b> P1/P2</span>
+          ) : null}
           {chart.levelRank !== null && chart.levelComparisonCharts !== null ? (
             <span><b>#{chart.levelRank}</b> of {chart.levelComparisonCharts} in {chart.difficulty}</span>
           ) : null}
@@ -130,21 +112,16 @@ function ChartCard({ chart }: { chart: ChartResult }) {
       </div>
       <div className={`delta ${delta !== null && delta < 0 ? "delta-easy" : "delta-hard"}`}>
         <span>difference</span>
-        <strong>{delta === null ? "—" : signed(delta)}</strong>
+        <strong>{delta === null ? "-" : signed(delta)}</strong>
         {chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null ? (
-          <small>{chart.difficultyCi95Low.toFixed(1)}–{chart.difficultyCi95High.toFixed(1)} CI</small>
+          <small>{chart.difficultyCi95Low.toFixed(1)}-{chart.difficultyCi95High.toFixed(1)} CI</small>
         ) : null}
       </div>
     </article>
   );
 }
 
-function TierSection({
-  rank,
-  name,
-  range,
-  charts,
-}: {
+function TierSection({ rank, name, range, charts }: {
   rank: number;
   name: string;
   range: string;
@@ -154,122 +131,81 @@ function TierSection({
     <section className={`tier tier-${groupTone[rank - 1]}`} aria-labelledby={`tier-${rank}`}>
       <header className="tier-header">
         <div className="tier-rank">{String(rank).padStart(2, "0")}</div>
-        <div>
-          <p>{range}</p>
-          <h2 id={`tier-${rank}`}>{name}</h2>
-        </div>
+        <div><p>{range}</p><h2 id={`tier-${rank}`}>{name}</h2></div>
         <span className="tier-count">{charts.length} chart{charts.length === 1 ? "" : "s"}</span>
       </header>
       <div className="tier-list">
-        {charts.length ? charts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />) : (
-          <p className="empty-tier">No charts match the current filters.</p>
-        )}
+        {charts.length
+          ? charts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)
+          : <p className="empty-tier">No charts match the current filters.</p>}
       </div>
     </section>
   );
 }
 
-export default function Home() {
-  const [activeMix, setActiveMix] = useState<MixKey>(DEFAULT_MIX);
-  const [payloads, setPayloads] = useState<Partial<Record<MixKey, AnalysisPayload>>>({});
-  const [activeModes, setActiveModes] = useState<Record<MixKey, ModeKey>>({
-    phoenix1: "singles",
-    phoenix2: "singles",
+export default function TierListPage() {
+  const [payload, setPayload] = useState<AnalysisPayload | null>(null);
+  const [activeMode, setActiveMode] = useState<ModeKey>("singles");
+  const [filters, setFilters] = useState<Record<ModeKey, FilterState>>({
+    singles: { ...initialFilter },
+    doubles: { ...initialFilter },
   });
-  const [filters, setFilters] = useState<Record<MixKey, Record<ModeKey, FilterState>>>({
-    phoenix1: {
-      singles: { ...initialFilter },
-      doubles: { ...initialFilter },
-    },
-    phoenix2: {
-      singles: { ...initialFilter },
-      doubles: { ...initialFilter },
-    },
-  });
-  const [loadingMix, setLoadingMix] = useState<MixKey | null>(DEFAULT_MIX);
-  const [messages, setMessages] = useState<Partial<Record<MixKey, string | null>>>({});
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
-  const [jobs, setJobs] = useState<Partial<Record<MixKey, AnalysisJobStatus | null>>>({});
+  const [job, setJob] = useState<AnalysisJobStatus | null>(null);
   const [nowMs, setNowMs] = useState(0);
   const [tabVisible, setTabVisible] = useState(true);
 
-  const loadLatest = useCallback(async (mix: MixKey, showLoading = false) => {
-    if (showLoading) setLoadingMix(mix);
+  const loadLatest = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
     try {
-      const archive = archiveForMix(mix, LOCAL_ANALYSIS);
-      const reratesArchive = MIXES[mix].archive;
-      const [response, reratesResponse] = await Promise.all([
-        fetch(archive?.url ?? `/api/analyze?mix=${mix}`, {
-          cache: archive ? "force-cache" : "no-store",
-        }),
-        reratesArchive
-          ? fetch(reratesArchive.reratesUrl, { cache: "force-cache" })
-          : Promise.resolve(null),
-      ]);
+      const response = await fetch("/api/tier-list", { cache: "no-store" });
       if (response.status === 404) {
-        setPayloads((current) => ({ ...current, [mix]: undefined }));
+        setPayload(null);
         return false;
       }
-      let latest = await readJsonResponse<AnalysisPayload>(response);
-      if (latest.mix && latest.mix.key !== mix) {
-        throw new Error(`The server returned ${latest.mix.label} data for ${MIXES[mix].label}.`);
+      const latest = await readJsonResponse<AnalysisPayload>(response);
+      if (latest.mix?.key !== "combined") {
+        throw new Error("The server returned a version-specific tier list.");
       }
-      if (reratesResponse) {
-        const rerates = await readJsonResponse<Phoenix1ReratePayload>(reratesResponse);
-        latest = applyPhoenix1Rerates(latest, rerates);
-      }
-      setPayloads((current) => ({ ...current, [mix]: latest }));
+      setPayload(latest);
       setIsDemo(false);
       return true;
     } catch (error) {
-      setMessages((current) => ({
-        ...current,
-        [mix]: error instanceof Error ? error.message : "Could not load the latest analysis.",
-      }));
+      setMessage(error instanceof Error ? error.message : "Could not load the combined tier list.");
       return false;
     } finally {
-      if (showLoading) setLoadingMix((current) => current === mix ? null : current);
+      if (showLoading) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const initialMix = mixFromSearchParams(params);
-    setActiveMix(initialMix);
-    const useDemo = params.get("demo") === "1"
-      || process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+    const useDemo = params.get("demo") === "1" || process.env.NEXT_PUBLIC_DEMO_MODE === "1";
     if (useDemo) {
-      setPayloads(demoPayloads);
+      setPayload(demoPayload);
       setIsDemo(true);
-      setLoadingMix(null);
+      setLoading(false);
       return;
     }
-    void loadLatest(initialMix, true);
-    if (LOCAL_ANALYSIS || MIXES[initialMix].archive) {
-      window.localStorage.removeItem(`analysisJobId:${initialMix}`);
-      return;
-    }
+    void loadLatest(true);
   }, [loadLatest]);
 
   useEffect(() => {
-    if (LOCAL_ANALYSIS || isDemo || MIXES[activeMix].archive) {
-      window.localStorage.removeItem(`analysisJobId:${activeMix}`);
+    const storageKey = "analysisJobId:phoenix2";
+    if (LOCAL_ANALYSIS || isDemo) {
+      window.localStorage.removeItem(storageKey);
       return;
     }
-    const storageKey = `analysisJobId:${activeMix}`;
-    const legacyJobId = activeMix === DEFAULT_MIX
-      ? window.localStorage.getItem("analysisJobId")
-      : null;
-    const storedJobId = window.localStorage.getItem(storageKey) || legacyJobId;
+    const storedJobId = window.localStorage.getItem(storageKey)
+      || window.localStorage.getItem("analysisJobId");
     if (!storedJobId) return;
-    fetch(
-      `/api/analyze?mix=${activeMix}&jobId=${encodeURIComponent(storedJobId)}`,
-      { cache: "no-store" },
-    )
+    fetch(`/api/analyze?mix=phoenix2&jobId=${encodeURIComponent(storedJobId)}`, { cache: "no-store" })
       .then((response) => readJsonResponse<AnalysisJobStatus>(response))
-      .then((status) => setJobs((current) => ({ ...current, [activeMix]: status })))
+      .then(setJob)
       .catch(() => window.localStorage.removeItem(storageKey));
-  }, [activeMix, isDemo]);
+  }, [isDemo]);
 
   useEffect(() => {
     setNowMs(Date.now());
@@ -283,46 +219,31 @@ export default function Home() {
     };
   }, []);
 
-  const payload = payloads[activeMix] || null;
-  const job = jobs[activeMix] || null;
-  const activeMode = activeModes[activeMix];
-  const loading = loadingMix === activeMix;
-  const message = messages[activeMix] || null;
-  const archive = archiveForMix(activeMix, LOCAL_ANALYSIS);
   const jobIsActive = job?.status === "queued" || job?.status === "running";
   useEffect(() => {
-    if (LOCAL_ANALYSIS || MIXES[activeMix].archive || !job?.id || !jobIsActive) return;
-    const pollingMix = activeMix;
+    if (LOCAL_ANALYSIS || !job?.id || !jobIsActive) return;
     let cancelled = false;
     let timer: number | undefined;
     const poll = async () => {
       try {
         const response = await fetch(
-          `/api/analyze?mix=${pollingMix}&jobId=${encodeURIComponent(job.id)}`,
+          `/api/analyze?mix=phoenix2&jobId=${encodeURIComponent(job.id)}`,
           { cache: "no-store" },
         );
         const status = await readJsonResponse<AnalysisJobStatus>(response);
         if (cancelled) return;
-        setJobs((current) => ({ ...current, [pollingMix]: status }));
+        setJob(status);
         if (status.status === "completed") {
-          setMessages((current) => ({
-            ...current,
-            [pollingMix]: `${MIXES[pollingMix].label} analysis complete.`,
-          }));
-          window.localStorage.removeItem(`analysisJobId:${pollingMix}`);
-          if (pollingMix === DEFAULT_MIX) window.localStorage.removeItem("analysisJobId");
-          await loadLatest(pollingMix);
+          setMessage("Combined Phoenix analysis complete.");
+          window.localStorage.removeItem("analysisJobId:phoenix2");
+          window.localStorage.removeItem("analysisJobId");
+          await loadLatest();
           return;
         }
         if (status.status === "failed") return;
       } catch (error) {
         if (!cancelled) {
-          setMessages((current) => ({
-            ...current,
-            [pollingMix]: error instanceof Error
-              ? error.message
-              : "Could not read analysis progress.",
-          }));
+          setMessage(error instanceof Error ? error.message : "Could not read analysis progress.");
         }
       }
       if (!cancelled) timer = window.setTimeout(poll, tabVisible ? 2000 : 10_000);
@@ -332,74 +253,39 @@ export default function Home() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [activeMix, job?.id, jobIsActive, loadLatest, tabVisible]);
-
-  const selectMix = (mix: MixKey) => {
-    if (mix === activeMix) return;
-    setActiveMix(mix);
-    const url = new URL(window.location.href);
-    if (mix === DEFAULT_MIX) url.searchParams.delete("mix");
-    else url.searchParams.set("mix", mix);
-    window.history.replaceState({}, "", url);
-    if (!isDemo) void loadLatest(mix, true);
-  };
+  }, [job?.id, jobIsActive, loadLatest, tabVisible]);
 
   const runAnalysis = async () => {
-    if (archive) return;
     if (LOCAL_ANALYSIS) {
-      setMessages((current) => ({
-        ...current,
-        [activeMix]: `Reloading the latest local ${MIXES[activeMix].label} analysis…`,
-      }));
-      const loaded = await loadLatest(activeMix, true);
-      if (loaded) {
-        setMessages((current) => ({
-          ...current,
-          [activeMix]: "Local analysis reloaded from disk.",
-        }));
-      }
+      setMessage("Reloading the latest local combined analysis...");
+      if (await loadLatest(true)) setMessage("Local combined analysis reloaded from disk.");
       return;
     }
-    setMessages((current) => ({
-      ...current,
-      [activeMix]: `Starting a ${MIXES[activeMix].label} background refresh…`,
-    }));
+    setMessage("Starting a Phoenix 2 refresh and combined analysis...");
     try {
-      const response = await fetch(`/api/analyze?mix=${activeMix}`, { method: "POST" });
+      const response = await fetch("/api/analyze?mix=phoenix2", { method: "POST" });
       const body = await readJsonResponse<AnalysisRefreshResponse>(response);
       if (body.outcome === "fresh") {
-        setMessages((current) => ({
-          ...current,
-          [activeMix]: "The current rankings are still fresh; no new job was started.",
-        }));
-        await loadLatest(activeMix);
+        setMessage("The current rankings are still fresh; no new job was started.");
+        await loadLatest();
         return;
       }
       if (body.outcome === "busy") throw new Error(body.error);
-      setJobs((current) => ({ ...current, [activeMix]: body.job }));
-      window.localStorage.setItem(`analysisJobId:${activeMix}`, body.job.id);
-      setMessages((current) => ({
-        ...current,
-        [activeMix]: body.outcome === "existing"
-          ? "Following the refresh already in progress."
-          : null,
-      }));
+      setJob(body.job);
+      window.localStorage.setItem("analysisJobId:phoenix2", body.job.id);
+      setMessage(body.outcome === "existing" ? "Following the refresh already in progress." : null);
     } catch (error) {
-      setMessages((current) => ({
-        ...current,
-        [activeMix]: error instanceof Error ? error.message : "Analysis failed.",
-      }));
+      setMessage(error instanceof Error ? error.message : "Analysis failed.");
     }
   };
 
   const failedRetryMs = job?.status === "failed" && job.retryAllowedAtUtc && nowMs
     ? Math.max(0, new Date(job.retryAllowedAtUtc).getTime() - nowMs)
     : 0;
-  const runDisabled = Boolean(archive) || (LOCAL_ANALYSIS ? loading : jobIsActive || failedRetryMs > 0);
-
+  const runDisabled = LOCAL_ANALYSIS ? loading : jobIsActive || failedRetryMs > 0;
   const modeCharts = payload?.[activeMode] || [];
   const modeSummary = payload?.summary.modes[activeMode];
-  const filter = filters[activeMix][activeMode];
+  const filter = filters[activeMode];
   const levels = useMemo(
     () => [...new Set(modeCharts.map((chart) => chart.level))].sort((a, b) => a - b),
     [modeCharts],
@@ -410,99 +296,72 @@ export default function Home() {
       if (!filter.showUnrated && chart.difficultyDelta === null) return false;
       if (filter.level !== "All" && chart.level !== Number(filter.level)) return false;
       if (filter.evidence !== "All" && chart.evidenceStatus !== filter.evidence) return false;
-      if (query && !`${chart.songName} ${chart.stepArtist || ""}`.toLocaleLowerCase().includes(query)) return false;
-      return true;
+      return !query || `${chart.songName} ${chart.stepArtist || ""}`.toLocaleLowerCase().includes(query);
     });
   }, [filter, modeCharts]);
-
   const updateFilter = (patch: Partial<FilterState>) => {
     setFilters((current) => ({
       ...current,
-      [activeMix]: {
-        ...current[activeMix],
-        [activeMode]: { ...current[activeMix][activeMode], ...patch },
-      },
+      [activeMode]: { ...current[activeMode], ...patch },
     }));
   };
 
-  const setActiveMode = (mode: ModeKey) => {
-    setActiveModes((current) => ({ ...current, [activeMix]: mode }));
-  };
-
   const statusText = loading
-    ? "Loading the latest analysis…"
-    : archive
-      ? message || (payload
-        ? `Archived snapshot generated ${formatRunTime(payload.generatedAtUtc)}`
-        : "The archived Phoenix 1 snapshot could not be loaded.")
+    ? "Loading the combined tier list..."
     : LOCAL_ANALYSIS
       ? message || (payload
         ? `Local results generated ${formatRunTime(payload.generatedAtUtc)}`
-        : `No local ${MIXES[activeMix].label} results yet. Run npm run analyze:${activeMix}, then reload.`)
+        : "No local combined results yet. Run npm run analyze:recommendations, then reload.")
       : jobIsActive && job
-      ? `${job.stage[0].toUpperCase()}${job.stage.slice(1)}: ${job.progress.message}`
-      : job?.status === "failed"
-        ? `Refresh failed: ${job.error || "The worker did not complete."}`
-        : message || (payload
-          ? `Last completed ${formatRunTime(payload.generatedAtUtc)}`
-          : "No stored analysis yet. Run one to create the first ranking.");
+        ? `${job.stage[0].toUpperCase()}${job.stage.slice(1)}: ${job.progress.message}`
+        : job?.status === "failed"
+          ? `Refresh failed: ${job.error || "The worker did not complete."}`
+          : message || (payload
+            ? `Last completed ${formatRunTime(payload.generatedAtUtc)}`
+            : "No stored combined analysis yet. Run one to create the first ranking.");
   const buttonLabel = jobIsActive
-    ? "Refreshing…"
-    : archive
-      ? "Archived snapshot"
+    ? "Refreshing..."
     : LOCAL_ANALYSIS
       ? "Reload local results"
       : failedRetryMs > 0
-      ? `Retry in ${durationLabel(failedRetryMs)}`
-      : "Refresh rankings";
+        ? `Retry in ${durationLabel(failedRetryMs)}`
+        : "Refresh rankings";
 
   return (
     <main>
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
       <header className="site-header">
         <a className="brand" href="/" aria-label="Pumbility Farmer home">
           <span className="brand-mark">PF</span>
           <span>Pumbility <b>Farmer</b></span>
         </a>
-        <div className="run-area">
-          <button className="run-button" disabled={runDisabled} onClick={runAnalysis} type="button">
-            <span className={jobIsActive ? "spinner" : "run-icon"}>{jobIsActive ? "" : "↻"}</span>
-            {buttonLabel}
-          </button>
+        <div className="header-actions tier-header-actions">
+          <nav className="page-nav" aria-label="Primary navigation">
+            <Link href="/recommendations">Recommendations</Link>
+            <span>Tier List</span>
+          </nav>
+          <div className="run-area">
+            <button aria-label={buttonLabel} className="run-button" disabled={runDisabled} onClick={runAnalysis} type="button">
+              <span className={jobIsActive ? "spinner" : "run-icon"} aria-hidden="true">
+                {jobIsActive ? "" : "\u21bb"}
+              </span>
+              <span className="run-button-label">{buttonLabel}</span>
+            </button>
+          </div>
         </div>
       </header>
 
       <section className="hero" id="top">
-        <div className="mix-switcher" role="tablist" aria-label="Pump It Up version">
-          {(["phoenix1", "phoenix2"] as MixKey[]).map((mix) => (
-            <button
-              aria-controls="rankings-dashboard"
-              aria-selected={activeMix === mix}
-              className={activeMix === mix ? "active" : ""}
-              key={mix}
-              onClick={() => selectMix(mix)}
-              role="tab"
-              type="button"
-            >
-              {MIXES[mix].label}
-            </button>
-          ))}
-        </div>
+        <p className="home-eyebrow">PHOENIX 1 + PHOENIX 2 EVIDENCE</p>
+        <h1>Combined scoring tier list</h1>
         <div className="run-status" aria-live="polite">
           <span className={jobIsActive ? "status-live" : "status-dot"} />
           <span>{statusText}</span>
           {isDemo ? <b>Demo data</b> : null}
-          {archive && !isDemo ? <b>Frozen archive</b> : null}
-          {LOCAL_ANALYSIS && !archive && !isDemo ? <b>Local snapshot</b> : null}
+          {LOCAL_ANALYSIS && !isDemo ? <b>Local snapshot</b> : null}
         </div>
         <div className="refresh-meta" aria-live="polite">
-          {archive
-            ? <span>Frozen: <b>{formatRunTime(archive.frozenAtUtc)}</b></span>
-            : payload && nowMs
-              ? <span>Refresh age: <b>{refreshAge(payload.generatedAtUtc, nowMs)}</b></span>
-              : null}
-          {!archive && !LOCAL_ANALYSIS && job?.status === "failed" && failedRetryMs > 0
+          {payload && nowMs ? <span>Refresh age: <b>{refreshAge(payload.generatedAtUtc, nowMs)}</b></span> : null}
+          {!LOCAL_ANALYSIS && job?.status === "failed" && failedRetryMs > 0
             ? <span>Retry available in <b>{durationLabel(failedRetryMs)}</b></span>
             : null}
         </div>
@@ -537,15 +396,15 @@ export default function Home() {
         </div>
 
         <div className="stats-grid">
-          <div><span>Eligible players</span><strong>{modeSummary?.eligiblePlayers ?? 0}</strong><small>30+ positive-Pumbility {activeMode} scores</small></div>
-          <div><span>Charts measured</span><strong>{modeSummary?.measuredCharts ?? 0}</strong><small>of {modeSummary?.catalogCharts ?? 0} level 20+</small></div>
+          <div><span>Eligible players</span><strong>{modeSummary?.eligiblePlayers ?? 0}</strong><small>normalized P1 + P2 histories</small></div>
+          <div><span>Charts measured</span><strong>{modeSummary?.measuredCharts ?? 0}</strong><small>of {modeSummary?.catalogCharts ?? 0} current charts</small></div>
           <div><span>Published charts</span><strong>{modeSummary?.publishedCharts ?? 0}</strong><small>10+ contributors</small></div>
-          <div><span>Calibration</span><strong>{modeSummary?.pumbilityPerLevel?.toFixed(1) ?? "—"}</strong><small>Pumbility per level</small></div>
+          <div><span>Evidence scale</span><strong>Level</strong><small>version-normalized residuals</small></div>
         </div>
 
         <div className="filter-bar">
           <label className="search-field">
-            <span>⌕</span>
+            <span aria-hidden="true">{"\u2315"}</span>
             <input
               aria-label="Search songs or step artists"
               onChange={(event) => updateFilter({ query: event.target.value })}
@@ -576,15 +435,12 @@ export default function Home() {
         </div>
 
         <div className="results-heading">
-          <div>
-            <p>{activeMode} · easiest first</p>
-            <h2>Magnitude-based scoring tiers</h2>
-          </div>
-          <p><b>−</b> easier to score <span /> <b>+</b> harder to score</p>
+          <div><p>{activeMode} - easiest first</p><h2>Magnitude-based scoring tiers</h2></div>
+          <p><b>-</b> easier to score <span /> <b>+</b> harder to score</p>
         </div>
 
         <div className="tiers">
-          {(payload?.effectBands || demoPayloads[activeMix].effectBands).map((group) => (
+          {(payload?.effectBands || demoPayload.effectBands).map((group) => (
             <TierSection
               charts={filteredCharts.filter((chart) => chart.effectBandRank === group.rank)}
               key={group.rank}
@@ -603,9 +459,9 @@ export default function Home() {
       </section>
 
       <footer>
-        <p><b>How it works</b> Player skill is the mean positive Pumbility of ranks 11–30 within each mode. Chart estimates use the deduplicated union of each player’s top 20% by Pumbility and most recent 20%; when that produces fewer than 100 scores, the player’s top 100 by Pumbility are used instead.</p>
-        <p>Every chart is compared only with charts of the same mode and official level. Extreme tiers require a measured difference of at least half a level; relative percentiles are retained only for within-folder rank.</p>
-        <p>Results with fewer than 10 contributors are clearly labeled.</p>
+        <p><b>How it works</b> Phoenix 1 and Phoenix 2 player residuals are normalized within version and mode, then combined against the current Phoenix 2 catalog.</p>
+        <p>A Phoenix 2 score replaces the same player's Phoenix 1 score for the same chart. Removed Phoenix 1 charts are excluded.</p>
+        <p>Every chart is compared only with charts of the same mode and current official level. Results with fewer than 10 contributors remain labeled.</p>
       </footer>
     </main>
   );

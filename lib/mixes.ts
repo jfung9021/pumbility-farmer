@@ -6,6 +6,18 @@ export interface MixInfo {
   label: "Phoenix 1" | "Phoenix 2";
 }
 
+export interface CombinedMixInfo {
+  key: "combined";
+  apiValue: "Phoenix+Phoenix2";
+  label: "Phoenix 1 + 2";
+}
+
+export const COMBINED_MIX: CombinedMixInfo = {
+  key: "combined",
+  apiValue: "Phoenix+Phoenix2",
+  label: "Phoenix 1 + 2",
+};
+
 export interface MixDefinition extends MixInfo {
   archive: {
     url: string;

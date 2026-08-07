@@ -15,11 +15,16 @@ if str(ROOT) not in sys.path:
 
 from phoenix2_sync import sanitize_snapshot  # noqa: E402
 from piu_misgrade_analyzer import load_snapshot  # noqa: E402
-from piu_recommendations import build_recommendation_index  # noqa: E402
+from piu_recommendations import (  # noqa: E402
+    build_combined_chart_results,
+    build_combined_tier_payload,
+    build_recommendation_index,
+)
 
 
 DATA_ROOT = ROOT / ".local-data" / "piu-scores"
 OUTPUT_PATH = DATA_ROOT / "recommendations" / "latest.json"
+COMBINED_OUTPUT_PATH = DATA_ROOT / "combined" / "analysis" / "web_results.json"
 
 
 def _read_snapshot(mix: str) -> dict:
@@ -41,7 +46,17 @@ def _read_snapshot(mix: str) -> dict:
 def main() -> int:
     phoenix1 = _read_snapshot("phoenix1")
     phoenix2 = _read_snapshot("phoenix2")
-    payload = build_recommendation_index(phoenix1, phoenix2)
+    combined_charts, combined_slopes, combined_metadata = build_combined_chart_results(
+        phoenix1, phoenix2
+    )
+    combined_payload = build_combined_tier_payload(combined_charts, combined_metadata)
+    payload = build_recommendation_index(
+        phoenix1,
+        phoenix2,
+        generated_at_utc=combined_payload["generatedAtUtc"],
+        combined_charts=combined_charts,
+        phoenix2_slopes=combined_slopes,
+    )
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     temporary = OUTPUT_PATH.with_suffix(".tmp")
     temporary.write_text(
@@ -49,8 +64,21 @@ def main() -> int:
         encoding="utf-8",
     )
     os.replace(temporary, OUTPUT_PATH)
+    COMBINED_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    combined_temporary = COMBINED_OUTPUT_PATH.with_suffix(".tmp")
+    combined_temporary.write_text(
+        json.dumps(
+            combined_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    os.replace(combined_temporary, COMBINED_OUTPUT_PATH)
     print(
-        f"Built recommendations for {len(payload['players']):,} named Phoenix 2 players."
+        f"Built the combined tier list and recommendations for "
+        f"{len(payload['players']):,} named Phoenix 2 players."
     )
     return 0
 

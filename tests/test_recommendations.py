@@ -5,6 +5,8 @@ import unittest
 import pandas as pd
 
 from piu_recommendations import (
+    PHOENIX2_RATING_SCORE_THRESHOLD,
+    build_combined_tier_payload,
     build_player_recommendation,
     merge_source_contributions,
     public_player_key,
@@ -277,6 +279,197 @@ class PlayerRecommendationTests(unittest.TestCase):
         first = public_player_key("private-player-id")
         self.assertEqual(first, public_player_key("private-player-id"))
         self.assertNotIn("private-player-id", first)
+
+    def _rating_source_fixture(self) -> tuple[dict, list[dict], tuple[pd.DataFrame, pd.DataFrame]]:
+        charts = []
+        scores = []
+        phoenix1_scores = []
+        combined = []
+        for index in range(60):
+            chart_id = f"source-chart-{index:02d}"
+            charts.append(
+                {
+                    "id": chart_id,
+                    "songName": f"Source Chart {index}",
+                    "type": "Single",
+                    "level": 20,
+                    "difficulty": "S20",
+                    "imageUrl": None,
+                    "noteCount": None,
+                    "stepArtist": "Tester",
+                }
+            )
+            estimate = 20.0 if 10 <= index <= 29 else 22.0
+            combined.append(
+                {
+                    "mode": "Singles",
+                    "songName": f"Source Chart {index}",
+                    "difficulty": "S20",
+                    "type": "Single",
+                    "level": 20,
+                    "chartId": chart_id,
+                    "imageUrl": None,
+                    "noteCount": None,
+                    "stepArtist": "Tester",
+                    "estimatedDifficulty": estimate,
+                    "difficultyDelta": estimate - 20.5,
+                    "difficultyCi95Low": estimate - 0.1,
+                    "difficultyCi95High": estimate + 0.1,
+                    "nContributors": 10,
+                    "phoenix1Contributors": 8,
+                    "phoenix2Contributors": 2,
+                    "evidenceStatus": "Published",
+                }
+            )
+            scores.append(
+                {
+                    "playerId": "player",
+                    "chartId": chart_id,
+                    "pumbility": 500 - index,
+                    "score": 990_000 - index,
+                    "recordedAt": "2026-08-08T00:00:00Z",
+                    "isBroken": False,
+                }
+            )
+            phoenix1_scores.append(
+                {
+                    "playerId": "player",
+                    "chartId": chart_id,
+                    "pumbility": 500 + index,
+                    "score": 990_000 - index,
+                    "recordedAt": "2026-08-01T00:00:00Z",
+                    "isBroken": False,
+                }
+            )
+        snapshot = {
+            "players": [{"playerId": "player", "username": "PLAYER"}],
+            "charts": charts,
+            "scores": scores,
+        }
+        prepared_catalog = pd.DataFrame(charts).rename(columns={"id": "chartId"})
+        return snapshot, combined, (prepared_catalog, pd.DataFrame(phoenix1_scores))
+
+    def test_rating_source_switches_at_fifty_phoenix2_scores(self) -> None:
+        snapshot, combined, prepared_phoenix1 = self._rating_source_fixture()
+        below = {**snapshot, "scores": snapshot["scores"][:49]}
+        below_mode = build_player_recommendation(
+            "player",
+            below,
+            combined,
+            {"singles": 10.0},
+            prepared_phoenix1=prepared_phoenix1,
+        )["modes"]["singles"]
+
+        self.assertEqual(below_mode["phoenix2ScoreCount"], 49)
+        self.assertEqual(
+            below_mode["phoenix2ScoreThreshold"], PHOENIX2_RATING_SCORE_THRESHOLD
+        )
+        self.assertEqual(below_mode["ratingSource"], "phoenix1")
+        self.assertEqual(below_mode["scoringRating"], 22.0)
+        p1_only_chart = next(
+            row for row in below_mode["candidates"] if row["chartId"] == "source-chart-59"
+        )
+        self.assertFalse(p1_only_chart["played"])
+
+        at_threshold = {**snapshot, "scores": snapshot["scores"][:50]}
+        threshold_mode = build_player_recommendation(
+            "player",
+            at_threshold,
+            combined,
+            {"singles": 10.0},
+            prepared_phoenix1=prepared_phoenix1,
+        )["modes"]["singles"]
+        self.assertEqual(threshold_mode["phoenix2ScoreCount"], 50)
+        self.assertEqual(threshold_mode["ratingSource"], "phoenix2")
+        self.assertEqual(threshold_mode["scoringRating"], 20.0)
+
+    def test_phoenix1_rating_without_phoenix2_history_has_no_projection(self) -> None:
+        snapshot, combined, prepared_phoenix1 = self._rating_source_fixture()
+        empty_scores = pd.DataFrame(columns=pd.DataFrame(snapshot["scores"]).columns)
+        prepared_phoenix2 = (
+            pd.DataFrame(snapshot["charts"]).rename(columns={"id": "chartId"}),
+            empty_scores,
+        )
+        mode = build_player_recommendation(
+            "player",
+            snapshot,
+            combined,
+            {"singles": 10.0},
+            prepared_phoenix1=prepared_phoenix1,
+            prepared_phoenix2=prepared_phoenix2,
+        )["modes"]["singles"]
+
+        self.assertTrue(mode["eligible"])
+        self.assertEqual(mode["ratingSource"], "phoenix1")
+        self.assertFalse(mode["projectionAvailable"])
+        self.assertEqual(mode["currentTop50Pumbility"], 0.0)
+        self.assertTrue(all(not row["played"] for row in mode["candidates"]))
+        self.assertTrue(all(row["projectedGain"] is None for row in mode["candidates"]))
+
+
+class CombinedTierPayloadTests(unittest.TestCase):
+    def test_payload_uses_combined_identity_and_filters_below_level_twenty(self) -> None:
+        chart = {
+            "mode": "Singles",
+            "modeRank": 1,
+            "levelRank": 1,
+            "levelPercentile": 0.5,
+            "levelComparisonCharts": 1,
+            "folder": "S20",
+            "relativeGroupRank": 6,
+            "relativeGroup": "50-60% percentile",
+            "effectBandRank": 5,
+            "effectBand": "Typical",
+            "songName": "Current Chart",
+            "difficulty": "S20",
+            "type": "Single",
+            "level": 20,
+            "chartId": "current",
+            "imageUrl": None,
+            "noteCount": None,
+            "stepArtist": None,
+            "estimatedDifficulty": 20.5,
+            "averageDifficulty": 20.5,
+            "difficultyDelta": 0.0,
+            "difficultyDeltaCi95Low": -0.1,
+            "difficultyDeltaCi95High": 0.1,
+            "difficultyCi95Low": 20.4,
+            "difficultyCi95High": 20.6,
+            "pumbilityPerLevel": 1.0,
+            "nContributors": 12,
+            "nPlayersScored": 12,
+            "phoenix1Contributors": 10,
+            "phoenix2Contributors": 2,
+            "evidenceStatus": "Published",
+        }
+        easier = {
+            **chart,
+            "chartId": "easier",
+            "songName": "Easier Chart",
+            "difficultyDelta": -0.5,
+            "estimatedDifficulty": 20.0,
+        }
+        payload = build_combined_tier_payload(
+            [
+                chart,
+                easier,
+                {**chart, "chartId": "low", "level": 19, "folder": "S19"},
+            ],
+            {
+                "sourceObservations": 12,
+                "phoenix1Observations": 10,
+                "phoenix2Observations": 2,
+                "modes": {"singles": {"eligiblePlayers": 12}},
+            },
+            generated_at_utc="2026-08-08T00:00:00Z",
+        )
+
+        self.assertEqual(payload["mix"]["key"], "combined")
+        self.assertEqual(
+            [row["chartId"] for row in payload["singles"]],
+            ["easier", "current"],
+        )
+        self.assertEqual(payload["singles"][0]["phoenix1Contributors"], 10)
 
 
 if __name__ == "__main__":

@@ -30,7 +30,10 @@ from piu_misgrade_analyzer import (
     load_snapshot,
 )
 from piu_recommendations import (
+    build_combined_chart_results,
+    build_combined_tier_payload,
     build_recommendation_index,
+    combined_tier_blob_path,
     frozen_phoenix1_snapshot_path,
     recommendation_blob_path,
 )
@@ -564,6 +567,7 @@ def publish_success(
     snapshot: Mapping[str, Any],
     payload: Mapping[str, Any],
     recommendations: Mapping[str, Any] | None = None,
+    combined_tier: Mapping[str, Any] | None = None,
     mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> None:
     """Publish immutable aggregate, then promote snapshot/latest and enforce retention."""
@@ -577,6 +581,8 @@ def publish_success(
     )
     if recommendations is not None:
         blobs.put_json(recommendation_blob_path(), recommendations)
+    if combined_tier is not None:
+        blobs.put_json(combined_tier_blob_path(), combined_tier)
     blobs.put_json(latest_blob_path(mix_spec), payload)
     runs = sorted(
         blobs.list(runs_prefix(mix_spec)), key=lambda item: item.pathname, reverse=True
@@ -797,6 +803,7 @@ def execute_analysis_job(
         chart_results, _, summary, _ = analyze_snapshot(players, charts, scores, config)
         payload = build_web_payload(chart_results, summary)
         recommendation_payload: dict[str, Any] | None = None
+        combined_tier_payload: dict[str, Any] | None = None
         frozen_phoenix1 = blob_store.get_json(frozen_phoenix1_snapshot_path())
         if frozen_phoenix1 is not None:
             update_job(
@@ -811,10 +818,21 @@ def execute_analysis_job(
                     "message": "Combining Phoenix 1 and Phoenix 2 recommendation evidence.",
                 },
             )
+            phoenix1_snapshot = sanitize_snapshot(frozen_phoenix1, mix="phoenix1")
+            combined_charts, combined_slopes, combined_metadata = (
+                build_combined_chart_results(phoenix1_snapshot, snapshot)
+            )
+            combined_tier_payload = build_combined_tier_payload(
+                combined_charts,
+                combined_metadata,
+                generated_at_utc=payload.get("generatedAtUtc"),
+            )
             recommendation_payload = build_recommendation_index(
-                sanitize_snapshot(frozen_phoenix1, mix="phoenix1"),
+                phoenix1_snapshot,
                 snapshot,
                 generated_at_utc=payload.get("generatedAtUtc"),
+                combined_charts=combined_charts,
+                phoenix2_slopes=combined_slopes,
             )
 
         update_job(
@@ -835,6 +853,7 @@ def execute_analysis_job(
             snapshot=snapshot,
             payload=payload,
             recommendations=recommendation_payload,
+            combined_tier=combined_tier_payload,
             mix=mix_spec,
         )
         blob_store.delete(staging_path)
