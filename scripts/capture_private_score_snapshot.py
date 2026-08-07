@@ -38,9 +38,8 @@ from piu_misgrade_analyzer import (  # noqa: E402
 
 
 DEFAULT_DATA_ROOT = PROJECT_ROOT / ".local-data" / "piu-scores"
-PLAYER_FIELDS = ("userId", "lastSyncedAtUtc", "lastScoreRecordedAtUtc")
+PLAYER_FIELDS = ("userId", "username", "lastSyncedAtUtc", "lastScoreRecordedAtUtc")
 FORBIDDEN_KEYS = {
-    "username",
     "gameTag",
     "email",
     "displayName",
@@ -323,6 +322,7 @@ def capture_private_snapshot(
     players = [
         {
             "userId": row["playerId"],
+            "username": row.get("username", ""),
             "lastSyncedAtUtc": row.get("lastSyncedAtUtc", ""),
             "lastScoreRecordedAtUtc": row.get("lastScoreRecordedAtUtc"),
         }

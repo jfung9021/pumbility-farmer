@@ -1,0 +1,802 @@
+"""Combined Phoenix chart estimates and player-specific recommendations.
+
+Phoenix 1 and Phoenix 2 use different Pumbility scales.  This module therefore
+normalizes player residuals within each version and mode before pooling chart
+evidence.  Phoenix 2 is authoritative for the catalog and for every overlapping
+player/chart score.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from collections import Counter
+from datetime import datetime, timezone
+from typing import Any, Mapping, Sequence
+
+import numpy as np
+import pandas as pd
+
+from piu_misgrade_analyzer import (
+    AnalysisConfig,
+    MODE_LABELS,
+    MODE_TYPES,
+    _fit_level_calibration,
+    _robust_location,
+    apply_within_level_difficulty,
+)
+
+
+RECOMMENDATION_SCHEMA_VERSION = 5
+RECOMMENDATION_RADIUS = 0.5
+MIN_RECOMMENDATION_LEVEL = 20
+BASELINE_START_RANK = 11
+BASELINE_END_RANK = 30
+TOP_PUMBILITY_COUNT = 50
+TOP_RECOMMENDATION_COUNT = 20
+MAX_RAW_SCORE = 1_000_000
+SCORE_PROJECTION_MIN_PLAYER_SCORES = 5
+PLAYER_KEY_NAMESPACE = "pumbility-farmer-recommendations-v1"
+
+
+def recommendation_blob_path() -> str:
+    return "analysis/recommendations/latest.json"
+
+
+def frozen_phoenix1_snapshot_path() -> str:
+    return "analysis/private/phoenix1-frozen.json"
+
+
+def public_player_key(player_id: object) -> str:
+    value = f"{PLAYER_KEY_NAMESPACE}:{player_id}".encode("utf-8")
+    return hashlib.sha256(value).hexdigest()[:20]
+
+
+def _mode_key(chart_type: str) -> str:
+    return "singles" if chart_type == "Single" else "doubles"
+
+
+def _folder(chart_type: str, level: int) -> str:
+    return f"{'S' if chart_type == 'Single' else 'D'}{level}"
+
+
+def _clean_snapshot_frames(
+    snapshot: Mapping[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    charts = pd.DataFrame(snapshot.get("charts", []))
+    scores = pd.DataFrame(snapshot.get("scores", []))
+    required_charts = {"id", "songName", "type", "level"}
+    required_scores = {"playerId", "chartId", "pumbility", "isBroken"}
+    if charts.empty or not required_charts.issubset(charts.columns):
+        raise ValueError("A recommendation snapshot has an invalid chart catalog.")
+    if scores.empty or not required_scores.issubset(scores.columns):
+        raise ValueError("A recommendation snapshot has no usable score rows.")
+
+    charts = charts.copy().rename(columns={"id": "chartId"})
+    charts["chartId"] = charts["chartId"].astype(str)
+    charts["level"] = pd.to_numeric(charts["level"], errors="coerce")
+    charts = charts[
+        charts["type"].isin(MODE_TYPES)
+        & charts["level"].notna()
+        & (charts["level"] > 0)
+    ].copy()
+    charts["level"] = charts["level"].astype(int)
+    charts = charts.sort_values("chartId", kind="mergesort").drop_duplicates(
+        "chartId", keep="last"
+    )
+
+    scores = scores.copy()
+    scores["playerId"] = scores["playerId"].astype(str)
+    scores["chartId"] = scores["chartId"].astype(str)
+    scores["pumbility"] = pd.to_numeric(scores["pumbility"], errors="coerce")
+    if "score" not in scores.columns:
+        scores["score"] = np.nan
+    scores["score"] = pd.to_numeric(scores["score"], errors="coerce")
+    if "recordedAt" not in scores.columns:
+        scores["recordedAt"] = ""
+    scores["isBroken"] = scores["isBroken"].fillna(False).astype(bool)
+    scores = scores[
+        scores["pumbility"].notna()
+        & (scores["pumbility"] > 0)
+        & (~scores["isBroken"])
+    ].copy()
+    scores = scores.sort_values(
+        ["playerId", "chartId", "pumbility", "score", "recordedAt"],
+        ascending=[True, True, False, False, False],
+        kind="mergesort",
+    ).drop_duplicates(["playerId", "chartId"], keep="first")
+    return charts, scores
+
+
+def retain_catalog_source_rows(
+    charts: pd.DataFrame,
+    scores: pd.DataFrame,
+    allowed_chart_ids: set[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Apply the Phoenix 2 catalog allowlist before any source calculation."""
+    retained_charts = charts[charts["chartId"].astype(str).isin(allowed_chart_ids)].copy()
+    retained_ids = set(retained_charts["chartId"].astype(str))
+    retained_scores = scores[scores["chartId"].astype(str).isin(retained_ids)].copy()
+    return retained_charts, retained_scores
+
+
+def rebase_source_rows_to_catalog(
+    charts: pd.DataFrame,
+    scores: pd.DataFrame,
+    authoritative_catalog: pd.DataFrame,
+    pumbility_per_level: Mapping[str, float],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Apply source scores to the authoritative catalog's type and level."""
+    source_metadata = charts[["chartId", "type", "level"]].rename(
+        columns={"type": "sourceType", "level": "sourceLevel"}
+    )
+    target_metadata = authoritative_catalog[["chartId", "type", "level"]].rename(
+        columns={"type": "targetType", "level": "targetLevel"}
+    )
+    mapping = source_metadata.merge(
+        target_metadata,
+        on="chartId",
+        how="inner",
+        validate="one_to_one",
+    )
+    mapping["pumbilityPerLevel"] = mapping["sourceType"].map(pumbility_per_level)
+    mapping = mapping[
+        mapping["pumbilityPerLevel"].notna()
+        & mapping["targetType"].isin(MODE_TYPES)
+    ].copy()
+    if mapping.empty:
+        return target_metadata.iloc[0:0].rename(
+            columns={"targetType": "type", "targetLevel": "level"}
+        ), scores.iloc[0:0].copy()
+
+    mapping["levelDelta"] = mapping["targetLevel"] - mapping["sourceLevel"]
+    rebased_scores = scores.merge(
+        mapping[["chartId", "levelDelta", "pumbilityPerLevel"]],
+        on="chartId",
+        how="inner",
+        validate="many_to_one",
+    )
+    rebased_scores["pumbility"] = (
+        rebased_scores["pumbility"]
+        + rebased_scores["levelDelta"] * rebased_scores["pumbilityPerLevel"]
+    )
+    rebased_scores = rebased_scores[rebased_scores["pumbility"] > 0].drop(
+        columns=["levelDelta", "pumbilityPerLevel"]
+    )
+    retained_ids = set(mapping["chartId"].astype(str))
+    rebased_charts = authoritative_catalog[
+        authoritative_catalog["chartId"].astype(str).isin(retained_ids)
+    ].copy()
+    return rebased_charts, rebased_scores
+
+
+def _source_level_slopes(
+    charts: pd.DataFrame,
+    scores: pd.DataFrame,
+) -> dict[str, float]:
+    merged = scores.merge(
+        charts[["chartId", "type", "level"]],
+        on="chartId",
+        how="inner",
+        validate="many_to_one",
+    )
+    slopes: dict[str, float] = {}
+    for chart_type in MODE_TYPES:
+        mode = merged[merged["type"] == chart_type]
+        if mode.empty:
+            continue
+        try:
+            slope, _ = _fit_level_calibration(mode)
+        except ValueError:
+            continue
+        slopes[chart_type] = slope
+    return slopes
+
+
+def _source_contributions(
+    snapshot: Mapping[str, Any],
+    source: str,
+    *,
+    contribution_fraction: float = 0.20,
+    allowed_chart_ids: set[str] | None = None,
+    authoritative_catalog: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    charts, scores = _clean_snapshot_frames(snapshot)
+    if authoritative_catalog is not None:
+        authoritative_ids = set(authoritative_catalog["chartId"].astype(str))
+        charts, scores = retain_catalog_source_rows(charts, scores, authoritative_ids)
+        source_slopes = _source_level_slopes(charts, scores)
+        charts, scores = rebase_source_rows_to_catalog(
+            charts,
+            scores,
+            authoritative_catalog,
+            source_slopes,
+        )
+    if allowed_chart_ids is not None:
+        charts, scores = retain_catalog_source_rows(charts, scores, allowed_chart_ids)
+    if charts.empty or scores.empty:
+        columns = ["playerId", "chartId", "mode", "source", "normalizedResidual"]
+        return pd.DataFrame(columns=columns), {}
+    merged = scores.merge(
+        charts[["chartId", "type", "level"]],
+        on="chartId",
+        how="inner",
+        validate="many_to_one",
+    )
+    frames: list[pd.DataFrame] = []
+    slopes: dict[str, float] = {}
+    for chart_type in MODE_TYPES:
+        mode = merged[merged["type"] == chart_type].copy()
+        if mode.empty:
+            continue
+        mode = mode.sort_values(
+            ["playerId", "pumbility", "score", "chartId"],
+            ascending=[True, False, False, True],
+            kind="mergesort",
+        )
+        mode["playerRank"] = mode.groupby("playerId", sort=False).cumcount() + 1
+        counts = mode.groupby("playerId", sort=False).size()
+        baseline_rows = mode[
+            mode["playerRank"].between(BASELINE_START_RANK, BASELINE_END_RANK)
+        ]
+        baselines = baseline_rows.groupby("playerId", sort=False)["pumbility"].agg(
+            baselinePumbility="mean", baselineCount="count"
+        )
+        baselines["validScoreCount"] = baselines.index.map(counts)
+        baselines = baselines[
+            (baselines["baselineCount"] == BASELINE_END_RANK - BASELINE_START_RANK + 1)
+            & (baselines["validScoreCount"] >= BASELINE_END_RANK)
+            & (baselines["baselinePumbility"] > 0)
+        ]
+        if baselines.empty:
+            continue
+
+        try:
+            slope, _ = _fit_level_calibration(mode)
+        except ValueError:
+            continue
+        slopes[_mode_key(chart_type)] = slope
+
+        eligible = mode[mode["playerId"].isin(baselines.index)].copy()
+        eligible["validScoreCount"] = eligible["playerId"].map(counts).astype(int)
+        eligible["rankLimit"] = np.ceil(
+            eligible["validScoreCount"] * contribution_fraction
+        ).astype(int)
+        eligible["recordedAtTimestamp"] = pd.to_datetime(
+            eligible["recordedAt"], errors="coerce", utc=True
+        )
+        eligible["recencyRank"] = pd.Series(pd.NA, index=eligible.index, dtype="Int64")
+        dated = eligible[eligible["recordedAtTimestamp"].notna()].sort_values(
+            ["playerId", "recordedAtTimestamp", "pumbility", "score", "chartId"],
+            ascending=[True, False, False, False, True],
+            kind="mergesort",
+        )
+        eligible.loc[dated.index, "recencyRank"] = pd.array(
+            dated.groupby("playerId", sort=False).cumcount() + 1, dtype="Int64"
+        )
+        window = (
+            (eligible["playerRank"] <= eligible["rankLimit"])
+            | (
+                eligible["recencyRank"].notna()
+                & (eligible["recencyRank"] <= eligible["rankLimit"])
+            )
+        )
+        union_count = window.groupby(eligible["playerId"], sort=False).transform("sum")
+        selected = np.where(
+            union_count < 100,
+            eligible["playerRank"] <= 100,
+            window,
+        )
+        contribution = eligible[selected].copy()
+        contribution["baselinePumbility"] = contribution["playerId"].map(
+            baselines["baselinePumbility"]
+        )
+        contribution["normalizedResidual"] = (
+            contribution["pumbility"] - contribution["baselinePumbility"]
+        ) / slope
+        contribution["mode"] = MODE_LABELS[chart_type]
+        contribution["source"] = source
+        frames.append(
+            contribution[
+                [
+                    "playerId",
+                    "chartId",
+                    "mode",
+                    "source",
+                    "normalizedResidual",
+                ]
+            ]
+        )
+    columns = ["playerId", "chartId", "mode", "source", "normalizedResidual"]
+    return (
+        pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns),
+        slopes,
+    )
+
+
+def merge_source_contributions(
+    phoenix1: pd.DataFrame,
+    phoenix2: pd.DataFrame,
+    *,
+    authoritative_phoenix2_keys: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Merge source observations with unconditional Phoenix 2 precedence."""
+    keys = ["playerId", "chartId", "mode"]
+    key_source = (
+        authoritative_phoenix2_keys
+        if authoritative_phoenix2_keys is not None
+        else phoenix2
+    )
+    if key_source.empty:
+        return pd.concat([phoenix1, phoenix2], ignore_index=True)
+    phoenix2_keys = pd.MultiIndex.from_frame(key_source[keys])
+    if phoenix1.empty:
+        return phoenix2.copy()
+    phoenix1_keys = pd.MultiIndex.from_frame(phoenix1[keys])
+    retained_phoenix1 = phoenix1[~phoenix1_keys.isin(phoenix2_keys)].copy()
+    return pd.concat([retained_phoenix1, phoenix2], ignore_index=True)
+
+
+def retain_phoenix2_catalog_contributions(
+    contributions: pd.DataFrame,
+    phoenix2_catalog: pd.DataFrame,
+) -> pd.DataFrame:
+    """Remove every observation whose chart is absent from Phoenix 2 charts.json."""
+    valid_ids = set(phoenix2_catalog["chartId"].astype(str))
+    return contributions[contributions["chartId"].astype(str).isin(valid_ids)].copy()
+
+
+def build_combined_chart_results(
+    phoenix1_snapshot: Mapping[str, Any],
+    phoenix2_snapshot: Mapping[str, Any],
+    *,
+    bootstrap_samples: int = 0,
+) -> tuple[list[dict[str, Any]], dict[str, float]]:
+    """Build Phoenix 2-catalog chart estimates from normalized two-version evidence."""
+    del bootstrap_samples  # Normal-approximation intervals keep full refreshes bounded.
+    phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
+    phoenix2_chart_ids = set(phoenix2_catalog["chartId"].astype(str))
+    phoenix1, _ = _source_contributions(
+        phoenix1_snapshot,
+        "phoenix1",
+        authoritative_catalog=phoenix2_catalog,
+    )
+    phoenix2, phoenix2_slopes = _source_contributions(
+        phoenix2_snapshot,
+        "phoenix2",
+        allowed_chart_ids=phoenix2_chart_ids,
+    )
+    type_by_chart = dict(zip(phoenix2_catalog["chartId"], phoenix2_catalog["type"]))
+    phoenix2_score_keys = phoenix2_scores[["playerId", "chartId"]].copy()
+    phoenix2_score_keys["mode"] = phoenix2_score_keys["chartId"].map(type_by_chart).map(
+        MODE_LABELS
+    )
+    phoenix2_score_keys = phoenix2_score_keys[phoenix2_score_keys["mode"].notna()]
+    combined = merge_source_contributions(
+        phoenix1,
+        phoenix2,
+        authoritative_phoenix2_keys=phoenix2_score_keys,
+    )
+
+    catalog = phoenix2_catalog
+    combined = retain_phoenix2_catalog_contributions(combined, catalog)
+    rows: list[pd.DataFrame] = []
+    config = AnalysisConfig(
+        mix="phoenix2",
+        min_contributors=5,
+        published_contributors=10,
+        bootstrap_samples=0,
+    )
+    for chart_type in MODE_TYPES:
+        mode_name = MODE_LABELS[chart_type]
+        mode_catalog = catalog[catalog["type"] == chart_type].copy()
+        if mode_catalog.empty:
+            continue
+        mode_catalog["folder"] = [
+            _folder(chart_type, int(level)) for level in mode_catalog["level"]
+        ]
+        mode_observations = combined[combined["mode"] == mode_name]
+        stat_rows: list[dict[str, Any]] = []
+        for chart_id, group in mode_observations.groupby("chartId", sort=False):
+            values = group["normalizedResidual"].to_numpy(dtype=float)
+            location = _robust_location(values)
+            std = float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+            margin = 1.96 * std / math.sqrt(len(values)) if len(values) > 1 else 0.0
+            counts = Counter(group["source"])
+            stat_rows.append(
+                {
+                    "chartId": str(chart_id),
+                    "nContributors": int(group["playerId"].nunique()),
+                    "nPlayersScored": int(group["playerId"].nunique()),
+                    "meanResidualPb": float(np.mean(values)),
+                    "chartResidualPb": location,
+                    "medianResidualPb": float(np.median(values)),
+                    "residualStdPb": std,
+                    "residualCi95LowPb": location - margin,
+                    "residualCi95HighPb": location + margin,
+                    "meanContributorBaselinePb": 0.0,
+                    "phoenix1Contributors": int(counts.get("phoenix1", 0)),
+                    "phoenix2Contributors": int(counts.get("phoenix2", 0)),
+                }
+            )
+        stats = pd.DataFrame(stat_rows)
+        if stats.empty:
+            stats = pd.DataFrame(
+                columns=[
+                    "chartId",
+                    "nContributors",
+                    "nPlayersScored",
+                    "meanResidualPb",
+                    "chartResidualPb",
+                    "medianResidualPb",
+                    "residualStdPb",
+                    "residualCi95LowPb",
+                    "residualCi95HighPb",
+                    "meanContributorBaselinePb",
+                    "phoenix1Contributors",
+                    "phoenix2Contributors",
+                ]
+            )
+        result = mode_catalog.merge(stats, on="chartId", how="left")
+        result["mode"] = mode_name
+        for column in (
+            "nContributors",
+            "nPlayersScored",
+            "phoenix1Contributors",
+            "phoenix2Contributors",
+        ):
+            result[column] = result[column].fillna(0).astype(int)
+        result["contributionAppearanceRate"] = np.where(
+            result["nPlayersScored"] > 0,
+            result["nContributors"] / result["nPlayersScored"],
+            np.nan,
+        )
+        result["evidenceStatus"] = np.select(
+            [
+                result["nContributors"] >= config.published_contributors,
+                result["nContributors"] >= config.min_contributors,
+                result["nContributors"] > 0,
+            ],
+            ["Published", "Provisional", "Insufficient"],
+            default="Unrated",
+        )
+        result = apply_within_level_difficulty(result, 1.0, config)
+        rows.append(result)
+
+    if not rows:
+        raise ValueError("The combined recommendation catalog had no Single or Double charts.")
+    output = pd.concat(rows, ignore_index=True)
+    keep = [
+        "mode",
+        "songName",
+        "difficulty",
+        "type",
+        "level",
+        "chartId",
+        "imageUrl",
+        "noteCount",
+        "stepArtist",
+        "estimatedDifficulty",
+        "difficultyDelta",
+        "difficultyCi95Low",
+        "difficultyCi95High",
+        "nContributors",
+        "phoenix1Contributors",
+        "phoenix2Contributors",
+        "evidenceStatus",
+    ]
+    for column in keep:
+        if column not in output.columns:
+            output[column] = pd.NA
+    records = json.loads(output[keep].to_json(orient="records", double_precision=6))
+    return records, phoenix2_slopes
+
+
+def _top_total(values: Sequence[float]) -> float:
+    return float(sum(sorted((value for value in values if value > 0), reverse=True)[:TOP_PUMBILITY_COUNT]))
+
+
+def fit_score_projection_slopes(
+    phoenix2_snapshot: Mapping[str, Any],
+    combined_charts: Sequence[Mapping[str, Any]],
+) -> dict[str, float]:
+    """Estimate raw-score loss per measured difficulty level within players."""
+    catalog, scores = _clean_snapshot_frames(phoenix2_snapshot)
+    estimates = pd.DataFrame(combined_charts)
+    required = {"chartId", "type", "estimatedDifficulty"}
+    if estimates.empty or not required.issubset(estimates.columns):
+        return {}
+    merged = scores.merge(
+        catalog[["chartId", "type"]],
+        on="chartId",
+        how="inner",
+        validate="many_to_one",
+    ).merge(
+        estimates[["chartId", "estimatedDifficulty"]],
+        on="chartId",
+        how="inner",
+        validate="many_to_one",
+    )
+    merged = merged[
+        merged["score"].notna()
+        & merged["score"].between(0, MAX_RAW_SCORE)
+        & merged["estimatedDifficulty"].notna()
+    ].copy()
+    slopes: dict[str, float] = {}
+    for chart_type in MODE_TYPES:
+        mode = merged[merged["type"] == chart_type].copy()
+        counts = mode.groupby("playerId", sort=False).size()
+        eligible_ids = counts[counts >= SCORE_PROJECTION_MIN_PLAYER_SCORES].index
+        mode = mode[mode["playerId"].isin(eligible_ids)]
+        if mode.empty:
+            continue
+        difficulty = mode["estimatedDifficulty"].astype(float)
+        score = mode["score"].astype(float)
+        centered_difficulty = difficulty - difficulty.groupby(mode["playerId"]).transform(
+            "mean"
+        )
+        centered_score = score - score.groupby(mode["playerId"]).transform("mean")
+        denominator = float(np.dot(centered_difficulty, centered_difficulty))
+        slope = (
+            -float(np.dot(centered_difficulty, centered_score) / denominator)
+            if denominator > 0
+            else math.nan
+        )
+        if math.isfinite(slope) and slope > 0:
+            slopes[_mode_key(chart_type)] = slope
+    return slopes
+
+
+def build_player_recommendation(
+    player_id: str,
+    phoenix2_snapshot: Mapping[str, Any],
+    combined_charts: Sequence[Mapping[str, Any]],
+    phoenix2_slopes: Mapping[str, float],
+    score_projection_slopes: Mapping[str, float] | None = None,
+) -> dict[str, Any]:
+    catalog, scores = _clean_snapshot_frames(phoenix2_snapshot)
+    catalog_map = {str(row["chartId"]): row for row in catalog.to_dict(orient="records")}
+    chart_map = {str(row["chartId"]): dict(row) for row in combined_charts}
+    player_scores = scores[scores["playerId"] == str(player_id)].copy()
+    modes: dict[str, Any] = {}
+    for chart_type in MODE_TYPES:
+        mode_key = _mode_key(chart_type)
+        mode_ids = set(catalog.loc[catalog["type"] == chart_type, "chartId"])
+        mode_scores = player_scores[player_scores["chartId"].isin(mode_ids)].copy()
+        mode_scores = mode_scores.sort_values(
+            ["pumbility", "score", "chartId"],
+            ascending=[False, False, True],
+            kind="mergesort",
+        )
+        score_count = len(mode_scores)
+        if score_count == 0:
+            modes[mode_key] = {
+                "eligible": False,
+                "validScoreCount": 0,
+                "requiredScoreCount": 1,
+                "reason": "At least one positive Phoenix 2 score is required in this mode.",
+                "candidates": [],
+                "topRecommendations": [],
+            }
+            continue
+        slope = phoenix2_slopes.get(mode_key)
+        if slope is None or not math.isfinite(float(slope)) or float(slope) <= 0:
+            modes[mode_key] = {
+                "eligible": False,
+                "validScoreCount": int(len(mode_scores)),
+                "requiredScoreCount": BASELINE_END_RANK,
+                "reason": "Phoenix 2 does not yet have enough calibration data for this mode.",
+                "candidates": [],
+                "topRecommendations": [],
+            }
+            continue
+
+        if score_count >= BASELINE_END_RANK:
+            baseline_start = BASELINE_START_RANK
+            baseline_end = BASELINE_END_RANK
+            baseline_label = "ranks 11–30"
+        else:
+            baseline_start = 1
+            baseline_end = max(1, math.ceil(score_count * 0.5))
+            baseline_label = f"best 50% ({baseline_end} of {score_count})"
+        baseline = mode_scores.iloc[baseline_start - 1 : baseline_end].copy()
+        baseline_pb = float(baseline["pumbility"].mean())
+        baseline_scores = baseline["score"].dropna().astype(float)
+        baseline_score = (
+            float(baseline_scores.mean()) if not baseline_scores.empty else None
+        )
+        score_projection_slope = (score_projection_slopes or {}).get(mode_key)
+        fallback_count = 0
+        baseline_difficulties: list[float] = []
+        baseline_edges: list[float] = []
+        for row in baseline.to_dict(orient="records"):
+            chart_id = str(row["chartId"])
+            catalog_chart = catalog_map[chart_id]
+            estimate = chart_map.get(chart_id, {}).get("estimatedDifficulty")
+            if estimate is None or not math.isfinite(float(estimate)):
+                estimate = float(catalog_chart["level"]) + 0.5
+                fallback_count += 1
+            estimate = float(estimate)
+            baseline_difficulties.append(estimate)
+            baseline_edges.append(float(catalog_chart["level"]) + 0.5 - estimate)
+        scoring_rating = float(np.mean(baseline_difficulties))
+        baseline_edge = float(np.mean(baseline_edges))
+        current_values = [float(value) for value in mode_scores["pumbility"]]
+        current_total = _top_total(current_values)
+        existing_by_chart = {
+            str(row["chartId"]): float(row["pumbility"])
+            for row in mode_scores.to_dict(orient="records")
+        }
+
+        candidates: list[dict[str, Any]] = []
+        for chart in combined_charts:
+            if chart.get("type") != chart_type:
+                continue
+            if int(chart.get("level") or 0) < MIN_RECOMMENDATION_LEVEL:
+                continue
+            estimate = chart.get("estimatedDifficulty")
+            if estimate is None or not math.isfinite(float(estimate)):
+                continue
+            estimate = float(estimate)
+            if estimate > scoring_rating + RECOMMENDATION_RADIUS + 1e-9:
+                continue
+            farm_edge = float(chart["level"]) + 0.5 - estimate
+            expected = max(0.0, baseline_pb + float(slope) * (farm_edge - baseline_edge))
+            chart_id = str(chart["chartId"])
+            existing = existing_by_chart.get(chart_id)
+            projected = max(existing or 0.0, expected)
+            projected_score: int | None = None
+            if (
+                baseline_score is not None
+                and score_projection_slope is not None
+                and math.isfinite(float(score_projection_slope))
+                and float(score_projection_slope) > 0
+            ):
+                raw_projection = baseline_score + float(score_projection_slope) * (
+                    scoring_rating - estimate
+                )
+                projected_score = int(
+                    round(min(MAX_RAW_SCORE, max(0.0, raw_projection)))
+                )
+            simulated = [
+                projected if str(row["chartId"]) == chart_id else float(row["pumbility"])
+                for row in mode_scores.to_dict(orient="records")
+            ]
+            if existing is None:
+                simulated.append(projected)
+            gain = max(0.0, _top_total(simulated) - current_total)
+            candidates.append(
+                {
+                    **dict(chart),
+                    "distanceFromRating": round(estimate - scoring_rating, 6),
+                    "farmEdge": round(farm_edge, 6),
+                    "existingPumbility": round(existing, 3) if existing is not None else None,
+                    "expectedPumbility": round(expected, 3),
+                    "projectedGain": round(gain, 3),
+                    "projectedScore": projected_score,
+                    "played": existing is not None,
+                }
+            )
+        candidates.sort(
+            key=lambda row: (
+                float(row["estimatedDifficulty"]),
+                str(row["songName"]).casefold(),
+                str(row["chartId"]),
+            )
+        )
+        top = sorted(
+            candidates,
+            key=lambda row: (
+                -float(row["projectedGain"]),
+                -float(row["expectedPumbility"]),
+                str(row["songName"]).casefold(),
+                str(row["chartId"]),
+            ),
+        )[:TOP_RECOMMENDATION_COUNT]
+        modes[mode_key] = {
+            "eligible": True,
+            "validScoreCount": int(score_count),
+            "baselineRanks": [baseline_start, baseline_end],
+            "baselineLabel": baseline_label,
+            "baselineScoreCount": int(len(baseline)),
+            "baselinePumbility": round(baseline_pb, 3),
+            "baselineScore": round(baseline_score, 3) if baseline_score is not None else None,
+            "scoringRating": round(scoring_rating, 3),
+            "ratingFallbackCharts": fallback_count,
+            "pumbilityPerLevel": round(float(slope), 6),
+            "scorePointsPerDifficulty": (
+                round(float(score_projection_slope), 6)
+                if score_projection_slope is not None
+                else None
+            ),
+            "currentTop50Pumbility": round(current_total, 3),
+            "candidateRange": [
+                None,
+                round(scoring_rating + RECOMMENDATION_RADIUS, 3),
+            ],
+            "candidateCount": len(candidates),
+            "candidates": candidates,
+            "topRecommendations": top,
+        }
+    return {"playerKey": public_player_key(player_id), "modes": modes}
+
+
+def build_recommendation_index(
+    phoenix1_snapshot: Mapping[str, Any],
+    phoenix2_snapshot: Mapping[str, Any],
+    *,
+    generated_at_utc: str | None = None,
+) -> dict[str, Any]:
+    combined_charts, slopes = build_combined_chart_results(
+        phoenix1_snapshot, phoenix2_snapshot
+    )
+    score_projection_slopes = fit_score_projection_slopes(
+        phoenix2_snapshot, combined_charts
+    )
+    players = phoenix2_snapshot.get("players", [])
+    named_players = [
+        row
+        for row in players
+        if isinstance(row, Mapping)
+        and str(row.get("playerId") or row.get("userId") or "").strip()
+        and str(row.get("username") or "").strip()
+    ]
+    username_counts = Counter(str(row["username"]).strip().casefold() for row in named_players)
+    output_players: list[dict[str, Any]] = []
+    for row in named_players:
+        player_id = str(row.get("playerId") or row.get("userId"))
+        username = str(row["username"]).strip()
+        recommendation = build_player_recommendation(
+            player_id,
+            phoenix2_snapshot,
+            combined_charts,
+            slopes,
+            score_projection_slopes,
+        )
+        suffix = recommendation["playerKey"][-4:]
+        recommendation.update(
+            {
+                "username": username,
+                "displayName": (
+                    f"{username} · {suffix}"
+                    if username_counts[username.casefold()] > 1
+                    else username
+                ),
+            }
+        )
+        output_players.append(recommendation)
+    output_players.sort(
+        key=lambda row: (str(row["username"]).casefold(), str(row["playerKey"]))
+    )
+    return {
+        "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+        "generatedAtUtc": generated_at_utc
+        or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "charts": [
+            chart
+            for chart in combined_charts
+            if isinstance(chart.get("estimatedDifficulty"), (int, float))
+            and math.isfinite(float(chart["estimatedDifficulty"]))
+            and int(chart.get("level") or 0) >= MIN_RECOMMENDATION_LEVEL
+        ],
+        "method": {
+            "catalog": "Phoenix 2 authoritative catalog",
+            "overlapRule": "best Phoenix 2 score always replaces Phoenix 1 for the same player and chart",
+            "phoenix1RerateHandling": "Phoenix 1 Pumbility is shifted by its source slope times the Phoenix 2 minus Phoenix 1 level delta before ranking and normalization",
+            "crossVersionNormalization": "Phoenix 1 scores rebased to Phoenix 2 levels, then version- and mode-specific Pumbility residuals converted to level units",
+            "pumbilityPerLevel": slopes,
+            "scorePointsPerDifficulty": score_projection_slopes,
+            "baselineRanks": [BASELINE_START_RANK, BASELINE_END_RANK],
+            "shortHistoryBaseline": "for a selected Phoenix 2 username with fewer than 30 qualifying scores, use the best ceil(50%) in that mode",
+            "candidateUpperRadius": RECOMMENDATION_RADIUS,
+            "candidateLowerBound": None,
+            "topPumbilityCount": TOP_PUMBILITY_COUNT,
+            "projection": "baseline achievement quality adjusted by chart farm edge",
+            "manualRanking": "farm edge at or below the requested scoring rating plus 0.5; no personal top-50 gain is inferred",
+            "skillRatingCatalog": "all valid Phoenix 2 chart levels",
+            "displayMinimumOfficialLevel": MIN_RECOMMENDATION_LEVEL,
+            "scoreProjection": "player baseline raw score adjusted by a Phoenix 2 within-player score-points-per-difficulty slope and capped at 1000000",
+        },
+        "players": output_players,
+    }

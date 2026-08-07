@@ -18,6 +18,10 @@ import {
   type Phoenix1ReratePayload,
 } from "../lib/phoenix1-rerates.ts";
 import type { AnalysisPayload } from "../lib/types.ts";
+import {
+  recommendationPlayerList,
+  recommendationsForRating,
+} from "../lib/local-recommendations.ts";
 
 
 test("uses a JSON error when the backend supplies one", async () => {
@@ -224,4 +228,83 @@ test("validates local aggregates against the requested Phoenix version", async (
 test("reports a missing local analysis without exposing a path", async () => {
   const missing = path.join(tmpdir(), "piu-local-analysis-missing", "web_results.json");
   await assert.rejects(() => readLocalAnalysisPayload(missing), LocalAnalysisNotFoundError);
+});
+
+test("recommendation player list exposes names and eligibility without mode payloads", () => {
+  const response = recommendationPlayerList({
+    generatedAtUtc: "2026-08-08T00:00:00Z",
+    method: { baselineRanks: [11, 30] },
+    charts: [],
+    players: [
+      {
+        playerKey: "opaque",
+        username: "PLAYER",
+        displayName: "PLAYER",
+        modes: {
+          singles: {
+            eligible: true,
+            validScoreCount: 30,
+            candidates: [],
+            topRecommendations: [],
+          },
+          doubles: {
+            eligible: false,
+            validScoreCount: 4,
+            candidates: [],
+            topRecommendations: [],
+          },
+        },
+      },
+    ],
+  });
+  assert.deepEqual(response.players, [
+    {
+      playerKey: "opaque",
+      username: "PLAYER",
+      displayName: "PLAYER",
+      eligibility: { singles: true, doubles: false },
+    },
+  ]);
+  assert.equal("modes" in response.players[0], false);
+});
+
+test("manual recommendations use an unbounded lower range and +0.5 upper limit", () => {
+  const chart = (chartId: string, estimatedDifficulty: number, level: number) => ({
+    mode: "Singles" as const,
+    songName: chartId,
+    difficulty: `S${level}`,
+    type: "Single" as const,
+    level,
+    chartId,
+    imageUrl: null,
+    noteCount: null,
+    stepArtist: null,
+    estimatedDifficulty,
+    difficultyDelta: estimatedDifficulty - level - 0.5,
+    difficultyCi95Low: estimatedDifficulty,
+    difficultyCi95High: estimatedDifficulty,
+    nContributors: 10,
+    phoenix1Contributors: 5,
+    phoenix2Contributors: 5,
+    evidenceStatus: "Published" as const,
+  });
+  const response = recommendationsForRating({
+    generatedAtUtc: "2026-08-08T00:00:00Z",
+    method: {},
+    charts: [
+      chart("far-easier", 10, 20),
+      chart("upper-edge", 21, 21),
+      chart("too-hard", 21.01, 21),
+      chart("below-scope", 10, 19),
+    ],
+    players: [],
+  }, 20.5);
+
+  const singles = response.player.modes.singles;
+  assert.deepEqual(singles.candidateRange, [null, 21]);
+  assert.deepEqual(
+    singles.candidates.map((candidate) => candidate.chartId),
+    ["far-easier", "upper-edge"],
+  );
+  assert.equal(singles.topRecommendations[0].chartId, "far-easier");
 });

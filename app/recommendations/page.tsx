@@ -1,0 +1,457 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+
+import { readJsonResponse } from "../../lib/api-response";
+import type {
+  ModeKey,
+  PlayerRecommendationsResponse,
+  RecommendationChart,
+  RecommendationPlayersResponse,
+} from "../../lib/types";
+
+
+function formatGeneratedAt(value: string | undefined): string {
+  if (!value) return "Unknown generation time";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown generation time";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function signed(value: number, digits = 2): string {
+  return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
+}
+
+function ratingLabel(mode: ModeKey, value: number): string {
+  return `${mode === "singles" ? "S" : "D"}${value.toFixed(2)}`;
+}
+
+function RecommendationCard({
+  chart,
+  manual = false,
+  rank,
+}: {
+  chart: RecommendationChart;
+  manual?: boolean;
+  rank: number;
+}) {
+  return (
+    <article className="recommendation-card">
+      <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
+      <div className="recommendation-jacket" aria-hidden="true">
+        {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <b>{chart.difficulty}</b>}
+      </div>
+      <div className="recommendation-copy">
+        <div className="recommendation-title">
+          <h3>{chart.songName}</h3>
+          <span className={`evidence evidence-${chart.evidenceStatus.toLowerCase()}`}>
+            {chart.evidenceStatus}
+          </span>
+        </div>
+        <p>{chart.stepArtist || "Unknown step artist"}</p>
+        <div className="recommendation-tags">
+          <span><b>{chart.difficulty}</b> official</span>
+          <span><b>{chart.type === "Single" ? "S" : "D"}{chart.estimatedDifficulty.toFixed(2)}</b> estimate</span>
+          <span>{chart.played ? `Current ${chart.existingPumbility?.toFixed(2)} PB` : "Unplayed in Phoenix 2"}</span>
+          {chart.projectedScore !== null ? (
+            <span><b>{chart.projectedScore.toLocaleString()}</b> projected score</span>
+          ) : null}
+        </div>
+      </div>
+      <div className="recommendation-value">
+        <span>{manual ? "farm edge" : "projected gain"}</span>
+        <strong>{signed(manual ? chart.farmEdge : chart.projectedGain)}</strong>
+        <small>
+          {manual
+            ? `${chart.estimatedDifficulty.toFixed(2)} scoring difficulty`
+            : `${chart.expectedPumbility.toFixed(2)} expected`}
+        </small>
+      </div>
+    </article>
+  );
+}
+
+function CandidateRow({ chart, manual = false }: { chart: RecommendationChart; manual?: boolean }) {
+  return (
+    <article className="candidate-row">
+      <div className="candidate-jacket" aria-hidden="true">
+        {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
+      </div>
+      <div className="candidate-copy">
+        <div><h3>{chart.songName}</h3><span>{chart.evidenceStatus}</span></div>
+        <p>
+          {chart.difficulty} official · {chart.estimatedDifficulty.toFixed(2)} estimated · {chart.nContributors} contributors
+          {chart.projectedScore !== null ? ` · ${chart.projectedScore.toLocaleString()} projected score` : ""}
+        </p>
+      </div>
+      <div className="candidate-metric"><span>from rating</span><b>{signed(chart.distanceFromRating)}</b></div>
+      <div className="candidate-metric">
+        <span>{manual ? "farm edge" : "expected"}</span>
+        <b>{manual ? signed(chart.farmEdge) : chart.expectedPumbility.toFixed(2)}</b>
+      </div>
+      <div className="candidate-metric candidate-gain"><span>gain</span><b>{signed(chart.projectedGain)}</b></div>
+    </article>
+  );
+}
+
+export default function RecommendationsPage() {
+  const [playersPayload, setPlayersPayload] = useState<RecommendationPlayersResponse | null>(null);
+  const [playerPayload, setPlayerPayload] = useState<PlayerRecommendationsResponse | null>(null);
+  const [selectedKey, setSelectedKey] = useState("");
+  const [playerQuery, setPlayerQuery] = useState("");
+  const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
+  const [manualRatingInput, setManualRatingInput] = useState("");
+  const [manualRating, setManualRating] = useState<number | null>(null);
+  const [activeMode, setActiveMode] = useState<ModeKey>("singles");
+  const [query, setQuery] = useState("");
+  const [loadingPlayers, setLoadingPlayers] = useState(true);
+  const [loadingPlayer, setLoadingPlayer] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/recommendations/players", { cache: "no-store" })
+      .then((response) => readJsonResponse<RecommendationPlayersResponse>(response))
+      .then((payload) => {
+        if (cancelled) return;
+        setPlayersPayload(payload);
+        const params = new URLSearchParams(window.location.search);
+        const requestedRating = Number(params.get("rating"));
+        if (Number.isFinite(requestedRating) && requestedRating >= 1 && requestedRating <= 40) {
+          setManualRating(requestedRating);
+          setManualRatingInput(String(requestedRating));
+          return;
+        }
+        const requested = params.get("player") || "";
+        const requestedPlayer = payload.players.find((player) => player.playerKey === requested);
+        if (requestedPlayer) {
+          setSelectedKey(requestedPlayer.playerKey);
+          setPlayerQuery(requestedPlayer.displayName);
+        }
+      })
+      .catch((caught) => {
+        if (!cancelled) setError(caught instanceof Error ? caught.message : "Could not load players.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPlayers(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const requestQuery = selectedKey
+      ? `playerKey=${encodeURIComponent(selectedKey)}`
+      : manualRating !== null
+        ? `rating=${encodeURIComponent(manualRating)}`
+        : "";
+    if (!requestQuery) {
+      setPlayerPayload(null);
+      return;
+    }
+    const controller = new AbortController();
+    setLoadingPlayer(true);
+    setError(null);
+    fetch(`/api/recommendations?${requestQuery}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((response) => readJsonResponse<PlayerRecommendationsResponse>(response))
+      .then(setPlayerPayload)
+      .catch((caught) => {
+        if (caught instanceof DOMException && caught.name === "AbortError") return;
+        setError(caught instanceof Error ? caught.message : "Could not load recommendations.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingPlayer(false);
+      });
+    return () => controller.abort();
+  }, [manualRating, selectedKey]);
+
+  const selectPlayer = (playerKey: string, inputValue = "") => {
+    setSelectedKey(playerKey);
+    setManualRating(null);
+    setPlayerQuery(inputValue);
+    setPlayerMenuOpen(false);
+    setQuery("");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("rating");
+    if (playerKey) url.searchParams.set("player", playerKey);
+    else url.searchParams.delete("player");
+    window.history.replaceState({}, "", url);
+  };
+
+  const mode = playerPayload?.player.modes[activeMode] || null;
+  const handlePlayerInput = (value: string) => {
+    setPlayerQuery(value);
+    setPlayerMenuOpen(true);
+    if (!selectedKey && manualRating === null) return;
+    setSelectedKey("");
+    setManualRating(null);
+    setQuery("");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("player");
+    url.searchParams.delete("rating");
+    window.history.replaceState({}, "", url);
+  };
+
+  const applyManualRating = () => {
+    const rating = Number(manualRatingInput);
+    if (!Number.isFinite(rating) || rating < 1 || rating > 40) {
+      setError("Enter a skill rating from 1 to 40.");
+      return;
+    }
+    setError(null);
+    setSelectedKey("");
+    setPlayerQuery("");
+    setPlayerMenuOpen(false);
+    setManualRating(rating);
+    setQuery("");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("player");
+    url.searchParams.set("rating", String(rating));
+    window.history.replaceState({}, "", url);
+  };
+
+  const filteredPlayers = useMemo(() => {
+    const players = playersPayload?.players || [];
+    const normalized = selectedKey ? "" : playerQuery.trim().toLocaleLowerCase();
+    if (!normalized) return players;
+    return players.filter((player) =>
+      `${player.displayName} ${player.username}`.toLocaleLowerCase().includes(normalized),
+    );
+  }, [playerQuery, playersPayload, selectedKey]);
+
+  const filteredCandidates = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase();
+    const rows = mode?.candidates || [];
+    if (!normalized) return rows;
+    return rows.filter((chart) =>
+      `${chart.songName} ${chart.stepArtist || ""} ${chart.difficulty}`
+        .toLocaleLowerCase()
+        .includes(normalized),
+    );
+  }, [mode, query]);
+  const hasSelection = Boolean(selectedKey || manualRating !== null);
+  const manualMode = Boolean(playerPayload?.player.manual);
+
+  return (
+    <main className="recommendations-page">
+      <div className="ambient ambient-one" />
+      <div className="ambient ambient-two" />
+      <header className="site-header">
+        <Link className="brand" href="/" aria-label="Pumbility Farmer home">
+          <span className="brand-mark">PF</span>
+          <span>Pumbility <b>Farmer</b></span>
+        </Link>
+        <nav className="page-nav" aria-label="Primary navigation">
+          <Link href="/tier-list">Tier List</Link>
+          <span>Recommendations</span>
+        </nav>
+      </header>
+
+      <section className="recommendations-hero">
+        <p className="home-eyebrow">PERSONALIZED PHOENIX 2 ROUTE</p>
+        <h1>Farm where your skill<br /><em>goes further.</em></h1>
+        <p>
+          Choose a consented Phoenix 2 player. We use scores from every chart level—ranks
+          11–30, or the best half when fewer than 30 are available—then recommend S20/D20+ charts.
+        </p>
+
+        <div className="player-picker">
+          <label htmlFor="player-select">Phoenix 2 username</label>
+          <div className="player-combobox">
+            <input
+              aria-controls="player-options"
+              aria-expanded={playerMenuOpen}
+              aria-haspopup="listbox"
+              autoComplete="off"
+              disabled={loadingPlayers || !playersPayload?.players.length}
+              id="player-select"
+              onBlur={() => setPlayerMenuOpen(false)}
+              onChange={(event) => handlePlayerInput(event.target.value)}
+              onClick={() => setPlayerMenuOpen(true)}
+              onFocus={(event) => {
+                event.currentTarget.select();
+                setPlayerMenuOpen(true);
+              }}
+              placeholder="Type or select a player"
+              role="combobox"
+              type="text"
+              value={playerQuery}
+            />
+            {playerMenuOpen ? (
+              <div className="player-options" id="player-options" role="listbox">
+                {filteredPlayers.map((player) => (
+                  <button
+                    aria-selected={selectedKey === player.playerKey}
+                    key={player.playerKey}
+                    onClick={() => selectPlayer(player.playerKey, player.displayName)}
+                    onMouseDown={(event) => event.preventDefault()}
+                    role="option"
+                    type="button"
+                  >
+                    {player.displayName}
+                  </button>
+                ))}
+                {!filteredPlayers.length ? <p>No matching usernames</p> : null}
+              </div>
+            ) : null}
+          </div>
+          <form
+            className="manual-rating-picker"
+            onSubmit={(event) => {
+              event.preventDefault();
+              applyManualRating();
+            }}
+          >
+            <label htmlFor="manual-rating">Or enter skill rating</label>
+            <div>
+              <input
+                id="manual-rating"
+                inputMode="decimal"
+                max="40"
+                min="1"
+                onChange={(event) => setManualRatingInput(event.target.value)}
+                placeholder="22.5"
+                step="0.01"
+                type="number"
+                value={manualRatingInput}
+              />
+              <button type="submit">Use rating</button>
+            </div>
+          </form>
+          <span>
+            {playersPayload
+              ? `${playersPayload.players.length.toLocaleString()} usernames · generated ${formatGeneratedAt(playersPayload.generatedAtUtc)}`
+              : "Only usernames shared with this community tool are listed."}
+          </span>
+        </div>
+        {error ? <div className="recommendation-notice error-notice">{error}</div> : null}
+      </section>
+
+      <section className="recommendations-workspace" aria-busy={loadingPlayer}>
+        {!hasSelection ? (
+          <div className="recommendation-empty">
+            <span>PF</span>
+            <h2>Select a username or enter a skill rating</h2>
+            <p>Your internal player ID and raw score history are never returned to the browser.</p>
+          </div>
+        ) : loadingPlayer && !playerPayload ? (
+          <div className="recommendation-empty"><span className="spinner" /><h2>Calculating your route</h2></div>
+        ) : playerPayload ? (
+          <>
+            <div className="recommendation-player-heading">
+              <div>
+                <p>{manualMode ? "MANUAL SKILL RATING" : "SELECTED PLAYER"}</p>
+                <h2>
+                  {manualMode
+                    ? ratingLabel(activeMode, mode?.scoringRating ?? 0)
+                    : playerPayload.player.displayName}
+                </h2>
+              </div>
+              <div className="recommendation-mode-tabs" role="tablist" aria-label="Recommendation mode">
+                {(["singles", "doubles"] as ModeKey[]).map((modeKey) => (
+                  <button
+                    aria-selected={activeMode === modeKey}
+                    className={activeMode === modeKey ? "active" : ""}
+                    key={modeKey}
+                    onClick={() => { setActiveMode(modeKey); setQuery(""); }}
+                    role="tab"
+                    type="button"
+                  >
+                    <b>{modeKey === "singles" ? "S" : "D"}</b>
+                    <span>{modeKey}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {!mode?.eligible ? (
+              <div className="recommendation-empty insufficient-state">
+                <span>{mode?.validScoreCount ?? 0}/{mode?.requiredScoreCount ?? 1}</span>
+                <h2>Not enough Phoenix 2 data yet</h2>
+                <p>{mode?.reason || "This mode cannot be rated yet."}</p>
+              </div>
+            ) : (
+              <>
+                <div className="recommendation-stats">
+                  {manualMode ? (
+                    <>
+                      <article><span>Scoring rating</span><strong>{ratingLabel(activeMode, mode.scoringRating ?? 0)}</strong><small>Manually specified skill level</small></article>
+                      <article><span>Upper limit</span><strong>+0.50</strong><small>No lower difficulty bound</small></article>
+                      <article><span>Nearby charts</span><strong>{mode.candidateCount ?? 0}</strong><small>Within the selected rating range</small></article>
+                      <article><span>Ranking</span><strong>Farm edge</strong><small>Official level minus measured difficulty</small></article>
+                    </>
+                  ) : (
+                    <>
+                  <article><span>Scoring rating</span><strong>{ratingLabel(activeMode, mode.scoringRating ?? 0)}</strong><small>Mean estimated difficulty of {mode.baselineLabel ?? "ranks 11–30"}</small></article>
+                  <article><span>Baseline Pumbility</span><strong>{mode.baselinePumbility?.toFixed(2)}</strong><small>Phoenix 2 {mode.baselineLabel ?? "ranks 11–30"}</small></article>
+                  <article><span>Eligible charts</span><strong>{mode.candidateCount ?? 0}</strong><small>At or below {mode.candidateRange?.[1].toFixed(2)}</small></article>
+                  <article><span>Current top 50</span><strong>{mode.currentTop50Pumbility?.toFixed(2)}</strong><small>Mode-specific Phoenix 2 total</small></article>
+                    </>
+                  )}
+                </div>
+
+                <section className="top-recommendations" aria-labelledby="top-recommendations-title">
+                  <div className="recommendation-section-heading">
+                    <div>
+                      <p>{manualMode ? "HIGHEST FARM EDGE" : "MAXIMUM PROJECTED VALUE"}</p>
+                      <h2 id="top-recommendations-title">
+                        {manualMode ? "Top 20 farmable charts" : "Top 20 Pumbility opportunities"}
+                      </h2>
+                    </div>
+                    {manualMode ? (
+                      <p className="manual-ranking-copy">
+                        Ranked by official Phoenix 2 level relative to measured scoring difficulty.
+                      </p>
+                    ) : null}
+                    <p>Expected gain after simulating the player’s top 50.</p>
+                  </div>
+                  <div className="recommendation-list">
+                    {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (
+                      <RecommendationCard chart={chart} key={chart.chartId} manual={manualMode} rank={index + 1} />
+                    )) : <p className="no-recommendations">{manualMode ? "No charts match this rating." : "No nearby chart is projected to improve the current top 50."}</p>}
+                  </div>
+                </section>
+
+                <section className="all-candidates" aria-labelledby="all-candidates-title">
+                  <div className="recommendation-section-heading candidate-heading">
+                    <div><p>FULL MATCHING SET</p><h2 id="all-candidates-title">All charts up to +0.5</h2></div>
+                    <label className="candidate-search">
+                      <span>⌕</span>
+                      <input
+                        aria-label="Search nearby charts"
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder="Search songs, artists, or levels"
+                        type="search"
+                        value={query}
+                      />
+                    </label>
+                  </div>
+                  <div className="candidate-list">
+                    {filteredCandidates.map((chart) => <CandidateRow chart={chart} key={chart.chartId} manual={manualMode} />)}
+                    {!filteredCandidates.length ? <p className="no-recommendations">No charts match this search.</p> : null}
+                  </div>
+                </section>
+              </>
+            )}
+          </>
+        ) : null}
+      </section>
+
+      <footer>
+        <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
+        <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
+        <p>Every valid chart level informs player skill, but only Phoenix 2 charts rated S20/D20 or higher are displayed as recommendations.</p>
+        <p>Projected Pumbility uses ranks 11–30 when available and the best half for shorter Phoenix 2 histories. It is not a guaranteed result.</p>
+      </footer>
+    </main>
+  );
+}

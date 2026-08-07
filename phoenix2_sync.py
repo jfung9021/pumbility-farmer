@@ -182,6 +182,7 @@ def sanitize_snapshot(
         players.append(
             {
                 "playerId": player_id,
+                "username": str(raw.get("username") or "").strip(),
                 "lastSyncedAtUtc": str(raw.get("lastSyncedAtUtc") or ""),
                 "lastScoreRecordedAtUtc": (
                     str(raw.get("lastScoreRecordedAtUtc"))
@@ -248,6 +249,11 @@ def synchronize_mix_snapshot(
     run_started = now()
     run_started_iso = isoformat_utc(run_started)
     players_full = client.fetch_page_collection("api/v2/players", {"limit": 100})
+    consented_profiles = {
+        str(row["userId"]): str(row.get("username") or "").strip()
+        for row in players_full
+        if row.get("userId") is not None and str(row.get("userId")).strip()
+    }
     consented_ids = sorted(
         {
             str(row["userId"])
@@ -346,6 +352,9 @@ def synchronize_mix_snapshot(
             players.append(
                 {
                     "playerId": player_id,
+                    "username": consented_profiles.get(
+                        player_id, str(metadata.get("username") or "").strip()
+                    ),
                     "lastSyncedAtUtc": str(metadata.get("lastSyncedAtUtc") or ""),
                     "lastScoreRecordedAtUtc": _last_score_recorded_at(rows),
                 }

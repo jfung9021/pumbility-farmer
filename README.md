@@ -125,8 +125,10 @@ Local methodology work can use privacy-minimized snapshots of Phoenix 2 best sco
 the configured credential. A community-tool key can read only players who explicitly
 shared data with that tool; this is not a global PIU Scores export.
 
-The local snapshots live under `.local-data/piu-scores/<mix>/`. Raw player IDs and scores are
-never served to the browser. In local mode, the dashboard reads each mix's chart-level aggregate
+The local snapshots live under `.local-data/piu-scores/<mix>/`. Raw player IDs and score histories are
+never served to the browser. Phoenix 2 snapshots retain the consented username required by the
+recommendation dropdown, while game tags and all other profile fields remain excluded. In local
+mode, the dashboard reads each mix's chart-level aggregate
 from `analysis/web_results.json`, including the re-analyzed Phoenix 1 result. A legacy Phoenix 2 aggregate at
 `.local-data/piu-scores/analysis/web_results.json` remains readable until it is replaced.
 
@@ -153,7 +155,8 @@ npm run analyze:local
 npm run dev:local
 ```
 
-`npm run analyze:local` re-analyzes the cached Phoenix 1 and Phoenix 2 snapshots. Use
+`npm run analyze:local` re-analyzes the cached Phoenix 1 and Phoenix 2 snapshots and builds the
+private local recommendation index. Use
 `npm run analyze:phoenix1` or `npm run analyze:phoenix2` to re-analyze only one version.
 The Phoenix 1 result is written only to `.local-data`; the frozen public archive is not changed.
 
@@ -181,7 +184,9 @@ npm run typecheck
 npm run build
 ```
 
-The frontend is a Next.js application. Phoenix 1 loads the versioned public artifact at
+The frontend is a Next.js application. `/` is the feature landing page, `/tier-list` contains the
+existing rankings dashboard, and `/recommendations` contains the player-specific Phoenix 2 route.
+Phoenix 1 loads the versioned public artifact at
 `/data/phoenix1-20260807.json`; `/api/analyze?mix=phoenix1` redirects to that canonical copy.
 Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 
@@ -189,6 +194,8 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 - `GET /api/analyze?mix=phoenix2&jobId=...`: load a matching 24-hour queue-job status.
 - `POST /api/analyze?mix=phoenix2`: queue or follow a Phoenix 2 refresh.
 - `POST /api/deploy?mix=phoenix2`: accept a signed deployment event for Phoenix 2.
+- `GET /api/recommendations/players`: return consented usernames and mode eligibility without raw IDs.
+- `GET /api/recommendations?playerKey=...`: return one precomputed player recommendation slice.
 
 Phoenix 1 POST, cron, deployment, worker, and publisher paths reject updates as archived.
 
@@ -222,10 +229,24 @@ The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as 
 
 - `analysis/phoenix2/latest.json` — current Phoenix 2 aggregate.
 - `analysis/private/phoenix2-current.json` — private, privacy-minimized incremental snapshot.
+- `analysis/private/phoenix1-frozen.json` — immutable private Phoenix 1 recommendation evidence.
+- `analysis/recommendations/latest.json` — private precomputed player recommendation index.
 - `analysis/phoenix2/staging/<job>.json` — resumable 50-player checkpoints.
 - `analysis/phoenix2/runs/*.json` — the latest ten immutable Phoenix 2 aggregate runs.
 
 The old `analysis/latest.json` is a read-only Phoenix 2 fallback and is no longer written.
+
+Seed the frozen Phoenix 1 recommendation evidence once, from the verified local archive, before
+the first production recommendation refresh:
+
+```powershell
+npm run seed:phoenix1-recommendations
+```
+
+The recommendation engine treats Phoenix 2 `charts.json` as a strict allowlist. Charts absent
+from that catalog are removed completely. For the same player and chart, a Phoenix 2 score always
+supersedes Phoenix 1; Phoenix 1 is used only when no Phoenix 2 score exists. Version-specific
+Pumbility residuals are converted to level units before evidence is combined.
 
 For combined Next.js, Python-function, and in-process queue development, use `vercel dev`. A Python-only worker test can set `PIU_ANALYSIS_RAW_DIR` to an existing snapshot directory instead of configuring a live credential.
 
@@ -247,7 +268,11 @@ Project-scoped Vercel account webhooks may target `/api/deploy?mix=phoenix2`. Th
 
 Set the linked Vercel project's Framework Preset to **Services** and its Default Max Duration to **800 seconds**. The backend's generated Celery subscriber inherits that project default; `vercel.json` also applies 800 seconds explicitly to source-backed Python functions.
 
-Never expose server-side secrets through a `NEXT_PUBLIC_` variable. The private snapshot allowlists only player IDs, analysis-required chart/score fields, and per-player sync timestamps. It never stores usernames, game tags, API credentials, or other profile fields, and no raw snapshot route exists.
+Never expose server-side secrets through a `NEXT_PUBLIC_` variable. The private snapshot allowlists
+only player IDs, the consented Phoenix 2 username, analysis-required chart/score fields, and
+per-player sync timestamps. It never stores game tags, API credentials, or other profile fields,
+and no raw snapshot route exists. Recommendation responses use an opaque player key and never
+return raw player IDs or complete score histories.
 
 ## Synchronization behavior
 
@@ -265,7 +290,10 @@ npm run typecheck
 npm run build
 ```
 
-The suite includes incremental merge/pruning/recheck/checkpoint tests, shared rate-limit tests, queue-state and cron tests, eager Celery execution, optimized/full payload equivalence, JSON fallback handling, and a mocked 809-player bounded-concurrency benchmark.
+The suite includes incremental merge/pruning/recheck/checkpoint tests, recommendation catalog and
+Phoenix 2 precedence tests, shared rate-limit tests, queue-state and cron tests, eager Celery
+execution, optimized/full payload equivalence, JSON fallback handling, and a mocked 809-player
+bounded-concurrency benchmark.
 
 `tests/fixtures/production-chart-aggregates-20260807.json` contains all 1,294 chart-level aggregates captured from the public production API for the within-level methodology regression. Its schema is allowlisted and contains no player identifiers, raw scores, usernames, game tags, or credentials. Refresh it explicitly with:
 

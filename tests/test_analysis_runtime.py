@@ -39,6 +39,7 @@ from piu_misgrade_analyzer import (
     build_web_payload,
     make_synthetic_snapshot,
 )
+from piu_recommendations import recommendation_blob_path
 NOW = datetime(2026, 8, 7, 6, 30, tzinfo=timezone.utc)
 API_CLIENT = TestClient(api_app)
 
@@ -247,6 +248,59 @@ class CoordinatorTests(unittest.TestCase):
 
 
 class ApiRouteTests(unittest.TestCase):
+    def test_recommendation_routes_return_safe_player_slices(self) -> None:
+        blobs = MemoryBlobStore()
+        blobs.put_json(
+            recommendation_blob_path(),
+            {
+                "schemaVersion": 1,
+                "generatedAtUtc": isoformat_utc(NOW),
+                "method": {"baselineRanks": [11, 30]},
+                "players": [
+                    {
+                        "playerKey": "public-key",
+                        "username": "PLAYER",
+                        "displayName": "PLAYER",
+                        "modes": {
+                            "singles": {
+                                "eligible": True,
+                                "validScoreCount": 30,
+                                "candidates": [],
+                                "topRecommendations": [],
+                            },
+                            "doubles": {
+                                "eligible": False,
+                                "validScoreCount": 2,
+                                "candidates": [],
+                                "topRecommendations": [],
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+        with patch("api.recommendations.PrivateBlobStore", return_value=blobs):
+            players = API_CLIENT.get("/api/recommendations/players")
+            selected = API_CLIENT.get("/api/recommendations?playerKey=public-key")
+            missing = API_CLIENT.get("/api/recommendations?playerKey=missing")
+        self.assertEqual(players.status_code, 200)
+        self.assertEqual(players.json()["players"][0]["username"], "PLAYER")
+        self.assertEqual(
+            players.json()["players"][0]["eligibility"],
+            {"singles": True, "doubles": False},
+        )
+        self.assertNotIn("modes", players.json()["players"][0])
+        self.assertEqual(selected.json()["player"]["playerKey"], "public-key")
+        self.assertEqual(missing.status_code, 404)
+
+    def test_recommendations_require_a_player_key_and_generated_index(self) -> None:
+        blobs = MemoryBlobStore()
+        with patch("api.recommendations.PrivateBlobStore", return_value=blobs):
+            no_key = API_CLIENT.get("/api/recommendations")
+            no_index = API_CLIENT.get("/api/recommendations/players")
+        self.assertEqual(no_key.status_code, 400)
+        self.assertEqual(no_index.status_code, 404)
+
     def test_mix_specific_cron_route_rejects_archived_phoenix1(self) -> None:
         with patch.dict("os.environ", {"CRON_SECRET": "cron-secret-value"}):
             response = API_CLIENT.get(
@@ -461,11 +515,13 @@ class WorkerTests(unittest.TestCase):
             job_id="p2",
             snapshot=snapshot2,
             payload=latest_payload(NOW, "phoenix2"),
+            recommendations={"generatedAtUtc": isoformat_utc(NOW), "players": []},
             mix="phoenix2",
         )
         self.assertEqual(read_latest_payload(blobs, "phoenix2")["mix"]["key"], "phoenix2")
         self.assertEqual(blobs.get_json(current_snapshot_path("phoenix2"))["mix"], "Phoenix2")
         self.assertEqual(len(blobs.list(runs_prefix("phoenix2"))), 1)
+        self.assertEqual(blobs.get_json(recommendation_blob_path())["players"], [])
 
     def test_stale_archived_job_fails_without_syncing_or_publishing(self) -> None:
         blobs = MemoryBlobStore()
@@ -501,7 +557,7 @@ class WorkerTests(unittest.TestCase):
         snapshot = blobs.get_json(CURRENT_SNAPSHOT_PATH)
         self.assertEqual(len(snapshot["players"]), 1)
         serialized = json.dumps(snapshot)
-        self.assertNotIn("username", serialized)
+        self.assertEqual(snapshot["players"][0]["username"], "private")
         self.assertNotIn("gameTag", serialized)
         self.assertIsNone(blobs.get_json(f"{STAGING_PREFIX}{job['id']}.json"))
         self.assertIsNone(jobs.active_job_id())
