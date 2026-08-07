@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-PIU Phoenix 2 player-normalized chart misgrade analyzer.
+PIU Phoenix 2 player-normalized chart scoring-difficulty analyzer.
 
-Implements the requested exploratory metric:
-  1. For each player, sort all valid Phoenix 2 best scores by per-score Pumbility.
-  2. Define the player's baseline as the mean Pumbility of ranks 11 through 30.
-  3. For each score in ranks 1 through 10, compute:
-         residual = score_pumbility - baseline
-         squared_residual = residual ** 2
-  4. For each chart, average squared_residual across contributing players.
-     Larger values are interpreted as easier / more favorably misgraded.
-  5. Within each official folder, rank charts into ten equal-count bands:
-         .0 = easiest, .9 = hardest.
+Singles and Doubles are analyzed as completely independent populations:
+  1. Rank each player's valid best scores within one mode by Pumbility.
+  2. Define that mode's player baseline as the mean of ranks 11 through 30.
+  3. Retain only ranks 1 through 100 from that player and mode.
+  4. For every level-20+ chart in that set, compute the signed residual from the
+     player's mode-specific baseline.
+  5. Calibrate residual Pumbility into continuous level units and anchor the
+     average official level L at L + 0.5. Negative differences are easier to
+     score than average and positive differences are harder.
 
 The script deliberately does NOT consume PIU Scores' existing scoring-level or tier-list fields.
 It uses only player best scores, the API-computed Phoenix 2 Pumbility value for each score,
@@ -31,7 +30,7 @@ Offline validation
 
   python piu_misgrade_analyzer.py synthetic --output-dir ./synthetic_demo
 
-Dependencies: Python 3.10+, requests, pandas, numpy, scipy.
+Dependencies: Python 3.12+, requests, pandas, numpy.
 """
 
 from __future__ import annotations
@@ -58,11 +57,26 @@ import requests
 
 
 DEFAULT_BASE_URL = "https://piuscores.arroweclip.se/"
-TARGET_SINGLE_LEVELS = (20, 21, 22, 23)
-TARGET_DOUBLE_LEVELS = (20, 21, 22, 23, 24)
-TARGET_FOLDERS = tuple([f"S{x}" for x in TARGET_SINGLE_LEVELS] + [f"D{x}" for x in TARGET_DOUBLE_LEVELS])
+MIN_TARGET_LEVEL = 20
+MODE_TYPES = ("Single", "Double")
+MODE_LABELS = {"Single": "Singles", "Double": "Doubles"}
+SYNTHETIC_FOLDERS = (
+    "S20", "S21", "S22", "S23", "D20", "D21", "D22", "D23", "D24"
+)
+RELATIVE_GROUPS = (
+    "Extremely Easy",
+    "Very Easy",
+    "Clearly Easy",
+    "Moderately Easy",
+    "Slightly Easy",
+    "Typical",
+    "Slightly Hard",
+    "Moderately Hard",
+    "Very Hard",
+    "Extremely Hard",
+)
 KEY_RE = re.compile(r"^(?:piu_scores_live_|pst_live_)[0-9a-f]{64}$")
-SCRIPT_VERSION = "1.0.2-exploratory"
+SCRIPT_VERSION = "2.0.0-mode-separated"
 
 
 class ApiError(RuntimeError):
@@ -73,7 +87,7 @@ class ApiError(RuntimeError):
 class AnalysisConfig:
     baseline_start_rank: int = 11
     baseline_end_rank: int = 30
-    top_end_rank: int = 10
+    analysis_end_rank: int = 100
     min_contributors: int = 5
     published_contributors: int = 10
     shrinkage_k: float = 10.0
@@ -360,9 +374,11 @@ def load_snapshot(raw_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, A
 
 
 def folder_for(chart_type: str, level: int) -> str | None:
-    if chart_type == "Single" and level in TARGET_SINGLE_LEVELS:
+    if level < MIN_TARGET_LEVEL:
+        return None
+    if chart_type == "Single":
         return f"S{level}"
-    if chart_type == "Double" and level in TARGET_DOUBLE_LEVELS:
+    if chart_type == "Double":
         return f"D{level}"
     return None
 
@@ -384,31 +400,74 @@ def _bootstrap_mean_ci(values: np.ndarray, samples: int, rng: np.random.Generato
     return float(low), float(high)
 
 
-def _assign_decile_labels(
-    frame: pd.DataFrame,
-    metric_column: str,
-    label_column: str,
-) -> pd.DataFrame:
-    result = frame.copy()
-    result[label_column] = pd.Series(pd.NA, index=result.index, dtype="string")
-    result[label_column + "Rank"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
-    result[label_column + "Bucket"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+def relative_difficulty_group(delta: float) -> tuple[int, str]:
+    """Return the stable, absolute scoring-difference group for a level delta."""
+    if not math.isfinite(delta):
+        raise ValueError("A relative-difficulty group requires a finite delta.")
+    if delta <= -3.0:
+        rank = 1
+    elif delta <= -2.0:
+        rank = 2
+    elif delta <= -1.25:
+        rank = 3
+    elif delta <= -0.75:
+        rank = 4
+    elif delta < -0.25:
+        rank = 5
+    elif delta <= 0.25:
+        rank = 6
+    elif delta <= 0.75:
+        rank = 7
+    elif delta <= 1.25:
+        rank = 8
+    elif delta < 2.0:
+        rank = 9
+    else:
+        rank = 10
+    return rank, RELATIVE_GROUPS[rank - 1]
 
-    for folder, group in result.groupby("folder", sort=False, dropna=False):
-        eligible = group[group[metric_column].notna()].copy()
-        if eligible.empty:
-            continue
-        eligible = eligible.sort_values(
-            [metric_column, "nTop10", "songName", "chartId"],
-            ascending=[False, False, True, True],
-            kind="mergesort",
+
+def _fit_level_calibration(chart_stats: pd.DataFrame) -> tuple[float, float]:
+    """Fit expected residual Pumbility per official level for one play mode."""
+    measured = chart_stats[
+        chart_stats["meanResidualPb"].notna() & chart_stats["level"].notna()
+    ].copy()
+    fallback_slope = 50.0
+    if measured.empty:
+        return fallback_slope, -fallback_slope * MIN_TARGET_LEVEL
+
+    x = measured["level"].to_numpy(dtype=float)
+    y = measured["meanResidualPb"].to_numpy(dtype=float)
+    contributors = measured["nContributors"].to_numpy(dtype=float)
+    weights = np.sqrt(np.clip(contributors, 1.0, 30.0))
+
+    slope = fallback_slope
+    if len(measured) >= 2 and np.unique(x).size >= 2:
+        candidate = float(np.polyfit(x, y, 1, w=weights)[0])
+        # Pumbility is approximately linear in level. Reject a degenerate cohort fit.
+        if math.isfinite(candidate) and 5.0 <= candidate <= 150.0:
+            slope = candidate
+    intercept = float(np.average(y - slope * x, weights=weights))
+    return slope, intercept
+
+
+def _apply_chart_ranks(result: pd.DataFrame) -> pd.DataFrame:
+    result = result.copy()
+    result["modeRank"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+    result["levelRank"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+    measured = result[result["difficultyDelta"].notna()].sort_values(
+        ["difficultyDelta", "nContributors", "songName", "chartId"],
+        ascending=[True, False, True, True],
+        kind="mergesort",
+    )
+    if not measured.empty:
+        result.loc[measured.index, "modeRank"] = pd.array(
+            np.arange(1, len(measured) + 1), dtype="Int64"
         )
-        count = len(eligible)
-        for zero_index, row_index in enumerate(eligible.index):
-            bucket = min(9, int(math.floor(zero_index * 10 / count)))
-            result.at[row_index, label_column] = f"{folder}.{bucket}"
-            result.at[row_index, label_column + "Rank"] = zero_index + 1
-            result.at[row_index, label_column + "Bucket"] = bucket
+    for _, group in measured.groupby("folder", sort=False):
+        result.loc[group.index, "levelRank"] = pd.array(
+            np.arange(1, len(group) + 1), dtype="Int64"
+        )
     return result
 
 
@@ -418,7 +477,7 @@ def analyze_snapshot(
     scores: Sequence[Mapping[str, Any]],
     config: AnalysisConfig,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any], pd.DataFrame]:
-    """Return chart results, player baselines, run summary, and top-10 contributions."""
+    """Return chart results, mode-specific baselines, summary, and top-100 contributions."""
     chart_df = pd.DataFrame(charts)
     score_df = pd.DataFrame(scores)
     if chart_df.empty:
@@ -462,16 +521,18 @@ def analyze_snapshot(
         how="inner",
         validate="many_to_one",
     )
-    if "difficulty" not in merged.columns:
-        merged["difficulty"] = np.where(
-            merged["type"].eq("Single"), "S" + merged["level"].astype(str),
-            np.where(merged["type"].eq("Double"), "D" + merged["level"].astype(str), ""),
+    if "difficulty" not in chart_df.columns:
+        chart_df["difficulty"] = np.where(
+            chart_df["type"].eq("Single"), "S" + chart_df["level"].astype(str),
+            np.where(chart_df["type"].eq("Double"), "D" + chart_df["level"].astype(str), ""),
         )
+    if "difficulty" not in merged.columns:
+        merged = merged.merge(chart_df[["chartId", "difficulty"]], on="chartId", how="left")
 
     valid = merged[
         merged["pumbility"].notna()
         & (~merged["isBroken"])
-        & merged["type"].isin(["Single", "Double"])
+        & merged["type"].isin(MODE_TYPES)
     ].copy()
     if valid.empty:
         raise ValueError("No valid Single/Double Phoenix 2 scores with Pumbility were found.")
@@ -483,210 +544,271 @@ def analyze_snapshot(
         kind="mergesort",
     ).drop_duplicates(["playerId", "chartId"], keep="first")
 
-    player_counts = valid.groupby("playerId").size().rename("validScoreCount")
-    eligible_player_ids = player_counts[player_counts >= config.minimum_scores_per_player].index
-    valid = valid[valid["playerId"].isin(eligible_player_ids)].copy()
-    if valid.empty:
-        raise ValueError(
-            f"No player had at least {config.minimum_scores_per_player} valid best scores, "
-            "so ranks 11-30 cannot be defined."
-        )
-
-    valid = valid.sort_values(
-        ["playerId", "pumbility", "score", "chartId"],
-        ascending=[True, False, False, True],
-        kind="mergesort",
-    )
-    valid["playerRank"] = valid.groupby("playerId", sort=False).cumcount() + 1
-
-    baseline_slice = valid[
-        valid["playerRank"].between(config.baseline_start_rank, config.baseline_end_rank)
-    ]
-    baselines = baseline_slice.groupby("playerId", sort=False)["pumbility"].agg(
-        baselinePumbility="mean",
-        baselineStd="std",
-        baselineMin="min",
-        baselineMax="max",
-        baselineCount="count",
-    )
-    baselines = baselines.join(player_counts, how="left")
-    baselines = baselines[baselines["baselineCount"] == (
-        config.baseline_end_rank - config.baseline_start_rank + 1
-    )].copy()
-
-    # Hash identifiers in diagnostics. Aggregate outputs never expose names or raw player IDs.
-    baselines["playerHash"] = [
-        hashlib.sha256(pid.encode("utf-8")).hexdigest()[:16] for pid in baselines.index.astype(str)
-    ]
-
-    top = valid[
-        valid["playerRank"].between(1, config.top_end_rank)
-        & valid["playerId"].isin(baselines.index)
-    ].copy()
-    top = top.join(baselines[["baselinePumbility"]], on="playerId")
-    top["residualPb"] = top["pumbility"] - top["baselinePumbility"]
-    top["squaredResidualPb2"] = top["residualPb"] ** 2
-
-    target_top = top[top["folder"].isin(TARGET_FOLDERS)].copy()
-    target_catalog = chart_df[chart_df["folder"].isin(TARGET_FOLDERS)].copy()
+    target_catalog = chart_df[chart_df["folder"].notna()].copy()
     if target_catalog.empty:
-        raise ValueError("The chart catalog contained none of the requested target folders.")
-
-    # Denominators: eligible players who have any valid best score on the chart.
-    target_valid = valid[valid["folder"].isin(TARGET_FOLDERS)].copy()
-    scored_counts = target_valid.groupby("chartId")["playerId"].nunique().rename("nPlayersScored")
+        raise ValueError("The chart catalog contained no Single or Double charts at level 20 or above.")
 
     rng = np.random.default_rng(config.random_seed)
-    stat_rows: list[dict[str, Any]] = []
-    for chart_id, group in target_top.groupby("chartId", sort=False):
-        squared = group["squaredResidualPb2"].to_numpy(dtype=float)
-        residual = group["residualPb"].to_numpy(dtype=float)
-        ci_low, ci_high = _bootstrap_mean_ci(squared, config.bootstrap_samples, rng)
-        stat_rows.append(
-            {
-                "chartId": str(chart_id),
-                "nTop10": int(group["playerId"].nunique()),
-                "misgradeRawPb2": float(np.mean(squared)),
-                "misgradeRmsPb": float(math.sqrt(max(0.0, np.mean(squared)))),
-                "meanResidualPb": float(np.mean(residual)),
-                "medianResidualPb": float(np.median(residual)),
-                "residualStdPb": float(np.std(residual, ddof=1)) if len(residual) > 1 else 0.0,
-                "rawCi95LowPb2": ci_low,
-                "rawCi95HighPb2": ci_high,
-                "meanContributorBaselinePb": float(group["baselinePumbility"].mean()),
-            }
+    mode_results: list[pd.DataFrame] = []
+    baseline_frames: list[pd.DataFrame] = []
+    contribution_frames: list[pd.DataFrame] = []
+    eligible_valid_rows = 0
+
+    for chart_type in MODE_TYPES:
+        mode_name = MODE_LABELS[chart_type]
+        mode_valid = valid[valid["type"] == chart_type].copy()
+        mode_valid = mode_valid.sort_values(
+            ["playerId", "pumbility", "score", "chartId"],
+            ascending=[True, False, False, True],
+            kind="mergesort",
         )
-    stats = pd.DataFrame(stat_rows)
-    if stats.empty:
-        stats = pd.DataFrame(
-            columns=[
-                "chartId", "nTop10", "misgradeRawPb2", "misgradeRmsPb",
-                "meanResidualPb", "medianResidualPb", "residualStdPb",
-                "rawCi95LowPb2", "rawCi95HighPb2", "meanContributorBaselinePb",
-            ]
+        counts = mode_valid.groupby("playerId").size().rename("validScoreCount")
+        mode_valid["playerRank"] = mode_valid.groupby("playerId", sort=False).cumcount() + 1
+        baseline_slice = mode_valid[
+            mode_valid["playerRank"].between(
+                config.baseline_start_rank, config.baseline_end_rank
+            )
+        ]
+        baselines = baseline_slice.groupby("playerId", sort=False)["pumbility"].agg(
+            baselinePumbility="mean",
+            baselineStd="std",
+            baselineMin="min",
+            baselineMax="max",
+            baselineCount="count",
         )
+        baselines = baselines.join(counts, how="left")
+        required_baseline_count = config.baseline_end_rank - config.baseline_start_rank + 1
+        baselines = baselines[
+            (baselines["baselineCount"] == required_baseline_count)
+            & (baselines["validScoreCount"] >= config.minimum_scores_per_player)
+        ].copy()
+        eligible_ids = baselines.index
+        eligible_valid = mode_valid[mode_valid["playerId"].isin(eligible_ids)].copy()
+        eligible_valid_rows += len(eligible_valid)
 
-    result = target_catalog.merge(stats, on="chartId", how="left")
-    result = result.merge(scored_counts, on="chartId", how="left")
-    result["nTop10"] = result["nTop10"].fillna(0).astype(int)
-    result["nPlayersScored"] = result["nPlayersScored"].fillna(0).astype(int)
-    result["top10AppearanceRate"] = np.where(
-        result["nPlayersScored"] > 0,
-        result["nTop10"] / result["nPlayersScored"],
-        np.nan,
-    )
+        baseline_export = baselines.reset_index().copy()
+        baseline_export["mode"] = mode_name
+        baseline_export["playerHash"] = baseline_export["playerId"].map(
+            lambda pid: hashlib.sha256(str(pid).encode("utf-8")).hexdigest()[:16]
+        )
+        baseline_export = baseline_export.drop(columns=["playerId"])
+        baseline_frames.append(baseline_export)
 
-    # Empirical-Bayes-style reliability companion. The requested raw metric remains primary.
-    level_prior = (
-        target_top.groupby("folder", sort=False)["squaredResidualPb2"].mean().rename("folderPriorPb2")
-    )
-    result = result.merge(level_prior, on="folder", how="left")
-    weight = result["nTop10"] / (result["nTop10"] + config.shrinkage_k)
-    result["reliabilityWeight"] = weight
-    result["misgradeShrunkPb2"] = np.where(
-        result["misgradeRawPb2"].notna() & result["folderPriorPb2"].notna(),
-        weight * result["misgradeRawPb2"] + (1.0 - weight) * result["folderPriorPb2"],
-        np.nan,
-    )
-    result["misgradeShrunkRmsPb"] = np.sqrt(result["misgradeShrunkPb2"])
+        top100 = eligible_valid[
+            eligible_valid["playerRank"].between(1, config.analysis_end_rank)
+        ].copy()
+        top100 = top100.join(baselines[["baselinePumbility"]], on="playerId")
+        top100["residualPb"] = top100["pumbility"] - top100["baselinePumbility"]
+        target_top100 = top100[top100["folder"].notna()].copy()
 
-    result["evidenceStatus"] = np.select(
-        [
-            result["nTop10"] >= config.published_contributors,
-            result["nTop10"] >= config.min_contributors,
-            result["nTop10"] > 0,
-        ],
-        ["Published", "Provisional", "Insufficient"],
-        default="Unrated",
-    )
+        if not target_top100.empty:
+            contribution_export = target_top100[
+                ["playerId", "chartId", "folder", "songName", "difficulty", "playerRank",
+                 "pumbility", "baselinePumbility", "residualPb"]
+            ].copy()
+            contribution_export["mode"] = mode_name
+            contribution_export["playerHash"] = contribution_export["playerId"].map(
+                lambda pid: hashlib.sha256(str(pid).encode("utf-8")).hexdigest()[:16]
+            )
+            contribution_frames.append(contribution_export.drop(columns=["playerId"]))
 
-    result = _assign_decile_labels(result, "misgradeRawPb2", "requestedTier")
-    result = _assign_decile_labels(result, "misgradeShrunkPb2", "reliabilityTier")
+        scored_counts = (
+            eligible_valid[eligible_valid["folder"].notna()]
+            .groupby("chartId")["playerId"]
+            .nunique()
+            .rename("nPlayersScored")
+        )
+        stat_rows: list[dict[str, Any]] = []
+        for chart_id, group in target_top100.groupby("chartId", sort=False):
+            residual = group["residualPb"].to_numpy(dtype=float)
+            ci_low, ci_high = _bootstrap_mean_ci(residual, config.bootstrap_samples, rng)
+            stat_rows.append(
+                {
+                    "chartId": str(chart_id),
+                    "nContributors": int(group["playerId"].nunique()),
+                    "meanResidualPb": float(np.mean(residual)),
+                    "medianResidualPb": float(np.median(residual)),
+                    "residualStdPb": float(np.std(residual, ddof=1)) if len(residual) > 1 else 0.0,
+                    "residualCi95LowPb": ci_low,
+                    "residualCi95HighPb": ci_high,
+                    "meanContributorBaselinePb": float(group["baselinePumbility"].mean()),
+                }
+            )
+        stats = pd.DataFrame(stat_rows)
+        if stats.empty:
+            stats = pd.DataFrame(columns=[
+                "chartId", "nContributors", "meanResidualPb", "medianResidualPb",
+                "residualStdPb", "residualCi95LowPb", "residualCi95HighPb",
+                "meanContributorBaselinePb",
+            ])
+        stats = stats.merge(
+            chart_df[["chartId", "level"]], on="chartId", how="left", validate="one_to_one"
+        )
+        slope, intercept = _fit_level_calibration(stats)
 
-    # Within-folder percentiles: 1.0 is easiest, 0.0 is hardest among measured charts.
-    result["easePercentileRaw"] = np.nan
-    for folder, group in result.groupby("folder", sort=False):
-        measured = group[group["misgradeRawPb2"].notna()]
-        if measured.empty:
+        mode_catalog = target_catalog[target_catalog["type"] == chart_type].copy()
+        if mode_catalog.empty:
             continue
-        ranks = measured["misgradeRawPb2"].rank(method="average", ascending=True)
-        denom = max(1, len(measured) - 1)
-        pct = (ranks - 1) / denom if len(measured) > 1 else pd.Series(0.5, index=measured.index)
-        result.loc[measured.index, "easePercentileRaw"] = pct
+        result = mode_catalog.merge(stats.drop(columns=["level"]), on="chartId", how="left")
+        result = result.merge(scored_counts, on="chartId", how="left")
+        result["mode"] = mode_name
+        result["nContributors"] = result["nContributors"].fillna(0).astype(int)
+        result["nPlayersScored"] = result["nPlayersScored"].fillna(0).astype(int)
+        result["top100AppearanceRate"] = np.where(
+            result["nPlayersScored"] > 0,
+            result["nContributors"] / result["nPlayersScored"],
+            np.nan,
+        )
+        result["expectedResidualPb"] = intercept + slope * result["level"].astype(float)
+        result["rawEasePb"] = result["meanResidualPb"] - result["expectedResidualPb"]
+        weight = result["nContributors"] / (result["nContributors"] + config.shrinkage_k)
+        result["reliabilityWeight"] = weight
+        result["shrunkEasePb"] = np.where(
+            result["meanResidualPb"].notna(), weight * result["rawEasePb"], np.nan
+        )
+        result["pumbilityPerLevel"] = slope
+        result["averageDifficulty"] = result["level"].astype(float) + 0.5
+        result["difficultyDelta"] = -result["shrunkEasePb"] / slope
+        result["estimatedDifficulty"] = result["averageDifficulty"] + result["difficultyDelta"]
+        delta_ci_low = -weight * (
+            result["residualCi95HighPb"] - result["expectedResidualPb"]
+        ) / slope
+        delta_ci_high = -weight * (
+            result["residualCi95LowPb"] - result["expectedResidualPb"]
+        ) / slope
+        result["difficultyCi95Low"] = result["averageDifficulty"] + delta_ci_low
+        result["difficultyCi95High"] = result["averageDifficulty"] + delta_ci_high
+        result["evidenceStatus"] = np.select(
+            [
+                result["nContributors"] >= config.published_contributors,
+                result["nContributors"] >= config.min_contributors,
+                result["nContributors"] > 0,
+            ],
+            ["Published", "Provisional", "Insufficient"],
+            default="Unrated",
+        )
+        result["relativeGroupRank"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+        result["relativeGroup"] = pd.Series(pd.NA, index=result.index, dtype="string")
+        for row_index, delta in result["difficultyDelta"].dropna().items():
+            group_rank, group_name = relative_difficulty_group(float(delta))
+            result.at[row_index, "relativeGroupRank"] = group_rank
+            result.at[row_index, "relativeGroup"] = group_name
+        result = _apply_chart_ranks(result)
+        mode_results.append(result)
 
+    if not any(not frame.empty for frame in baseline_frames):
+        raise ValueError(
+            f"No player had at least {config.minimum_scores_per_player} valid scores in either "
+            "Singles or Doubles, so separate ranks 11-30 baselines cannot be defined."
+        )
+
+    result = pd.concat(mode_results, ignore_index=True)
     output_columns = [
-        "folder", "requestedTier", "requestedTierRank", "requestedTierBucket",
-        "reliabilityTier", "reliabilityTierRank", "reliabilityTierBucket",
-        "songName", "difficulty", "type", "level", "chartId",
-        "misgradeRawPb2", "misgradeRmsPb", "misgradeShrunkPb2", "misgradeShrunkRmsPb",
-        "meanResidualPb", "medianResidualPb", "residualStdPb",
-        "rawCi95LowPb2", "rawCi95HighPb2", "nTop10", "nPlayersScored",
-        "top10AppearanceRate", "easePercentileRaw", "reliabilityWeight",
-        "meanContributorBaselinePb", "evidenceStatus", "noteCount", "stepArtist",
+        "mode", "modeRank", "levelRank", "folder", "relativeGroupRank", "relativeGroup",
+        "songName", "difficulty", "type", "level", "chartId", "imageUrl", "noteCount",
+        "stepArtist", "estimatedDifficulty", "averageDifficulty", "difficultyDelta",
+        "difficultyCi95Low", "difficultyCi95High", "pumbilityPerLevel", "rawEasePb",
+        "shrunkEasePb", "meanResidualPb", "medianResidualPb", "residualStdPb",
+        "residualCi95LowPb", "residualCi95HighPb", "expectedResidualPb",
+        "nContributors", "nPlayersScored", "top100AppearanceRate", "reliabilityWeight",
+        "meanContributorBaselinePb", "evidenceStatus",
     ]
     for col in output_columns:
         if col not in result.columns:
             result[col] = pd.NA
     result = result[output_columns].sort_values(
-        ["folder", "requestedTierRank", "songName", "chartId"],
+        ["mode", "modeRank", "folder", "songName", "chartId"],
         na_position="last",
         kind="mergesort",
     )
 
-    baseline_out = baselines.reset_index(drop=True)[
-        ["playerHash", "validScoreCount", "baselinePumbility", "baselineStd",
-         "baselineMin", "baselineMax", "baselineCount"]
-    ].sort_values("playerHash")
-
-    contribution_out = target_top[
-        ["playerId", "chartId", "folder", "songName", "difficulty", "playerRank",
-         "pumbility", "baselinePumbility", "residualPb", "squaredResidualPb2"]
-    ].copy()
-    contribution_out["playerHash"] = contribution_out["playerId"].map(
-        lambda value: hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
+    baseline_out = pd.concat(baseline_frames, ignore_index=True)
+    baseline_columns = [
+        "mode", "playerHash", "validScoreCount", "baselinePumbility", "baselineStd",
+        "baselineMin", "baselineMax", "baselineCount",
+    ]
+    baseline_out = baseline_out[baseline_columns].sort_values(["mode", "playerHash"])
+    contribution_out = (
+        pd.concat(contribution_frames, ignore_index=True)
+        if contribution_frames
+        else pd.DataFrame(columns=[
+            "chartId", "folder", "songName", "difficulty", "playerRank", "pumbility",
+            "baselinePumbility", "residualPb", "mode", "playerHash",
+        ])
     )
-    contribution_out = contribution_out.drop(columns=["playerId"])
 
-    measured = result[result["misgradeRawPb2"].notna()]
+    measured = result[result["difficultyDelta"].notna()]
     summary = {
         "scriptVersion": SCRIPT_VERSION,
         "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
         "method": {
             "baselineRanks": [config.baseline_start_rank, config.baseline_end_rank],
-            "comparedRanks": [1, config.top_end_rank],
-            "chartMetric": "mean((score_pumbility - player_baseline)^2)",
-            "tierDirection": ".0 easiest; .9 hardest",
-            "tierAssignment": "equal-count within each official folder, sorted by descending raw metric",
+            "analyzedRanks": [1, config.analysis_end_rank],
+            "chartMetric": "signed player-normalized Pumbility residual",
+            "difficultyDelta": "estimatedDifficulty - (officialLevel + 0.5)",
+            "negativeDeltaMeaning": "easier to score than the average chart at that level",
+            "modeSeparation": "Singles and Doubles use independent eligibility, baselines, calibration, and ranks",
             "usesExistingPiuScoresTierList": False,
             "shrinkageK": config.shrinkage_k,
             "bootstrapSamples": config.bootstrap_samples,
         },
         "coverage": {
             "playersReturnedByCredential": len(players),
-            "playersWithAtLeast30ValidScores": int(len(baselines)),
-            "validBestScoreRowsAmongEligiblePlayers": int(len(valid)),
-            "targetTop10Contributions": int(len(target_top)),
+            "eligiblePlayerModePairs": int(len(baseline_out)),
+            "validBestScoreRowsAmongEligiblePlayerModes": int(eligible_valid_rows),
+            "targetTop100Contributions": int(len(contribution_out)),
             "targetCatalogCharts": int(len(result)),
-            "targetChartsWithAnyContribution": int(len(measured)),
+            "targetChartsMeasured": int(len(measured)),
             "targetChartsPublished": int((result["evidenceStatus"] == "Published").sum()),
             "targetChartsProvisional": int((result["evidenceStatus"] == "Provisional").sum()),
             "targetChartsInsufficient": int((result["evidenceStatus"] == "Insufficient").sum()),
             "targetChartsUnrated": int((result["evidenceStatus"] == "Unrated").sum()),
         },
-        "folders": {},
+        "modes": {},
     }
-    for folder in TARGET_FOLDERS:
-        subset = result[result["folder"] == folder]
-        summary["folders"][folder] = {
+    for mode_name in MODE_LABELS.values():
+        subset = result[result["mode"] == mode_name]
+        mode_baselines = baseline_out[baseline_out["mode"] == mode_name]
+        measured_subset = subset[subset["difficultyDelta"].notna()]
+        folders: dict[str, Any] = {}
+        for folder in sorted(subset["folder"].dropna().unique(), key=lambda value: int(value[1:])):
+            folder_subset = subset[subset["folder"] == folder]
+            contributors = folder_subset.loc[folder_subset["nContributors"] > 0, "nContributors"]
+            folders[str(folder)] = {
+                "catalogCharts": int(len(folder_subset)),
+                "measuredCharts": int(folder_subset["difficultyDelta"].notna().sum()),
+                "publishedCharts": int((folder_subset["evidenceStatus"] == "Published").sum()),
+                "medianContributors": float(contributors.median()) if not contributors.empty else None,
+            }
+        summary["modes"][mode_name.lower()] = {
+            "eligiblePlayers": int(len(mode_baselines)),
             "catalogCharts": int(len(subset)),
-            "measuredCharts": int(subset["misgradeRawPb2"].notna().sum()),
+            "measuredCharts": int(len(measured_subset)),
             "publishedCharts": int((subset["evidenceStatus"] == "Published").sum()),
-            "medianContributors": float(subset.loc[subset["nTop10"] > 0, "nTop10"].median())
-            if (subset["nTop10"] > 0).any()
-            else None,
+            "pumbilityPerLevel": float(measured_subset["pumbilityPerLevel"].iloc[0])
+            if not measured_subset.empty else 50.0,
+            "folders": folders,
         }
 
     return result, baseline_out, summary, contribution_out
+
+
+def build_web_payload(
+    chart_results: pd.DataFrame,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Convert analysis frames into a JSON-safe contract for the web UI."""
+    records = json.loads(chart_results.to_json(orient="records", double_precision=6))
+    return {
+        "generatedAtUtc": summary.get("generatedAtUtc"),
+        "summary": dict(summary),
+        "singles": [row for row in records if row.get("mode") == "Singles"],
+        "doubles": [row for row in records if row.get("mode") == "Doubles"],
+        "relativeGroups": [
+            {"rank": rank, "name": name}
+            for rank, name in enumerate(RELATIVE_GROUPS, start=1)
+        ],
+    }
 
 
 def export_analysis(
@@ -701,13 +823,26 @@ def export_analysis(
     chart_results.to_csv(output_dir / "chart_tiers.csv", index=False, float_format="%.6f")
     player_baselines.to_csv(output_dir / "player_baselines_pseudonymous.csv", index=False, float_format="%.6f")
     _write_json(output_dir / "analysis_summary.json", summary)
+    _write_json(output_dir / "web_results.json", build_web_payload(chart_results, summary))
     if include_contributions:
-        contributions.to_csv(output_dir / "top10_contributions_pseudonymous.csv", index=False, float_format="%.6f")
+        contributions.to_csv(output_dir / "top100_contributions_pseudonymous.csv", index=False, float_format="%.6f")
 
-    # One easy-to-read CSV per folder.
+    for mode_name in MODE_LABELS.values():
+        subset = chart_results[chart_results["mode"] == mode_name]
+        subset.to_csv(
+            output_dir / f"{mode_name.lower()}_rankings.csv",
+            index=False,
+            float_format="%.6f",
+        )
+
+    # One easy-to-read CSV per official folder.
     folder_dir = output_dir / "folders"
     folder_dir.mkdir(exist_ok=True)
-    for folder in TARGET_FOLDERS:
+    folders = sorted(
+        chart_results["folder"].dropna().unique(),
+        key=lambda value: (value[0], int(value[1:])),
+    )
+    for folder in folders:
         subset = chart_results[chart_results["folder"] == folder]
         subset.to_csv(folder_dir / f"{folder.lower()}_tiers.csv", index=False, float_format="%.6f")
 
@@ -716,37 +851,40 @@ def make_synthetic_snapshot(
     seed: int = 20260807,
     players_per_folder: int = 80,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, float]]:
-    """Construct a controlled fixture where the intended easiest-to-hardest order is known."""
+    """Construct a fixture with independent mode skill and known chart ease signals."""
     rng = np.random.default_rng(seed)
     charts: list[dict[str, Any]] = []
     scores: list[dict[str, Any]] = []
     players: list[dict[str, Any]] = []
     true_signal: dict[str, float] = {}
 
-    background_charts: list[dict[str, Any]] = []
-    for i in range(40):
-        chart_type = "Single" if i % 2 == 0 else "Double"
-        level = 16 + (i % 4)
-        chart_id = f"background-{i:02d}"
-        row = {
-            "id": chart_id,
-            "mix": "Phoenix2",
-            "originalMix": "Phoenix2",
-            "songName": f"Synthetic Background {i + 1:02d}",
-            "type": chart_type,
-            "level": level,
-            "difficulty": ("S" if chart_type == "Single" else "D") + str(level),
-            "noteCount": 500 + i,
-            "playerCount": 1,
-            "stepArtist": "Synthetic",
-            "scoringLevel": None,
-        }
-        charts.append(row)
-        background_charts.append(row)
+    background_charts: dict[str, list[dict[str, Any]]] = {"Single": [], "Double": []}
+    for chart_type in MODE_TYPES:
+        prefix = "S" if chart_type == "Single" else "D"
+        for i in range(40):
+            level = 16 + (i % 4)
+            chart_id = f"background-{prefix.lower()}-{i:02d}"
+            row = {
+                "id": chart_id,
+                "mix": "Phoenix2",
+                "originalMix": "Phoenix2",
+                "songName": f"Synthetic {prefix} Background {i + 1:02d}",
+                "type": chart_type,
+                "level": level,
+                "difficulty": f"{prefix}{level}",
+                "imageUrl": None,
+                "noteCount": 500 + i,
+                "playerCount": 1,
+                "stepArtist": "Synthetic",
+                "scoringLevel": None,
+            }
+            charts.append(row)
+            background_charts[chart_type].append(row)
 
-    residual_signals = np.linspace(28.0, 6.0, 10)
+    # The mean signal is identical in each official level; the level effect is 50 PB.
+    residual_signals = np.linspace(170.0, 10.0, 10)
     target_charts: dict[str, list[dict[str, Any]]] = {}
-    for folder in TARGET_FOLDERS:
+    for folder in SYNTHETIC_FOLDERS:
         chart_type = "Single" if folder.startswith("S") else "Double"
         level = int(folder[1:])
         rows: list[dict[str, Any]] = []
@@ -760,6 +898,7 @@ def make_synthetic_snapshot(
                 "type": chart_type,
                 "level": level,
                 "difficulty": folder,
+                "imageUrl": None,
                 "noteCount": 850 + level * 10 + index,
                 "playerCount": 1,
                 "stepArtist": "Synthetic",
@@ -770,15 +909,21 @@ def make_synthetic_snapshot(
             true_signal[chart_id] = float(signal)
         target_charts[folder] = rows
 
-    for folder_index, folder in enumerate(TARGET_FOLDERS):
+    for folder_index, folder in enumerate(SYNTHETIC_FOLDERS):
         for player_index in range(players_per_folder):
             player_id = f"synthetic-player-{folder_index:02d}-{player_index:04d}"
             players.append({"userId": player_id, "isPublic": False})
             base = float(rng.normal(345.0 + folder_index * 1.2, 8.0))
+            chart_type = "Single" if folder.startswith("S") else "Double"
+            level = int(folder[1:])
+            level_bonus = 50.0 * (level - MIN_TARGET_LEVEL)
 
-            # Ten target charts are designed to occupy the player's top ten.
+            # Ten targets occupy the top ten. Their signed signals have a known order.
             for chart_index, chart in enumerate(target_charts[folder]):
-                pumbility = base + residual_signals[chart_index] + float(rng.normal(0.0, 0.65))
+                pumbility = (
+                    base + level_bonus + residual_signals[chart_index]
+                    + float(rng.normal(0.0, 0.65))
+                )
                 scores.append(
                     {
                         "playerId": player_id,
@@ -793,8 +938,8 @@ def make_synthetic_snapshot(
                     }
                 )
 
-            # Twenty stable baseline scores become ranks 11-30.
-            for bg in background_charts[:20]:
+            # Twenty stable same-mode scores become ranks 11-30.
+            for bg in background_charts[chart_type][:20]:
                 pumbility = base + float(rng.normal(0.0, 0.45))
                 scores.append(
                     {
@@ -810,8 +955,8 @@ def make_synthetic_snapshot(
                     }
                 )
 
-            # Twenty lower scores ensure a full, unambiguous ranking tail.
-            for bg in background_charts[20:]:
+            # Twenty lower same-mode scores exercise the top-100 cutoff path.
+            for bg in background_charts[chart_type][20:]:
                 pumbility = base - 9.0 - abs(float(rng.normal(0.0, 1.2)))
                 scores.append(
                     {
@@ -838,32 +983,34 @@ def validate_synthetic(
     measured["trueResidualSignalPb"] = measured["chartId"].map(true_signal)
     folder_results: dict[str, Any] = {}
     all_ok = True
-    for folder in TARGET_FOLDERS:
+    for folder in SYNTHETIC_FOLDERS:
         group = measured[measured["folder"] == folder].copy()
         if len(group) != 10:
             folder_results[folder] = {"passed": False, "reason": f"expected 10 charts, found {len(group)}"}
             all_ok = False
             continue
-        correlation = float(group["trueResidualSignalPb"].corr(group["misgradeRawPb2"], method="spearman"))
-        easiest = group.sort_values("misgradeRawPb2", ascending=False).iloc[0]
-        hardest = group.sort_values("misgradeRawPb2", ascending=True).iloc[0]
+        correlation = float(group["trueResidualSignalPb"].corr(group["difficultyDelta"], method="spearman"))
+        easiest = group.sort_values("difficultyDelta", ascending=True).iloc[0]
+        hardest = group.sort_values("difficultyDelta", ascending=False).iloc[0]
         expected_easiest = group.sort_values("trueResidualSignalPb", ascending=False).iloc[0]
         expected_hardest = group.sort_values("trueResidualSignalPb", ascending=True).iloc[0]
-        passed = (
-            correlation >= 0.98
-            and easiest["chartId"] == expected_easiest["chartId"]
+        passed = (correlation <= -0.98) and (
+            easiest["chartId"] == expected_easiest["chartId"]
             and hardest["chartId"] == expected_hardest["chartId"]
-            and easiest["requestedTier"] == f"{folder}.0"
-            and hardest["requestedTier"] == f"{folder}.9"
+            and float(easiest["difficultyDelta"]) < 0
+            and float(hardest["difficultyDelta"]) > 0
         )
+        if folder == "S20":
+            passed = passed and float(easiest["estimatedDifficulty"]) < 20.0
         all_ok = all_ok and passed
         folder_results[folder] = {
             "passed": bool(passed),
             "spearmanCorrelation": correlation,
             "easiestChart": str(easiest["songName"]),
-            "easiestTier": str(easiest["requestedTier"]),
+            "easiestGroup": str(easiest["relativeGroup"]),
+            "easiestEstimatedDifficulty": float(easiest["estimatedDifficulty"]),
             "hardestChart": str(hardest["songName"]),
-            "hardestTier": str(hardest["requestedTier"]),
+            "hardestGroup": str(hardest["relativeGroup"]),
         }
     return {"passed": bool(all_ok), "folders": folder_results}
 
@@ -871,15 +1018,17 @@ def validate_synthetic(
 def print_result_summary(summary: Mapping[str, Any], output_dir: Path) -> None:
     coverage = summary.get("coverage", {})
     print("\nAnalysis complete", flush=True)
-    print(f"  eligible players: {coverage.get('playersWithAtLeast30ValidScores', 0):,}")
-    print(f"  target top-10 contributions: {coverage.get('targetTop10Contributions', 0):,}")
-    print(f"  target charts measured: {coverage.get('targetChartsWithAnyContribution', 0):,}")
+    modes = summary.get("modes", {})
+    print(f"  eligible Single players: {modes.get('singles', {}).get('eligiblePlayers', 0):,}")
+    print(f"  eligible Double players: {modes.get('doubles', {}).get('eligiblePlayers', 0):,}")
+    print(f"  target top-100 contributions: {coverage.get('targetTop100Contributions', 0):,}")
+    print(f"  target charts measured: {coverage.get('targetChartsMeasured', 0):,}")
     print(f"  output: {output_dir.resolve()}")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate player-normalized Phoenix 2 chart misgrade tiers.",
+        description="Generate separate Single/Double Phoenix 2 scoring-difficulty rankings.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -894,7 +1043,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--include-contributions",
             action="store_true",
-            help="Write pseudonymous player-chart top-10 contribution rows for audit/debugging.",
+            help="Write pseudonymous player-chart top-100 contribution rows for audit/debugging.",
         )
 
     live = sub.add_parser("live", help="Pull a live consented-player snapshot and analyze it.")
@@ -996,7 +1145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _write_json(output_dir / "synthetic_validation.json", validation)
             if not validation["passed"]:
                 raise RuntimeError("Synthetic validation did not recover the known ordering.")
-            print("Synthetic validation passed for all nine folders.", flush=True)
+            print("Synthetic mode-separated validation passed for all nine folders.", flush=True)
 
         print_result_summary(summary, output_dir)
         return 0
