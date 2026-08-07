@@ -1,9 +1,15 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/analyze.py": {
-      "maxDuration": 300,
+    "**/*.py": {
+      "maxDuration": 800,
       "excludeFiles": "{piu_live_run/**,piu_phoenix_run/**,synthetic_demo/**,tests/**,__pycache__/**}"
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "0 6 * * *"
+    }
+  ]
 }

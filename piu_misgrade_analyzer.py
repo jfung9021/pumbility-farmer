@@ -44,9 +44,11 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 from urllib.parse import urljoin, urlparse
@@ -76,7 +78,7 @@ RELATIVE_GROUPS = (
     "Extremely Hard",
 )
 KEY_RE = re.compile(r"^(?:piu_scores_live_|pst_live_)[0-9a-f]{64}$")
-SCRIPT_VERSION = "2.0.0-mode-separated"
+SCRIPT_VERSION = "2.1.0-phoenix2-incremental"
 
 
 class ApiError(RuntimeError):
@@ -99,6 +101,42 @@ class AnalysisConfig:
         return self.baseline_end_rank
 
 
+class SharedRequestLimiter:
+    """Thread-safe request-start pacing with a shared rate-limit backoff."""
+
+    def __init__(
+        self,
+        interval_seconds: float = 0.125,
+        *,
+        monotonic: Any = time.monotonic,
+        sleeper: Any = time.sleep,
+    ) -> None:
+        self.interval_seconds = max(0.0, float(interval_seconds))
+        self._monotonic = monotonic
+        self._sleeper = sleeper
+        self._lock = threading.Lock()
+        self._next_start = 0.0
+        self._blocked_until = 0.0
+
+    def wait(self) -> None:
+        while True:
+            with self._lock:
+                now = float(self._monotonic())
+                ready_at = max(self._next_start, self._blocked_until)
+                delay = ready_at - now
+                if delay <= 0:
+                    self._next_start = now + self.interval_seconds
+                    return
+            self._sleeper(delay)
+
+    def block_for(self, delay_seconds: float) -> None:
+        with self._lock:
+            self._blocked_until = max(
+                self._blocked_until,
+                float(self._monotonic()) + max(0.0, float(delay_seconds)),
+            )
+
+
 class PiuScoresClient:
     """Minimal, conservative API v2 client with opaque-cursor paging."""
 
@@ -108,7 +146,8 @@ class PiuScoresClient:
         base_url: str = DEFAULT_BASE_URL,
         timeout_seconds: float = 30.0,
         max_retries: int = 5,
-        throttle_seconds: float = 0.12,
+        request_start_interval_seconds: float = 0.125,
+        limiter: SharedRequestLimiter | None = None,
     ) -> None:
         if not KEY_RE.fullmatch(api_key.strip()):
             raise ApiError(
@@ -118,7 +157,7 @@ class PiuScoresClient:
         self.base_url = base_url.rstrip("/") + "/"
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
-        self.throttle_seconds = max(0.0, throttle_seconds)
+        self.limiter = limiter or SharedRequestLimiter(request_start_interval_seconds)
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -129,6 +168,23 @@ class PiuScoresClient:
         )
         self._allowed_netloc = urlparse(self.base_url).netloc
         self.request_count = 0
+        self._request_count_lock = threading.Lock()
+
+    @staticmethod
+    def _retry_after_seconds(value: str | None, attempt: int) -> float:
+        fallback = min(60.0, float(2**attempt))
+        if not value:
+            return fallback
+        try:
+            return max(1.0, float(value))
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(value)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                return max(1.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                return fallback
 
     def _safe_url(self, url: str) -> str:
         full = urljoin(self.base_url, url)
@@ -141,13 +197,15 @@ class PiuScoresClient:
         full_url = self._safe_url(url)
         last_message = "unknown error"
         for attempt in range(self.max_retries + 1):
+            self.limiter.wait()
             try:
                 response = self.session.get(
                     full_url,
                     params=params if attempt == 0 else None,
                     timeout=self.timeout_seconds,
                 )
-                self.request_count += 1
+                with self._request_count_lock:
+                    self.request_count += 1
             except requests.RequestException as exc:
                 last_message = exc.__class__.__name__
                 if attempt >= self.max_retries:
@@ -159,14 +217,10 @@ class PiuScoresClient:
                 continue
 
             if response.status_code == 429:
-                retry_after = response.headers.get("Retry-After")
-                try:
-                    delay = max(1.0, float(retry_after)) if retry_after else min(60.0, 2**attempt)
-                except ValueError:
-                    delay = min(60.0, 2**attempt)
+                delay = self._retry_after_seconds(response.headers.get("Retry-After"), attempt)
                 if attempt >= self.max_retries:
                     raise ApiError("PIU Scores rate limit persisted after retries (HTTP 429).")
-                time.sleep(delay)
+                self.limiter.block_for(delay)
                 continue
 
             if response.status_code in (401, 403):
@@ -196,8 +250,6 @@ class PiuScoresClient:
                 raise ApiError("PIU Scores returned a non-JSON response.") from None
             if not isinstance(payload, dict):
                 raise ApiError("PIU Scores returned an unexpected JSON shape.")
-            if self.throttle_seconds:
-                time.sleep(self.throttle_seconds)
             return payload
 
         raise ApiError(f"API request failed: {last_message}")
@@ -989,7 +1041,9 @@ def validate_synthetic(
             folder_results[folder] = {"passed": False, "reason": f"expected 10 charts, found {len(group)}"}
             all_ok = False
             continue
-        correlation = float(group["trueResidualSignalPb"].corr(group["difficultyDelta"], method="spearman"))
+        true_ranks = group["trueResidualSignalPb"].rank(method="average")
+        measured_ranks = group["difficultyDelta"].rank(method="average")
+        correlation = float(true_ranks.corr(measured_ranks))
         easiest = group.sort_values("difficultyDelta", ascending=True).iloc[0]
         hardest = group.sort_values("difficultyDelta", ascending=False).iloc[0]
         expected_easiest = group.sort_values("trueResidualSignalPb", ascending=False).iloc[0]

@@ -1,6 +1,6 @@
 # Pumbility Farmer
 
-Pumbility Farmer is a PIU Phoenix 2 scoring-difficulty analyzer and Vercel web UI. It produces completely independent Singles and Doubles rankings for every official chart at level 20 or above.
+Pumbility Farmer is a PIU Phoenix 2 scoring-difficulty analyzer and Vercel web UI. It produces completely independent Singles and Doubles rankings for every official chart at level 20 or above. Player baselines and top-100 ranks use each eligible player's complete mode history, including levels below 20.
 
 ## Analysis method
 
@@ -90,10 +90,27 @@ npm run build
 
 The frontend is a Next.js application. The Python function at `/api/analyze` supports:
 
-- `GET`: load the latest successful result from Vercel Blob.
-- `POST`: pull a fresh PIU Scores snapshot, run both independent analyses, store the result, and return it.
+- `GET /api/analyze`: load the latest successful `AnalysisPayload` from private Vercel Blob.
+- `GET /api/analyze?jobId=...`: load a 24-hour queue-job status from Vercel Runtime Cache.
+- `POST /api/analyze`: return immediately with a fresh-result response or a queued/existing job.
 
-For combined Next.js and Python-function development, use `vercel dev`. A Python-only local test can set `PIU_ANALYSIS_RAW_DIR` to an existing snapshot directory instead of configuring a live credential.
+The response contracts are:
+
+```text
+200 { outcome: "fresh", generatedAtUtc, nextAllowedAtUtc }
+202 { outcome: "started" | "existing", job }
+```
+
+The browser polls active jobs every two seconds (ten seconds in a hidden tab), displays the synchronization stage and player progress, then reloads the latest rankings after completion. All responses are read as text before conditional JSON parsing so a platform-generated timeout page is shown as a useful message instead of a JSON syntax error.
+
+The Celery subscriber declared in `pyproject.toml` uses Vercel Queues through the `vercel://` broker. Vercel Runtime Cache stores job status, and the worker stores only private JSON objects in Vercel Blob:
+
+- `analysis/latest.json` — current aggregate returned through the API.
+- `analysis/private/phoenix2-current.json` — private, privacy-minimized incremental snapshot.
+- `analysis/staging/<job>.json` — resumable 50-player checkpoints, deleted after success or after 24 hours.
+- `analysis/runs/*.json` — the latest ten immutable aggregate runs.
+
+For combined Next.js, Python-function, and in-process queue development, use `vercel dev`. A Python-only worker test can set `PIU_ANALYSIS_RAW_DIR` to an existing snapshot directory instead of configuring a live credential.
 
 ## Vercel configuration
 
@@ -101,13 +118,31 @@ The project is designed for the existing `pumbility-farmer.vercel.app` project u
 
 Configure these server-side variables:
 
-- `PIU_SCORES_API_KEY` — required for fresh live analysis.
-- `BLOB_READ_WRITE_TOKEN` — recommended; automatically provided after connecting a Vercel Blob store.
-- `ANALYSIS_RUN_SECRET` — optional password protecting the run button.
-- `ANALYSIS_COOLDOWN_SECONDS` — optional; defaults to 300 seconds.
+- `PIU_SCORES_API_KEY` — required for live synchronization.
+- `BLOB_READ_WRITE_TOKEN` — required; automatically provided after connecting a **private** Vercel Blob store.
+- `CRON_SECRET` — required; a sensitive random value of at least 16 characters used for the secured daily cron route.
 - `ANALYSIS_BOOTSTRAP_SAMPLES` — optional; defaults to 500.
 
-Never expose the PIU Scores credential through a `NEXT_PUBLIC_` variable. The API cache and aggregate outputs intentionally omit raw player IDs and names.
+The daily cron is defined in `vercel.json` at `06:00 UTC` and applies exactly the same one-hour freshness, global-active-job, deterministic-ID, and five-minute failed-retry rules as the public run button. The worker has an 800-second function backstop.
+
+Never expose either secret through a `NEXT_PUBLIC_` variable. The private snapshot allowlists only player IDs, analysis-required chart/score fields, and per-player sync timestamps. It never stores usernames, game tags, API credentials, or other profile fields, and no raw snapshot route exists.
+
+## Synchronization behavior
+
+Every worker run fetches the consented `/api/v2/players` list and the complete `mix=Phoenix2` chart catalog. Six score workers share a 125 ms request-start limiter and any `Retry-After` backoff. Known players use `recordedAfter`, new players receive a full fetch, and previously empty players are rechecked only after 24 hours. Revoked players are removed immediately.
+
+Valid rows are merged deterministically by player/chart, retaining the best Pumbility/score. Players with no Phoenix 2 rows are excluded, and only players with at least 30 valid Singles or 30 valid Doubles scores are passed to the analyzer. No `minLevel` score filter is used.
+
+## Verification
+
+```bash
+python -m unittest discover -s tests -v
+npm run test:frontend
+npm run typecheck
+npm run build
+```
+
+The suite includes incremental merge/pruning/recheck/checkpoint tests, shared rate-limit tests, queue-state and cron tests, eager Celery execution, optimized/full payload equivalence, JSON fallback handling, and a mocked 809-player bounded-concurrency benchmark.
 
 ## Evidence labels
 
@@ -116,4 +151,4 @@ Never expose the PIU Scores credential through a `NEXT_PUBLIC_` variable. The AP
 - **Insufficient:** 1–4 contributing players.
 - **Unrated:** the chart was not present in any eligible player's top 100 for that mode.
 
-The current cached snapshot contains one player. It is useful for functional testing, but its measured charts remain correctly labeled **Insufficient**.
+The local sample snapshots contain one player. They are useful for functional testing, but their measured charts remain correctly labeled **Insufficient**.

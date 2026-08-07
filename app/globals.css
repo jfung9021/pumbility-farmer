@@ -202,6 +202,49 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
   text-transform: uppercase;
 }
 
+.refresh-meta {
+  align-items: center;
+  color: #7b877d;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  gap: 8px 18px;
+  margin-top: 8px;
+}
+
+.refresh-meta b { color: #b8c3b9; font-weight: 750; }
+
+.job-progress {
+  background: #121813;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  height: 24px;
+  margin-top: 14px;
+  max-width: 620px;
+  overflow: hidden;
+  position: relative;
+}
+
+.job-progress > div {
+  background: linear-gradient(90deg, rgba(200, 255, 46, 0.28), rgba(200, 255, 46, 0.62));
+  height: 100%;
+  transition: width 0.35s ease;
+}
+
+.job-progress > span {
+  align-items: center;
+  color: #cad3ca;
+  display: flex;
+  font-size: 10px;
+  inset: 0;
+  justify-content: space-between;
+  letter-spacing: 0.03em;
+  padding: 0 10px;
+  position: absolute;
+}
+
+.job-progress > span b { color: var(--ink); }
+
 .status-dot, .status-live { background: var(--acid); border-radius: 50%; height: 6px; width: 6px; }
 .status-live { animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(200, 255, 46, 0.06); opacity: 0.45; } }
@@ -426,6 +469,7 @@ footer b { color: #929b93; }
   .hero h1 { font-size: clamp(49px, 16vw, 74px); line-height: 0.88; margin-top: 22px; }
   .hero > p { font-size: 14px; }
   .run-status { align-items: flex-start; line-height: 1.5; }
+  .refresh-meta { align-items: flex-start; flex-direction: column; gap: 4px; }
   .dashboard { padding: 0 12px 70px; }
   .mode-tabs { padding: 5px; }
   .mode-tabs button { gap: 9px; padding: 11px 9px; }
