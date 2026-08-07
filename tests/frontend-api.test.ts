@@ -5,13 +5,14 @@ import path from "node:path";
 import test from "node:test";
 
 import { readJsonResponse } from "../lib/api-response.ts";
+import { demoPayloads } from "../lib/demo-data.ts";
 import {
   LocalAnalysisNotFoundError,
   LocalAnalysisValidationError,
   localAnalysisEnabled,
   readLocalAnalysisPayload,
 } from "../lib/local-analysis.ts";
-import { MIXES, mixFromSearchParams } from "../lib/mixes.ts";
+import { archiveForMix, MIXES, mixFromSearchParams } from "../lib/mixes.ts";
 import {
   applyPhoenix1Rerates,
   type Phoenix1ReratePayload,
@@ -61,6 +62,28 @@ test("Phoenix 1 is a versioned archive while Phoenix 2 remains refreshable", () 
   );
   assert.equal(MIXES.phoenix1.archive?.sha256.length, 64);
   assert.equal(MIXES.phoenix2.archive, null);
+});
+
+test("local analysis mode reads Phoenix 1 from disk instead of the archive", () => {
+  assert.equal(archiveForMix("phoenix1", true), null);
+  assert.equal(archiveForMix("phoenix1", false)?.url, "/data/phoenix1-20260807.json");
+});
+
+test("demo payload uses the symmetric quarter-level effect bands", () => {
+  assert.deepEqual(
+    demoPayloads.phoenix2.effectBands.map(({ low, high }) => [low, high]),
+    [
+      [null, -1.0],
+      [-1.0, -0.75],
+      [-0.75, -0.5],
+      [-0.5, -0.25],
+      [-0.25, 0.25],
+      [0.25, 0.5],
+      [0.5, 0.75],
+      [0.75, 1.0],
+      [1.0, null],
+    ],
+  );
 });
 
 test("annotates the frozen Phoenix 1 charts with Phoenix 2 rerates", async () => {

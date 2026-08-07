@@ -14,54 +14,54 @@ const groupNames = [
 ] as const;
 
 const effectBands = [
-  { rank: 1, name: "Extremely Easy", low: null, high: -0.75 },
-  { rank: 2, name: "Very Easy", low: -0.75, high: -0.5 },
-  { rank: 3, name: "Easy", low: -0.5, high: -0.25 },
-  { rank: 4, name: "Slightly Easy", low: -0.25, high: -0.1 },
-  { rank: 5, name: "Typical", low: -0.1, high: 0.1 },
-  { rank: 6, name: "Slightly Hard", low: 0.1, high: 0.25 },
-  { rank: 7, name: "Hard", low: 0.25, high: 0.5 },
-  { rank: 8, name: "Very Hard", low: 0.5, high: 0.75 },
-  { rank: 9, name: "Extremely Hard", low: 0.75, high: null },
+  { rank: 1, name: "Extremely Easy", low: null, high: -1.0 },
+  { rank: 2, name: "Very Easy", low: -1.0, high: -0.75 },
+  { rank: 3, name: "Easy", low: -0.75, high: -0.5 },
+  { rank: 4, name: "Slightly Easy", low: -0.5, high: -0.25 },
+  { rank: 5, name: "Typical", low: -0.25, high: 0.25 },
+  { rank: 6, name: "Slightly Hard", low: 0.25, high: 0.5 },
+  { rank: 7, name: "Hard", low: 0.5, high: 0.75 },
+  { rank: 8, name: "Very Hard", low: 0.75, high: 1.0 },
+  { rank: 9, name: "Extremely Hard", low: 1.0, high: null },
 ] as const;
 
 function effectBand(delta: number | null) {
   if (delta === null) return null;
-  if (delta <= -0.75) return effectBands[0];
-  if (delta <= -0.5) return effectBands[1];
-  if (delta <= -0.25) return effectBands[2];
-  if (delta <= -0.1) return effectBands[3];
-  if (delta < 0.1) return effectBands[4];
-  if (delta < 0.25) return effectBands[5];
-  if (delta < 0.5) return effectBands[6];
-  if (delta < 0.75) return effectBands[7];
+  if (delta <= -1.0) return effectBands[0];
+  if (delta <= -0.75) return effectBands[1];
+  if (delta <= -0.5) return effectBands[2];
+  if (delta <= -0.25) return effectBands[3];
+  if (delta < 0.25) return effectBands[4];
+  if (delta < 0.5) return effectBands[5];
+  if (delta < 0.75) return effectBands[6];
+  if (delta < 1.0) return effectBands[7];
   return effectBands[8];
 }
 
 const demoRows: Record<ModeKey, Array<[string, number, number | null, number, number]>> = {
   singles: [
-    ["Lucid Dream", 21, -0.82, 34, 1],
-    ["Becouse of You", 21, -0.62, 28, 2],
-    ["Conflict", 22, -0.36, 25, 3],
-    ["Vector", 20, -0.18, 22, 4],
+    ["Lucid Dream", 21, -1.08, 34, 1],
+    ["Becouse of You", 21, -0.82, 28, 2],
+    ["Conflict", 22, -0.62, 25, 3],
+    ["Vector", 20, -0.36, 22, 4],
     ["Orbit Stabilizer", 23, -0.05, 19, 5],
     ["Bar Bar Bar", 20, 0.01, 18, 6],
-    ["District 1", 22, 0.16, 16, 7],
-    ["Rising Star", 24, 0.34, 14, 8],
-    ["Crossing Delta", 25, 0.58, 12, 9],
-    ["Final Audition", 26, 0.82, 11, 10],
+    ["District 1", 22, 0.36, 16, 7],
+    ["Rising Star", 24, 0.62, 14, 8],
+    ["Crossing Delta", 25, 0.82, 12, 9],
+    ["Final Audition", 26, 1.08, 11, 10],
   ],
   doubles: [
-    ["Slam", 24, -0.84, 38, 1],
-    ["8 6 - FULL SONG -", 23, -0.61, 31, 2],
-    ["Tomboy", 22, -0.35, 29, 3],
-    ["Energy Synergy Matrix", 22, -0.17, 24, 4],
+    ["Slam", 24, -1.12, 38, 1],
+    ["8 6 - FULL SONG -", 23, -0.84, 31, 2],
+    ["Tomboy", 22, -0.61, 29, 3],
+    ["Energy Synergy Matrix", 22, -0.35, 24, 4],
     ["After LIKE", 23, -0.04, 22, 5],
     ["Another Truth", 21, 0.02, 20, 6],
-    ["Point Zero One", 22, 0.17, 18, 7],
-    ["Le Grand Bleu", 25, 0.35, 16, 8],
-    ["Demon of Laplace", 27, 0.61, 13, 9],
-    ["PARADOXX", 28, 0.84, 10, 10],
+    ["Point Zero One", 22, 0.35, 18, 7],
+    ["Le Grand Bleu", 25, 0.61, 16, 8],
+    ["Demon of Laplace", 27, 0.84, 13, 9],
+    ["PARADOXX", 28, 1.12, 10, 10],
   ],
 };
 
@@ -106,7 +106,7 @@ export const demoPayload: AnalysisPayload = {
   generatedAtUtc: "2026-08-07T04:20:00Z",
   mix: { key: "phoenix2", apiValue: "Phoenix2", label: "Phoenix 2" },
   summary: {
-    scriptVersion: "5.6.0-nine-bands-and-0.4-scale",
+    scriptVersion: "5.9.0-quarter-level-bands-and-1.0-scale",
     method: {},
     coverage: { playersReturnedByCredential: 52 },
     modes: {

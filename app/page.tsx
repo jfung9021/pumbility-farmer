@@ -8,6 +8,7 @@ import {
   type Phoenix1ReratePayload,
 } from "../lib/phoenix1-rerates";
 import {
+  archiveForMix,
   DEFAULT_MIX,
   MIXES,
   mixFromSearchParams,
@@ -49,7 +50,7 @@ function signedBoundary(value: number): string {
 }
 
 function effectRange(low: number | null, high: number | null): string {
-  if (low === null) return `difference ≤ ${signedBoundary(high ?? -0.75)}`;
+  if (low === null) return `difference ≤ ${signedBoundary(high ?? -1.0)}`;
   if (high === null) return `difference ≥ ${signedBoundary(low)}`;
   return `${signedBoundary(low)} to ${signedBoundary(high)}`;
 }
@@ -195,13 +196,14 @@ export default function Home() {
   const loadLatest = useCallback(async (mix: MixKey, showLoading = false) => {
     if (showLoading) setLoadingMix(mix);
     try {
-      const archive = MIXES[mix].archive;
+      const archive = archiveForMix(mix, LOCAL_ANALYSIS);
+      const reratesArchive = MIXES[mix].archive;
       const [response, reratesResponse] = await Promise.all([
         fetch(archive?.url ?? `/api/analyze?mix=${mix}`, {
           cache: archive ? "force-cache" : "no-store",
         }),
-        archive
-          ? fetch(archive.reratesUrl, { cache: "force-cache" })
+        reratesArchive
+          ? fetch(reratesArchive.reratesUrl, { cache: "force-cache" })
           : Promise.resolve(null),
       ]);
       if (response.status === 404) {
@@ -286,7 +288,7 @@ export default function Home() {
   const activeMode = activeModes[activeMix];
   const loading = loadingMix === activeMix;
   const message = messages[activeMix] || null;
-  const archive = MIXES[activeMix].archive;
+  const archive = archiveForMix(activeMix, LOCAL_ANALYSIS);
   const jobIsActive = job?.status === "queued" || job?.status === "running";
   useEffect(() => {
     if (LOCAL_ANALYSIS || MIXES[activeMix].archive || !job?.id || !jobIsActive) return;

@@ -6,7 +6,7 @@ import {
   localAnalysisEnabled,
   readLocalAnalysisPayload,
 } from "../../../lib/local-analysis";
-import { DEFAULT_MIX, isMixKey, MIXES } from "../../../lib/mixes";
+import { archiveForMix, DEFAULT_MIX, isMixKey } from "../../../lib/mixes";
 
 
 export const dynamic = "force-dynamic";
@@ -20,11 +20,12 @@ export async function GET(request: NextRequest) {
       { status: 400, headers: { "Cache-Control": "no-store" } },
     );
   }
-  const archive = MIXES[requestedMix].archive;
+  const isLocalAnalysis = localAnalysisEnabled();
+  const archive = archiveForMix(requestedMix, isLocalAnalysis);
   if (archive) {
     return NextResponse.redirect(new URL(archive.url, request.url), 307);
   }
-  if (!localAnalysisEnabled()) {
+  if (!isLocalAnalysis) {
     return NextResponse.json(
       { error: "Local analysis mode is disabled." },
       { status: 404, headers: { "Cache-Control": "no-store" } },
