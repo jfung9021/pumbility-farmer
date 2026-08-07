@@ -92,7 +92,8 @@ class LocalSnapshotTests(unittest.TestCase):
             self.assertEqual(manifest["players"], 2)
             self.assertEqual(manifest["scoreRows"], 2)
             self.assertEqual({row["userId"] for row in players}, {"player-1", "player-2"})
-            self.assertNotIn("username", json.dumps(players))
+            self.assertIn("discard me", json.dumps(players))
+            self.assertNotIn("gameTag", json.dumps(players))
             self.assertNotIn("scoringLevel", json.dumps(charts))
             self.assertNotIn("username", json.dumps(scores))
             self.assertFalse((root / "staging" / "snapshot.json").exists())
@@ -102,8 +103,8 @@ class LocalSnapshotTests(unittest.TestCase):
             )
             self.assertEqual(validate_snapshot_directory(root / "current"), manifest)
 
-    def test_validation_rejects_profile_fields(self) -> None:
-        players = [{"userId": "p", "username": "private"}]
+    def test_validation_rejects_unneeded_profile_fields(self) -> None:
+        players = [{"userId": "p", "gameTag": "private"}]
         charts = [{"id": "c"}]
         scores = [{"playerId": "p", "chartId": "c", "pumbility": 1, "isBroken": False}]
         with self.assertRaisesRegex(ValueError, "forbidden fields"):

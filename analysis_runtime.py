@@ -29,6 +29,11 @@ from piu_misgrade_analyzer import (
     build_web_payload,
     load_snapshot,
 )
+from piu_recommendations import (
+    build_recommendation_index,
+    frozen_phoenix1_snapshot_path,
+    recommendation_blob_path,
+)
 
 
 LEGACY_LATEST_BLOB_PATH = "analysis/latest.json"
@@ -558,6 +563,7 @@ def publish_success(
     job_id: str,
     snapshot: Mapping[str, Any],
     payload: Mapping[str, Any],
+    recommendations: Mapping[str, Any] | None = None,
     mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> None:
     """Publish immutable aggregate, then promote snapshot/latest and enforce retention."""
@@ -569,6 +575,8 @@ def publish_success(
         current_snapshot_path(mix_spec),
         sanitize_snapshot(snapshot, mix=mix_spec),
     )
+    if recommendations is not None:
+        blobs.put_json(recommendation_blob_path(), recommendations)
     blobs.put_json(latest_blob_path(mix_spec), payload)
     runs = sorted(
         blobs.list(runs_prefix(mix_spec)), key=lambda item: item.pathname, reverse=True
@@ -605,13 +613,11 @@ def _snapshot_from_raw_dir(
                     f"{mix_spec.label}."
                 )
     players, charts, scores = load_snapshot(raw_dir)
-    player_ids = sorted(
-        {
-            str(row.get("userId"))
-            for row in players
-            if row.get("userId") is not None and str(row.get("userId")).strip()
-        }
-    )
+    player_metadata = {
+        str(row.get("userId")): str(row.get("username") or "").strip()
+        for row in players
+        if row.get("userId") is not None and str(row.get("userId")).strip()
+    }
     stamp = isoformat_utc(timestamp)
     return sanitize_snapshot(
         {
@@ -619,8 +625,12 @@ def _snapshot_from_raw_dir(
             "mix": mix_spec.api_value,
             "generatedAtUtc": stamp,
             "players": [
-                {"playerId": player_id, "lastSyncedAtUtc": stamp}
-                for player_id in player_ids
+                {
+                    "playerId": player_id,
+                    "username": player_metadata[player_id],
+                    "lastSyncedAtUtc": stamp,
+                }
+                for player_id in sorted(player_metadata)
             ],
             "charts": charts,
             "scores": scores,
@@ -786,14 +796,35 @@ def execute_analysis_job(
         )
         chart_results, _, summary, _ = analyze_snapshot(players, charts, scores, config)
         payload = build_web_payload(chart_results, summary)
+        recommendation_payload: dict[str, Any] | None = None
+        frozen_phoenix1 = blob_store.get_json(frozen_phoenix1_snapshot_path())
+        if frozen_phoenix1 is not None:
+            update_job(
+                job_store,
+                job_id,
+                status="running",
+                stage="analyzing",
+                progress={
+                    "current": len(players),
+                    "total": len(players),
+                    "percent": 100,
+                    "message": "Combining Phoenix 1 and Phoenix 2 recommendation evidence.",
+                },
+            )
+            recommendation_payload = build_recommendation_index(
+                sanitize_snapshot(frozen_phoenix1, mix="phoenix1"),
+                snapshot,
+                generated_at_utc=payload.get("generatedAtUtc"),
+            )
+
         update_job(
             job_store,
             job_id,
             status="running",
             stage="publishing",
             progress={
-                "current": 1,
-                "total": 1,
+                "current": len(players),
+                "total": len(players),
                 "percent": 100,
                 "message": "Publishing the private snapshot and refreshed rankings.",
             },
@@ -803,6 +834,7 @@ def execute_analysis_job(
             job_id=job_id,
             snapshot=snapshot,
             payload=payload,
+            recommendations=recommendation_payload,
             mix=mix_spec,
         )
         blob_store.delete(staging_path)

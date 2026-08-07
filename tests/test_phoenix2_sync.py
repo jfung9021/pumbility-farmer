@@ -121,7 +121,7 @@ class Phoenix2SyncTests(unittest.TestCase):
         self.assertEqual(len(score_calls), 2)
         self.assertTrue(all(params["mix"] == MIX for params in score_calls))
         self.assertTrue(all("minLevel" not in params for params in score_calls))
-        self.assertNotIn("username", snapshot["players"][0])
+        self.assertEqual(snapshot["players"][0]["username"], "private")
         self.assertNotIn("username", snapshot["charts"][0])
         players, _, _ = analyzer_input(snapshot, eligible_only=False)
         self.assertEqual(players, [{"userId": "has-scores"}])

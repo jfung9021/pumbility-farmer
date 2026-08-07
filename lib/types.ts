@@ -121,3 +121,82 @@ export type AnalysisRefreshResponse =
       outcome: "started" | "existing";
       job: AnalysisJobStatus;
     };
+
+export interface RecommendationChartEstimate {
+  mode: "Singles" | "Doubles";
+  songName: string;
+  difficulty: string;
+  type: "Single" | "Double";
+  level: number;
+  chartId: string;
+  imageUrl: string | null;
+  noteCount: number | null;
+  stepArtist: string | null;
+  estimatedDifficulty: number;
+  difficultyDelta: number;
+  difficultyCi95Low: number | null;
+  difficultyCi95High: number | null;
+  nContributors: number;
+  phoenix1Contributors: number;
+  phoenix2Contributors: number;
+  evidenceStatus: EvidenceStatus;
+}
+
+export interface RecommendationChart extends RecommendationChartEstimate {
+  distanceFromRating: number;
+  farmEdge: number;
+  existingPumbility: number | null;
+  expectedPumbility: number;
+  projectedGain: number;
+  projectedScore: number | null;
+  played: boolean;
+}
+
+export interface RecommendationModeResult {
+  eligible: boolean;
+  manual?: boolean;
+  validScoreCount: number;
+  requiredScoreCount?: number;
+  reason?: string;
+  baselineRanks?: [number, number];
+  baselineLabel?: string;
+  baselineScoreCount?: number;
+  baselinePumbility?: number;
+  baselineScore?: number | null;
+  scoringRating?: number;
+  ratingFallbackCharts?: number;
+  pumbilityPerLevel?: number;
+  scorePointsPerDifficulty?: number | null;
+  currentTop50Pumbility?: number;
+  candidateRange?: [number | null, number];
+  candidateCount?: number;
+  candidates: RecommendationChart[];
+  topRecommendations: RecommendationChart[];
+}
+
+export interface RecommendationPlayerSummary {
+  playerKey: string;
+  username: string;
+  displayName: string;
+  eligibility: Record<ModeKey, boolean>;
+}
+
+export interface RecommendationPlayer {
+  playerKey: string;
+  username: string;
+  displayName: string;
+  manual?: boolean;
+  modes: Record<ModeKey, RecommendationModeResult>;
+}
+
+export interface RecommendationPlayersResponse {
+  generatedAtUtc: string;
+  method: Record<string, unknown>;
+  players: RecommendationPlayerSummary[];
+}
+
+export interface PlayerRecommendationsResponse {
+  generatedAtUtc: string;
+  method: Record<string, unknown>;
+  player: RecommendationPlayer;
+}
