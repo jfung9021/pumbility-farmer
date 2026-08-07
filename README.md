@@ -1,6 +1,6 @@
 # Pumbility Farmer
 
-Pumbility Farmer is a PIU Phoenix 1 and Phoenix 2 scoring-difficulty analyzer and Vercel web UI. The version toggle selects an independent dataset. Phoenix 1 is a frozen, privacy-safe chart aggregate generated on August 7, 2026; it is never refreshed. Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Within either version, Singles and Doubles rankings are completely independent. Player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 20.
+Pumbility Farmer is a PIU Phoenix scoring-difficulty analyzer and Vercel web UI. Its primary tier list combines normalized Phoenix 1 and Phoenix 2 score evidence against the current Phoenix 2 catalog. Phoenix 1 is a frozen, privacy-safe source captured on August 7, 2026; Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Singles and Doubles rankings are completely independent. Player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 20.
 
 ## Analysis method
 
@@ -185,7 +185,7 @@ npm run build
 ```
 
 The frontend is a Next.js application. `/` is the feature landing page, `/tier-list` contains the
-existing rankings dashboard, and `/recommendations` contains the player-specific Phoenix 2 route.
+combined Phoenix rankings dashboard, and `/recommendations` contains the player-specific route.
 Phoenix 1 loads the versioned public artifact at
 `/data/phoenix1-20260807.json`; `/api/analyze?mix=phoenix1` redirects to that canonical copy.
 Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
@@ -196,6 +196,7 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 - `POST /api/deploy?mix=phoenix2`: accept a signed deployment event for Phoenix 2.
 - `GET /api/recommendations/players`: return consented usernames and mode eligibility without raw IDs.
 - `GET /api/recommendations?playerKey=...`: return one precomputed player recommendation slice.
+- `GET /api/tier-list`: return the public combined Phoenix 1 and Phoenix 2 tier aggregate.
 
 Phoenix 1 POST, cron, deployment, worker, and publisher paths reject updates as archived.
 
@@ -228,6 +229,7 @@ The browser polls active jobs every two seconds (ten seconds in a hidden tab), d
 The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as a private-data backend in Vercel Services; the Next.js UI remains the frontend service. The subscriber uses Vercel Queues through the `vercel://` broker. Vercel Runtime Cache stores job status, and the worker stores only private JSON objects in Vercel Blob:
 
 - `analysis/phoenix2/latest.json` — current Phoenix 2 aggregate.
+- `analysis/combined/latest.json` — current combined tier-list aggregate.
 - `analysis/private/phoenix2-current.json` — private, privacy-minimized incremental snapshot.
 - `analysis/private/phoenix1-frozen.json` — immutable private Phoenix 1 recommendation evidence.
 - `analysis/recommendations/latest.json` — private precomputed player recommendation index.
@@ -247,6 +249,12 @@ The recommendation engine treats Phoenix 2 `charts.json` as a strict allowlist. 
 from that catalog are removed completely. For the same player and chart, a Phoenix 2 score always
 supersedes Phoenix 1; Phoenix 1 is used only when no Phoenix 2 score exists. Version-specific
 Pumbility residuals are converted to level units before evidence is combined.
+
+Player skill-rating history is selected independently for Singles and Doubles. A mode uses
+Phoenix 2 once it has 50 valid, deduplicated Phoenix 2 chart scores; below that threshold it uses
+Phoenix 1 history when available. Played status, existing Pumbility, current top-50 totals, and
+projected gain always use Phoenix 2. A player with no Phoenix 2 history can still receive a
+Phoenix 1-derived rating and farm-edge ordering, but no Phoenix 2 Pumbility projection is inferred.
 
 For combined Next.js, Python-function, and in-process queue development, use `vercel dev`. A Python-only worker test can set `PIU_ANALYSIS_RAW_DIR` to an existing snapshot directory instead of configuring a live credential.
 

@@ -42,6 +42,7 @@ function RecommendationCard({
   manual?: boolean;
   rank: number;
 }) {
+  const displayedValue = manual ? chart.farmEdge : chart.projectedGain;
   return (
     <article className="recommendation-card">
       <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
@@ -67,11 +68,13 @@ function RecommendationCard({
       </div>
       <div className="recommendation-value">
         <span>{manual ? "farm edge" : "projected gain"}</span>
-        <strong>{signed(manual ? chart.farmEdge : chart.projectedGain)}</strong>
+        <strong>{displayedValue === null ? "-" : signed(displayedValue)}</strong>
         <small>
           {manual
             ? `${chart.estimatedDifficulty.toFixed(2)} scoring difficulty`
-            : `${chart.expectedPumbility.toFixed(2)} expected`}
+            : chart.expectedPumbility === null
+              ? "Phoenix 2 projection unavailable"
+              : `${chart.expectedPumbility.toFixed(2)} expected`}
         </small>
       </div>
     </article>
@@ -94,9 +97,11 @@ function CandidateRow({ chart, manual = false }: { chart: RecommendationChart; m
       <div className="candidate-metric"><span>from rating</span><b>{signed(chart.distanceFromRating)}</b></div>
       <div className="candidate-metric">
         <span>{manual ? "farm edge" : "expected"}</span>
-        <b>{manual ? signed(chart.farmEdge) : chart.expectedPumbility.toFixed(2)}</b>
+        <b>{manual
+          ? signed(chart.farmEdge)
+          : chart.expectedPumbility === null ? "-" : chart.expectedPumbility.toFixed(2)}</b>
       </div>
-      <div className="candidate-metric candidate-gain"><span>gain</span><b>{signed(chart.projectedGain)}</b></div>
+      <div className="candidate-metric candidate-gain"><span>gain</span><b>{chart.projectedGain === null ? "-" : signed(chart.projectedGain)}</b></div>
     </article>
   );
 }
@@ -188,6 +193,10 @@ export default function RecommendationsPage() {
   };
 
   const mode = playerPayload?.player.modes[activeMode] || null;
+  const phoenix2ScoreCount = mode?.phoenix2ScoreCount ?? mode?.validScoreCount ?? 0;
+  const phoenix2ScoreThreshold = mode?.phoenix2ScoreThreshold ?? 50;
+  const phoenix2ThresholdProgress = Math.min(phoenix2ScoreCount, phoenix2ScoreThreshold);
+  const ratingSourceLabel = mode?.ratingSource === "phoenix1" ? "Phoenix 1" : "Phoenix 2";
   const handlePlayerInput = (value: string) => {
     setPlayerQuery(value);
     setPlayerMenuOpen(true);
@@ -251,17 +260,15 @@ export default function RecommendationsPage() {
           <span>Pumbility <b>Farmer</b></span>
         </Link>
         <nav className="page-nav" aria-label="Primary navigation">
-          <Link href="/tier-list">Tier List</Link>
           <span>Recommendations</span>
+          <Link href="/tier-list">Tier List</Link>
         </nav>
       </header>
 
       <section className="recommendations-hero">
-        <p className="home-eyebrow">PERSONALIZED PHOENIX 2 ROUTE</p>
-        <h1>Farm where your skill<br /><em>goes further.</em></h1>
-        <p>
-          Choose a consented Phoenix 2 player. We use scores from every chart level—ranks
-          11–30, or the best half when fewer than 30 are available—then recommend S20/D20+ charts.
+        <p className="recommendations-intro">
+          Choose a consented player. Skill ratings use Phoenix 1 until each mode reaches
+          50 Phoenix 2 scores, while played status and current value always use Phoenix 2.
         </p>
 
         <div className="player-picker">
@@ -376,7 +383,7 @@ export default function RecommendationsPage() {
             {!mode?.eligible ? (
               <div className="recommendation-empty insufficient-state">
                 <span>{mode?.validScoreCount ?? 0}/{mode?.requiredScoreCount ?? 1}</span>
-                <h2>Not enough Phoenix 2 data yet</h2>
+                <h2>Not enough score data yet</h2>
                 <p>{mode?.reason || "This mode cannot be rated yet."}</p>
               </div>
             ) : (
@@ -391,10 +398,10 @@ export default function RecommendationsPage() {
                     </>
                   ) : (
                     <>
-                  <article><span>Scoring rating</span><strong>{ratingLabel(activeMode, mode.scoringRating ?? 0)}</strong><small>Mean estimated difficulty of {mode.baselineLabel ?? "ranks 11–30"}</small></article>
-                  <article><span>Baseline Pumbility</span><strong>{mode.baselinePumbility?.toFixed(2)}</strong><small>Phoenix 2 {mode.baselineLabel ?? "ranks 11–30"}</small></article>
+                  <article><span>Scoring rating</span><strong>{ratingLabel(activeMode, mode.scoringRating ?? 0)}</strong><small>{ratingSourceLabel} {mode.ratingBaselineLabel ?? mode.baselineLabel ?? "ranks 11-30"}</small></article>
+                  <article className="rating-source-stat"><span>Phoenix 2 rating history</span><strong>{phoenix2ThresholdProgress}/{phoenix2ScoreThreshold}</strong><small>{mode.ratingSource === "phoenix1" ? "Using Phoenix 1 until this reaches 50" : "Using Phoenix 2 scores for skill rating"}</small><i><b style={{ width: `${Math.min(100, (phoenix2ThresholdProgress / phoenix2ScoreThreshold) * 100)}%` }} /></i></article>
                   <article><span>Eligible charts</span><strong>{mode.candidateCount ?? 0}</strong><small>At or below {mode.candidateRange?.[1].toFixed(2)}</small></article>
-                  <article><span>Current top 50</span><strong>{mode.currentTop50Pumbility?.toFixed(2)}</strong><small>Mode-specific Phoenix 2 total</small></article>
+                  <article><span>Current top 50</span><strong>{mode.currentTop50Pumbility?.toFixed(2) ?? "-"}</strong><small>Phoenix 2 only</small></article>
                     </>
                   )}
                 </div>
@@ -402,9 +409,11 @@ export default function RecommendationsPage() {
                 <section className="top-recommendations" aria-labelledby="top-recommendations-title">
                   <div className="recommendation-section-heading">
                     <div>
-                      <p>{manualMode ? "HIGHEST FARM EDGE" : "MAXIMUM PROJECTED VALUE"}</p>
+                      <p>{manualMode || mode.projectionAvailable === false ? "HIGHEST FARM EDGE" : "MAXIMUM PROJECTED VALUE"}</p>
                       <h2 id="top-recommendations-title">
-                        {manualMode ? "Top 20 farmable charts" : "Top 20 Pumbility opportunities"}
+                        {manualMode || mode.projectionAvailable === false
+                          ? "Top 20 farmable charts"
+                          : "Top 20 Pumbility opportunities"}
                       </h2>
                     </div>
                     {manualMode ? (
@@ -412,7 +421,9 @@ export default function RecommendationsPage() {
                         Ranked by official Phoenix 2 level relative to measured scoring difficulty.
                       </p>
                     ) : null}
-                    <p>Expected gain after simulating the player’s top 50.</p>
+                    <p>{mode.projectionAvailable === false
+                      ? "Ranked by farm edge because a Phoenix 2 projection is not available yet."
+                      : "Expected gain after simulating the player's Phoenix 2 top 50."}</p>
                   </div>
                   <div className="recommendation-list">
                     {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (
@@ -449,8 +460,8 @@ export default function RecommendationsPage() {
       <footer>
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
-        <p>Every valid chart level informs player skill, but only Phoenix 2 charts rated S20/D20 or higher are displayed as recommendations.</p>
-        <p>Projected Pumbility uses ranks 11–30 when available and the best half for shorter Phoenix 2 histories. It is not a guaranteed result.</p>
+        <p>Skill rating uses Phoenix 1 independently for Singles and Doubles until that mode reaches 50 valid Phoenix 2 scores.</p>
+        <p>Played status, current top 50, and projected gain always use Phoenix 2. Projections are estimates, not guaranteed results.</p>
       </footer>
     </main>
   );

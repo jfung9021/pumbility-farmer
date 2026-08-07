@@ -459,11 +459,9 @@ footer b { color: #929b93; }
 .home-page { display: flex; flex-direction: column; }
 .home-status { align-items: center; color: #7f8980; display: flex; font-size: 10px; font-weight: 750; gap: 8px; letter-spacing: 0.1em; text-transform: uppercase; }
 .home-status i { background: var(--acid); border-radius: 50%; box-shadow: 0 0 16px rgba(200, 255, 46, 0.5); height: 6px; width: 6px; }
-.home-hero { margin: auto; max-width: 1180px; padding: 100px 24px 130px; position: relative; width: 100%; z-index: 1; }
+.home-hero { margin: auto; max-width: 1180px; padding: 72px 24px 110px; position: relative; width: 100%; z-index: 1; }
 .home-eyebrow { color: var(--acid); font-size: 9px; font-weight: 850; letter-spacing: 0.2em; margin: 0 0 20px; text-transform: uppercase; }
-.home-hero > h1, .recommendations-hero > h1 { font-size: clamp(48px, 7.7vw, 96px); letter-spacing: -0.075em; line-height: 0.92; margin: 0; max-width: 940px; }
-.home-hero h1 em, .recommendations-hero h1 em { color: var(--acid); font-family: Georgia, "Times New Roman", serif; font-weight: 400; }
-.home-intro { color: #949e95; font-size: 15px; line-height: 1.7; margin: 30px 0 0; max-width: 650px; }
+.home-intro { color: #a6afa7; font-size: 20px; line-height: 1.65; margin: 0; max-width: 760px; }
 .feature-grid { display: grid; gap: 18px; grid-template-columns: 1fr 1fr; margin-top: 70px; }
 .feature-card { align-items: stretch; background: rgba(14, 19, 15, 0.88); border: 1px solid var(--line); border-radius: 14px; color: var(--ink); display: grid; gap: 22px; grid-template-columns: 42px 1fr auto; min-height: 240px; overflow: hidden; padding: 30px; position: relative; text-decoration: none; transition: 0.2s ease; }
 .feature-card > div { min-width: 0; }
@@ -484,9 +482,9 @@ footer b { color: #929b93; }
 .page-nav a, .page-nav span { border-radius: 999px; color: #778079; padding: 8px 12px; text-decoration: none; }
 .page-nav a:hover { color: var(--ink); }
 .page-nav span { background: rgba(200, 255, 46, 0.1); border: 1px solid rgba(200, 255, 46, 0.22); color: var(--acid); }
-.recommendations-hero { margin: 0 auto; max-width: 1180px; padding: 76px 24px 44px; position: relative; }
-.recommendations-hero > h1 { font-size: clamp(42px, 6.7vw, 78px); }
-.recommendations-hero > p:not(.home-eyebrow) { color: #8d978e; font-size: 13px; line-height: 1.7; margin: 26px 0 0; max-width: 620px; }
+.header-actions { align-items: center; display: flex; gap: 14px; min-width: 0; }
+.recommendations-hero { margin: 0 auto; max-width: 1180px; padding: 48px 24px 44px; position: relative; }
+.recommendations-intro { color: #a6afa7; font-size: 18px; line-height: 1.65; margin: 0; max-width: 760px; }
 .player-picker { background: rgba(13, 18, 14, 0.9); border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 8px; grid-template-columns: minmax(260px, 430px) 1fr; margin-top: 42px; max-width: 850px; padding: 18px; }
 .player-picker label { color: var(--acid); font-size: 9px; font-weight: 800; grid-column: 1; letter-spacing: 0.13em; text-transform: uppercase; }
 .player-combobox { grid-column: 1; min-width: 0; position: relative; }
@@ -529,6 +527,8 @@ footer b { color: #929b93; }
 .recommendation-stats strong { display: block; font-size: 27px; letter-spacing: -0.045em; margin: 10px 0 7px; }
 .recommendation-stats article:first-child strong { color: var(--acid); }
 .recommendation-stats small { font-size: 8px; letter-spacing: 0.02em; line-height: 1.4; text-transform: none; }
+.rating-source-stat i { background: #dce4dd; display: block; height: 3px; margin-top: 12px; overflow: hidden; width: 100%; }
+.rating-source-stat i b { background: var(--acid); display: block; height: 100%; transition: width 180ms ease; }
 .top-recommendations, .all-candidates { margin-top: 56px; }
 .recommendation-section-heading { align-items: end; display: flex; justify-content: space-between; margin-bottom: 18px; }
 .recommendation-section-heading h2 { font-size: 28px; letter-spacing: -0.045em; margin: 0; }
@@ -572,7 +572,7 @@ footer b { color: #929b93; }
 
 @media (max-width: 820px) {
   .hero { padding-top: 34px; }
-  .home-hero { padding-top: 76px; }
+  .home-hero { padding-top: 60px; }
   .feature-grid { grid-template-columns: 1fr; margin-top: 54px; }
   .feature-card { min-height: 210px; }
   .player-picker { grid-template-columns: 1fr; }
@@ -595,9 +595,8 @@ footer b { color: #929b93; }
 @media (max-width: 560px) {
   .site-header { height: 68px; padding: 0 16px; }
   .home-status { font-size: 0; }
-  .home-hero { padding: 62px 18px 80px; }
-  .home-hero > h1 { font-size: 40px; line-height: 0.98; overflow-wrap: anywhere; }
-  .home-intro { font-size: 13px; }
+  .home-hero { padding: 48px 18px 80px; }
+  .home-intro { font-size: 17px; }
   .feature-grid { margin-top: 42px; }
   .feature-card { gap: 13px; grid-template-columns: 28px minmax(0, 1fr); max-width: 100%; min-height: 0; min-width: 0; padding: 22px 18px; width: 100%; }
   .feature-card h2 { font-size: 27px; }
@@ -605,9 +604,11 @@ footer b { color: #929b93; }
   .page-nav { gap: 2px; }
   .page-nav a, .page-nav span { font-size: 8px; padding: 7px 8px; }
   .page-nav span { display: none; }
-  .recommendations-hero { padding: 54px 18px 34px; }
-  .recommendations-hero > h1 { font-size: 39px; line-height: 0.98; overflow-wrap: anywhere; }
-  .recommendations-hero > p:not(.home-eyebrow) { font-size: 11px; }
+  .tier-header-actions { gap: 6px; }
+  .tier-header-actions .run-button { min-width: 0; padding: 10px 12px; }
+  .tier-header-actions .run-button-label { display: none; }
+  .recommendations-hero { padding: 36px 18px 34px; }
+  .recommendations-intro { font-size: 16px; }
   .player-picker { margin-top: 30px; padding: 14px; }
   .recommendations-workspace { padding: 0 12px 70px; }
   .recommendation-empty { min-height: 280px; padding: 30px 20px; }

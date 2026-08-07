@@ -15,35 +15,33 @@ export default function HomePage() {
       </header>
 
       <section className="home-hero">
-        <p className="home-eyebrow">PUMP IT UP · PLAYER-NORMALIZED ANALYSIS</p>
-        <h1>Choose how you want<br />to <em>farm.</em></h1>
         <p className="home-intro">
-          Explore the full scoring-difficulty tier list, or use your Phoenix 2
-          history to find charts near your current skill that offer the most Pumbility.
+          Use your Phoenix history to find charts near your current skill that offer
+          the most Pumbility, or explore the combined scoring-difficulty tier list.
         </p>
 
         <div className="feature-grid">
-          <Link className="feature-card feature-tier" href="/tier-list">
+          <Link className="feature-card feature-recommendations" href="/recommendations">
             <span className="feature-index">01</span>
             <div>
-              <p>GLOBAL ANALYSIS</p>
-              <h2>Tier List</h2>
+              <p>PERSONALIZED ROUTE</p>
+              <h2>Recommendations</h2>
               <span>
-                Browse the existing Phoenix 1 and Phoenix 2 scoring-difficulty
-                rankings with every current filter and evidence label.
+                Select a username, see which version supplies your skill rating,
+                and rank nearby charts against your current Phoenix 2 history.
               </span>
             </div>
             <b aria-hidden="true">↗</b>
           </Link>
 
-          <Link className="feature-card feature-recommendations" href="/recommendations">
+          <Link className="feature-card feature-tier" href="/tier-list">
             <span className="feature-index">02</span>
             <div>
-              <p>PERSONALIZED ROUTE</p>
-              <h2>Recommendations</h2>
+              <p>GLOBAL ANALYSIS</p>
+              <h2>Tier List</h2>
               <span>
-                Select a Phoenix 2 username, see your scoring rating, and rank
-                nearby charts by projected top-50 Pumbility gain.
+                Browse one current tier list built from normalized Phoenix 1 and
+                Phoenix 2 evidence with every filter and evidence label.
               </span>
             </div>
             <b aria-hidden="true">↗</b>

@@ -39,7 +39,7 @@ from piu_misgrade_analyzer import (
     build_web_payload,
     make_synthetic_snapshot,
 )
-from piu_recommendations import recommendation_blob_path
+from piu_recommendations import combined_tier_blob_path, recommendation_blob_path
 NOW = datetime(2026, 8, 7, 6, 30, tzinfo=timezone.utc)
 API_CLIENT = TestClient(api_app)
 
@@ -248,6 +248,31 @@ class CoordinatorTests(unittest.TestCase):
 
 
 class ApiRouteTests(unittest.TestCase):
+    def test_combined_tier_route_returns_only_the_public_aggregate(self) -> None:
+        blobs = MemoryBlobStore()
+        blobs.put_json(
+            combined_tier_blob_path(),
+            {
+                "generatedAtUtc": isoformat_utc(NOW),
+                "mix": {
+                    "key": "combined",
+                    "apiValue": "Phoenix+Phoenix2",
+                    "label": "Phoenix 1 + 2",
+                },
+                "summary": {"modes": {}},
+                "singles": [],
+                "doubles": [],
+                "relativeGroups": [],
+                "effectBands": [],
+            },
+        )
+        with patch("api.tier_list.PrivateBlobStore", return_value=blobs):
+            response = API_CLIENT.get("/api/tier-list")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["mix"]["key"], "combined")
+        self.assertNotIn("players", response.json())
+
     def test_recommendation_routes_return_safe_player_slices(self) -> None:
         blobs = MemoryBlobStore()
         blobs.put_json(
@@ -548,12 +573,14 @@ class WorkerTests(unittest.TestCase):
             snapshot=snapshot2,
             payload=latest_payload(NOW, "phoenix2"),
             recommendations={"generatedAtUtc": isoformat_utc(NOW), "players": []},
+            combined_tier={"generatedAtUtc": isoformat_utc(NOW), "singles": []},
             mix="phoenix2",
         )
         self.assertEqual(read_latest_payload(blobs, "phoenix2")["mix"]["key"], "phoenix2")
         self.assertEqual(blobs.get_json(current_snapshot_path("phoenix2"))["mix"], "Phoenix2")
         self.assertEqual(len(blobs.list(runs_prefix("phoenix2"))), 1)
         self.assertEqual(blobs.get_json(recommendation_blob_path())["players"], [])
+        self.assertEqual(blobs.get_json(combined_tier_blob_path())["singles"], [])
 
     def test_stale_archived_job_fails_without_syncing_or_publishing(self) -> None:
         blobs = MemoryBlobStore()
