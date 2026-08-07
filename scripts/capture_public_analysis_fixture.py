@@ -19,12 +19,17 @@ ROW_FIELDS = (
     "level",
     "songName",
     "meanResidualPb",
+    "chartResidualPb",
+    "residualStdPb",
     "residualCi95LowPb",
     "residualCi95HighPb",
     "nContributors",
     "pumbilityPerLevel",
     "difficultyDelta",
+    "effectBandRank",
+    "effectBand",
     "relativeGroupRank",
+    "shrinkageK",
 )
 
 
@@ -46,7 +51,8 @@ def capture(source: str) -> dict[str, Any]:
                 rows.append({field: row.get(field) for field in ROW_FIELDS})
 
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 3,
+        "mix": payload.get("mix"),
         "source": source,
         "sourceGeneratedAtUtc": payload.get("generatedAtUtc"),
         "sourceSha256": hashlib.sha256(raw).hexdigest(),

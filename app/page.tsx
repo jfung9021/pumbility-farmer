@@ -1,8 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { demoPayload } from "../lib/demo-data";
+import { demoPayloads } from "../lib/demo-data";
 import { readJsonResponse } from "../lib/api-response";
+import {
+  DEFAULT_MIX,
+  MIXES,
+  mixFromSearchParams,
+  type MixKey,
+} from "../lib/mixes";
 import type {
   AnalysisJobStatus,
   AnalysisPayload,
@@ -11,6 +17,8 @@ import type {
   EvidenceStatus,
   ModeKey,
 } from "../lib/types";
+
+const LOCAL_ANALYSIS = process.env.NEXT_PUBLIC_LOCAL_ANALYSIS === "1";
 
 type FilterState = {
   query: string;
@@ -26,10 +34,20 @@ const initialFilter: FilterState = {
   showUnrated: false,
 };
 
-const groupTone = ["lime", "green", "mint", "cyan", "sky", "slate", "amber", "orange", "rose", "red"];
+const groupTone = ["lime", "green", "mint", "cyan", "slate", "amber", "orange", "rose", "red"];
 
-function signed(value: number): string {
-  return `${value > 0 ? "+" : ""}${value.toFixed(2)}`;
+function signed(value: number, digits = 2): string {
+  return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
+}
+
+function signedBoundary(value: number): string {
+  return signed(value, Number.isInteger(value * 100) ? 2 : 3);
+}
+
+function effectRange(low: number | null, high: number | null): string {
+  if (low === null) return `difference ≤ ${signedBoundary(high ?? -0.75)}`;
+  if (high === null) return `difference ≥ ${signedBoundary(low)}`;
+  return `${signedBoundary(low)} to ${signedBoundary(high)}`;
 }
 
 function chartGrade(chart: ChartResult): string {
@@ -105,13 +123,23 @@ function ChartCard({ chart }: { chart: ChartResult }) {
   );
 }
 
-function TierSection({ rank, name, charts }: { rank: number; name: string; charts: ChartResult[] }) {
+function TierSection({
+  rank,
+  name,
+  range,
+  charts,
+}: {
+  rank: number;
+  name: string;
+  range: string;
+  charts: ChartResult[];
+}) {
   return (
     <section className={`tier tier-${groupTone[rank - 1]}`} aria-labelledby={`tier-${rank}`}>
       <header className="tier-header">
         <div className="tier-rank">{String(rank).padStart(2, "0")}</div>
         <div>
-          <p>Within-level scoring difficulty</p>
+          <p>{range}</p>
           <h2 id={`tier-${rank}`}>{name}</h2>
         </div>
         <span className="tier-count">{charts.length} chart{charts.length === 1 ? "" : "s"}</span>
@@ -126,55 +154,96 @@ function TierSection({ rank, name, charts }: { rank: number; name: string; chart
 }
 
 export default function Home() {
-  const [payload, setPayload] = useState<AnalysisPayload | null>(null);
-  const [activeMode, setActiveMode] = useState<ModeKey>("singles");
-  const [filters, setFilters] = useState<Record<ModeKey, FilterState>>({
-    singles: { ...initialFilter },
-    doubles: { ...initialFilter },
+  const [activeMix, setActiveMix] = useState<MixKey>(DEFAULT_MIX);
+  const [payloads, setPayloads] = useState<Partial<Record<MixKey, AnalysisPayload>>>({});
+  const [activeModes, setActiveModes] = useState<Record<MixKey, ModeKey>>({
+    phoenix1: "singles",
+    phoenix2: "singles",
   });
-  const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState<string | null>(null);
+  const [filters, setFilters] = useState<Record<MixKey, Record<ModeKey, FilterState>>>({
+    phoenix1: {
+      singles: { ...initialFilter },
+      doubles: { ...initialFilter },
+    },
+    phoenix2: {
+      singles: { ...initialFilter },
+      doubles: { ...initialFilter },
+    },
+  });
+  const [loadingMix, setLoadingMix] = useState<MixKey | null>(DEFAULT_MIX);
+  const [messages, setMessages] = useState<Partial<Record<MixKey, string | null>>>({});
   const [isDemo, setIsDemo] = useState(false);
-  const [job, setJob] = useState<AnalysisJobStatus | null>(null);
+  const [jobs, setJobs] = useState<Partial<Record<MixKey, AnalysisJobStatus | null>>>({});
   const [nowMs, setNowMs] = useState(0);
   const [tabVisible, setTabVisible] = useState(true);
 
-  const loadLatest = useCallback(async (showLoading = false) => {
-    if (showLoading) setLoading(true);
+  const loadLatest = useCallback(async (mix: MixKey, showLoading = false) => {
+    if (showLoading) setLoadingMix(mix);
     try {
-      const response = await fetch("/api/analyze", { cache: "no-store" });
+      const archive = MIXES[mix].archive;
+      const response = await fetch(archive?.url ?? `/api/analyze?mix=${mix}`, {
+        cache: archive ? "force-cache" : "no-store",
+      });
       if (response.status === 404) {
-        setPayload(null);
-        return;
+        setPayloads((current) => ({ ...current, [mix]: undefined }));
+        return false;
       }
       const latest = await readJsonResponse<AnalysisPayload>(response);
-      setPayload(latest);
+      if (latest.mix && latest.mix.key !== mix) {
+        throw new Error(`The server returned ${latest.mix.label} data for ${MIXES[mix].label}.`);
+      }
+      setPayloads((current) => ({ ...current, [mix]: latest }));
       setIsDemo(false);
+      return true;
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not load the latest analysis.");
+      setMessages((current) => ({
+        ...current,
+        [mix]: error instanceof Error ? error.message : "Could not load the latest analysis.",
+      }));
+      return false;
     } finally {
-      if (showLoading) setLoading(false);
+      if (showLoading) setLoadingMix((current) => current === mix ? null : current);
     }
   }, []);
 
   useEffect(() => {
-    const useDemo = new URLSearchParams(window.location.search).get("demo") === "1"
+    const params = new URLSearchParams(window.location.search);
+    const initialMix = mixFromSearchParams(params);
+    setActiveMix(initialMix);
+    const useDemo = params.get("demo") === "1"
       || process.env.NEXT_PUBLIC_DEMO_MODE === "1";
     if (useDemo) {
-      setPayload(demoPayload);
+      setPayloads(demoPayloads);
       setIsDemo(true);
-      setLoading(false);
+      setLoadingMix(null);
       return;
     }
-    void loadLatest(true);
-    const storedJobId = window.localStorage.getItem("analysisJobId");
-    if (storedJobId) {
-      fetch(`/api/analyze?jobId=${encodeURIComponent(storedJobId)}`, { cache: "no-store" })
-        .then((response) => readJsonResponse<AnalysisJobStatus>(response))
-        .then(setJob)
-        .catch(() => window.localStorage.removeItem("analysisJobId"));
+    void loadLatest(initialMix, true);
+    if (LOCAL_ANALYSIS || MIXES[initialMix].archive) {
+      window.localStorage.removeItem(`analysisJobId:${initialMix}`);
+      return;
     }
   }, [loadLatest]);
+
+  useEffect(() => {
+    if (LOCAL_ANALYSIS || isDemo || MIXES[activeMix].archive) {
+      window.localStorage.removeItem(`analysisJobId:${activeMix}`);
+      return;
+    }
+    const storageKey = `analysisJobId:${activeMix}`;
+    const legacyJobId = activeMix === DEFAULT_MIX
+      ? window.localStorage.getItem("analysisJobId")
+      : null;
+    const storedJobId = window.localStorage.getItem(storageKey) || legacyJobId;
+    if (!storedJobId) return;
+    fetch(
+      `/api/analyze?mix=${activeMix}&jobId=${encodeURIComponent(storedJobId)}`,
+      { cache: "no-store" },
+    )
+      .then((response) => readJsonResponse<AnalysisJobStatus>(response))
+      .then((status) => setJobs((current) => ({ ...current, [activeMix]: status })))
+      .catch(() => window.localStorage.removeItem(storageKey));
+  }, [activeMix, isDemo]);
 
   useEffect(() => {
     setNowMs(Date.now());
@@ -188,29 +257,46 @@ export default function Home() {
     };
   }, []);
 
+  const payload = payloads[activeMix] || null;
+  const job = jobs[activeMix] || null;
+  const activeMode = activeModes[activeMix];
+  const loading = loadingMix === activeMix;
+  const message = messages[activeMix] || null;
+  const archive = MIXES[activeMix].archive;
   const jobIsActive = job?.status === "queued" || job?.status === "running";
   useEffect(() => {
-    if (!job?.id || !jobIsActive) return;
+    if (LOCAL_ANALYSIS || MIXES[activeMix].archive || !job?.id || !jobIsActive) return;
+    const pollingMix = activeMix;
     let cancelled = false;
     let timer: number | undefined;
     const poll = async () => {
       try {
-        const response = await fetch(`/api/analyze?jobId=${encodeURIComponent(job.id)}`, {
-          cache: "no-store",
-        });
+        const response = await fetch(
+          `/api/analyze?mix=${pollingMix}&jobId=${encodeURIComponent(job.id)}`,
+          { cache: "no-store" },
+        );
         const status = await readJsonResponse<AnalysisJobStatus>(response);
         if (cancelled) return;
-        setJob(status);
+        setJobs((current) => ({ ...current, [pollingMix]: status }));
         if (status.status === "completed") {
-          setMessage("Analysis complete. Both ranking sets have been refreshed.");
-          window.localStorage.removeItem("analysisJobId");
-          await loadLatest();
+          setMessages((current) => ({
+            ...current,
+            [pollingMix]: `${MIXES[pollingMix].label} analysis complete.`,
+          }));
+          window.localStorage.removeItem(`analysisJobId:${pollingMix}`);
+          if (pollingMix === DEFAULT_MIX) window.localStorage.removeItem("analysisJobId");
+          await loadLatest(pollingMix);
           return;
         }
         if (status.status === "failed") return;
       } catch (error) {
         if (!cancelled) {
-          setMessage(error instanceof Error ? error.message : "Could not read analysis progress.");
+          setMessages((current) => ({
+            ...current,
+            [pollingMix]: error instanceof Error
+              ? error.message
+              : "Could not read analysis progress.",
+          }));
         }
       }
       if (!cancelled) timer = window.setTimeout(poll, tabVisible ? 2000 : 10_000);
@@ -220,34 +306,74 @@ export default function Home() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [job?.id, jobIsActive, loadLatest, tabVisible]);
+  }, [activeMix, job?.id, jobIsActive, loadLatest, tabVisible]);
+
+  const selectMix = (mix: MixKey) => {
+    if (mix === activeMix) return;
+    setActiveMix(mix);
+    const url = new URL(window.location.href);
+    if (mix === DEFAULT_MIX) url.searchParams.delete("mix");
+    else url.searchParams.set("mix", mix);
+    window.history.replaceState({}, "", url);
+    if (!isDemo) void loadLatest(mix, true);
+  };
 
   const runAnalysis = async () => {
-    setMessage("Starting a background refresh…");
+    if (archive) return;
+    if (LOCAL_ANALYSIS) {
+      setMessages((current) => ({
+        ...current,
+        [activeMix]: `Reloading the latest local ${MIXES[activeMix].label} analysis…`,
+      }));
+      const loaded = await loadLatest(activeMix, true);
+      if (loaded) {
+        setMessages((current) => ({
+          ...current,
+          [activeMix]: "Local analysis reloaded from disk.",
+        }));
+      }
+      return;
+    }
+    setMessages((current) => ({
+      ...current,
+      [activeMix]: `Starting a ${MIXES[activeMix].label} background refresh…`,
+    }));
     try {
-      const response = await fetch("/api/analyze", { method: "POST" });
+      const response = await fetch(`/api/analyze?mix=${activeMix}`, { method: "POST" });
       const body = await readJsonResponse<AnalysisRefreshResponse>(response);
       if (body.outcome === "fresh") {
-        setMessage("The current rankings are still fresh; no new job was started.");
-        await loadLatest();
+        setMessages((current) => ({
+          ...current,
+          [activeMix]: "The current rankings are still fresh; no new job was started.",
+        }));
+        await loadLatest(activeMix);
         return;
       }
-      setJob(body.job);
-      window.localStorage.setItem("analysisJobId", body.job.id);
-      setMessage(body.outcome === "existing" ? "Following the refresh already in progress." : null);
+      if (body.outcome === "busy") throw new Error(body.error);
+      setJobs((current) => ({ ...current, [activeMix]: body.job }));
+      window.localStorage.setItem(`analysisJobId:${activeMix}`, body.job.id);
+      setMessages((current) => ({
+        ...current,
+        [activeMix]: body.outcome === "existing"
+          ? "Following the refresh already in progress."
+          : null,
+      }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Analysis failed.");
+      setMessages((current) => ({
+        ...current,
+        [activeMix]: error instanceof Error ? error.message : "Analysis failed.",
+      }));
     }
   };
 
   const failedRetryMs = job?.status === "failed" && job.retryAllowedAtUtc && nowMs
     ? Math.max(0, new Date(job.retryAllowedAtUtc).getTime() - nowMs)
     : 0;
-  const runDisabled = jobIsActive || failedRetryMs > 0;
+  const runDisabled = Boolean(archive) || (LOCAL_ANALYSIS ? loading : jobIsActive || failedRetryMs > 0);
 
   const modeCharts = payload?.[activeMode] || [];
   const modeSummary = payload?.summary.modes[activeMode];
-  const filter = filters[activeMode];
+  const filter = filters[activeMix][activeMode];
   const levels = useMemo(
     () => [...new Set(modeCharts.map((chart) => chart.level))].sort((a, b) => a - b),
     [modeCharts],
@@ -266,13 +392,28 @@ export default function Home() {
   const updateFilter = (patch: Partial<FilterState>) => {
     setFilters((current) => ({
       ...current,
-      [activeMode]: { ...current[activeMode], ...patch },
+      [activeMix]: {
+        ...current[activeMix],
+        [activeMode]: { ...current[activeMix][activeMode], ...patch },
+      },
     }));
+  };
+
+  const setActiveMode = (mode: ModeKey) => {
+    setActiveModes((current) => ({ ...current, [activeMix]: mode }));
   };
 
   const statusText = loading
     ? "Loading the latest analysis…"
-    : jobIsActive && job
+    : archive
+      ? message || (payload
+        ? `Archived snapshot generated ${formatRunTime(payload.generatedAtUtc)}`
+        : "The archived Phoenix 1 snapshot could not be loaded.")
+    : LOCAL_ANALYSIS
+      ? message || (payload
+        ? `Local results generated ${formatRunTime(payload.generatedAtUtc)}`
+        : `No local ${MIXES[activeMix].label} results yet. Run npm run analyze:${activeMix}, then reload.`)
+      : jobIsActive && job
       ? `${job.stage[0].toUpperCase()}${job.stage.slice(1)}: ${job.progress.message}`
       : job?.status === "failed"
         ? `Refresh failed: ${job.error || "The worker did not complete."}`
@@ -281,7 +422,11 @@ export default function Home() {
           : "No stored analysis yet. Run one to create the first ranking.");
   const buttonLabel = jobIsActive
     ? "Refreshing…"
-    : failedRetryMs > 0
+    : archive
+      ? "Archived snapshot"
+    : LOCAL_ANALYSIS
+      ? "Reload local results"
+      : failedRetryMs > 0
       ? `Retry in ${durationLabel(failedRetryMs)}`
       : "Refresh rankings";
 
@@ -303,24 +448,39 @@ export default function Home() {
       </header>
 
       <section className="hero" id="top">
-        <div className="eyebrow"><span /> Phoenix 2 score intelligence</div>
-        <h1>Find the charts that<br /><em>give more back.</em></h1>
-        <p>
-          Player-normalized scoring difficulty across every level 20+ chart.
-          Singles and Doubles are modeled, calibrated, and ranked independently.
-        </p>
+        <div className="mix-switcher" role="tablist" aria-label="Pump It Up version">
+          {(["phoenix1", "phoenix2"] as MixKey[]).map((mix) => (
+            <button
+              aria-controls="rankings-dashboard"
+              aria-selected={activeMix === mix}
+              className={activeMix === mix ? "active" : ""}
+              key={mix}
+              onClick={() => selectMix(mix)}
+              role="tab"
+              type="button"
+            >
+              {MIXES[mix].label}
+            </button>
+          ))}
+        </div>
         <div className="run-status" aria-live="polite">
           <span className={jobIsActive ? "status-live" : "status-dot"} />
           <span>{statusText}</span>
           {isDemo ? <b>Demo data</b> : null}
+          {archive && !isDemo ? <b>Frozen archive</b> : null}
+          {LOCAL_ANALYSIS && !archive && !isDemo ? <b>Local snapshot</b> : null}
         </div>
         <div className="refresh-meta" aria-live="polite">
-          {payload && nowMs ? <span>Refresh age: <b>{refreshAge(payload.generatedAtUtc, nowMs)}</b></span> : null}
-          {job?.status === "failed" && failedRetryMs > 0
+          {archive
+            ? <span>Frozen: <b>{formatRunTime(archive.frozenAtUtc)}</b></span>
+            : payload && nowMs
+              ? <span>Refresh age: <b>{refreshAge(payload.generatedAtUtc, nowMs)}</b></span>
+              : null}
+          {!archive && !LOCAL_ANALYSIS && job?.status === "failed" && failedRetryMs > 0
             ? <span>Retry available in <b>{durationLabel(failedRetryMs)}</b></span>
             : null}
         </div>
-        {jobIsActive && job ? (
+        {!LOCAL_ANALYSIS && jobIsActive && job ? (
           <div className="job-progress" aria-label={`${job.progress.percent}% complete`}>
             <div style={{ width: `${Math.max(0, Math.min(100, job.progress.percent))}%` }} />
             <span>
@@ -333,7 +493,7 @@ export default function Home() {
         ) : null}
       </section>
 
-      <section className="dashboard" aria-busy={loading || jobIsActive}>
+      <section className="dashboard" aria-busy={loading || jobIsActive} id="rankings-dashboard">
         <div className="mode-tabs" role="tablist" aria-label="Chart mode">
           {(["singles", "doubles"] as ModeKey[]).map((mode) => (
             <button
@@ -351,10 +511,10 @@ export default function Home() {
         </div>
 
         <div className="stats-grid">
-          <div><span>Eligible players</span><strong>{modeSummary?.eligiblePlayers ?? 0}</strong><small>30+ {activeMode} scores</small></div>
+          <div><span>Eligible players</span><strong>{modeSummary?.eligiblePlayers ?? 0}</strong><small>30+ positive-Pumbility {activeMode} scores</small></div>
           <div><span>Charts measured</span><strong>{modeSummary?.measuredCharts ?? 0}</strong><small>of {modeSummary?.catalogCharts ?? 0} level 20+</small></div>
           <div><span>Published charts</span><strong>{modeSummary?.publishedCharts ?? 0}</strong><small>10+ contributors</small></div>
-          <div><span>Calibration</span><strong>{modeSummary?.pumbilityPerLevel.toFixed(1) ?? "—"}</strong><small>Pumbility per level</small></div>
+          <div><span>Calibration</span><strong>{modeSummary?.pumbilityPerLevel?.toFixed(1) ?? "—"}</strong><small>Pumbility per level</small></div>
         </div>
 
         <div className="filter-bar">
@@ -392,18 +552,19 @@ export default function Home() {
         <div className="results-heading">
           <div>
             <p>{activeMode} · easiest first</p>
-            <h2>Within-level scoring tiers</h2>
+            <h2>Magnitude-based scoring tiers</h2>
           </div>
           <p><b>−</b> easier to score <span /> <b>+</b> harder to score</p>
         </div>
 
         <div className="tiers">
-          {(payload?.relativeGroups || demoPayload.relativeGroups).map((group) => (
+          {(payload?.effectBands || demoPayloads[activeMix].effectBands).map((group) => (
             <TierSection
-              charts={filteredCharts.filter((chart) => chart.relativeGroupRank === group.rank)}
+              charts={filteredCharts.filter((chart) => chart.effectBandRank === group.rank)}
               key={group.rank}
               name={group.name}
               rank={group.rank}
+              range={effectRange(group.low, group.high)}
             />
           ))}
           {filter.showUnrated ? (
@@ -416,8 +577,8 @@ export default function Home() {
       </section>
 
       <footer>
-        <p><b>How it works</b> Player skill is the mean Pumbility of ranks 11–30 within each mode. Only each player’s top 100 mode scores contribute to chart estimates.</p>
-        <p>Every chart is compared only with charts of the same mode and official level. Tiers are within-level deciles; the numerical estimate is centered on the typical chart at that level.</p>
+        <p><b>How it works</b> Player skill is the mean positive Pumbility of ranks 11–30 within each mode. Chart estimates use the deduplicated union of each player’s top 20% by Pumbility and most recent 20%; when that produces fewer than 100 scores, the player’s top 100 by Pumbility are used instead.</p>
+        <p>Every chart is compared only with charts of the same mode and official level. Extreme tiers require a measured difference of at least half a level; relative percentiles are retained only for within-folder rank.</p>
         <p>Results with fewer than 10 contributors are clearly labeled.</p>
       </footer>
     </main>

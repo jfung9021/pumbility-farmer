@@ -4,6 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:local": "next dev",
+    "snapshot:local": "python scripts/capture_private_score_snapshot.py",
+    "snapshot:phoenix2": "python scripts/capture_private_score_snapshot.py --mix phoenix2",
+    "analyze:local": "npm run analyze:phoenix2",
+    "analyze:phoenix2": "python piu_misgrade_analyzer.py cache --mix phoenix2 --raw-dir .local-data/piu-scores/phoenix2/current --output-dir .local-data/piu-scores/phoenix2/analysis",
+    "verify:phoenix1-archive": "python scripts/verify_phoenix1_archive.py",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",

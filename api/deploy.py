@@ -8,11 +8,12 @@ import json
 import os
 from typing import Mapping
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from analysis_runtime import deterministic_deployment_job_id
 from api._shared import start_or_reuse_analysis
+from mix_registry import DEFAULT_MIX_KEY, resolve_mix
 
 
 router = APIRouter()
@@ -43,7 +44,10 @@ def deployment_details(payload: Mapping[str, Any]) -> tuple[str, str] | None:
 
 
 @router.post("/api/deploy")
-async def deployment_promoted(request: Request):
+async def deployment_promoted(
+    request: Request,
+    mix: str = Query(default=DEFAULT_MIX_KEY),
+):
     raw_body = await request.body()
     secret = os.getenv("VERCEL_DEPLOY_WEBHOOK_SECRET", "").strip()
     if not webhook_authorized(
@@ -65,13 +69,16 @@ async def deployment_promoted(request: Request):
     if expected_project and not hmac.compare_digest(project_id, expected_project):
         return JSONResponse(status_code=202, content={"outcome": "ignored"})
 
-    job_id = deterministic_deployment_job_id(deployment_id)
     try:
+        mix_spec = resolve_mix(mix)
+        job_id = deterministic_deployment_job_id(deployment_id, mix=mix_spec)
+        mix_kwargs = {} if mix_spec.key == DEFAULT_MIX_KEY else {"mix": mix_spec}
         status, result = start_or_reuse_analysis(
             force_refresh=True,
             deterministic_job_id=job_id,
             full_sync=True,
             trigger="deployment",
+            **mix_kwargs,
         )
         job = result.get("job") if isinstance(result, dict) else None
         if isinstance(job, dict) and job.get("id") != job_id:
@@ -85,6 +92,8 @@ async def deployment_promoted(request: Request):
                 content={"error": "The deployment refresh is waiting for its retry window."},
             )
         return JSONResponse(status_code=status, content=result)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
     except RuntimeError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
     except Exception:

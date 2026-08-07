@@ -7,6 +7,8 @@ from phoenix2_sync import (
     MIX,
     analyzer_input,
     merge_best_scores,
+    sanitize_snapshot,
+    synchronize_mix_snapshot,
     synchronize_phoenix2_snapshot,
 )
 from piu_misgrade_analyzer import PiuScoresClient, SharedRequestLimiter
@@ -65,6 +67,48 @@ class FakeClient:
 
 
 class Phoenix2SyncTests(unittest.TestCase):
+    def test_phoenix1_uses_exact_upstream_mix_and_retains_metadata(self) -> None:
+        client = FakeClient(
+            ["player"],
+            [chart("phoenix-chart")],
+            {"player": [score("player", "phoenix-chart", 500)]},
+        )
+        snapshot, staging = synchronize_mix_snapshot(
+            client,
+            None,
+            job_id="phoenix1-job",
+            mix="phoenix1",
+            now=lambda: FIXED_NOW,
+        )
+        mix_params = [
+            params["mix"]
+            for path, params in client.calls
+            if path == "api/v2/charts" or path.endswith("/scores")
+        ]
+        self.assertEqual(mix_params, ["Phoenix", "Phoenix"])
+        self.assertEqual(snapshot["mix"], "Phoenix")
+        self.assertEqual(staging["mix"], "Phoenix")
+
+    def test_snapshot_and_resume_mix_mismatches_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "does not match requested mix"):
+            sanitize_snapshot({"mix": "Phoenix2"}, mix="phoenix1")
+
+        client = FakeClient(["player"], [chart("a")], {"player": []})
+        resume = {
+            "jobId": "job",
+            "mix": "Phoenix2",
+            "snapshot": {"mix": "Phoenix2", "players": [], "charts": [], "scores": []},
+        }
+        with self.assertRaisesRegex(ValueError, "Resume checkpoint mix"):
+            synchronize_mix_snapshot(
+                client,
+                None,
+                job_id="job",
+                mix="phoenix1",
+                resume_staging=resume,
+                now=lambda: FIXED_NOW,
+            )
+
     def test_phoenix2_only_requests_and_empty_player_filter(self) -> None:
         client = FakeClient(["has-scores", "empty"], [chart("low-level")], {
             "has-scores": [score("has-scores", "low-level", 500)],
@@ -96,6 +140,21 @@ class Phoenix2SyncTests(unittest.TestCase):
         self.assertEqual(players, [{"userId": "eligible"}])
         self.assertEqual(len(filtered), 30)
         self.assertTrue(any(row["level"] < 20 for row in charts))
+
+    def test_zero_pumbility_does_not_count_toward_eligibility(self) -> None:
+        charts = [chart(f"s-{index}", "Single", 5 + index % 20) for index in range(30)]
+        rows = [
+            score("zero-heavy", row["id"], 500 - index if index < 10 else 0)
+            for index, row in enumerate(charts)
+        ]
+        snapshot = {
+            "players": [{"playerId": "zero-heavy"}],
+            "charts": charts,
+            "scores": rows,
+        }
+        players, _, filtered = analyzer_input(snapshot)
+        self.assertEqual(players, [])
+        self.assertEqual(filtered, [])
 
     def test_incremental_merge_consent_pruning_and_recent_empty_skip(self) -> None:
         current = {

@@ -1,13 +1,17 @@
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 
 from piu_misgrade_analyzer import (
     AnalysisConfig,
+    _fit_level_calibration,
     apply_within_level_difficulty,
     analyze_snapshot,
+    build_web_payload,
+    difficulty_effect_band,
     folder_for,
     make_synthetic_snapshot,
     relative_difficulty_group,
@@ -41,14 +45,138 @@ def score(player_id: str, chart_id: str, pumbility: float) -> dict:
 
 
 class AnalyzerTests(unittest.TestCase):
+    def test_payload_identifies_the_analyzed_mix(self) -> None:
+        players, charts, scores, _ = make_synthetic_snapshot(players_per_folder=2)
+        results, _, summary, _ = analyze_snapshot(
+            players,
+            charts,
+            scores,
+            AnalysisConfig(mix="phoenix1", bootstrap_samples=0),
+        )
+        payload = build_web_payload(results, summary)
+        self.assertEqual(payload["mix"], {
+            "key": "phoenix1",
+            "apiValue": "Phoenix",
+            "label": "Phoenix 1",
+        })
+        self.assertEqual(
+            [(band["rank"], band["name"]) for band in payload["effectBands"]],
+            [
+                (1, "Extremely Easy"),
+                (2, "Very Easy"),
+                (3, "Easy"),
+                (4, "Slightly Easy"),
+                (5, "Typical"),
+                (6, "Slightly Hard"),
+                (7, "Hard"),
+                (8, "Very Hard"),
+                (9, "Extremely Hard"),
+            ],
+        )
+
     def test_dynamic_level_filter_and_relative_groups(self) -> None:
         self.assertEqual(folder_for("Single", 20), "S20")
         self.assertEqual(folder_for("Single", 27), "S27")
         self.assertEqual(folder_for("Double", 31), "D31")
         self.assertIsNone(folder_for("Single", 19))
-        self.assertEqual(relative_difficulty_group(0.02), (1, "Extremely Easy"))
-        self.assertEqual(relative_difficulty_group(0.5), (6, "Typical"))
-        self.assertEqual(relative_difficulty_group(0.98), (10, "Extremely Hard"))
+        self.assertEqual(relative_difficulty_group(0.02), (1, "Easiest 10%"))
+        self.assertEqual(relative_difficulty_group(0.5), (6, "50–60% percentile"))
+        self.assertEqual(relative_difficulty_group(0.98), (10, "Hardest 10%"))
+        boundary_cases = [
+            (-0.76, (1, "Extremely Easy")),
+            (-0.75, (1, "Extremely Easy")),
+            (-0.74, (2, "Very Easy")),
+            (-0.50, (2, "Very Easy")),
+            (-0.49, (3, "Easy")),
+            (-0.25, (3, "Easy")),
+            (-0.24, (4, "Slightly Easy")),
+            (-0.10, (4, "Slightly Easy")),
+            (-0.09, (5, "Typical")),
+            (0.00, (5, "Typical")),
+            (0.09, (5, "Typical")),
+            (0.10, (6, "Slightly Hard")),
+            (0.24, (6, "Slightly Hard")),
+            (0.25, (7, "Hard")),
+            (0.49, (7, "Hard")),
+            (0.50, (8, "Very Hard")),
+            (0.74, (8, "Very Hard")),
+            (0.75, (9, "Extremely Hard")),
+        ]
+        for delta, expected in boundary_cases:
+            with self.subTest(delta=delta):
+                self.assertEqual(difficulty_effect_band(delta), expected)
+
+    def test_score_controlled_level_calibration(self) -> None:
+        rows = []
+        for player_index, base in enumerate((100.0, 240.0, 380.0, 520.0)):
+            for level in range(15, 23):
+                rows.append({
+                    "playerId": f"p-{player_index}",
+                    "score": 950000 + (level % 2) * 500,
+                    "level": level,
+                    "pumbility": base + 7.3 * level,
+                })
+        slope, diagnostics = _fit_level_calibration(pd.DataFrame(rows))
+        self.assertAlmostEqual(slope, 7.3, places=6)
+        self.assertEqual(
+            diagnostics["method"],
+            "within-player fixed effects and 2,500-point score bands",
+        )
+
+    def test_difficulty_formula_scales_previous_one_to_point_eight(self) -> None:
+        frame = pd.DataFrame([
+            {
+                "chartId": "easy",
+                "folder": "S20",
+                "songName": "Easy",
+                "level": 20,
+                "chartResidualPb": -100.0,
+                "meanResidualPb": -100.0,
+                "residualStdPb": 0.0,
+                "residualCi95LowPb": -100.0,
+                "residualCi95HighPb": -100.0,
+                "nContributors": 10,
+            },
+            {
+                "chartId": "hard",
+                "folder": "S20",
+                "songName": "Hard",
+                "level": 20,
+                "chartResidualPb": 100.0,
+                "meanResidualPb": 100.0,
+                "residualStdPb": 0.0,
+                "residualCi95LowPb": 100.0,
+                "residualCi95HighPb": 100.0,
+                "nContributors": 10,
+            },
+        ])
+        result = apply_within_level_difficulty(
+            frame,
+            50.0,
+            AnalysisConfig(bootstrap_samples=0, shrinkage_k=0),
+        )
+        easy = result[result["chartId"] == "easy"].iloc[0]
+        self.assertAlmostEqual(float(easy["difficultyDelta"]), 0.8)
+        self.assertAlmostEqual(float(easy["estimatedDifficulty"]), 21.3)
+
+    def test_calibration_accepts_legacy_mix_scale_and_rejects_negative_slope(self) -> None:
+        rows = []
+        for player_index, base in enumerate((100.0, 300.0, 500.0, 700.0)):
+            for level in range(15, 23):
+                rows.append({
+                    "playerId": f"legacy-{player_index}",
+                    "score": 950000 + (level % 2) * 500,
+                    "level": level,
+                    "pumbility": base + 90.0 * level,
+                })
+        legacy_slope, diagnostics = _fit_level_calibration(pd.DataFrame(rows))
+        self.assertAlmostEqual(legacy_slope, 90.0, places=6)
+        self.assertEqual(diagnostics["validation"], "positive finite empirical slope")
+
+        negative_rows = pd.DataFrame(rows)
+        negative_rows["pumbility"] = 3000.0 - negative_rows["pumbility"]
+        with self.assertRaisesRegex(ValueError, "positive and finite"):
+            _fit_level_calibration(negative_rows)
 
     def test_each_folder_uses_its_own_reference_and_percentile_groups(self) -> None:
         frame = pd.DataFrame([
@@ -66,38 +194,87 @@ class AnalyzerTests(unittest.TestCase):
             for index, offset in enumerate((-10.0, 10.0))
         ])
         result = apply_within_level_difficulty(
-            frame, 50.0, AnalysisConfig(bootstrap_samples=0)
+            frame,
+            50.0,
+            AnalysisConfig(bootstrap_samples=0, shrinkage_k=0),
         )
         for folder, reference in (("S22", 0.0), ("S23", 100.0)):
             rows = result[result["folder"] == folder].sort_values("difficultyDelta")
             self.assertTrue((rows["levelReferenceResidualPb"] == reference).all())
             self.assertAlmostEqual(float(rows["difficultyDelta"].sum()), 0.0)
+            self.assertAlmostEqual(float(rows["difficultyDelta"].abs().max()), 0.08)
             self.assertEqual(list(rows["relativeGroupRank"]), [3, 8])
         self.assertGreater(
             float(result[result["folder"] == "S23"]["estimatedDifficulty"].min()),
             23.0,
         )
 
-    def test_top_100_cutoff_excludes_rank_101(self) -> None:
-        charts = [chart(f"single-{index:03d}", "Single", 20) for index in range(101)]
-        scores = [
-            score("player", row["id"], 700.0 - index)
-            for index, row in enumerate(charts)
-        ]
+    def test_top_and_recent_windows_are_unioned_and_deduplicated(self) -> None:
+        charts = [chart(f"single-{index:03d}", "Single", 20) for index in range(500)]
+        scores = []
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        for index, row in enumerate(charts):
+            scored = score("player", row["id"], 1200.0 - index)
+            timestamp_order = 600 + index if 50 <= index < 150 else index
+            scored["recordedAt"] = (
+                start + timedelta(days=timestamp_order)
+            ).isoformat().replace("+00:00", "Z")
+            scores.append(scored)
         results, baselines, summary, contributions = analyze_snapshot(
             [{"userId": "player"}],
             charts,
             scores,
-            AnalysisConfig(bootstrap_samples=0),
+            AnalysisConfig(bootstrap_samples=0, pumbility_per_level=7.3),
         )
-        excluded = results[results["chartId"] == "single-100"].iloc[0]
+        recent_only = results[results["chartId"] == "single-125"].iloc[0]
+        excluded = results[results["chartId"] == "single-150"].iloc[0]
+        self.assertEqual(recent_only["nContributors"], 1)
         self.assertEqual(excluded["nContributors"], 0)
         self.assertEqual(excluded["nPlayersScored"], 1)
         self.assertEqual(excluded["evidenceStatus"], "Unrated")
-        self.assertEqual(len(contributions), 100)
+        self.assertEqual(len(contributions), 150)
+        self.assertTrue((contributions["contributionRankLimit"] == 100).all())
+        self.assertFalse(contributions["usesTop100Fallback"].any())
+        self.assertEqual(int(contributions["selectedByPumbility"].sum()), 100)
+        self.assertEqual(int(contributions["selectedByRecency"].sum()), 100)
+        self.assertEqual(int(
+            (contributions["selectedByPumbility"] & contributions["selectedByRecency"]).sum()
+        ), 50)
+        self.assertEqual(summary["coverage"]["targetSelectedContributions"], 150)
+        self.assertEqual(summary["coverage"]["playerModePairsUsingTop100Fallback"], 0)
         self.assertEqual(len(baselines[baselines["mode"] == "Singles"]), 1)
         self.assertEqual(summary["modes"]["singles"]["eligiblePlayers"], 1)
         self.assertEqual(summary["modes"]["doubles"]["eligiblePlayers"], 0)
+
+    def test_small_union_falls_back_to_top_100_by_pumbility(self) -> None:
+        charts = [chart(f"single-{index:03d}", "Single", 20) for index in range(120)]
+        scores = []
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        for index, row in enumerate(charts):
+            scored = score("player", row["id"], 700.0 - index)
+            timestamp_order = 200 + index if 96 <= index < 120 else index
+            scored["recordedAt"] = (
+                start + timedelta(days=timestamp_order)
+            ).isoformat().replace("+00:00", "Z")
+            scores.append(scored)
+
+        results, _, summary, contributions = analyze_snapshot(
+            [{"userId": "player"}],
+            charts,
+            scores,
+            AnalysisConfig(bootstrap_samples=0, pumbility_per_level=7.3),
+        )
+
+        fallback_last = results[results["chartId"] == "single-099"].iloc[0]
+        recent_outside_fallback = results[results["chartId"] == "single-110"].iloc[0]
+        self.assertEqual(fallback_last["nContributors"], 1)
+        self.assertEqual(recent_outside_fallback["nContributors"], 0)
+        self.assertEqual(len(contributions), 100)
+        self.assertTrue((contributions["contributionRankLimit"] == 24).all())
+        self.assertTrue(contributions["usesTop100Fallback"].all())
+        self.assertTrue(contributions["selectedByTop100Fallback"].all())
+        self.assertEqual(summary["coverage"]["targetSelectedContributions"], 100)
+        self.assertEqual(summary["coverage"]["playerModePairsUsingTop100Fallback"], 1)
 
     def test_single_and_double_player_baselines_are_independent(self) -> None:
         charts = []
@@ -112,13 +289,41 @@ class AnalyzerTests(unittest.TestCase):
             [{"userId": "dual-mode-player"}],
             charts,
             scores,
-            AnalysisConfig(bootstrap_samples=0),
+            AnalysisConfig(bootstrap_samples=0, pumbility_per_level=7.3),
         )
         single = float(baselines.loc[baselines["mode"] == "Singles", "baselinePumbility"].iloc[0])
         double = float(baselines.loc[baselines["mode"] == "Doubles", "baselinePumbility"].iloc[0])
         self.assertAlmostEqual(double - single, 400.0)
 
-    def test_synthetic_recovers_order_and_allows_s20_below_20(self) -> None:
+    def test_zero_pumbility_scores_do_not_qualify_a_player(self) -> None:
+        charts = [
+            chart(f"chart-{index:02d}", "Single", 16 + index % 5)
+            for index in range(37)
+        ]
+        scores = []
+        for index, row in enumerate(charts):
+            scores.append(score("valid", row["id"], 500.0 - index))
+            scores.append(
+                score(
+                    "zero-baseline",
+                    row["id"],
+                    330.0 - index if index < 10 else 0.0,
+                )
+            )
+        results, baselines, summary, contributions = analyze_snapshot(
+            [{"userId": "valid"}, {"userId": "zero-baseline"}],
+            charts,
+            scores,
+            AnalysisConfig(bootstrap_samples=0, pumbility_per_level=7.3),
+        )
+        singles = baselines[baselines["mode"] == "Singles"]
+        self.assertEqual(len(singles), 1)
+        self.assertGreater(float(singles.iloc[0]["baselinePumbility"]), 0)
+        self.assertEqual(summary["coverage"]["nonpositivePumbilityRowsExcluded"], 27)
+        self.assertTrue((results["nContributors"] <= 1).all())
+        self.assertEqual(contributions["playerHash"].nunique(), 1)
+
+    def test_synthetic_recovers_order_with_half_scaled_output(self) -> None:
         players, charts, scores, truth = make_synthetic_snapshot(players_per_folder=5)
         results, _, _, _ = analyze_snapshot(
             players,
@@ -129,8 +334,19 @@ class AnalyzerTests(unittest.TestCase):
         validation = validate_synthetic(results, truth)
         self.assertTrue(validation["passed"])
         easiest_s20 = results[results["folder"] == "S20"].sort_values("difficultyDelta").iloc[0]
-        self.assertLess(float(easiest_s20["estimatedDifficulty"]), 20.0)
+        self.assertLessEqual(float(easiest_s20["difficultyDelta"]), -0.25)
+        self.assertIn(
+            str(easiest_s20["effectBand"]),
+            {"Extremely Easy", "Very Easy", "Easy"},
+        )
         self.assertEqual(int(easiest_s20["relativeGroupRank"]), 1)
+        measured = results[results["difficultyDelta"].notna()]
+        self.assertTrue(measured["effectBandRank"].between(1, 9).all())
+        for row in measured.itertuples():
+            self.assertEqual(
+                (int(row.effectBandRank), str(row.effectBand)),
+                difficulty_effect_band(float(row.difficultyDelta)),
+            )
 
     def test_production_aggregate_reclassifies_every_folder_locally(self) -> None:
         fixture_path = (
@@ -157,18 +373,17 @@ class AnalyzerTests(unittest.TestCase):
             )
         rescored = pd.concat(rescored_modes, ignore_index=True)
 
-        s23 = rescored[rescored["folder"] == "S23"]
-        self.assertTrue((s23["difficultyDelta"] < 0).any())
-        self.assertTrue((s23["difficultyDelta"] > 0).any())
-        self.assertEqual(int(s23["relativeGroupRank"].min()), 1)
-        self.assertEqual(int(s23["relativeGroupRank"].max()), 10)
-        self.assertTrue((s23["estimatedDifficulty"] >= 23.0).all())
-
-        below_folder = rescored[
-            rescored["estimatedDifficulty"] < rescored["level"].astype(float)
-        ]
-        self.assertLessEqual(len(below_folder), 1)
-        self.assertTrue((below_folder["relativeGroupRank"] == 1).all())
+        for _, group in rescored.groupby("folder"):
+            self.assertAlmostEqual(
+                float(group["rawEasePb"].median()), 0.0, places=6
+            )
+            if len(group) >= 10:
+                self.assertEqual(int(group["relativeGroupRank"].min()), 1)
+                self.assertEqual(int(group["relativeGroupRank"].max()), 10)
+        extreme_easy = rescored[rescored["effectBand"] == "Extremely Easy"]
+        extreme_hard = rescored[rescored["effectBand"] == "Extremely Hard"]
+        self.assertTrue((extreme_easy["difficultyDelta"] <= -0.75).all())
+        self.assertTrue((extreme_hard["difficultyDelta"] >= 0.75).all())
 
         comparison = rescored[["chartId", "relativeGroupRank"]].merge(
             measured[["chartId", "relativeGroupRank"]],

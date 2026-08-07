@@ -1,3 +1,5 @@
+import type { MixInfo, MixKey } from "./mixes";
+
 export type ModeKey = "singles" | "doubles";
 export type EvidenceStatus = "Published" | "Provisional" | "Insufficient" | "Unrated";
 
@@ -10,6 +12,8 @@ export interface ChartResult {
   folder: string;
   relativeGroupRank: number | null;
   relativeGroup: string | null;
+  effectBandRank: number | null;
+  effectBand: string | null;
   songName: string;
   difficulty: string;
   type: "Single" | "Double";
@@ -21,6 +25,8 @@ export interface ChartResult {
   estimatedDifficulty: number | null;
   averageDifficulty: number;
   difficultyDelta: number | null;
+  difficultyDeltaCi95Low: number | null;
+  difficultyDeltaCi95High: number | null;
   difficultyCi95Low: number | null;
   difficultyCi95High: number | null;
   nContributors: number;
@@ -33,6 +39,8 @@ export interface FolderSummary {
   measuredCharts: number;
   publishedCharts: number;
   medianContributors: number | null;
+  extremelyEasyCharts: number;
+  extremelyHardCharts: number;
 }
 
 export interface ModeSummary {
@@ -40,12 +48,15 @@ export interface ModeSummary {
   catalogCharts: number;
   measuredCharts: number;
   publishedCharts: number;
-  pumbilityPerLevel: number;
+  pumbilityPerLevel: number | null;
+  calibration: Record<string, unknown>;
+  shrinkage: Record<string, unknown>;
   folders: Record<string, FolderSummary>;
 }
 
 export interface AnalysisPayload {
   generatedAtUtc: string;
+  mix: MixInfo;
   summary: {
     scriptVersion: string;
     method: Record<string, unknown>;
@@ -55,6 +66,12 @@ export interface AnalysisPayload {
   singles: ChartResult[];
   doubles: ChartResult[];
   relativeGroups: Array<{ rank: number; name: string }>;
+  effectBands: Array<{
+    rank: number;
+    name: string;
+    low: number | null;
+    high: number | null;
+  }>;
 }
 
 export type AnalysisJobState = "queued" | "running" | "completed" | "failed";
@@ -77,6 +94,7 @@ export interface AnalysisJobStatus {
   generatedAtUtc: string | null;
   retryAllowedAtUtc: string | null;
   error: string | null;
+  mix: MixKey;
 }
 
 export type AnalysisRefreshResponse =
@@ -84,6 +102,11 @@ export type AnalysisRefreshResponse =
       outcome: "fresh";
       generatedAtUtc: string;
       nextAllowedAtUtc: string;
+    }
+  | {
+      outcome: "busy";
+      activeMix: MixKey;
+      error: string;
     }
   | {
       outcome: "started" | "existing";

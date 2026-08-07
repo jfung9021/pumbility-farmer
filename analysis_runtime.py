@@ -15,9 +15,11 @@ from phoenix2_sync import (
     analyzer_input,
     isoformat_utc,
     sanitize_snapshot,
+    synchronize_mix_snapshot,
     synchronize_phoenix2_snapshot,
     utc_now,
 )
+from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 from piu_misgrade_analyzer import (
     AnalysisConfig,
     ApiError,
@@ -29,10 +31,34 @@ from piu_misgrade_analyzer import (
 )
 
 
-LATEST_BLOB_PATH = "analysis/latest.json"
-CURRENT_SNAPSHOT_PATH = "analysis/private/phoenix2-current.json"
-RUNS_PREFIX = "analysis/runs/"
-STAGING_PREFIX = "analysis/staging/"
+LEGACY_LATEST_BLOB_PATH = "analysis/latest.json"
+
+
+def latest_blob_path(mix: str | MixSpec = DEFAULT_MIX_KEY) -> str:
+    spec = resolve_mix(mix)
+    return f"analysis/{spec.slug}/latest.json"
+
+
+def current_snapshot_path(mix: str | MixSpec = DEFAULT_MIX_KEY) -> str:
+    spec = resolve_mix(mix)
+    return f"analysis/private/{spec.slug}-current.json"
+
+
+def runs_prefix(mix: str | MixSpec = DEFAULT_MIX_KEY) -> str:
+    spec = resolve_mix(mix)
+    return f"analysis/{spec.slug}/runs/"
+
+
+def staging_prefix(mix: str | MixSpec = DEFAULT_MIX_KEY) -> str:
+    spec = resolve_mix(mix)
+    return f"analysis/{spec.slug}/staging/"
+
+
+# Backward-compatible constants refer to the default Phoenix 2 dataset.
+LATEST_BLOB_PATH = latest_blob_path()
+CURRENT_SNAPSHOT_PATH = current_snapshot_path()
+RUNS_PREFIX = runs_prefix()
+STAGING_PREFIX = staging_prefix()
 JOB_TTL_SECONDS = 24 * 60 * 60
 # Temporarily disabled: successful runs do not impose a manual-refresh cooldown.
 FRESHNESS = timedelta(0)
@@ -170,14 +196,16 @@ class JobStore(Protocol):
     def save(self, job: Mapping[str, Any]) -> dict[str, Any]: ...
     def active_job_id(self) -> str | None: ...
     def set_active_job_id(self, job_id: str | None) -> None: ...
-    def latest_job_id(self) -> str | None: ...
-    def set_latest_job_id(self, job_id: str) -> None: ...
+    def latest_job_id(self, mix: str | MixSpec = DEFAULT_MIX_KEY) -> str | None: ...
+    def set_latest_job_id(
+        self, job_id: str, mix: str | MixSpec = DEFAULT_MIX_KEY
+    ) -> None: ...
 
 
 class RuntimeJobStore:
     JOB_KEY = "job:{}"
     ACTIVE_KEY = "active-job"
-    LATEST_KEY = "latest-job"
+    LATEST_KEY = "latest-job:{}"
 
     def __init__(self) -> None:
         from vercel.cache import RuntimeCache
@@ -215,18 +243,25 @@ class RuntimeJobStore:
         else:
             self.cache.delete(self.ACTIVE_KEY)
 
-    def latest_job_id(self) -> str | None:
-        return self._get_id(self.LATEST_KEY)
+    def latest_job_id(self, mix: str | MixSpec = DEFAULT_MIX_KEY) -> str | None:
+        return self._get_id(self.LATEST_KEY.format(resolve_mix(mix).slug))
 
-    def set_latest_job_id(self, job_id: str) -> None:
-        self.cache.set(self.LATEST_KEY, job_id, self._options("Latest analysis job"))
+    def set_latest_job_id(
+        self, job_id: str, mix: str | MixSpec = DEFAULT_MIX_KEY
+    ) -> None:
+        spec = resolve_mix(mix)
+        self.cache.set(
+            self.LATEST_KEY.format(spec.slug),
+            job_id,
+            self._options(f"Latest {spec.label} analysis job"),
+        )
 
 
 class MemoryJobStore:
     def __init__(self) -> None:
         self.jobs: dict[str, dict[str, Any]] = {}
         self.active: str | None = None
-        self.latest: str | None = None
+        self.latest: dict[str, str] = {}
         self._lock = threading.RLock()
 
     def get(self, job_id: str) -> dict[str, Any] | None:
@@ -248,13 +283,15 @@ class MemoryJobStore:
         with self._lock:
             self.active = job_id
 
-    def latest_job_id(self) -> str | None:
+    def latest_job_id(self, mix: str | MixSpec = DEFAULT_MIX_KEY) -> str | None:
         with self._lock:
-            return self.latest
+            return self.latest.get(resolve_mix(mix).key)
 
-    def set_latest_job_id(self, job_id: str) -> None:
+    def set_latest_job_id(
+        self, job_id: str, mix: str | MixSpec = DEFAULT_MIX_KEY
+    ) -> None:
         with self._lock:
-            self.latest = job_id
+            self.latest[resolve_mix(mix).key] = job_id
 
 
 def new_job(
@@ -264,7 +301,9 @@ def new_job(
     attempt: int = 0,
     full_sync: bool = False,
     trigger: str = "manual",
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> dict[str, Any]:
+    mix_spec = resolve_mix(mix)
     timestamp = isoformat_utc(now)
     return {
         "id": job_id,
@@ -286,6 +325,7 @@ def new_job(
         "attempt": attempt,
         "fullSync": full_sync,
         "trigger": trigger,
+        "mix": mix_spec.key,
     }
 
 
@@ -309,16 +349,27 @@ def update_job(
     return store.save(job)
 
 
-def deterministic_hourly_job_id(now: datetime, attempt: int = 0) -> str:
-    base = now.astimezone(timezone.utc).strftime("analysis-%Y%m%dT%H")
+def deterministic_hourly_job_id(
+    now: datetime,
+    attempt: int = 0,
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
+) -> str:
+    spec = resolve_mix(mix)
+    prefix = "analysis" if spec.key == DEFAULT_MIX_KEY else f"analysis-{spec.slug}"
+    base = now.astimezone(timezone.utc).strftime(f"{prefix}-%Y%m%dT%H")
     return base if attempt <= 0 else f"{base}-r{attempt}"
 
 
-def deterministic_deployment_job_id(deployment_id: str) -> str:
+def deterministic_deployment_job_id(
+    deployment_id: str,
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
+) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_-]", "-", deployment_id.strip())[:80]
     if not normalized:
         raise ValueError("A deployment refresh requires a deployment ID.")
-    return f"analysis-deploy-{normalized}"
+    spec = resolve_mix(mix)
+    suffix = "" if spec.key == DEFAULT_MIX_KEY else f"-{spec.slug}"
+    return f"analysis-deploy-{normalized}{suffix}"
 
 
 def _fresh_result(payload: Mapping[str, Any] | None, now: datetime) -> tuple[str, str] | None:
@@ -336,6 +387,34 @@ def _fresh_result(payload: Mapping[str, Any] | None, now: datetime) -> tuple[str
     return None
 
 
+def read_latest_payload(
+    blobs: JsonBlobStore,
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
+) -> dict[str, Any] | None:
+    """Read a mix-scoped aggregate, with a read-only legacy fallback for Phoenix 2."""
+    spec = resolve_mix(mix)
+    payload = blobs.get_json(latest_blob_path(spec))
+    if payload is None and spec.key == DEFAULT_MIX_KEY:
+        payload = blobs.get_json(LEGACY_LATEST_BLOB_PATH)
+    if payload is None:
+        return None
+    payload_mix = payload.get("mix")
+    if isinstance(payload_mix, Mapping):
+        actual = resolve_mix(payload_mix.get("key") or payload_mix.get("apiValue"))
+        if actual.key != spec.key:
+            raise ValueError(
+                f"Stored aggregate mix {actual.label} does not match requested mix {spec.label}."
+            )
+    elif payload_mix is not None:
+        raise ValueError("Stored aggregate mix metadata is invalid.")
+    normalized = dict(payload)
+    normalized["mix"] = spec.as_payload()
+    summary = normalized.get("summary")
+    if isinstance(summary, Mapping):
+        normalized["summary"] = {**summary, "mix": spec.as_payload()}
+    return normalized
+
+
 Enqueue = Callable[[str], None]
 
 
@@ -349,13 +428,31 @@ def request_refresh(
     deterministic_job_id: str | None = None,
     full_sync: bool = False,
     trigger: str = "manual",
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> tuple[int, dict[str, Any]]:
     """Apply freshness, global-active, and failed-retry rules before enqueueing."""
+    mix_spec = resolve_mix(mix)
+    if mix_spec.archived:
+        return 409, {
+            "outcome": "archived",
+            "error": f"{mix_spec.label} is an archived snapshot and cannot be refreshed.",
+            "archiveUrl": mix_spec.archive_url,
+        }
     effective_now = now or utc_now()
     active_id = jobs.active_job_id()
     active = jobs.get(active_id) if active_id else None
     if active and active.get("status") in {"queued", "running"}:
-        return 202, {"outcome": "existing", "job": active}
+        active_mix = resolve_mix(active.get("mix")).key
+        if active_mix == mix_spec.key:
+            return 202, {"outcome": "existing", "job": active}
+        return 409, {
+            "outcome": "busy",
+            "activeMix": active_mix,
+            "error": (
+                f"{resolve_mix(active_mix).label} is currently refreshing. "
+                f"Retry {mix_spec.label} after it finishes."
+            ),
+        }
     if active_id:
         jobs.set_active_job_id(None)
 
@@ -365,7 +462,7 @@ def request_refresh(
     }:
         return 202, {"outcome": "existing", "job": deterministic_existing}
 
-    latest_payload = blobs.get_json(LATEST_BLOB_PATH)
+    latest_payload = read_latest_payload(blobs, mix_spec)
     if not force_refresh and (fresh := _fresh_result(latest_payload, effective_now)):
         generated_at, next_allowed_at = fresh
         return 200, {
@@ -374,7 +471,7 @@ def request_refresh(
             "nextAllowedAtUtc": next_allowed_at,
         }
 
-    latest_job_id = jobs.latest_job_id()
+    latest_job_id = jobs.latest_job_id(mix_spec)
     previous = deterministic_existing or (jobs.get(latest_job_id) if latest_job_id else None)
     if previous and previous.get("status") == "failed":
         retry_at = parse_utc(previous.get("retryAllowedAtUtc"))
@@ -383,22 +480,25 @@ def request_refresh(
 
     attempt = int(previous.get("attempt") or 0) + 1 if deterministic_existing else 0
     if previous and not deterministic_job_id:
-        previous_base = deterministic_hourly_job_id(effective_now)
+        previous_base = deterministic_hourly_job_id(effective_now, mix=mix_spec)
         if str(previous.get("id", "")).startswith(previous_base):
             attempt = int(previous.get("attempt") or 0) + 1
-    job_id = deterministic_job_id or deterministic_hourly_job_id(effective_now, attempt)
+    job_id = deterministic_job_id or deterministic_hourly_job_id(
+        effective_now, attempt, mix=mix_spec
+    )
     while not deterministic_job_id and jobs.get(job_id) is not None:
         attempt += 1
-        job_id = deterministic_hourly_job_id(effective_now, attempt)
+        job_id = deterministic_hourly_job_id(effective_now, attempt, mix=mix_spec)
     job = new_job(
         job_id,
         effective_now,
         attempt=attempt,
         full_sync=full_sync,
         trigger=trigger,
+        mix=mix_spec,
     )
     jobs.save(job)
-    jobs.set_latest_job_id(job_id)
+    jobs.set_latest_job_id(job_id, mix_spec)
     jobs.set_active_job_id(job_id)
     try:
         enqueue(job_id)
@@ -427,11 +527,12 @@ def cleanup_abandoned_staging(
     *,
     now: datetime | None = None,
     keep_path: str | None = None,
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> int:
     effective_now = now or utc_now()
     stale = [
         item.pathname
-        for item in blobs.list(STAGING_PREFIX)
+        for item in blobs.list(staging_prefix(mix))
         if item.pathname != keep_path
         and item.uploaded_at is not None
         and effective_now - item.uploaded_at > STAGING_MAX_AGE
@@ -441,10 +542,14 @@ def cleanup_abandoned_staging(
     return len(stale)
 
 
-def _run_path(payload: Mapping[str, Any], job_id: str) -> str:
+def _run_path(
+    payload: Mapping[str, Any],
+    job_id: str,
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
+) -> str:
     generated = parse_utc(payload.get("generatedAtUtc")) or utc_now()
     stamp = generated.strftime("%Y%m%dT%H%M%S%fZ")
-    return f"{RUNS_PREFIX}{stamp}-{job_id}.json"
+    return f"{runs_prefix(mix)}{stamp}-{job_id}.json"
 
 
 def publish_success(
@@ -453,12 +558,21 @@ def publish_success(
     job_id: str,
     snapshot: Mapping[str, Any],
     payload: Mapping[str, Any],
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> None:
     """Publish immutable aggregate, then promote snapshot/latest and enforce retention."""
-    blobs.put_json(_run_path(payload, job_id), payload)
-    blobs.put_json(CURRENT_SNAPSHOT_PATH, sanitize_snapshot(snapshot))
-    blobs.put_json(LATEST_BLOB_PATH, payload)
-    runs = sorted(blobs.list(RUNS_PREFIX), key=lambda item: item.pathname, reverse=True)
+    mix_spec = resolve_mix(mix)
+    if mix_spec.archived:
+        raise ValueError(f"{mix_spec.label} is archived and cannot be published.")
+    blobs.put_json(_run_path(payload, job_id, mix_spec), payload)
+    blobs.put_json(
+        current_snapshot_path(mix_spec),
+        sanitize_snapshot(snapshot, mix=mix_spec),
+    )
+    blobs.put_json(latest_blob_path(mix_spec), payload)
+    runs = sorted(
+        blobs.list(runs_prefix(mix_spec)), key=lambda item: item.pathname, reverse=True
+    )
     stale = [item.pathname for item in runs[RUN_RETENTION:]]
     if stale:
         blobs.delete(stale)
@@ -474,7 +588,22 @@ def safe_error(exc: BaseException) -> str:
     return "The analysis failed unexpectedly. Please retry after the cooldown."
 
 
-def _snapshot_from_raw_dir(raw_dir: Path, timestamp: datetime) -> dict[str, Any]:
+def _snapshot_from_raw_dir(
+    raw_dir: Path,
+    timestamp: datetime,
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
+) -> dict[str, Any]:
+    mix_spec = resolve_mix(mix)
+    manifest_path = raw_dir / "snapshot_manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(manifest, Mapping) and manifest.get("mix"):
+            manifest_mix = resolve_mix(manifest.get("mix"))
+            if manifest_mix.key != mix_spec.key:
+                raise ValueError(
+                    f"Raw snapshot mix {manifest_mix.label} does not match requested mix "
+                    f"{mix_spec.label}."
+                )
     players, charts, scores = load_snapshot(raw_dir)
     player_ids = sorted(
         {
@@ -487,7 +616,7 @@ def _snapshot_from_raw_dir(raw_dir: Path, timestamp: datetime) -> dict[str, Any]
     return sanitize_snapshot(
         {
             "schemaVersion": 1,
-            "mix": "Phoenix2",
+            "mix": mix_spec.api_value,
             "generatedAtUtc": stamp,
             "players": [
                 {"playerId": player_id, "lastSyncedAtUtc": stamp}
@@ -495,7 +624,8 @@ def _snapshot_from_raw_dir(raw_dir: Path, timestamp: datetime) -> dict[str, Any]
             ],
             "charts": charts,
             "scores": scores,
-        }
+        },
+        mix=mix_spec,
     )
 
 
@@ -515,6 +645,24 @@ def execute_analysis_job(
         raise RuntimeError("The queued analysis job status was not found.")
     if existing.get("status") == "completed":
         return existing
+    mix_spec = resolve_mix(existing.get("mix"))
+    if mix_spec.archived:
+        archived = update_job(
+            job_store,
+            job_id,
+            status="failed",
+            error=f"{mix_spec.label} is archived and cannot be refreshed.",
+            retryAllowedAtUtc=None,
+            progress={
+                "current": 0,
+                "total": 0,
+                "percent": 0,
+                "message": "Archived snapshots cannot be refreshed.",
+            },
+        )
+        if job_store.active_job_id() == job_id:
+            job_store.set_active_job_id(None)
+        return archived
 
     active_id = job_store.active_job_id()
     if active_id and active_id != job_id:
@@ -538,20 +686,28 @@ def execute_analysis_job(
             "current": 0,
             "total": 0,
             "percent": 0,
-            "message": "Reading the consented-player list and Phoenix 2 catalog.",
+            "message": f"Reading the consented-player list and {mix_spec.label} catalog.",
         },
     )
-    staging_path = f"{STAGING_PREFIX}{job_id}.json"
+    staging_path = f"{staging_prefix(mix_spec)}{job_id}.json"
 
     try:
-        cleanup_abandoned_staging(blob_store, now=now(), keep_path=staging_path)
-        current = blob_store.get_json(CURRENT_SNAPSHOT_PATH)
+        cleanup_abandoned_staging(
+            blob_store, now=now(), keep_path=staging_path, mix=mix_spec
+        )
+        current = blob_store.get_json(current_snapshot_path(mix_spec))
         resume = blob_store.get_json(staging_path)
-        raw_dir_setting = os.getenv("PIU_ANALYSIS_RAW_DIR", "").strip()
+        raw_dir_setting = os.getenv(
+            f"PIU_ANALYSIS_RAW_DIR_{mix_spec.key.upper()}",
+            os.getenv("PIU_ANALYSIS_RAW_DIR", ""),
+        ).strip()
         if raw_dir_setting:
-            snapshot = _snapshot_from_raw_dir(Path(raw_dir_setting), now())
+            snapshot = _snapshot_from_raw_dir(
+                Path(raw_dir_setting), now(), mix=mix_spec
+            )
             staging = {
                 "schemaVersion": 1,
+                "mix": mix_spec.api_value,
                 "jobId": job_id,
                 "createdAtUtc": isoformat_utc(now()),
                 "updatedAtUtc": isoformat_utc(now()),
@@ -586,7 +742,15 @@ def execute_analysis_job(
                     },
                 )
 
-            snapshot, _ = synchronize_phoenix2_snapshot(
+            synchronize = (
+                synchronize_phoenix2_snapshot
+                if mix_spec.key == DEFAULT_MIX_KEY
+                else synchronize_mix_snapshot
+            )
+            sync_kwargs: dict[str, Any] = {}
+            if mix_spec.key != DEFAULT_MIX_KEY:
+                sync_kwargs["mix"] = mix_spec
+            snapshot, _ = synchronize(
                 effective_client,
                 None if existing.get("fullSync") else current,
                 job_id=job_id,
@@ -596,9 +760,11 @@ def execute_analysis_job(
                 progress=on_progress,
                 checkpoint=lambda value: blob_store.put_json(staging_path, value),
                 now=now,
+                **sync_kwargs,
             )
 
         config = AnalysisConfig(
+            mix=mix_spec.key,
             bootstrap_samples=int(os.getenv("ANALYSIS_BOOTSTRAP_SAMPLES", "500"))
         )
         players, charts, scores = analyzer_input(
@@ -637,6 +803,7 @@ def execute_analysis_job(
             job_id=job_id,
             snapshot=snapshot,
             payload=payload,
+            mix=mix_spec,
         )
         blob_store.delete(staging_path)
         completed = update_job(

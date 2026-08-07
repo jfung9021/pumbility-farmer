@@ -17,12 +17,16 @@ from analysis_runtime import (
     MemoryBlobStore,
     MemoryJobStore,
     cleanup_abandoned_staging,
+    current_snapshot_path,
     deterministic_deployment_job_id,
     execute_analysis_job,
     isoformat_utc,
     new_job,
+    latest_blob_path,
     publish_success,
+    read_latest_payload,
     request_refresh,
+    runs_prefix,
     update_job,
 )
 from api.cron import cron_authorized
@@ -39,17 +43,56 @@ NOW = datetime(2026, 8, 7, 6, 30, tzinfo=timezone.utc)
 API_CLIENT = TestClient(api_app)
 
 
-def latest_payload(generated: datetime) -> dict:
+def latest_payload(generated: datetime, mix: str = "phoenix2") -> dict:
+    mix_value = "Phoenix" if mix == "phoenix1" else "Phoenix2"
+    mix_label = "Phoenix 1" if mix == "phoenix1" else "Phoenix 2"
     return {
         "generatedAtUtc": isoformat_utc(generated),
-        "summary": {"scriptVersion": SCRIPT_VERSION, "modes": {}},
+        "mix": {"key": mix, "apiValue": mix_value, "label": mix_label},
+        "summary": {"scriptVersion": SCRIPT_VERSION, "modes": {}, "mix": {
+            "key": mix, "apiValue": mix_value, "label": mix_label,
+        }},
         "singles": [],
         "doubles": [],
         "relativeGroups": [],
+        "effectBands": [],
     }
 
 
 class CoordinatorTests(unittest.TestCase):
+    def test_legacy_phoenix2_payload_is_normalized_without_rewriting_it(self) -> None:
+        blobs = MemoryBlobStore()
+        legacy = latest_payload(NOW)
+        legacy.pop("mix")
+        legacy["summary"].pop("mix")
+        blobs.put_json("analysis/latest.json", legacy)
+
+        normalized = read_latest_payload(blobs, "phoenix2")
+
+        self.assertEqual(normalized["mix"]["key"], "phoenix2")
+        self.assertEqual(normalized["summary"]["mix"]["apiValue"], "Phoenix2")
+        self.assertNotIn("mix", blobs.get_json("analysis/latest.json"))
+
+    def test_archived_phoenix1_refresh_is_rejected_before_job_coordination(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        active = new_job("analysis-20260807T06", NOW, mix="phoenix2")
+        jobs.save(active)
+        jobs.set_active_job_id(active["id"])
+        enqueued: list[str] = []
+
+        status, body = request_refresh(
+            blobs,
+            jobs,
+            enqueued.append,
+            now=NOW,
+            mix="phoenix1",
+        )
+
+        self.assertEqual((status, body["outcome"]), (409, "archived"))
+        self.assertEqual(body["archiveUrl"], "/data/phoenix1-20260807.json")
+        self.assertEqual(enqueued, [])
+
     def test_successful_result_has_no_manual_refresh_cooldown(self) -> None:
         blobs = MemoryBlobStore()
         jobs = MemoryJobStore()
@@ -204,6 +247,33 @@ class CoordinatorTests(unittest.TestCase):
 
 
 class ApiRouteTests(unittest.TestCase):
+    def test_mix_specific_cron_route_rejects_archived_phoenix1(self) -> None:
+        with patch.dict("os.environ", {"CRON_SECRET": "cron-secret-value"}):
+            response = API_CLIENT.get(
+                "/api/cron/phoenix1",
+                headers={"Authorization": "Bearer cron-secret-value"},
+            )
+        self.assertEqual((response.status_code, response.json()["outcome"]), (409, "archived"))
+
+    def test_analysis_route_reads_only_the_requested_mix(self) -> None:
+        blobs = MemoryBlobStore()
+        phoenix2 = latest_payload(NOW, "phoenix2")
+        blobs.put_json(latest_blob_path("phoenix2"), phoenix2)
+        with patch("api.analyze.PrivateBlobStore", return_value=blobs):
+            first = API_CLIENT.get("/api/analyze?mix=phoenix1", follow_redirects=False)
+            second = API_CLIENT.get("/api/analyze?mix=phoenix2")
+            invalid = API_CLIENT.get("/api/analyze?mix=Fiesta")
+        self.assertEqual(first.status_code, 307)
+        self.assertEqual(first.headers["location"], "/data/phoenix1-20260807.json")
+        self.assertEqual(second.json()["mix"]["key"], "phoenix2")
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_archived_phoenix1_manual_refresh_and_job_lookup_are_rejected(self) -> None:
+        refresh = API_CLIENT.post("/api/analyze?mix=phoenix1")
+        job = API_CLIENT.get("/api/analyze?mix=phoenix1&jobId=stale")
+        self.assertEqual((refresh.status_code, refresh.json()["outcome"]), (409, "archived"))
+        self.assertEqual((job.status_code, job.json()["outcome"]), (410, "archived"))
+
     def test_missing_latest_and_unauthorized_cron_are_json(self) -> None:
         blobs = MemoryBlobStore()
         with patch("api.analyze.PrivateBlobStore", return_value=blobs):
@@ -291,6 +361,30 @@ class ApiRouteTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 503)
 
+    def test_deployment_webhook_rejects_archived_phoenix1(self) -> None:
+        secret = "deployment-secret"
+        raw = json.dumps({
+            "type": "deployment.promoted",
+            "payload": {
+                "deployment": {"id": "dpl_phoenix1"},
+                "project": {"id": "prj_example"},
+            },
+        }, separators=(",", ":")).encode()
+        signature = hmac.new(secret.encode(), raw, hashlib.sha1).hexdigest()
+        with patch.dict(
+            "os.environ",
+            {
+                "VERCEL_DEPLOY_WEBHOOK_SECRET": secret,
+                "VERCEL_PROJECT_ID": "prj_example",
+            },
+        ):
+            response = API_CLIENT.post(
+                "/api/deploy?mix=phoenix1",
+                content=raw,
+                headers={"x-vercel-signature": signature},
+            )
+        self.assertEqual((response.status_code, response.json()["outcome"]), (409, "archived"))
+
     def test_post_returns_async_refresh_contract(self) -> None:
         job = new_job("analysis-20260807T06", NOW)
         with patch("api.analyze.start_or_reuse_analysis", return_value=(
@@ -315,8 +409,8 @@ def chart(index: int) -> dict:
         "id": f"chart-{index:02d}",
         "songName": f"Chart {index}",
         "type": "Single",
-        "level": 20 + index % 2,
-        "difficulty": f"S{20 + index % 2}",
+        "level": 20 + index % 3,
+        "difficulty": f"S{20 + index % 3}",
         "imageUrl": None,
         "noteCount": 1000,
         "stepArtist": "Test",
@@ -326,8 +420,8 @@ def chart(index: int) -> dict:
 def score(index: int) -> dict:
     return {
         "chartId": f"chart-{index:02d}",
-        "pumbility": 700 - index,
-        "score": 990000 - index,
+        "pumbility": 200 + 7.3 * (20 + index % 3) - index * 0.1,
+        "score": 990999 - index,
         "recordedAt": "2026-08-07T06:00:00Z",
         "isBroken": False,
         "gameTag": "must-not-be-cached",
@@ -346,6 +440,47 @@ class WorkerClient:
 
 
 class WorkerTests(unittest.TestCase):
+    def test_archived_phoenix1_cannot_be_published(self) -> None:
+        blobs = MemoryBlobStore()
+        snapshot1 = {"mix": "Phoenix", "players": [], "charts": [], "scores": []}
+        with self.assertRaisesRegex(ValueError, "archived"):
+            publish_success(
+                blobs,
+                job_id="p1",
+                snapshot=snapshot1,
+                payload=latest_payload(NOW, "phoenix1"),
+                mix="phoenix1",
+            )
+        self.assertEqual(blobs.values, {})
+
+    def test_phoenix2_publish_paths_remain_available(self) -> None:
+        blobs = MemoryBlobStore()
+        snapshot2 = {"mix": "Phoenix2", "players": [], "charts": [], "scores": []}
+        publish_success(
+            blobs,
+            job_id="p2",
+            snapshot=snapshot2,
+            payload=latest_payload(NOW, "phoenix2"),
+            mix="phoenix2",
+        )
+        self.assertEqual(read_latest_payload(blobs, "phoenix2")["mix"]["key"], "phoenix2")
+        self.assertEqual(blobs.get_json(current_snapshot_path("phoenix2"))["mix"], "Phoenix2")
+        self.assertEqual(len(blobs.list(runs_prefix("phoenix2"))), 1)
+
+    def test_stale_archived_job_fails_without_syncing_or_publishing(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        job = new_job("stale-phoenix1", NOW, mix="phoenix1")
+        jobs.save(job)
+        jobs.set_active_job_id(job["id"])
+        result = execute_analysis_job(
+            job["id"], blobs=blobs, jobs=jobs, client=WorkerClient(), now=lambda: NOW
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("archived", result["error"])
+        self.assertEqual(blobs.values, {})
+        self.assertIsNone(jobs.active_job_id())
+
     def test_job_transitions_publish_private_snapshot_and_latest(self) -> None:
         blobs = MemoryBlobStore()
         jobs = MemoryJobStore()

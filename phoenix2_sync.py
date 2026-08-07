@@ -1,4 +1,4 @@
-"""Incremental, privacy-minimized Phoenix 2 snapshot synchronization."""
+"""Incremental, privacy-minimized snapshot synchronization for supported mixes."""
 
 from __future__ import annotations
 
@@ -8,8 +8,11 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 
-MIX = "Phoenix2"
+
+# Compatibility constant for existing Phoenix 2 callers.
+MIX = resolve_mix(DEFAULT_MIX_KEY).api_value
 SNAPSHOT_SCHEMA_VERSION = 1
 DEFAULT_WORKERS = 6
 DEFAULT_CHECKPOINT_EVERY = 50
@@ -141,8 +144,20 @@ def merge_best_scores(
     return [best[key] for key in sorted(best)]
 
 
-def sanitize_snapshot(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
+def sanitize_snapshot(
+    snapshot: Mapping[str, Any] | None,
+    *,
+    mix: str | MixSpec | None = None,
+) -> dict[str, Any]:
     source = snapshot if isinstance(snapshot, Mapping) else {}
+    requested = resolve_mix(mix) if mix is not None else resolve_mix(source.get("mix"))
+    source_mix = source.get("mix")
+    if source_mix is not None and str(source_mix).strip():
+        existing = resolve_mix(source_mix)
+        if existing.key != requested.key:
+            raise ValueError(
+                f"Snapshot mix {existing.label} does not match requested mix {requested.label}."
+            )
     charts = [
         sanitized
         for raw in source.get("charts", [])
@@ -177,7 +192,7 @@ def sanitize_snapshot(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
         )
     return {
         "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
-        "mix": MIX,
+        "mix": requested.api_value,
         "generatedAtUtc": str(source.get("generatedAtUtc") or ""),
         "players": sorted(players, key=lambda row: row["playerId"]),
         "charts": sorted(charts, key=lambda row: row["id"]),
@@ -199,6 +214,7 @@ def _staging_payload(
     consented_player_ids: Sequence[str],
     completed_player_ids: set[str],
     snapshot: Mapping[str, Any],
+    mix: MixSpec,
 ) -> dict[str, Any]:
     return {
         "schemaVersion": 1,
@@ -208,15 +224,17 @@ def _staging_payload(
         "runStartedAtUtc": run_started_at,
         "consentedPlayerIds": sorted(consented_player_ids),
         "completedPlayerIds": sorted(completed_player_ids),
-        "snapshot": sanitize_snapshot(snapshot),
+        "mix": mix.api_value,
+        "snapshot": sanitize_snapshot(snapshot, mix=mix),
     }
 
 
-def synchronize_phoenix2_snapshot(
+def synchronize_mix_snapshot(
     client: CollectionClient,
     current_snapshot: Mapping[str, Any] | None,
     *,
     job_id: str,
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
     resume_staging: Mapping[str, Any] | None = None,
     workers: int = DEFAULT_WORKERS,
     checkpoint_every: int = DEFAULT_CHECKPOINT_EVERY,
@@ -226,6 +244,7 @@ def synchronize_phoenix2_snapshot(
     now: Callable[[], datetime] = utc_now,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Fetch consent and charts, then incrementally synchronize player scores."""
+    mix_spec = resolve_mix(mix)
     run_started = now()
     run_started_iso = isoformat_utc(run_started)
     players_full = client.fetch_page_collection("api/v2/players", {"limit": 100})
@@ -245,7 +264,9 @@ def synchronize_phoenix2_snapshot(
     if progress:
         progress(0, len(consented_ids), f"Discovered {len(consented_ids):,} consented players.")
 
-    charts_full = client.fetch_page_collection("api/v2/charts", {"mix": MIX, "limit": 100})
+    charts_full = client.fetch_page_collection(
+        "api/v2/charts", {"mix": mix_spec.api_value, "limit": 100}
+    )
     charts = [
         sanitized
         for raw in charts_full
@@ -255,13 +276,30 @@ def synchronize_phoenix2_snapshot(
     if not charts:
         from piu_misgrade_analyzer import ApiError
 
-        raise ApiError("The Phoenix 2 chart catalog was empty.")
+        raise ApiError(f"The {mix_spec.label} chart catalog was empty.")
     valid_chart_ids = {row["id"] for row in charts}
 
-    current = sanitize_snapshot(current_snapshot)
+    current = sanitize_snapshot(current_snapshot, mix=mix_spec)
     resume = resume_staging if isinstance(resume_staging, Mapping) else {}
-    can_resume = resume.get("jobId") == job_id and isinstance(resume.get("snapshot"), Mapping)
-    working = sanitize_snapshot(resume.get("snapshot") if can_resume else current)
+    resume_mix = resolve_mix(resume.get("mix") or mix_spec.api_value)
+    if (
+        resume.get("jobId") == job_id
+        and isinstance(resume.get("snapshot"), Mapping)
+        and resume_mix.key != mix_spec.key
+    ):
+        raise ValueError(
+            f"Resume checkpoint mix {resume_mix.label} does not match requested mix "
+            f"{mix_spec.label}."
+        )
+    can_resume = (
+        resume.get("jobId") == job_id
+        and resume_mix.key == mix_spec.key
+        and isinstance(resume.get("snapshot"), Mapping)
+    )
+    working = sanitize_snapshot(
+        resume.get("snapshot") if can_resume else current,
+        mix=mix_spec,
+    )
     consented_set = set(consented_ids)
     working_scores = [
         row
@@ -314,7 +352,7 @@ def synchronize_phoenix2_snapshot(
             )
         return {
             "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
-            "mix": MIX,
+            "mix": mix_spec.api_value,
             "generatedAtUtc": boundary_iso,
             "players": players,
             "charts": charts,
@@ -330,6 +368,7 @@ def synchronize_phoenix2_snapshot(
             consented_player_ids=consented_ids,
             completed_player_ids=completed,
             snapshot=build_working_snapshot(),
+            mix=mix_spec,
         )
         if checkpoint:
             checkpoint(payload)
@@ -351,14 +390,14 @@ def synchronize_phoenix2_snapshot(
                 progress(
                     len(completed),
                     len(consented_ids),
-                    "Skipping recently checked players with no Phoenix 2 scores.",
+                    f"Skipping recently checked players with no {mix_spec.label} scores.",
                 )
             if checkpoint_every > 0 and completed_since_checkpoint >= checkpoint_every:
                 save_checkpoint()
                 completed_since_checkpoint = 0
 
     def fetch_player(player_id: str) -> tuple[str, list[dict[str, Any]]]:
-        params: dict[str, Any] = {"mix": MIX, "limit": 100}
+        params: dict[str, Any] = {"mix": mix_spec.api_value, "limit": 100}
         previous = current_player_meta.get(player_id)
         if previous is not None and scores_by_player.get(player_id):
             recorded_after = str(previous.get("lastSyncedAtUtc") or "").strip()
@@ -368,7 +407,9 @@ def synchronize_phoenix2_snapshot(
         return player_id, rows
 
     remaining = [player_id for player_id in consented_ids if player_id not in completed]
-    executor = ThreadPoolExecutor(max_workers=max(1, int(workers)), thread_name_prefix="phoenix2")
+    executor = ThreadPoolExecutor(
+        max_workers=max(1, int(workers)), thread_name_prefix=mix_spec.slug
+    )
     futures: dict[Future[tuple[str, list[dict[str, Any]]]], str] = {
         executor.submit(fetch_player, player_id): player_id for player_id in remaining
     }
@@ -402,10 +443,24 @@ def synchronize_phoenix2_snapshot(
     else:
         executor.shutdown(wait=True)
 
-    final_snapshot = sanitize_snapshot(build_working_snapshot())
+    final_snapshot = sanitize_snapshot(build_working_snapshot(), mix=mix_spec)
     final_snapshot["generatedAtUtc"] = boundary_iso
     final_staging = save_checkpoint()
     return final_snapshot, final_staging
+
+
+def synchronize_phoenix2_snapshot(
+    client: CollectionClient,
+    current_snapshot: Mapping[str, Any] | None,
+    **kwargs: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Compatibility wrapper for the original Phoenix 2-only API."""
+    return synchronize_mix_snapshot(
+        client,
+        current_snapshot,
+        mix=DEFAULT_MIX_KEY,
+        **kwargs,
+    )
 
 
 def analyzer_input(
@@ -425,7 +480,8 @@ def analyzer_input(
             continue
         player_id = row["playerId"]
         nonempty.add(player_id)
-        counts[(player_id, mode)] += 1
+        if float(row["pumbility"]) > 0:
+            counts[(player_id, mode)] += 1
     if eligible_only:
         selected = {
             player_id

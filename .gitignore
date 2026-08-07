@@ -13,3 +13,5 @@ piu_*_run/
 synthetic_demo/
 **/raw/
 **/synthetic_raw/
+.vercel
+.local-data/
