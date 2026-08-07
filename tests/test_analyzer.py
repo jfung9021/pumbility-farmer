@@ -60,17 +60,20 @@ class AnalyzerTests(unittest.TestCase):
             "label": "Phoenix 1",
         })
         self.assertEqual(
-            [(band["rank"], band["name"]) for band in payload["effectBands"]],
             [
-                (1, "Extremely Easy"),
-                (2, "Very Easy"),
-                (3, "Easy"),
-                (4, "Slightly Easy"),
-                (5, "Typical"),
-                (6, "Slightly Hard"),
-                (7, "Hard"),
-                (8, "Very Hard"),
-                (9, "Extremely Hard"),
+                (band["rank"], band["name"], band["low"], band["high"])
+                for band in payload["effectBands"]
+            ],
+            [
+                (1, "Extremely Easy", None, -1.0),
+                (2, "Very Easy", -1.0, -0.75),
+                (3, "Easy", -0.75, -0.5),
+                (4, "Slightly Easy", -0.5, -0.25),
+                (5, "Typical", -0.25, 0.25),
+                (6, "Slightly Hard", 0.25, 0.5),
+                (7, "Hard", 0.5, 0.75),
+                (8, "Very Hard", 0.75, 1.0),
+                (9, "Extremely Hard", 1.0, None),
             ],
         )
 
@@ -83,24 +86,25 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(relative_difficulty_group(0.5), (6, "50–60% percentile"))
         self.assertEqual(relative_difficulty_group(0.98), (10, "Hardest 10%"))
         boundary_cases = [
-            (-0.76, (1, "Extremely Easy")),
-            (-0.75, (1, "Extremely Easy")),
-            (-0.74, (2, "Very Easy")),
-            (-0.50, (2, "Very Easy")),
-            (-0.49, (3, "Easy")),
-            (-0.25, (3, "Easy")),
-            (-0.24, (4, "Slightly Easy")),
-            (-0.10, (4, "Slightly Easy")),
-            (-0.09, (5, "Typical")),
+            (-1.01, (1, "Extremely Easy")),
+            (-1.00, (1, "Extremely Easy")),
+            (-0.99, (2, "Very Easy")),
+            (-0.75, (2, "Very Easy")),
+            (-0.74, (3, "Easy")),
+            (-0.50, (3, "Easy")),
+            (-0.49, (4, "Slightly Easy")),
+            (-0.25, (4, "Slightly Easy")),
+            (-0.24, (5, "Typical")),
             (0.00, (5, "Typical")),
-            (0.09, (5, "Typical")),
-            (0.10, (6, "Slightly Hard")),
-            (0.24, (6, "Slightly Hard")),
-            (0.25, (7, "Hard")),
-            (0.49, (7, "Hard")),
-            (0.50, (8, "Very Hard")),
-            (0.74, (8, "Very Hard")),
-            (0.75, (9, "Extremely Hard")),
+            (0.24, (5, "Typical")),
+            (0.25, (6, "Slightly Hard")),
+            (0.49, (6, "Slightly Hard")),
+            (0.50, (7, "Hard")),
+            (0.74, (7, "Hard")),
+            (0.75, (8, "Very Hard")),
+            (0.99, (8, "Very Hard")),
+            (1.00, (9, "Extremely Hard")),
+            (1.01, (9, "Extremely Hard")),
         ]
         for delta, expected in boundary_cases:
             with self.subTest(delta=delta):
@@ -123,7 +127,7 @@ class AnalyzerTests(unittest.TestCase):
             "within-player fixed effects and 2,500-point score bands",
         )
 
-    def test_difficulty_formula_scales_previous_one_to_point_eight(self) -> None:
+    def test_difficulty_formula_uses_one_point_zero_scale(self) -> None:
         frame = pd.DataFrame([
             {
                 "chartId": "easy",
@@ -156,8 +160,8 @@ class AnalyzerTests(unittest.TestCase):
             AnalysisConfig(bootstrap_samples=0, shrinkage_k=0),
         )
         easy = result[result["chartId"] == "easy"].iloc[0]
-        self.assertAlmostEqual(float(easy["difficultyDelta"]), 0.8)
-        self.assertAlmostEqual(float(easy["estimatedDifficulty"]), 21.3)
+        self.assertAlmostEqual(float(easy["difficultyDelta"]), 2.0)
+        self.assertAlmostEqual(float(easy["estimatedDifficulty"]), 22.5)
 
     def test_calibration_accepts_legacy_mix_scale_and_rejects_negative_slope(self) -> None:
         rows = []
@@ -202,7 +206,7 @@ class AnalyzerTests(unittest.TestCase):
             rows = result[result["folder"] == folder].sort_values("difficultyDelta")
             self.assertTrue((rows["levelReferenceResidualPb"] == reference).all())
             self.assertAlmostEqual(float(rows["difficultyDelta"].sum()), 0.0)
-            self.assertAlmostEqual(float(rows["difficultyDelta"].abs().max()), 0.08)
+            self.assertAlmostEqual(float(rows["difficultyDelta"].abs().max()), 0.2)
             self.assertEqual(list(rows["relativeGroupRank"]), [3, 8])
         self.assertGreater(
             float(result[result["folder"] == "S23"]["estimatedDifficulty"].min()),
@@ -382,8 +386,8 @@ class AnalyzerTests(unittest.TestCase):
                 self.assertEqual(int(group["relativeGroupRank"].max()), 10)
         extreme_easy = rescored[rescored["effectBand"] == "Extremely Easy"]
         extreme_hard = rescored[rescored["effectBand"] == "Extremely Hard"]
-        self.assertTrue((extreme_easy["difficultyDelta"] <= -0.75).all())
-        self.assertTrue((extreme_hard["difficultyDelta"] >= 0.75).all())
+        self.assertTrue((extreme_easy["difficultyDelta"] <= -1.0).all())
+        self.assertTrue((extreme_hard["difficultyDelta"] >= 1.0).all())
 
         comparison = rescored[["chartId", "relativeGroupRank"]].merge(
             measured[["chartId", "relativeGroupRank"]],

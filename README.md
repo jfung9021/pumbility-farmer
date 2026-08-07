@@ -29,11 +29,10 @@ Each mode is processed separately:
 10. Anchor the typical official level `L` chart at `L + 0.5` and shrink
     low-evidence estimates toward that reference.
 
-The displayed difference uses 40% of the calibrated residual conversion. This
-scales the previous formula's output by `0.8` (`+1.00` becomes `+0.80`):
+The displayed difference uses 100% of the calibrated residual conversion:
 
 ```text
-difficulty difference = -0.4 × shrunk Pumbility residual / Pumbility per level
+difficulty difference = -1.0 × shrunk Pumbility residual / Pumbility per level
 estimated scoring difficulty = official level + 0.5 + difficulty difference
 ```
 
@@ -43,24 +42,24 @@ The analyzer does not use the chart catalog's existing `scoringLevel` or an exis
 
 ## Magnitude bands and relative ranks
 
-The primary scoring tiers use nine fixed level-unit thresholds. The extreme
-bands begin at `±0.75`, making them more restrictive than the previous `±0.50`
-definition, while Slightly Easy and Slightly Hard preserve detail near Typical.
+The primary scoring tiers use a symmetric quarter-level ladder. The extreme
+bands begin at `±1.00`, and the remaining boundaries advance in `0.25` level
+increments around the Typical band.
 
 The bands are not filled by quota: a folder may contain several charts in a band
 or none when its measured charts genuinely have similar scoring difficulty.
 
 | Difficulty difference | Effect band |
 | ---: | --- |
-| `≤ −0.75` | Extremely Easy |
-| `−0.75 to −0.50` | Very Easy |
-| `−0.50 to −0.25` | Easy |
-| `−0.25 to −0.10` | Slightly Easy |
-| `−0.10 to +0.10` | Typical |
-| `+0.10 to +0.25` | Slightly Hard |
-| `+0.25 to +0.50` | Hard |
-| `+0.50 to +0.75` | Very Hard |
-| `≥ +0.75` | Extremely Hard |
+| `≤ −1.00` | Extremely Easy |
+| `−1.00 to −0.75` | Very Easy |
+| `−0.75 to −0.50` | Easy |
+| `−0.50 to −0.25` | Slightly Easy |
+| `−0.25 to +0.25` | Typical |
+| `+0.25 to +0.50` | Slightly Hard |
+| `+0.50 to +0.75` | Hard |
+| `+0.75 to +1.00` | Very Hard |
+| `≥ +1.00` | Extremely Hard |
 
 Midpoint-percentile deciles remain available as a separate within-folder rank.
 Their labels are deliberately descriptive rather than semantic:
@@ -126,9 +125,9 @@ Local methodology work can use privacy-minimized snapshots of Phoenix 2 best sco
 the configured credential. A community-tool key can read only players who explicitly
 shared data with that tool; this is not a global PIU Scores export.
 
-The live local dataset lives under `.local-data/piu-scores/phoenix2/`. Raw player IDs and scores
-are never served to the browser. The local dashboard reads only its chart-level aggregate from
-`analysis/web_results.json`. A legacy Phoenix 2 aggregate at
+The local snapshots live under `.local-data/piu-scores/<mix>/`. Raw player IDs and scores are
+never served to the browser. In local mode, the dashboard reads each mix's chart-level aggregate
+from `analysis/web_results.json`, including the re-analyzed Phoenix 1 result. A legacy Phoenix 2 aggregate at
 `.local-data/piu-scores/analysis/web_results.json` remains readable until it is replaced.
 
 Set the credential in the current PowerShell process and capture a complete snapshot:
@@ -140,7 +139,7 @@ Remove-Item Env:PIU_SCORES_API_KEY
 ```
 
 `snapshot:local` remains a Phoenix 2 alias. `snapshot:phoenix2` is the only version-specific
-capture command; Phoenix 1 has no update command.
+capture command; Phoenix 1 cannot be captured again.
 
 The capture follows every API cursor, uses the shared rate limiter and retry behavior, strips
 profile fields, validates references and uniqueness, and promotes staged files only after the
@@ -154,7 +153,9 @@ npm run analyze:local
 npm run dev:local
 ```
 
-Use `npm run analyze:phoenix2` explicitly when working on the live version.
+`npm run analyze:local` re-analyzes the cached Phoenix 1 and Phoenix 2 snapshots. Use
+`npm run analyze:phoenix1` or `npm run analyze:phoenix2` to re-analyze only one version.
+The Phoenix 1 result is written only to `.local-data`; the frozen public archive is not changed.
 
 Open `http://localhost:3000`. Local mode is enabled by the ignored `.env.local` file. The dashboard
 shows a **Local snapshot** badge and its refresh button reloads the aggregate from disk instead of

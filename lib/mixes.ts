@@ -37,6 +37,13 @@ export const MIXES: Record<MixKey, MixDefinition> = {
   },
 };
 
+export function archiveForMix(
+  mix: MixKey,
+  localAnalysis = false,
+): MixDefinition["archive"] {
+  return localAnalysis ? null : MIXES[mix].archive;
+}
+
 export function isMixKey(value: unknown): value is MixKey {
   return value === "phoenix1" || value === "phoenix2";
 }

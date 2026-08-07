@@ -75,23 +75,23 @@ RELATIVE_GROUPS = tuple(
     + ["Hardest 10%"]
 )
 EFFECT_BANDS = (
-    (1, "Extremely Easy", None, -0.75),
-    (2, "Very Easy", -0.75, -0.5),
-    (3, "Easy", -0.5, -0.25),
-    (4, "Slightly Easy", -0.25, -0.1),
-    (5, "Typical", -0.1, 0.1),
-    (6, "Slightly Hard", 0.1, 0.25),
-    (7, "Hard", 0.25, 0.5),
-    (8, "Very Hard", 0.5, 0.75),
-    (9, "Extremely Hard", 0.75, None),
+    (1, "Extremely Easy", None, -1.0),
+    (2, "Very Easy", -1.0, -0.75),
+    (3, "Easy", -0.75, -0.5),
+    (4, "Slightly Easy", -0.5, -0.25),
+    (5, "Typical", -0.25, 0.25),
+    (6, "Slightly Hard", 0.25, 0.5),
+    (7, "Hard", 0.5, 0.75),
+    (8, "Very Hard", 0.75, 1.0),
+    (9, "Extremely Hard", 1.0, None),
 )
 DEFAULT_EMPIRICAL_SHRINKAGE_K = 5.0
 CALIBRATION_SCORE_BIN = 2_500
 CALIBRATION_MIN_SCORE = 900_000
-DIFFICULTY_DELTA_SCALE = 0.4
+DIFFICULTY_DELTA_SCALE = 1.0
 SYNTHETIC_PUMBILITY_PER_LEVEL = 7.3
 KEY_RE = re.compile(r"^(?:piu_scores_live_|pst_live_)[0-9a-f]{64}$")
-SCRIPT_VERSION = "5.6.0-nine-bands-and-0.4-scale"
+SCRIPT_VERSION = "5.9.0-quarter-level-bands-and-1.0-scale"
 
 
 class ApiError(RuntimeError):
@@ -503,21 +503,21 @@ def difficulty_effect_band(delta: float) -> tuple[int, str]:
     """Classify a level-unit effect without forcing a quota within each folder."""
     if not math.isfinite(delta):
         raise ValueError("A difficulty effect band requires a finite delta.")
-    if delta <= -0.75:
+    if delta <= -1.0:
         return (1, "Extremely Easy")
-    if delta <= -0.5:
+    if delta <= -0.75:
         return (2, "Very Easy")
-    if delta <= -0.25:
+    if delta <= -0.5:
         return (3, "Easy")
-    if delta <= -0.1:
+    if delta <= -0.25:
         return (4, "Slightly Easy")
-    if delta < 0.1:
-        return (5, "Typical")
     if delta < 0.25:
-        return (6, "Slightly Hard")
+        return (5, "Typical")
     if delta < 0.5:
-        return (7, "Hard")
+        return (6, "Slightly Hard")
     if delta < 0.75:
+        return (7, "Hard")
+    if delta < 1.0:
         return (8, "Very Hard")
     return (9, "Extremely Hard")
 
@@ -1092,11 +1092,11 @@ def analyze_snapshot(
             "chartMetric": "signed player-normalized Pumbility residual",
             "validScoreRule": "finite, non-broken, strictly positive Pumbility",
             "levelReference": "median measured chart residual within the exact mode and official level",
-            "difficultyDelta": "-0.4 * shrunkEasePb / pumbilityPerLevel",
+            "difficultyDelta": f"-{DIFFICULTY_DELTA_SCALE:g} * shrunkEasePb / pumbilityPerLevel",
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
             "negativeDeltaMeaning": "easier to score than the typical chart at that exact mode and level",
             "relativeGrouping": "midpoint-percentile deciles, labeled only as relative percentiles",
-            "effectBands": "nine fixed level-unit thresholds; extreme means |difficultyDelta| >= 0.75",
+            "effectBands": "nine fixed quarter-level bands; extreme means |difficultyDelta| >= 1.0",
             "modeSeparation": "Singles and Doubles use independent eligibility, baselines, calibration, and ranks",
             "usesExistingPiuScoresTierList": False,
             "shrinkage": "mode-wide empirical-Bayes variance ratio" if config.shrinkage_k is None else "configured override",
