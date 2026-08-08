@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from piu_recommendations import (  # noqa: E402
     build_combined_chart_results,
     build_combined_tier_payload,
     build_recommendation_index,
+    recommendation_generation_key,
+    recommendation_shard_path,
 )
 
 
@@ -50,12 +53,29 @@ def main() -> int:
         phoenix1, phoenix2
     )
     combined_payload = build_combined_tier_payload(combined_charts, combined_metadata)
+    generation_key = recommendation_generation_key(combined_payload["generatedAtUtc"])
+
+    def write_shard(number: int, value: dict) -> None:
+        relative = recommendation_shard_path(generation_key, number).removeprefix(
+            "analysis/recommendations/"
+        )
+        path = OUTPUT_PATH.parent / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_suffix(".tmp")
+        temporary_path.write_text(
+            json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+            encoding="utf-8",
+        )
+        os.replace(temporary_path, path)
+
     payload = build_recommendation_index(
         phoenix1,
         phoenix2,
         generated_at_utc=combined_payload["generatedAtUtc"],
         combined_charts=combined_charts,
         phoenix2_slopes=combined_slopes,
+        generation_key=generation_key,
+        shard_writer=write_shard,
     )
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     temporary = OUTPUT_PATH.with_suffix(".tmp")
@@ -64,6 +84,11 @@ def main() -> int:
         encoding="utf-8",
     )
     os.replace(temporary, OUTPUT_PATH)
+    generations_root = OUTPUT_PATH.parent / "generations"
+    if generations_root.exists():
+        for generation_dir in generations_root.iterdir():
+            if generation_dir.is_dir() and generation_dir.name != generation_key:
+                shutil.rmtree(generation_dir)
     COMBINED_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     combined_temporary = COMBINED_OUTPUT_PATH.with_suffix(".tmp")
     combined_temporary.write_text(

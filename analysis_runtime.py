@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import re
@@ -36,6 +37,9 @@ from piu_recommendations import (
     combined_tier_blob_path,
     frozen_phoenix1_snapshot_path,
     recommendation_blob_path,
+    recommendation_generation_key,
+    recommendation_shard_path,
+    recommendation_shard_prefix,
 )
 
 
@@ -581,6 +585,16 @@ def publish_success(
     )
     if recommendations is not None:
         blobs.put_json(recommendation_blob_path(), recommendations)
+        generation_key = str(recommendations.get("generationKey") or "").strip()
+        if int(recommendations.get("storageSchemaVersion") or 0) >= 2 and generation_key:
+            keep_prefix = recommendation_shard_prefix(generation_key)
+            stale_recommendations = [
+                item.pathname
+                for item in blobs.list(recommendation_shard_prefix())
+                if not item.pathname.startswith(keep_prefix)
+            ]
+            if stale_recommendations:
+                blobs.delete(stale_recommendations)
     if combined_tier is not None:
         blobs.put_json(combined_tier_blob_path(), combined_tier)
     blobs.put_json(latest_blob_path(mix_spec), payload)
@@ -788,20 +802,23 @@ def execute_analysis_job(
             minimum_scores_per_mode=config.minimum_scores_per_player,
             eligible_only=True,
         )
+        eligible_player_count = len(players)
         update_job(
             job_store,
             job_id,
             status="running",
             stage="analyzing",
             progress={
-                "current": len(players),
-                "total": len(players),
+                "current": eligible_player_count,
+                "total": eligible_player_count,
                 "percent": 100,
-                "message": f"Analyzing {len(players):,} eligible players in separate modes.",
+                "message": f"Analyzing {eligible_player_count:,} eligible players in separate modes.",
             },
         )
         chart_results, _, summary, _ = analyze_snapshot(players, charts, scores, config)
         payload = build_web_payload(chart_results, summary)
+        del chart_results, players, charts, scores
+        gc.collect()
         recommendation_payload: dict[str, Any] | None = None
         combined_tier_payload: dict[str, Any] | None = None
         frozen_phoenix1 = blob_store.get_json(frozen_phoenix1_snapshot_path())
@@ -812,13 +829,14 @@ def execute_analysis_job(
                 status="running",
                 stage="analyzing",
                 progress={
-                    "current": len(players),
-                    "total": len(players),
+                    "current": eligible_player_count,
+                    "total": eligible_player_count,
                     "percent": 100,
                     "message": "Combining Phoenix 1 and Phoenix 2 recommendation evidence.",
                 },
             )
             phoenix1_snapshot = sanitize_snapshot(frozen_phoenix1, mix="phoenix1")
+            del frozen_phoenix1
             combined_charts, combined_slopes, combined_metadata = (
                 build_combined_chart_results(phoenix1_snapshot, snapshot)
             )
@@ -827,12 +845,18 @@ def execute_analysis_job(
                 combined_metadata,
                 generated_at_utc=payload.get("generatedAtUtc"),
             )
+            recommendation_generation = recommendation_generation_key(job_id)
             recommendation_payload = build_recommendation_index(
                 phoenix1_snapshot,
                 snapshot,
                 generated_at_utc=payload.get("generatedAtUtc"),
                 combined_charts=combined_charts,
                 phoenix2_slopes=combined_slopes,
+                generation_key=recommendation_generation,
+                shard_writer=lambda shard, value: blob_store.put_json(
+                    recommendation_shard_path(recommendation_generation, shard),
+                    value,
+                ),
             )
 
         update_job(
@@ -841,8 +865,8 @@ def execute_analysis_job(
             status="running",
             stage="publishing",
             progress={
-                "current": len(players),
-                "total": len(players),
+                "current": eligible_player_count,
+                "total": eligible_player_count,
                 "percent": 100,
                 "message": "Publishing the private snapshot and refreshed rankings.",
             },
