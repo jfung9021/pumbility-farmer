@@ -107,7 +107,7 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual((status, body["outcome"]), (202, "started"))
         self.assertEqual(enqueued, ["analysis-20260807T06"])
 
-    def test_deployment_refresh_is_full_and_deduplicated_by_deployment(self) -> None:
+    def test_deployment_reanalysis_is_deduplicated_by_deployment(self) -> None:
         blobs = MemoryBlobStore()
         jobs = MemoryJobStore()
         job_id = deterministic_deployment_job_id("dpl_example")
@@ -119,12 +119,13 @@ class CoordinatorTests(unittest.TestCase):
             now=NOW,
             force_refresh=True,
             deterministic_job_id=job_id,
-            full_sync=True,
+            reanalyze_only=True,
             trigger="deployment",
         )
         self.assertEqual((status, body["outcome"]), (202, "started"))
         self.assertEqual(enqueued, [job_id])
-        self.assertTrue(body["job"]["fullSync"])
+        self.assertFalse(body["job"]["fullSync"])
+        self.assertTrue(body["job"]["reanalyzeOnly"])
         self.assertEqual(body["job"]["trigger"], "deployment")
 
         update_job(jobs, job_id, now=NOW, status="completed")
@@ -136,7 +137,7 @@ class CoordinatorTests(unittest.TestCase):
             now=NOW + timedelta(minutes=1),
             force_refresh=True,
             deterministic_job_id=job_id,
-            full_sync=True,
+            reanalyze_only=True,
             trigger="deployment",
         )
         self.assertEqual((status, duplicate["outcome"]), (202, "existing"))
@@ -146,7 +147,7 @@ class CoordinatorTests(unittest.TestCase):
         blobs = MemoryBlobStore()
         jobs = MemoryJobStore()
         job_id = deterministic_deployment_job_id("dpl_retry")
-        failed = new_job(job_id, NOW, full_sync=True, trigger="deployment")
+        failed = new_job(job_id, NOW, reanalyze_only=True, trigger="deployment")
         jobs.save(failed)
         update_job(
             jobs,
@@ -163,7 +164,7 @@ class CoordinatorTests(unittest.TestCase):
             now=NOW + timedelta(minutes=1),
             force_refresh=True,
             deterministic_job_id=job_id,
-            full_sync=True,
+            reanalyze_only=True,
             trigger="deployment",
         )
         self.assertEqual(waiting["job"]["status"], "failed")
@@ -176,7 +177,7 @@ class CoordinatorTests(unittest.TestCase):
             now=NOW + timedelta(minutes=6),
             force_refresh=True,
             deterministic_job_id=job_id,
-            full_sync=True,
+            reanalyze_only=True,
             trigger="deployment",
         )
         self.assertEqual(retry["outcome"], "started")
@@ -442,7 +443,7 @@ class ApiRouteTests(unittest.TestCase):
             401, "Unauthorized webhook."
         ))
 
-    def test_promoted_deployment_webhook_starts_deduplicated_full_refresh(self) -> None:
+    def test_promoted_deployment_webhook_starts_cached_reanalysis(self) -> None:
         secret = "deployment-secret"
         event = {
             "id": "evt_1",
@@ -455,7 +456,7 @@ class ApiRouteTests(unittest.TestCase):
         raw = json.dumps(event, separators=(",", ":")).encode()
         signature = hmac.new(secret.encode(), raw, hashlib.sha1).hexdigest()
         job_id = deterministic_deployment_job_id("dpl_example")
-        job = new_job(job_id, NOW, full_sync=True, trigger="deployment")
+        job = new_job(job_id, NOW, reanalyze_only=True, trigger="deployment")
         with (
             patch.dict(
                 "os.environ",
@@ -478,7 +479,7 @@ class ApiRouteTests(unittest.TestCase):
         start.assert_called_once_with(
             force_refresh=True,
             deterministic_job_id=job_id,
-            full_sync=True,
+            reanalyze_only=True,
             trigger="deployment",
         )
 
@@ -684,16 +685,29 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNone(blobs.get_json(f"{STAGING_PREFIX}{job['id']}.json"))
         self.assertIsNone(jobs.active_job_id())
 
-    def test_deployment_job_discards_current_snapshot_for_full_sync(self) -> None:
+    def test_deployment_job_reuses_snapshot_without_upstream_sync(self) -> None:
         blobs = MemoryBlobStore()
-        blobs.put_json(CURRENT_SNAPSHOT_PATH, {
-            "players": [{"playerId": "old-player"}],
-            "charts": [],
-            "scores": [],
-        })
+        stored_snapshot = {
+            "schemaVersion": 2,
+            "mix": "Phoenix2",
+            "generatedAtUtc": isoformat_utc(NOW - timedelta(hours=1)),
+            "players": [
+                {
+                    "playerId": "player",
+                    "username": "private",
+                    "lastSyncedAtUtc": isoformat_utc(NOW - timedelta(hours=1)),
+                }
+            ],
+            "charts": [chart(index) for index in range(30)],
+            "scores": [
+                {**score(index), "playerId": "player"}
+                for index in range(30)
+            ],
+        }
+        blobs.put_json(CURRENT_SNAPSHOT_PATH, stored_snapshot)
         jobs = MemoryJobStore()
         job = new_job(
-            "analysis-deploy-test", NOW, full_sync=True, trigger="deployment"
+            "analysis-deploy-test", NOW, reanalyze_only=True, trigger="deployment"
         )
         jobs.save(job)
         jobs.set_active_job_id(job["id"])
@@ -709,7 +723,28 @@ class WorkerTests(unittest.TestCase):
                 now=lambda: NOW,
             )
         self.assertEqual(result["status"], "completed")
-        self.assertIsNone(synchronize.call_args.args[1])
+        synchronize.assert_not_called()
+        self.assertEqual(blobs.get_json(CURRENT_SNAPSHOT_PATH), stored_snapshot)
+
+    def test_deployment_reanalysis_fails_closed_without_a_snapshot(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        job = new_job(
+            "analysis-deploy-missing", NOW, reanalyze_only=True, trigger="deployment"
+        )
+        jobs.save(job)
+        jobs.set_active_job_id(job["id"])
+        with patch("analysis_runtime.synchronize_phoenix2_snapshot") as synchronize:
+            result = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=object(),
+                now=lambda: NOW,
+            )
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("No stored Phoenix 2 snapshot", result["error"])
+        synchronize.assert_not_called()
 
     def test_failed_worker_has_safe_error_and_five_minute_retry(self) -> None:
         blobs = MemoryBlobStore()

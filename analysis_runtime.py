@@ -313,6 +313,7 @@ def new_job(
     *,
     attempt: int = 0,
     full_sync: bool = False,
+    reanalyze_only: bool = False,
     trigger: str = "manual",
     mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> dict[str, Any]:
@@ -337,6 +338,7 @@ def new_job(
         "error": None,
         "attempt": attempt,
         "fullSync": full_sync,
+        "reanalyzeOnly": reanalyze_only,
         "trigger": trigger,
         "mix": mix_spec.key,
     }
@@ -440,10 +442,13 @@ def request_refresh(
     force_refresh: bool = False,
     deterministic_job_id: str | None = None,
     full_sync: bool = False,
+    reanalyze_only: bool = False,
     trigger: str = "manual",
     mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> tuple[int, dict[str, Any]]:
     """Apply freshness, global-active, and failed-retry rules before enqueueing."""
+    if full_sync and reanalyze_only:
+        raise ValueError("A refresh cannot be both a full sync and reanalysis-only.")
     mix_spec = resolve_mix(mix)
     if mix_spec.archived:
         return 409, {
@@ -530,6 +535,7 @@ def request_refresh(
         effective_now,
         attempt=attempt,
         full_sync=full_sync,
+        reanalyze_only=reanalyze_only,
         trigger=trigger,
         mix=mix_spec,
     )
@@ -596,17 +602,19 @@ def publish_success(
     payload: Mapping[str, Any],
     recommendations: Mapping[str, Any] | None = None,
     combined_tier: Mapping[str, Any] | None = None,
+    publish_snapshot: bool = True,
     mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> None:
-    """Publish immutable aggregate, then promote snapshot/latest and enforce retention."""
+    """Publish derived artifacts, optionally promote the snapshot, and enforce retention."""
     mix_spec = resolve_mix(mix)
     if mix_spec.archived:
         raise ValueError(f"{mix_spec.label} is archived and cannot be published.")
     blobs.put_json(_run_path(payload, job_id, mix_spec), payload)
-    blobs.put_json(
-        current_snapshot_path(mix_spec),
-        sanitize_snapshot(snapshot, mix=mix_spec),
-    )
+    if publish_snapshot:
+        blobs.put_json(
+            current_snapshot_path(mix_spec),
+            sanitize_snapshot(snapshot, mix=mix_spec),
+        )
     if recommendations is not None:
         blobs.put_json(recommendation_blob_path(), recommendations)
         generation_key = str(recommendations.get("generationKey") or "").strip()
@@ -740,7 +748,11 @@ def execute_analysis_job(
             "current": 0,
             "total": 0,
             "percent": 0,
-            "message": f"Reading the consented-player list and {mix_spec.label} catalog.",
+            "message": (
+                f"Loading the stored {mix_spec.label} snapshot for model reanalysis."
+                if existing.get("reanalyzeOnly")
+                else f"Reading the consented-player list and {mix_spec.label} catalog."
+            ),
         },
     )
     staging_path = f"{staging_prefix(mix_spec)}{job_id}.json"
@@ -750,12 +762,19 @@ def execute_analysis_job(
             blob_store, now=now(), keep_path=staging_path, mix=mix_spec
         )
         current = blob_store.get_json(current_snapshot_path(mix_spec))
-        resume = blob_store.get_json(staging_path)
+        reanalyze_only = bool(existing.get("reanalyzeOnly"))
+        resume = None if reanalyze_only else blob_store.get_json(staging_path)
         raw_dir_setting = os.getenv(
             f"PIU_ANALYSIS_RAW_DIR_{mix_spec.key.upper()}",
             os.getenv("PIU_ANALYSIS_RAW_DIR", ""),
         ).strip()
-        if raw_dir_setting:
+        if reanalyze_only:
+            if current is None:
+                raise ValueError(
+                    f"No stored {mix_spec.label} snapshot is available for model reanalysis."
+                )
+            snapshot = sanitize_snapshot(current, mix=mix_spec)
+        elif raw_dir_setting:
             snapshot = _snapshot_from_raw_dir(
                 Path(raw_dir_setting), now(), mix=mix_spec
             )
@@ -942,6 +961,7 @@ def execute_analysis_job(
             payload=payload,
             recommendations=recommendation_payload,
             combined_tier=combined_tier_payload,
+            publish_snapshot=not reanalyze_only,
             mix=mix_spec,
         )
         blob_store.delete(staging_path)
