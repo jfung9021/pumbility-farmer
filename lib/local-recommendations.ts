@@ -141,7 +141,7 @@ function manualMode(
     .filter(
       (chart) => chart.type === chartType
         && chart.level >= minimumOfficialLevel
-        && chart.estimatedDifficulty <= scoringRating + 0.5 + Number.EPSILON,
+        && chart.estimatedDifficulty <= scoringRating,
     )
     .map((chart) => {
       const farmEdge = chart.level + 0.5 - chart.estimatedDifficulty;
@@ -181,7 +181,7 @@ function manualMode(
     scoringRating: Number(scoringRating.toFixed(3)),
     candidateRange: [
       null,
-      Number((scoringRating + 0.5).toFixed(3)),
+      Number(scoringRating.toFixed(3)),
     ],
     candidateCount: candidates.length,
     candidates,

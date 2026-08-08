@@ -315,7 +315,7 @@ test("recommendation player list exposes names and eligibility without mode payl
   assert.equal("modes" in response.players[0], false);
 });
 
-test("manual recommendations include level 16, exclude level 15, and use a +0.5 upper limit", () => {
+test("manual recommendations exclude charts above the exact rating", () => {
   const chart = (chartId: string, estimatedDifficulty: number, level: number) => ({
     mode: "Singles" as const,
     songName: chartId,
@@ -340,18 +340,18 @@ test("manual recommendations include level 16, exclude level 15, and use a +0.5 
     method: {},
     charts: [
       chart("level-16", 10, 16),
-      chart("upper-edge", 21, 21),
-      chart("too-hard", 21.01, 21),
+      chart("at-rating", 20.5, 21),
+      chart("too-hard", 20.5001, 21),
       chart("level-15", 10, 15),
     ],
     players: [],
   }, 20.5);
 
   const singles = response.player.modes.singles;
-  assert.deepEqual(singles.candidateRange, [null, 21]);
+  assert.deepEqual(singles.candidateRange, [null, 20.5]);
   assert.deepEqual(
     singles.candidates.map((candidate) => candidate.chartId),
-    ["level-16", "upper-edge"],
+    ["level-16", "at-rating"],
   );
   assert.equal(singles.topRecommendations[0].chartId, "level-16");
 

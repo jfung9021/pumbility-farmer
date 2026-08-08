@@ -43,7 +43,7 @@ RECOMMENDATION_SCHEMA_VERSION = 8
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 1
-RECOMMENDATION_RADIUS = 0.5
+RECOMMENDATION_RADIUS = 0.0
 BASELINE_START_RANK = 11
 BASELINE_END_RANK = 30
 PHOENIX2_RATING_SCORE_THRESHOLD = 50
@@ -763,7 +763,7 @@ def build_manual_recommendation_mode(
         estimate = float(chart.get("estimatedDifficulty", 0))
         if (
             level < MIN_TARGET_LEVEL
-            or estimate > scoring_rating + RECOMMENDATION_RADIUS + 1e-9
+            or estimate > scoring_rating + RECOMMENDATION_RADIUS
         ):
             continue
         candidates.append(
@@ -1068,7 +1068,7 @@ def _build_player_recommendation_phoenix2_only(
             if estimate is None or not math.isfinite(float(estimate)):
                 continue
             estimate = float(estimate)
-            if estimate > scoring_rating + RECOMMENDATION_RADIUS + 1e-9:
+            if estimate > scoring_rating + RECOMMENDATION_RADIUS:
                 continue
             farm_edge = float(chart["level"]) + 0.5 - estimate
             expected = max(0.0, baseline_pb + float(slope) * (farm_edge - baseline_edge))
@@ -1320,7 +1320,7 @@ def build_player_recommendation(
             if estimate is None or not math.isfinite(float(estimate)):
                 continue
             estimate = float(estimate)
-            if estimate > scoring_rating + RECOMMENDATION_RADIUS + 1e-9:
+            if estimate > scoring_rating + RECOMMENDATION_RADIUS:
                 continue
             farm_edge = float(chart["level"]) + 0.5 - estimate
             chart_id = str(chart["chartId"])
@@ -1623,7 +1623,7 @@ def build_recommendation_index(
             "phoenix1PlatePriorCap": plate_model.phoenix1_cap,
             "projectedGain": "probability-weighted change to the Phoenix 2 top-50 total; each plate outcome replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
             "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
-            "manualRanking": "farm edge at or below the requested scoring rating plus 0.5; no personal top-50 gain is inferred",
+            "manualRanking": "farm edge at or below the requested scoring rating; no personal top-50 gain is inferred",
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
