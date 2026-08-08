@@ -12,6 +12,7 @@ from piu_recommendations import (
     build_combined_tier_payload,
     build_manual_recommendation_mode,
     build_player_recommendation,
+    build_recommendation_index,
     merge_source_contributions,
     public_player_key,
     rebase_source_rows_to_catalog,
@@ -229,6 +230,34 @@ class PlayerRecommendationTests(unittest.TestCase):
             "scores": scores,
         }
         self.combined = combined
+
+    def test_sharded_index_keeps_full_players_out_of_the_dropdown_blob(self) -> None:
+        players = [
+            {"playerId": "player", "username": "PLAYER"},
+            {"playerId": "second", "username": "SECOND"},
+            {"playerId": "third", "username": "THIRD"},
+        ]
+        snapshot = {**self.snapshot, "players": players}
+        shards: dict[int, dict] = {}
+        index = build_recommendation_index(
+            self.snapshot,
+            snapshot,
+            combined_charts=self.combined,
+            phoenix2_slopes={"singles": 10.0},
+            generation_key="test-generation",
+            shard_writer=lambda number, payload: shards.__setitem__(
+                number, dict(payload)
+            ),
+            shard_size=2,
+        )
+
+        self.assertEqual(index["storageSchemaVersion"], 2)
+        self.assertEqual(index["shardCount"], 2)
+        self.assertEqual(len(index["players"]), 3)
+        self.assertNotIn("charts", index)
+        self.assertNotIn("modes", index["players"][0])
+        self.assertEqual([len(shards[number]["players"]) for number in shards], [2, 1])
+        self.assertIn("modes", shards[0]["players"][0])
 
     def test_rating_uses_ranks_11_through_30_and_one_sided_limit(self) -> None:
         result = build_player_recommendation(

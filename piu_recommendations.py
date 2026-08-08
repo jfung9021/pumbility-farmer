@@ -13,7 +13,7 @@ import json
 import math
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -34,6 +34,8 @@ from piu_misgrade_analyzer import (
 
 
 RECOMMENDATION_SCHEMA_VERSION = 6
+RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
+RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 1
 RECOMMENDATION_RADIUS = 0.5
 BASELINE_START_RANK = 11
@@ -67,6 +69,19 @@ RECOMMENDATION_CHART_FIELDS = (
 
 def recommendation_blob_path() -> str:
     return "analysis/recommendations/latest.json"
+
+
+def recommendation_generation_key(job_id: object) -> str:
+    return hashlib.sha256(str(job_id).encode("utf-8")).hexdigest()[:20]
+
+
+def recommendation_shard_prefix(generation_key: object | None = None) -> str:
+    base = "analysis/recommendations/generations/"
+    return base if generation_key is None else f"{base}{generation_key}/shards/"
+
+
+def recommendation_shard_path(generation_key: object, shard: int) -> str:
+    return f"{recommendation_shard_prefix(generation_key)}{int(shard):04d}.json"
 
 
 def combined_tier_blob_path() -> str:
@@ -1324,7 +1339,14 @@ def build_recommendation_index(
     generated_at_utc: str | None = None,
     combined_charts: Sequence[Mapping[str, Any]] | None = None,
     phoenix2_slopes: Mapping[str, float] | None = None,
+    generation_key: str | None = None,
+    shard_writer: Callable[[int, Mapping[str, Any]], None] | None = None,
+    shard_size: int = RECOMMENDATION_SHARD_SIZE,
 ) -> dict[str, Any]:
+    if (generation_key is None) != (shard_writer is None):
+        raise ValueError("Recommendation sharding requires a generation key and writer.")
+    if shard_size <= 0:
+        raise ValueError("Recommendation shard size must be positive.")
     if combined_charts is None or phoenix2_slopes is None:
         built_charts, built_slopes, _ = build_combined_chart_results(
             phoenix1_snapshot, phoenix2_snapshot
@@ -1348,8 +1370,19 @@ def build_recommendation_index(
         and str(row.get("playerId") or row.get("userId") or "").strip()
         and str(row.get("username") or "").strip()
     ]
+    named_players.sort(
+        key=lambda row: (
+            str(row.get("username") or "").strip().casefold(),
+            public_player_key(row.get("playerId") or row.get("userId")),
+        )
+    )
     username_counts = Counter(str(row["username"]).strip().casefold() for row in named_players)
     output_players: list[dict[str, Any]] = []
+    shard_players: list[dict[str, Any]] = []
+    shard_number = 0
+    generated_at = generated_at_utc or datetime.now(timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
     for row in named_players:
         player_id = str(row.get("playerId") or row.get("userId"))
         username = str(row["username"]).strip()
@@ -1373,21 +1406,49 @@ def build_recommendation_index(
                 ),
             }
         )
-        output_players.append(recommendation)
-    output_players.sort(
-        key=lambda row: (str(row["username"]).casefold(), str(row["playerKey"]))
-    )
-    return {
+        if shard_writer is None:
+            output_players.append(recommendation)
+            continue
+        output_players.append(
+            {
+                "playerKey": recommendation["playerKey"],
+                "username": recommendation["username"],
+                "displayName": recommendation["displayName"],
+                "eligibility": {
+                    mode: bool(details.get("eligible"))
+                    for mode, details in recommendation.get("modes", {}).items()
+                    if mode in {"singles", "doubles"}
+                },
+                "shard": shard_number,
+            }
+        )
+        shard_players.append(recommendation)
+        if len(shard_players) >= shard_size:
+            shard_writer(
+                shard_number,
+                {
+                    "storageSchemaVersion": RECOMMENDATION_STORAGE_SCHEMA_VERSION,
+                    "generationKey": generation_key,
+                    "generatedAtUtc": generated_at,
+                    "players": shard_players,
+                },
+            )
+            shard_players = []
+            shard_number += 1
+    if shard_writer is not None and shard_players:
+        shard_writer(
+            shard_number,
+            {
+                "storageSchemaVersion": RECOMMENDATION_STORAGE_SCHEMA_VERSION,
+                "generationKey": generation_key,
+                "generatedAtUtc": generated_at,
+                "players": shard_players,
+            },
+        )
+        shard_number += 1
+    payload = {
         "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
-        "generatedAtUtc": generated_at_utc
-        or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "charts": [
-            chart
-            for chart in charts_for_players
-            if isinstance(chart.get("estimatedDifficulty"), (int, float))
-            and math.isfinite(float(chart["estimatedDifficulty"]))
-            and int(chart.get("level") or 0) >= MIN_TARGET_LEVEL
-        ],
+        "generatedAtUtc": generated_at,
         "method": {
             "catalog": "Phoenix 2 authoritative catalog",
             "overlapRule": "best Phoenix 2 score always replaces Phoenix 1 for the same player and chart",
@@ -1412,3 +1473,21 @@ def build_recommendation_index(
         },
         "players": output_players,
     }
+    if shard_writer is not None:
+        payload.update(
+            {
+                "storageSchemaVersion": RECOMMENDATION_STORAGE_SCHEMA_VERSION,
+                "generationKey": generation_key,
+                "shardCount": shard_number,
+                "shardSize": shard_size,
+            }
+        )
+        return payload
+    payload["charts"] = [
+        chart
+        for chart in charts_for_players
+        if isinstance(chart.get("estimatedDifficulty"), (int, float))
+        and math.isfinite(float(chart["estimatedDifficulty"]))
+        and int(chart.get("level") or 0) >= MIN_TARGET_LEVEL
+    ]
+    return payload

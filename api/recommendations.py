@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-import math
+from typing import Mapping
 
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from analysis_runtime import PrivateBlobStore
-from piu_recommendations import (
-    build_manual_recommendation_mode,
-    recommendation_blob_path,
-)
+from piu_recommendations import recommendation_blob_path, recommendation_shard_path
 
 
 router = APIRouter()
@@ -26,25 +23,48 @@ def _read_index() -> dict | None:
     return PrivateBlobStore().get_json(recommendation_blob_path())
 
 
-def _manual_recommendations(payload: dict, scoring_rating: float) -> dict:
+def _player_eligibility(player: Mapping) -> dict[str, bool]:
+    stored = player.get("eligibility")
+    if isinstance(stored, Mapping):
+        return {
+            mode: bool(stored.get(mode))
+            for mode in ("singles", "doubles")
+            if mode in stored
+        }
+    modes = player.get("modes", {})
+    if not isinstance(modes, Mapping):
+        return {}
     return {
-        "generatedAtUtc": payload.get("generatedAtUtc"),
-        "method": payload.get("method", {}),
-        "player": {
-            "playerKey": "manual",
-            "username": "",
-            "displayName": f"Manual {scoring_rating:.2f}",
-            "manual": True,
-            "modes": {
-                "singles": build_manual_recommendation_mode(
-                    payload.get("charts", []), "Single", scoring_rating
-                ),
-                "doubles": build_manual_recommendation_mode(
-                    payload.get("charts", []), "Double", scoring_rating
-                ),
-            },
-        },
+        mode: bool(details.get("eligible"))
+        for mode, details in modes.items()
+        if mode in {"singles", "doubles"} and isinstance(details, Mapping)
     }
+
+
+def _read_player(store: PrivateBlobStore, payload: dict, player_key: str) -> dict | None:
+    metadata = next(
+        (row for row in payload.get("players", []) if row.get("playerKey") == player_key),
+        None,
+    )
+    if metadata is None:
+        return None
+    if int(payload.get("storageSchemaVersion") or 0) < 2:
+        return metadata
+    generation_key = str(payload.get("generationKey") or "").strip()
+    shard = metadata.get("shard")
+    if not generation_key or not isinstance(shard, int):
+        raise ValueError("The recommendation shard index is invalid.")
+    shard_payload = store.get_json(recommendation_shard_path(generation_key, shard))
+    if shard_payload is None:
+        raise RuntimeError("The selected recommendation shard is unavailable.")
+    return next(
+        (
+            row
+            for row in shard_payload.get("players", [])
+            if row.get("playerKey") == player_key
+        ),
+        None,
+    )
 
 
 @router.get("/api/recommendations/players")
@@ -59,17 +79,12 @@ def get_recommendation_players():
             )
         players = []
         for player in payload.get("players", []):
-            modes = player.get("modes", {})
             players.append(
                 {
                     "playerKey": player.get("playerKey"),
                     "username": player.get("username"),
                     "displayName": player.get("displayName"),
-                    "eligibility": {
-                        mode: bool(details.get("eligible"))
-                        for mode, details in modes.items()
-                        if mode in {"singles", "doubles"}
-                    },
+                    "eligibility": _player_eligibility(player),
                 }
             )
         return JSONResponse(
@@ -97,17 +112,12 @@ def get_recommendation_players():
 @router.get("/api/recommendations")
 def get_player_recommendations(
     player_key: str = Query(default="", alias="playerKey"),
-    rating_value: str = Query(default="", alias="rating"),
 ):
-    try:
-        rating = float(rating_value) if rating_value.strip() else math.nan
-    except ValueError:
-        rating = math.nan
-    valid_rating = math.isfinite(rating) and 1 <= rating <= 40
-    if not player_key.strip() and not valid_rating:
+    normalized_key = player_key.strip()
+    if not normalized_key:
         return JSONResponse(
             status_code=400,
-            content={"error": "A playerKey or a skill rating from 1 to 40 is required."},
+            content={"error": "A playerKey is required."},
         )
     try:
         payload = _read_index()
@@ -116,16 +126,7 @@ def get_player_recommendations(
                 status_code=404,
                 content={"error": "Recommendations have not been generated yet."},
             )
-        if not player_key.strip():
-            return _manual_recommendations(payload, rating)
-        player = next(
-            (
-                row
-                for row in payload.get("players", [])
-                if row.get("playerKey") == player_key.strip()
-            ),
-            None,
-        )
+        player = _read_player(PrivateBlobStore(), payload, normalized_key)
         if player is None:
             return JSONResponse(
                 status_code=404,
