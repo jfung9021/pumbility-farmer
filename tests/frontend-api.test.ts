@@ -88,6 +88,21 @@ test("recommendation cards express projected grade and plate as a concrete goal"
   assert.doesNotMatch(page, /most likely|plateSourceLabel/);
 });
 
+test("mobile recommendation cards keep gain on the right and pair official difficulty with stepmaker", async () => {
+  const page = await readFile(
+    path.join(process.cwd(), "app", "recommendations", "page.tsx"),
+    "utf8",
+  );
+  const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
+
+  assert.match(page, /chart\.stepArtist \|\| "Unknown step artist"/);
+  assert.match(page, /chart\.difficulty\} official<\/b>/);
+  assert.doesNotMatch(page, /formula expected/);
+  assert.match(css, /grid-template-columns: 22px 48px minmax\(0, 1fr\) 92px/);
+  assert.match(css, /\.recommendation-value \{[^}]*grid-column: 4;[^}]*grid-row: 1;/);
+  assert.doesNotMatch(css, /\.recommendation-value small/);
+});
+
 test("rejects an empty successful response as non-JSON", async () => {
   const response = new Response("", { status: 200 });
   await assert.rejects(() => readJsonResponse(response), /empty or non-JSON/);

@@ -91,9 +91,11 @@ function RecommendationCard({
             {chart.evidenceStatus}
           </span>
         </div>
-        <p>{chart.stepArtist || "Unknown step artist"}</p>
+        <p>
+          {chart.stepArtist || "Unknown step artist"}
+          <b> · {chart.difficulty} official</b>
+        </p>
         <div className="recommendation-tags">
-          <span><b>{chart.difficulty}</b> official</span>
           <span><b>{chart.type === "Single" ? "S" : "D"}{chart.estimatedDifficulty.toFixed(2)}</b> estimate</span>
           <span>{chart.played ? `Current ${chart.existingPumbility?.toFixed(2)} PB` : "Unplayed in Phoenix 2"}</span>
           {recommendationGoal(chart) ? <span><b>{recommendationGoal(chart)}</b></span> : null}
@@ -102,11 +104,6 @@ function RecommendationCard({
       <div className="recommendation-value">
         <span>projected gain</span>
         <strong>{chart.projectedGain === null ? "-" : signed(chart.projectedGain)}</strong>
-        <small>
-          {chart.expectedPumbility === null
-            ? "Score projection unavailable"
-            : `${chart.expectedPumbility.toFixed(2)} formula expected`}
-        </small>
       </div>
     </article>
   );
