@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
+    _recommendation_chart_rows,
     build_combined_tier_payload,
+    build_manual_recommendation_mode,
     build_player_recommendation,
     merge_source_contributions,
     public_player_key,
@@ -14,6 +18,17 @@ from piu_recommendations import (
     retain_catalog_source_rows,
     retain_phoenix2_catalog_contributions,
 )
+
+try:
+    from api.recommendations import (
+        PLAYER_LIST_CACHE_CONTROL,
+        get_recommendation_players,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "fastapi":
+        raise
+    PLAYER_LIST_CACHE_CONTROL = ""
+    get_recommendation_players = None
 
 
 class CombinedEvidenceTests(unittest.TestCase):
@@ -147,7 +162,12 @@ class PlayerRecommendationTests(unittest.TestCase):
         combined = []
         for index in range(35):
             chart_id = f"chart-{index:02d}"
-            level = 19 if index == 34 else 20
+            if index == 32:
+                level = 16
+            elif index == 34:
+                level = 15
+            else:
+                level = 20
             charts.append(
                 {
                     "id": chart_id,
@@ -170,7 +190,7 @@ class PlayerRecommendationTests(unittest.TestCase):
             elif index == 33:
                 estimate = 21.01
             elif index == 34:
-                estimate = 19.1
+                estimate = 15.1
             combined.append(
                 {
                     "mode": "Singles",
@@ -227,6 +247,12 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertIn("chart-30", ids)
         self.assertIn("chart-31", ids)
         self.assertIn("chart-32", ids)
+        self.assertEqual(
+            next(row for row in result["candidates"] if row["chartId"] == "chart-32")[
+                "level"
+            ],
+            16,
+        )
         self.assertNotIn("chart-33", ids)
         self.assertNotIn("chart-34", ids)
         easy = next(row for row in result["candidates"] if row["chartId"] == "chart-30")
@@ -259,7 +285,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(mode["baselineRanks"], [1, 1])
         self.assertEqual(mode["baselinePumbility"], 300.0)
 
-    def test_lower_level_scores_inform_rating_but_are_not_candidates(self) -> None:
+    def test_level_fifteen_scores_inform_rating_but_are_not_candidates(self) -> None:
         low_score = {
             **self.snapshot["scores"][0],
             "chartId": "chart-34",
@@ -270,7 +296,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         )["modes"]["singles"]
 
         self.assertTrue(mode["eligible"])
-        self.assertEqual(mode["scoringRating"], 19.1)
+        self.assertEqual(mode["scoringRating"], 15.1)
         self.assertNotIn(
             "chart-34", {row["chartId"] for row in mode["candidates"]}
         )
@@ -408,33 +434,33 @@ class PlayerRecommendationTests(unittest.TestCase):
 
 
 class CombinedTierPayloadTests(unittest.TestCase):
-    def test_payload_uses_combined_identity_and_filters_below_level_twenty(self) -> None:
+    def test_payload_uses_combined_identity_and_filters_below_level_sixteen(self) -> None:
         chart = {
             "mode": "Singles",
             "modeRank": 1,
             "levelRank": 1,
             "levelPercentile": 0.5,
             "levelComparisonCharts": 1,
-            "folder": "S20",
+            "folder": "S16",
             "relativeGroupRank": 6,
             "relativeGroup": "50-60% percentile",
             "effectBandRank": 5,
             "effectBand": "Typical",
             "songName": "Current Chart",
-            "difficulty": "S20",
+            "difficulty": "S16",
             "type": "Single",
-            "level": 20,
+            "level": 16,
             "chartId": "current",
             "imageUrl": None,
             "noteCount": None,
             "stepArtist": None,
-            "estimatedDifficulty": 20.5,
-            "averageDifficulty": 20.5,
+            "estimatedDifficulty": 16.5,
+            "averageDifficulty": 16.5,
             "difficultyDelta": 0.0,
             "difficultyDeltaCi95Low": -0.1,
             "difficultyDeltaCi95High": 0.1,
-            "difficultyCi95Low": 20.4,
-            "difficultyCi95High": 20.6,
+            "difficultyCi95Low": 16.4,
+            "difficultyCi95High": 16.6,
             "pumbilityPerLevel": 1.0,
             "nContributors": 12,
             "nPlayersScored": 12,
@@ -447,13 +473,13 @@ class CombinedTierPayloadTests(unittest.TestCase):
             "chartId": "easier",
             "songName": "Easier Chart",
             "difficultyDelta": -0.5,
-            "estimatedDifficulty": 20.0,
+            "estimatedDifficulty": 16.0,
         }
         payload = build_combined_tier_payload(
             [
                 chart,
                 easier,
-                {**chart, "chartId": "low", "level": 19, "folder": "S19"},
+                {**chart, "chartId": "low", "level": 15, "folder": "S15"},
             ],
             {
                 "sourceObservations": 12,
@@ -470,6 +496,92 @@ class CombinedTierPayloadTests(unittest.TestCase):
             ["easier", "current"],
         )
         self.assertEqual(payload["singles"][0]["phoenix1Contributors"], 10)
+        self.assertEqual(
+            payload["summary"]["method"]["displayMinimumOfficialLevel"], 16
+        )
+        self.assertEqual(payload["summary"]["method"]["difficultyDeltaScale"], 0.7)
+
+
+class RecommendationChartBoundaryTests(unittest.TestCase):
+    def test_recommendation_chart_payload_includes_sixteen_and_excludes_fifteen(
+        self,
+    ) -> None:
+        rows = _recommendation_chart_rows(
+            [
+                {"chartId": "sixteen", "type": "Single", "level": 16},
+                {"chartId": "fifteen", "type": "Single", "level": 15},
+            ]
+        )
+
+        self.assertEqual([row["chartId"] for row in rows], ["sixteen"])
+
+    def test_manual_recommendations_include_sixteen_and_exclude_fifteen(self) -> None:
+        mode = build_manual_recommendation_mode(
+            [
+                {
+                    "chartId": "sixteen",
+                    "songName": "Sixteen",
+                    "type": "Single",
+                    "level": 16,
+                    "estimatedDifficulty": 16.0,
+                },
+                {
+                    "chartId": "fifteen",
+                    "songName": "Fifteen",
+                    "type": "Single",
+                    "level": 15,
+                    "estimatedDifficulty": 15.0,
+                },
+            ],
+            "Single",
+            16.0,
+        )
+
+        self.assertEqual(
+            [row["chartId"] for row in mode["candidates"]], ["sixteen"]
+        )
+
+
+@unittest.skipIf(get_recommendation_players is None, "FastAPI is not installed")
+class RecommendationPlayerListRouteTests(unittest.TestCase):
+    def test_success_is_publicly_cacheable_for_five_minutes(self) -> None:
+        payload = {
+            "generatedAtUtc": "2026-08-08T00:00:00Z",
+            "method": {"displayMinimumOfficialLevel": 16},
+            "players": [
+                {
+                    "playerKey": "public-key",
+                    "username": "PLAYER",
+                    "displayName": "PLAYER",
+                    "modes": {
+                        "singles": {"eligible": True},
+                        "doubles": {"eligible": False},
+                    },
+                }
+            ],
+        }
+
+        with patch("api.recommendations._read_index", return_value=payload):
+            response = get_recommendation_players()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], PLAYER_LIST_CACHE_CONTROL)
+        content = json.loads(response.body)
+        self.assertEqual(content["players"][0]["playerKey"], "public-key")
+
+    def test_errors_are_not_cacheable(self) -> None:
+        with patch("api.recommendations._read_index", return_value=None):
+            missing = get_recommendation_players()
+        with patch(
+            "api.recommendations._read_index",
+            side_effect=RuntimeError("blob unavailable"),
+        ):
+            unavailable = get_recommendation_players()
+
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.headers["cache-control"], "no-store")
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertEqual(unavailable.headers["cache-control"], "no-store")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Pumbility Farmer
 
-Pumbility Farmer is a PIU Phoenix scoring-difficulty analyzer and Vercel web UI. Its primary tier list combines normalized Phoenix 1 and Phoenix 2 score evidence against the current Phoenix 2 catalog. Phoenix 1 is a frozen, privacy-safe source captured on August 7, 2026; Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Singles and Doubles rankings are completely independent. Player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 20.
+Pumbility Farmer is a PIU Phoenix scoring-difficulty analyzer and Vercel web UI. Its primary tier list combines normalized Phoenix 1 and Phoenix 2 score evidence against the current Phoenix 2 catalog. Phoenix 1 is a frozen, privacy-safe source captured on August 7, 2026; Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Singles and Doubles rankings are completely independent. Published chart analysis starts at level 16, while player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 16.
 
 ## Analysis method
 
@@ -29,10 +29,11 @@ Each mode is processed separately:
 10. Anchor the typical official level `L` chart at `L + 0.5` and shrink
     low-evidence estimates toward that reference.
 
-The displayed difference uses 100% of the calibrated residual conversion:
+The displayed difference uses 70% of the calibrated residual conversion to keep
+the estimated scoring-difficulty range from becoming overly wide:
 
 ```text
-difficulty difference = -1.0 × shrunk Pumbility residual / Pumbility per level
+difficulty difference = -0.7 × shrunk Pumbility residual / Pumbility per level
 estimated scoring difficulty = official level + 0.5 + difficulty difference
 ```
 
@@ -117,7 +118,7 @@ Primary outputs include:
 - `chart_tiers.csv`: combined export with an explicit mode column.
 - `analysis_summary.json`: method and coverage diagnostics.
 - `player_baselines_pseudonymous.csv`: separate player-mode baselines with hashed IDs.
-- `folders/*.csv`: one export for every level-20+ folder found in the catalog.
+- `folders/*.csv`: one export for every level-16+ folder found in the catalog.
 
 ## Private local snapshot and visual analysis
 
@@ -194,7 +195,7 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 - `GET /api/analyze?mix=phoenix2&jobId=...`: load a matching 24-hour queue-job status.
 - `POST /api/analyze?mix=phoenix2`: queue or follow a Phoenix 2 refresh.
 - `POST /api/deploy?mix=phoenix2`: accept a signed deployment event for Phoenix 2.
-- `GET /api/recommendations/players`: return consented usernames and mode eligibility without raw IDs.
+- `GET /api/recommendations/players`: return consented usernames and mode eligibility without raw IDs; successful lists are cached for five minutes with stale revalidation.
 - `GET /api/recommendations?playerKey=...`: return one precomputed player recommendation slice.
 - `GET /api/tier-list`: return the public combined Phoenix 1 and Phoenix 2 tier aggregate.
 
@@ -202,8 +203,8 @@ Phoenix 1 POST, cron, deployment, worker, and publisher paths reject updates as 
 
 The Phoenix 1 chart cards also show official-rating changes in Phoenix 2. A separate versioned
 annotation file maps chart IDs to their Phoenix 1 and Phoenix 2 ratings, so these labels do not
-modify the frozen scoring analysis. The current import contains 152 level-20+ changes from the
-`Phoenix 2 build` worksheet: 118 uprates and 34 downrates. Regenerate the annotation layer from
+modify the frozen scoring analysis. The current import contains 231 level-16+ changes from the
+`Phoenix 2 build` worksheet: 197 uprates and 34 downrates. Regenerate the annotation layer from
 an updated copy of the source workbook with:
 
 ```powershell

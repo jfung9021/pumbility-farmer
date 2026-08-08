@@ -91,6 +91,16 @@ test("demo payload uses the symmetric quarter-level effect bands", () => {
   );
 });
 
+test("demo payload represents the level-16 and 0.7-scale methodology", () => {
+  const payload = demoPayloads.phoenix2;
+  assert.equal(payload.summary.scriptVersion, "6.0.0-level-16-and-0.7-scale");
+  assert.equal(payload.summary.method.difficultyDeltaScale, 0.7);
+  assert.equal(payload.summary.method.displayMinimumOfficialLevel, 16);
+  assert.equal(payload.singles.some((chart) => chart.level === 16), true);
+  assert.equal(payload.doubles.some((chart) => chart.level === 16), true);
+  assert.equal(payload.singles[0].difficultyDelta, -0.756);
+});
+
 test("annotates the frozen Phoenix 1 charts with Phoenix 2 rerates", async () => {
   const [archiveRaw, reratesRaw] = await Promise.all([
     readFile(path.join(process.cwd(), "public", "data", "phoenix1-20260807.json"), "utf8"),
@@ -109,8 +119,8 @@ test("annotates the frozen Phoenix 1 charts with Phoenix 2 rerates", async () =>
     (chart) => chart.songName === "Halloween Party ~Multiverse~" && chart.difficulty === "D21",
   );
 
-  assert.equal(changed.length, 152);
-  assert.equal(changed.filter((chart) => chart.phoenix2Rerate?.direction === "uprated").length, 118);
+  assert.equal(changed.length, 231);
+  assert.equal(changed.filter((chart) => chart.phoenix2Rerate?.direction === "uprated").length, 197);
   assert.equal(changed.filter((chart) => chart.phoenix2Rerate?.direction === "downrated").length, 34);
   assert.deepEqual(kugutsu?.phoenix2Rerate, {
     from: "D21",
@@ -286,7 +296,7 @@ test("recommendation player list exposes names and eligibility without mode payl
   assert.equal("modes" in response.players[0], false);
 });
 
-test("manual recommendations use an unbounded lower range and +0.5 upper limit", () => {
+test("manual recommendations include level 16, exclude level 15, and use a +0.5 upper limit", () => {
   const chart = (chartId: string, estimatedDifficulty: number, level: number) => ({
     mode: "Singles" as const,
     songName: chartId,
@@ -310,10 +320,10 @@ test("manual recommendations use an unbounded lower range and +0.5 upper limit",
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: [
-      chart("far-easier", 10, 20),
+      chart("level-16", 10, 16),
       chart("upper-edge", 21, 21),
       chart("too-hard", 21.01, 21),
-      chart("below-scope", 10, 19),
+      chart("level-15", 10, 15),
     ],
     players: [],
   }, 20.5);
@@ -322,7 +332,18 @@ test("manual recommendations use an unbounded lower range and +0.5 upper limit",
   assert.deepEqual(singles.candidateRange, [null, 21]);
   assert.deepEqual(
     singles.candidates.map((candidate) => candidate.chartId),
-    ["far-easier", "upper-edge"],
+    ["level-16", "upper-edge"],
   );
-  assert.equal(singles.topRecommendations[0].chartId, "far-easier");
+  assert.equal(singles.topRecommendations[0].chartId, "level-16");
+
+  const configuredFloor = recommendationsForRating({
+    generatedAtUtc: "2026-08-08T00:00:00Z",
+    method: { displayMinimumOfficialLevel: 17 },
+    charts: [chart("level-16", 10, 16), chart("level-17", 10, 17)],
+    players: [],
+  }, 20.5);
+  assert.deepEqual(
+    configuredFloor.player.modes.singles.candidates.map((candidate) => candidate.chartId),
+    ["level-17"],
+  );
 });

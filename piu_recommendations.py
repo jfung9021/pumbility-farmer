@@ -20,7 +20,9 @@ import pandas as pd
 
 from piu_misgrade_analyzer import (
     AnalysisConfig,
+    DIFFICULTY_DELTA_SCALE,
     EFFECT_BANDS,
+    MIN_TARGET_LEVEL,
     MODE_LABELS,
     MODE_TYPES,
     RELATIVE_GROUPS,
@@ -34,7 +36,6 @@ from piu_misgrade_analyzer import (
 RECOMMENDATION_SCHEMA_VERSION = 6
 COMBINED_TIER_SCHEMA_VERSION = 1
 RECOMMENDATION_RADIUS = 0.5
-MIN_RECOMMENDATION_LEVEL = 20
 BASELINE_START_RANK = 11
 BASELINE_END_RANK = 30
 PHOENIX2_RATING_SCORE_THRESHOLD = 50
@@ -572,7 +573,7 @@ def build_combined_tier_payload(
     records = [
         dict(chart)
         for chart in combined_charts
-        if int(chart.get("level") or 0) >= MIN_RECOMMENDATION_LEVEL
+        if int(chart.get("level") or 0) >= MIN_TARGET_LEVEL
     ]
     records.sort(
         key=lambda chart: (
@@ -652,7 +653,8 @@ def build_combined_tier_payload(
             "crossVersionNormalization": "version- and mode-specific Pumbility residuals converted to level units",
             "levelReference": "median measured chart residual within the exact mode and Phoenix 2 official level",
             "modeSeparation": "Singles and Doubles use independent baselines, calibration, and ranks",
-            "displayMinimumOfficialLevel": MIN_RECOMMENDATION_LEVEL,
+            "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
+            "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
         },
         "coverage": {
             "sourceObservations": int(metadata.get("sourceObservations", 0)),
@@ -694,7 +696,68 @@ def _recommendation_chart_rows(
     return [
         {key: chart.get(key) for key in RECOMMENDATION_CHART_FIELDS}
         for chart in combined_charts
+        if int(chart.get("level") or 0) >= MIN_TARGET_LEVEL
     ]
+
+
+def build_manual_recommendation_mode(
+    charts: Sequence[Mapping[str, Any]],
+    chart_type: str,
+    scoring_rating: float,
+) -> dict[str, Any]:
+    """Rank anonymous recommendations without inferring personal score gains."""
+    candidates: list[dict[str, Any]] = []
+    for chart in charts:
+        if chart.get("type") != chart_type:
+            continue
+        level = float(chart.get("level", 0))
+        estimate = float(chart.get("estimatedDifficulty", 0))
+        if (
+            level < MIN_TARGET_LEVEL
+            or estimate > scoring_rating + RECOMMENDATION_RADIUS + 1e-9
+        ):
+            continue
+        candidates.append(
+            {
+                **dict(chart),
+                "distanceFromRating": round(estimate - scoring_rating, 6),
+                "farmEdge": round(level + 0.5 - estimate, 6),
+                "existingPumbility": None,
+                "expectedPumbility": 0,
+                "projectedGain": 0,
+                "projectedScore": None,
+                "played": False,
+            }
+        )
+    candidates.sort(
+        key=lambda row: (
+            float(row["estimatedDifficulty"]),
+            str(row.get("songName", "")).casefold(),
+            str(row.get("chartId", "")),
+        )
+    )
+    top_recommendations = sorted(
+        candidates,
+        key=lambda row: (
+            -float(row["farmEdge"]),
+            float(row["estimatedDifficulty"]),
+            str(row.get("songName", "")).casefold(),
+            str(row.get("chartId", "")),
+        ),
+    )[:TOP_RECOMMENDATION_COUNT]
+    return {
+        "eligible": True,
+        "manual": True,
+        "validScoreCount": 0,
+        "scoringRating": round(scoring_rating, 3),
+        "candidateRange": [
+            None,
+            round(scoring_rating + RECOMMENDATION_RADIUS, 3),
+        ],
+        "candidateCount": len(candidates),
+        "candidates": candidates,
+        "topRecommendations": top_recommendations,
+    }
 
 
 def fit_score_projection_slopes(
@@ -862,7 +925,7 @@ def _build_player_recommendation_phoenix2_only(
         for chart in combined_charts:
             if chart.get("type") != chart_type:
                 continue
-            if int(chart.get("level") or 0) < MIN_RECOMMENDATION_LEVEL:
+            if int(chart.get("level") or 0) < MIN_TARGET_LEVEL:
                 continue
             estimate = chart.get("estimatedDifficulty")
             if estimate is None or not math.isfinite(float(estimate)):
@@ -1111,7 +1174,7 @@ def build_player_recommendation(
         for chart in combined_charts:
             if chart.get("type") != chart_type:
                 continue
-            if int(chart.get("level") or 0) < MIN_RECOMMENDATION_LEVEL:
+            if int(chart.get("level") or 0) < MIN_TARGET_LEVEL:
                 continue
             estimate = chart.get("estimatedDifficulty")
             if estimate is None or not math.isfinite(float(estimate)):
@@ -1323,13 +1386,14 @@ def build_recommendation_index(
             for chart in charts_for_players
             if isinstance(chart.get("estimatedDifficulty"), (int, float))
             and math.isfinite(float(chart["estimatedDifficulty"]))
-            and int(chart.get("level") or 0) >= MIN_RECOMMENDATION_LEVEL
+            and int(chart.get("level") or 0) >= MIN_TARGET_LEVEL
         ],
         "method": {
             "catalog": "Phoenix 2 authoritative catalog",
             "overlapRule": "best Phoenix 2 score always replaces Phoenix 1 for the same player and chart",
             "phoenix1RerateHandling": "Phoenix 1 Pumbility is shifted by its source slope times the Phoenix 2 minus Phoenix 1 level delta before ranking and normalization",
             "crossVersionNormalization": "Phoenix 1 scores rebased to Phoenix 2 levels, then version- and mode-specific Pumbility residuals converted to level units",
+            "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
             "pumbilityPerLevel": slopes,
             "scorePointsPerDifficulty": score_projection_slopes,
             "baselineRanks": [BASELINE_START_RANK, BASELINE_END_RANK],
@@ -1341,9 +1405,9 @@ def build_recommendation_index(
             "topPumbilityCount": TOP_PUMBILITY_COUNT,
             "projection": "baseline achievement quality adjusted by chart farm edge",
             "manualRanking": "farm edge at or below the requested scoring rating plus 0.5; no personal top-50 gain is inferred",
-            "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below 20",
+            "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
-            "displayMinimumOfficialLevel": MIN_RECOMMENDATION_LEVEL,
+            "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
             "scoreProjection": "player baseline raw score adjusted by a Phoenix 2 within-player score-points-per-difficulty slope and capped at 1000000",
         },
         "players": output_players,

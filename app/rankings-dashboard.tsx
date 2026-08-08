@@ -293,7 +293,7 @@ export function RankingsDashboard() {
           <>
             <div className="summaryGrid">
               <article><span>Eligible {modeLabel(activeMode)} players</span><strong>{summary?.eligiblePlayers ?? 0}</strong><small>30+ scores in this mode</small></article>
-              <article><span>Measured charts</span><strong>{summary?.measuredCharts ?? 0}</strong><small>of {summary?.catalogCharts ?? 0} level 20+</small></article>
+              <article><span>Measured charts</span><strong>{summary?.measuredCharts ?? 0}</strong><small>of {summary?.catalogCharts ?? 0} level 16+</small></article>
               <article><span>Selected observations</span><strong>{results.summary.coverage.targetSelectedContributions.toLocaleString()}</strong><small>hybrid windows with a top-100 floor</small></article>
               <article><span>Published charts</span><strong>{summary?.publishedCharts ?? 0}</strong><small>10+ contributors</small></article>
             </div>

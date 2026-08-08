@@ -20,12 +20,15 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARCHIVE = ROOT / "public" / "data" / "phoenix1-20260807.json"
 DEFAULT_OUTPUT = ROOT / "public" / "data" / "phoenix1-rerates-20260807.json"
 SHEET_NAME = "Phoenix 2 build"
+MIN_ARCHIVE_LEVEL = 16
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 RATING_RE = re.compile(r"([SD])\s*(\d{1,2})", re.IGNORECASE)
 TITLE_ALIASES = {
     "Halloween Party": "Halloween Party ~Multiverse~",
+    "Silver Beat": "Silver Beat feat. ChisaUezono",
+    "Pneumono... (87)": "Pneumonoultramicroscopicsilicovolcanoconiosis ft. Kagamine Len/GUMI",
     "Stardream": "Stardream (feat. Romelon)",
     "End of the World": "The End of the World ft. Skizzo",
     "Utsushiyo no Kaze": "Utsushiyo No Kaze feat. Kana",
@@ -155,7 +158,7 @@ def build_rerate_payload(workbook_path: Path, archive_path: Path) -> dict[str, A
     seen_chart_ids: set[str] = set()
     for row in read_rerate_rows(workbook_path):
         for old_rating, new_rating, delta in _rating_pairs(row):
-            if int(old_rating[1:]) < 20:
+            if int(old_rating[1:]) < MIN_ARCHIVE_LEVEL:
                 continue
             archive_title = TITLE_ALIASES.get(row["song"], row["song"])
             key = (_normalize_title(archive_title), old_rating)
@@ -194,7 +197,9 @@ def build_rerate_payload(workbook_path: Path, archive_path: Path) -> dict[str, A
             f"(suggestions: {', '.join(item['suggestions']) or 'none'})"
             for item in unmatched
         )
-        raise ValueError(f"Could not match {len(unmatched)} level-20+ rerates:\n{details}")
+        raise ValueError(
+            f"Could not match {len(unmatched)} level-{MIN_ARCHIVE_LEVEL}+ rerates:\n{details}"
+        )
 
     rerates.sort(key=lambda item: (item["sourceRow"], item["chartId"]))
     return {

@@ -30,6 +30,7 @@ const FORBIDDEN_KEYS = new Set([
   "token",
   "scores",
 ]);
+const DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL = 16;
 
 export class LocalRecommendationsNotFoundError extends Error {}
 export class LocalRecommendationsValidationError extends Error {}
@@ -133,12 +134,13 @@ function manualMode(
   charts: RecommendationChartEstimate[],
   modeKey: ModeKey,
   scoringRating: number,
+  minimumOfficialLevel: number,
 ): RecommendationModeResult {
   const chartType = modeKey === "singles" ? "Single" : "Double";
   const candidates: RecommendationChart[] = charts
     .filter(
       (chart) => chart.type === chartType
-        && chart.level >= 20
+        && chart.level >= minimumOfficialLevel
         && chart.estimatedDifficulty <= scoringRating + 0.5 + Number.EPSILON,
     )
     .map((chart) => {
@@ -186,6 +188,11 @@ export function recommendationsForRating(
   payload: Awaited<ReturnType<typeof readLocalRecommendationIndex>>,
   scoringRating: number,
 ): PlayerRecommendationsResponse {
+  const configuredMinimum = payload.method.displayMinimumOfficialLevel;
+  const minimumOfficialLevel = typeof configuredMinimum === "number"
+    && Number.isFinite(configuredMinimum)
+    ? configuredMinimum
+    : DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL;
   return {
     generatedAtUtc: payload.generatedAtUtc,
     method: payload.method,
@@ -195,8 +202,8 @@ export function recommendationsForRating(
       displayName: `Manual ${scoringRating.toFixed(2)}`,
       manual: true,
       modes: {
-        singles: manualMode(payload.charts, "singles", scoringRating),
-        doubles: manualMode(payload.charts, "doubles", scoringRating),
+        singles: manualMode(payload.charts, "singles", scoringRating, minimumOfficialLevel),
+        doubles: manualMode(payload.charts, "doubles", scoringRating, minimumOfficialLevel),
       },
     },
   };

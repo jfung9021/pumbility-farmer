@@ -78,10 +78,13 @@ class AnalyzerTests(unittest.TestCase):
         )
 
     def test_dynamic_level_filter_and_relative_groups(self) -> None:
+        self.assertEqual(folder_for("Single", 16), "S16")
+        self.assertEqual(folder_for("Double", 16), "D16")
         self.assertEqual(folder_for("Single", 20), "S20")
         self.assertEqual(folder_for("Single", 27), "S27")
         self.assertEqual(folder_for("Double", 31), "D31")
-        self.assertIsNone(folder_for("Single", 19))
+        self.assertIsNone(folder_for("Single", 15))
+        self.assertIsNone(folder_for("Double", 15))
         self.assertEqual(relative_difficulty_group(0.02), (1, "Easiest 10%"))
         self.assertEqual(relative_difficulty_group(0.5), (6, "50–60% percentile"))
         self.assertEqual(relative_difficulty_group(0.98), (10, "Hardest 10%"))
@@ -127,7 +130,7 @@ class AnalyzerTests(unittest.TestCase):
             "within-player fixed effects and 2,500-point score bands",
         )
 
-    def test_difficulty_formula_uses_one_point_zero_scale(self) -> None:
+    def test_difficulty_formula_scales_delta_and_confidence_intervals_by_point_seven(self) -> None:
         frame = pd.DataFrame([
             {
                 "chartId": "easy",
@@ -137,8 +140,8 @@ class AnalyzerTests(unittest.TestCase):
                 "chartResidualPb": -100.0,
                 "meanResidualPb": -100.0,
                 "residualStdPb": 0.0,
-                "residualCi95LowPb": -100.0,
-                "residualCi95HighPb": -100.0,
+                "residualCi95LowPb": -110.0,
+                "residualCi95HighPb": -90.0,
                 "nContributors": 10,
             },
             {
@@ -160,8 +163,12 @@ class AnalyzerTests(unittest.TestCase):
             AnalysisConfig(bootstrap_samples=0, shrinkage_k=0),
         )
         easy = result[result["chartId"] == "easy"].iloc[0]
-        self.assertAlmostEqual(float(easy["difficultyDelta"]), 2.0)
-        self.assertAlmostEqual(float(easy["estimatedDifficulty"]), 22.5)
+        self.assertAlmostEqual(float(easy["difficultyDelta"]), 1.4)
+        self.assertAlmostEqual(float(easy["estimatedDifficulty"]), 21.9)
+        self.assertAlmostEqual(float(easy["difficultyDeltaCi95Low"]), 1.26)
+        self.assertAlmostEqual(float(easy["difficultyDeltaCi95High"]), 1.54)
+        self.assertAlmostEqual(float(easy["difficultyCi95Low"]), 21.76)
+        self.assertAlmostEqual(float(easy["difficultyCi95High"]), 22.04)
 
     def test_calibration_accepts_legacy_mix_scale_and_rejects_negative_slope(self) -> None:
         rows = []
@@ -206,7 +213,7 @@ class AnalyzerTests(unittest.TestCase):
             rows = result[result["folder"] == folder].sort_values("difficultyDelta")
             self.assertTrue((rows["levelReferenceResidualPb"] == reference).all())
             self.assertAlmostEqual(float(rows["difficultyDelta"].sum()), 0.0)
-            self.assertAlmostEqual(float(rows["difficultyDelta"].abs().max()), 0.2)
+            self.assertAlmostEqual(float(rows["difficultyDelta"].abs().max()), 0.14)
             self.assertEqual(list(rows["relativeGroupRank"]), [3, 8])
         self.assertGreater(
             float(result[result["folder"] == "S23"]["estimatedDifficulty"].min()),
@@ -327,7 +334,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertTrue((results["nContributors"] <= 1).all())
         self.assertEqual(contributions["playerHash"].nunique(), 1)
 
-    def test_synthetic_recovers_order_with_half_scaled_output(self) -> None:
+    def test_synthetic_recovers_order_with_point_seven_scaled_output(self) -> None:
         players, charts, scores, truth = make_synthetic_snapshot(players_per_folder=5)
         results, _, _, _ = analyze_snapshot(
             players,
@@ -337,6 +344,8 @@ class AnalyzerTests(unittest.TestCase):
         )
         validation = validate_synthetic(results, truth)
         self.assertTrue(validation["passed"])
+        self.assertEqual(len(results[results["folder"] == "S16"]), 10)
+        self.assertEqual(len(results[results["folder"] == "D16"]), 10)
         easiest_s20 = results[results["folder"] == "S20"].sort_values("difficultyDelta").iloc[0]
         self.assertLessEqual(float(easiest_s20["difficultyDelta"]), -0.25)
         self.assertIn(
