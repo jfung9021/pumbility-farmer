@@ -52,14 +52,14 @@ test("mobile styles keep desktop information visible", async () => {
   assert.deepEqual(hiddenSelectors, [".feature-card > b"]);
 });
 
-test("recommendation methodology describes the joined score projection", async () => {
+test("recommendation methodology describes the population score response model", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
   );
 
-  assert.match(page, /projected-score difficulty slope uses matched Phoenix 1 and Phoenix 2 raw scores/);
-  assert.match(page, /centered within each player and version/);
+  assert.match(page, /Projected scores come from a player-balanced population response model/);
+  assert.match(page, /no player's raw-score average is used as their prediction baseline/);
 });
 
 test("rejects an empty successful response as non-JSON", async () => {

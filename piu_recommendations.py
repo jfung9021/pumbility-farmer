@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
 
@@ -39,7 +40,7 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 8
+RECOMMENDATION_SCHEMA_VERSION = 9
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 1
@@ -50,7 +51,11 @@ PHOENIX2_RATING_SCORE_THRESHOLD = 50
 TOP_PUMBILITY_COUNT = 50
 TOP_RECOMMENDATION_COUNT = 20
 MAX_RAW_SCORE = 1_000_000
-SCORE_PROJECTION_MIN_PLAYER_SCORES = 5
+SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v1"
+SCORE_RESPONSE_FOLDS = 5
+SCORE_RESPONSE_GRID_STEP = 0.1
+SCORE_RESPONSE_SMOOTHING_RADIUS = 8
+SCORE_RESPONSE_MIN_SUPPORT = 5
 PLAYER_KEY_NAMESPACE = "pumbility-farmer-recommendations-v1"
 RECOMMENDATION_CHART_FIELDS = (
     "mode",
@@ -71,6 +76,96 @@ RECOMMENDATION_CHART_FIELDS = (
     "phoenix2Contributors",
     "evidenceStatus",
 )
+
+
+@dataclass(frozen=True)
+class ScoreProjectionResult:
+    score: int | None
+    source: str
+    support_count: int
+    confidence: str
+
+
+@dataclass(frozen=True)
+class _ScoreSurface:
+    rating_axis: np.ndarray
+    difficulty_axis: np.ndarray
+    score_grid: np.ndarray
+    support_grid: np.ndarray
+
+    def predict(self, rating: float, difficulty: float) -> tuple[float, int] | None:
+        if (
+            not math.isfinite(rating)
+            or not math.isfinite(difficulty)
+            or rating < float(self.rating_axis[0])
+            or rating > float(self.rating_axis[-1])
+            or difficulty < float(self.difficulty_axis[0])
+            or difficulty > float(self.difficulty_axis[-1])
+        ):
+            return None
+
+        def bounds(axis: np.ndarray, value: float) -> tuple[int, int, float]:
+            high = int(np.searchsorted(axis, value, side="right"))
+            high = min(max(high, 1), len(axis) - 1)
+            low = high - 1
+            width = float(axis[high] - axis[low])
+            fraction = 0.0 if width <= 0 else (value - float(axis[low])) / width
+            return low, high, min(1.0, max(0.0, fraction))
+
+        r0, r1, rw = bounds(self.rating_axis, rating)
+        d0, d1, dw = bounds(self.difficulty_axis, difficulty)
+
+        def bilinear(grid: np.ndarray) -> float:
+            low = float(grid[r0, d0]) * (1 - dw) + float(grid[r0, d1]) * dw
+            high = float(grid[r1, d0]) * (1 - dw) + float(grid[r1, d1]) * dw
+            return low * (1 - rw) + high * rw
+
+        score = bilinear(self.score_grid)
+        support = int(round(max(0.0, bilinear(self.support_grid))))
+        if not math.isfinite(score) or support < SCORE_RESPONSE_MIN_SUPPORT:
+            return None
+        return score, support
+
+
+@dataclass(frozen=True)
+class ScoreResponseModel:
+    full_surfaces: Mapping[str, _ScoreSurface]
+    crossfit_surfaces: Mapping[int, Mapping[str, _ScoreSurface]]
+    training_player_ids: frozenset[str]
+
+    def predict(
+        self,
+        player_id: str,
+        mode_key: str,
+        scoring_rating: float,
+        estimated_difficulty: float,
+    ) -> ScoreProjectionResult:
+        player_id = str(player_id)
+        if player_id in self.training_player_ids:
+            fold = _score_response_fold(player_id)
+            surface = self.crossfit_surfaces.get(fold, {}).get(mode_key)
+            source = "population-crossfit"
+        else:
+            surface = self.full_surfaces.get(mode_key)
+            source = "population-full"
+        if surface is None:
+            return ScoreProjectionResult(None, source, 0, "unavailable")
+        prediction = surface.predict(float(scoring_rating), float(estimated_difficulty))
+        if prediction is None:
+            return ScoreProjectionResult(None, source, 0, "unavailable")
+        score, support = prediction
+        confidence = "high" if support >= 200 else "medium" if support >= 50 else "low"
+        return ScoreProjectionResult(
+            int(round(min(MAX_RAW_SCORE, max(0.0, score)))),
+            source,
+            support,
+            confidence,
+        )
+
+
+def _score_response_fold(player_id: object) -> int:
+    digest = hashlib.sha256(str(player_id).encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") % SCORE_RESPONSE_FOLDS
 
 
 def recommendation_blob_path() -> str:
@@ -775,6 +870,9 @@ def build_manual_recommendation_mode(
                 "expectedPumbility": 0,
                 "projectedGain": 0,
                 "projectedScore": None,
+                "scoreProjectionSource": None,
+                "scoreProjectionSupportCount": None,
+                "scoreProjectionConfidence": "unavailable",
                 "projectedGrade": None,
                 "projectedPlate": None,
                 "projectedPlateCode": None,
@@ -809,22 +907,261 @@ def build_manual_recommendation_mode(
             round(scoring_rating + RECOMMENDATION_RADIUS, 3),
         ],
         "candidateCount": len(candidates),
+        "projectionAvailable": False,
+        "scoreProjectionModel": None,
         "candidates": candidates,
         "topRecommendations": top_recommendations,
     }
 
 
-def fit_score_projection_model(
+def _baseline_bounds(score_count: int) -> tuple[int, int]:
+    if score_count >= BASELINE_END_RANK:
+        return BASELINE_START_RANK - 1, BASELINE_END_RANK
+    return 0, max(1, math.ceil(score_count * 0.5))
+
+
+def _rating_lookup(rows: pd.DataFrame) -> tuple[float | None, dict[str, float | None]]:
+    """Return the full and leave-one-chart-out difficulty baselines in O(n)."""
+    if rows.empty:
+        return None, {}
+    ordered = rows.sort_values(
+        ["pumbility", "score", "chartId"],
+        ascending=[False, False, True],
+        kind="mergesort",
+    ).reset_index(drop=True)
+    values = ordered["ratingDifficulty"].astype(float).to_numpy()
+    prefix = np.concatenate(([0.0], np.cumsum(values)))
+
+    def window_mean(count: int, removed: int | None = None) -> float | None:
+        if count <= 0:
+            return None
+        start, end = _baseline_bounds(count)
+        if removed is None:
+            return float((prefix[end] - prefix[start]) / (end - start))
+        if removed < start:
+            total = prefix[end + 1] - prefix[start + 1]
+        elif removed >= end:
+            total = prefix[end] - prefix[start]
+        else:
+            total = prefix[end + 1] - prefix[start] - values[removed]
+        return float(total / (end - start))
+
+    full = window_mean(len(ordered))
+    leave_one_out = {
+        str(chart_id): window_mean(len(ordered) - 1, index)
+        for index, chart_id in enumerate(ordered["chartId"])
+    }
+    return full, leave_one_out
+
+
+def _smooth_grid(values: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+    result = np.apply_along_axis(
+        lambda row: np.convolve(row, kernel, mode="same"), 1, values
+    )
+    return np.apply_along_axis(
+        lambda column: np.convolve(column, kernel, mode="same"), 0, result
+    )
+
+
+def _weighted_isotonic(
+    values: np.ndarray,
+    weights: np.ndarray,
+    *,
+    increasing: bool,
+) -> np.ndarray:
+    """Pool adjacent violations without letting one noisy cell flatten an axis."""
+    target = values.astype(float).copy()
+    if not increasing:
+        target = -target
+    block_values: list[float] = []
+    block_weights: list[float] = []
+    block_starts: list[int] = []
+    block_ends: list[int] = []
+    for index, (value, weight) in enumerate(zip(target, weights, strict=True)):
+        block_values.append(float(value))
+        block_weights.append(max(float(weight), 1e-6))
+        block_starts.append(index)
+        block_ends.append(index + 1)
+        while len(block_values) >= 2 and block_values[-2] > block_values[-1]:
+            combined_weight = block_weights[-2] + block_weights[-1]
+            combined_value = (
+                block_values[-2] * block_weights[-2]
+                + block_values[-1] * block_weights[-1]
+            ) / combined_weight
+            block_values[-2:] = [combined_value]
+            block_weights[-2:] = [combined_weight]
+            block_ends[-2:] = [block_ends[-1]]
+            block_starts.pop()
+    result = np.empty_like(target)
+    for value, start, end in zip(
+        block_values, block_starts, block_ends, strict=True
+    ):
+        result[start:end] = value
+    return result if increasing else -result
+
+
+def _project_monotone_score_grid(
+    values: np.ndarray,
+    weights: np.ndarray,
+) -> np.ndarray:
+    """Alternately project onto rating-up and difficulty-down constraints."""
+    result = values.astype(float).copy()
+    stable_weights = np.maximum(weights.astype(float), 1e-6)
+    for _ in range(12):
+        previous = result.copy()
+        for column in range(result.shape[1]):
+            result[:, column] = _weighted_isotonic(
+                result[:, column],
+                stable_weights[:, column],
+                increasing=True,
+            )
+        for row in range(result.shape[0]):
+            result[row, :] = _weighted_isotonic(
+                result[row, :],
+                stable_weights[row, :],
+                increasing=False,
+            )
+        if float(np.max(np.abs(result - previous))) < 0.01:
+            break
+    # Remove only floating-point remnants after weighted pooling.
+    result = np.maximum.accumulate(result, axis=0)
+    result = np.minimum.accumulate(result, axis=1)
+    return np.clip(result, 0, MAX_RAW_SCORE)
+
+
+def _calibrate_score_rows(rows: pd.DataFrame) -> tuple[pd.DataFrame, float]:
+    """Calibrate P1 to P2 without using rows outside the supplied train split."""
+    calibrated = rows.copy()
+    if calibrated.empty:
+        calibrated["calibratedScore"] = pd.Series(dtype=float)
+        return calibrated, 0.0
+    centered_x = calibrated["estimatedDifficulty"] - calibrated.groupby(
+        ["source", "playerId"], sort=False
+    )["estimatedDifficulty"].transform("mean")
+    centered_y = calibrated["score"] - calibrated.groupby(
+        ["source", "playerId"], sort=False
+    )["score"].transform("mean")
+    denominator = float(np.dot(centered_x, centered_x))
+    slope = (
+        -float(np.dot(centered_x, centered_y) / denominator)
+        if denominator > 0
+        else 0.0
+    )
+    grouped = calibrated.groupby(["playerId", "source"], sort=False).agg(
+        score=("score", "mean"), difficulty=("estimatedDifficulty", "mean")
+    )
+    grouped["intercept"] = grouped["score"] + max(0.0, slope) * grouped["difficulty"]
+    pivot = grouped["intercept"].unstack("source")
+    if {"phoenix1", "phoenix2"}.issubset(pivot.columns):
+        dual = pivot.dropna(subset=["phoenix1", "phoenix2"])
+        offset = (
+            float((dual["phoenix2"] - dual["phoenix1"]).median())
+            if not dual.empty
+            else 0.0
+        )
+    else:
+        offset = 0.0
+    if not math.isfinite(offset):
+        offset = 0.0
+    calibrated["calibratedScore"] = calibrated["score"].astype(float)
+    mask = calibrated["source"] == "phoenix1"
+    calibrated.loc[mask, "calibratedScore"] += offset
+    calibrated["calibratedScore"] = calibrated["calibratedScore"].clip(
+        0, MAX_RAW_SCORE
+    )
+    return calibrated, offset
+
+
+def _build_score_surface(rows: pd.DataFrame) -> _ScoreSurface | None:
+    if len(rows) < SCORE_RESPONSE_MIN_SUPPORT:
+        return None
+    rating_min = math.floor((float(rows["scoringRating"].min()) - 0.5) * 10) / 10
+    rating_max = math.ceil((float(rows["scoringRating"].max()) + 0.5) * 10) / 10
+    difficulty_min = math.floor((float(rows["estimatedDifficulty"].min()) - 0.5) * 10) / 10
+    difficulty_max = math.ceil((float(rows["estimatedDifficulty"].max()) + 0.5) * 10) / 10
+    rating_axis = np.arange(
+        rating_min, rating_max + SCORE_RESPONSE_GRID_STEP / 2, SCORE_RESPONSE_GRID_STEP
+    )
+    difficulty_axis = np.arange(
+        difficulty_min,
+        difficulty_max + SCORE_RESPONSE_GRID_STEP / 2,
+        SCORE_RESPONSE_GRID_STEP,
+    )
+    if len(rating_axis) < 2 or len(difficulty_axis) < 2:
+        return None
+
+    # Each player has equal total influence within a mode.  A single prolific
+    # player therefore cannot determine a region of the population surface.
+    balanced = rows.copy()
+    player_counts = balanced.groupby("playerId", sort=False)["chartId"].transform(
+        "count"
+    )
+    balanced["modelWeight"] = 1.0 / player_counts.clip(lower=1).astype(float)
+    p1_weight = float(
+        balanced.loc[balanced["source"] == "phoenix1", "modelWeight"].sum()
+    )
+    p2_weight = float(
+        balanced.loc[balanced["source"] == "phoenix2", "modelWeight"].sum()
+    )
+    if p1_weight > 0 and p2_weight > 0 and p1_weight > p2_weight:
+        balanced.loc[balanced["source"] == "phoenix1", "modelWeight"] *= (
+            p2_weight / p1_weight
+        )
+
+    numerator = np.zeros((len(rating_axis), len(difficulty_axis)), dtype=float)
+    denominator = np.zeros_like(numerator)
+    raw_count = np.zeros_like(numerator)
+    rating_index = np.rint(
+        (balanced["scoringRating"].to_numpy(float) - rating_axis[0])
+        / SCORE_RESPONSE_GRID_STEP
+    ).astype(int)
+    difficulty_index = np.rint(
+        (balanced["estimatedDifficulty"].to_numpy(float) - difficulty_axis[0])
+        / SCORE_RESPONSE_GRID_STEP
+    ).astype(int)
+    rating_index = np.clip(rating_index, 0, len(rating_axis) - 1)
+    difficulty_index = np.clip(difficulty_index, 0, len(difficulty_axis) - 1)
+    weights = balanced["modelWeight"].to_numpy(float)
+    scores = balanced["calibratedScore"].to_numpy(float)
+    np.add.at(numerator, (rating_index, difficulty_index), weights * scores)
+    np.add.at(denominator, (rating_index, difficulty_index), weights)
+    np.add.at(raw_count, (rating_index, difficulty_index), 1.0)
+
+    radius = min(
+        SCORE_RESPONSE_SMOOTHING_RADIUS,
+        (len(rating_axis) - 1) // 2,
+        (len(difficulty_axis) - 1) // 2,
+    )
+    offsets = np.arange(-radius, radius + 1, dtype=float)
+    sigma = max(1.0, radius / 2.0)
+    kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+    smoothed_numerator = _smooth_grid(numerator, kernel)
+    smoothed_denominator = _smooth_grid(denominator, kernel)
+    global_mean = float(np.average(scores, weights=weights))
+    score_grid = np.divide(
+        smoothed_numerator,
+        smoothed_denominator,
+        out=np.full_like(smoothed_numerator, global_mean),
+        where=smoothed_denominator > 0,
+    )
+    support_radius = min(5, radius)
+    support_kernel = np.ones(2 * support_radius + 1, dtype=float)
+    support_grid = _smooth_grid(raw_count, support_kernel)
+    score_grid = _project_monotone_score_grid(score_grid, support_grid)
+    return _ScoreSurface(rating_axis, difficulty_axis, score_grid, support_grid)
+
+
+def fit_score_response_model(
     phoenix1_snapshot: Mapping[str, Any] | None,
     phoenix2_snapshot: Mapping[str, Any],
     combined_charts: Sequence[Mapping[str, Any]],
-) -> tuple[dict[str, float], dict[str, Any]]:
-    """Fit joined P1+P2 raw-score loss with player/version centering."""
+) -> tuple[ScoreResponseModel, dict[str, Any]]:
+    """Fit P2-calibrated, player-balanced monotone population score surfaces."""
     catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
     estimates = pd.DataFrame(combined_charts)
     required = ["chartId", "type", "estimatedDifficulty"]
     if estimates.empty or not set(required).issubset(estimates.columns):
-        return {}, {"modes": {}}
+        return ScoreResponseModel({}, {}, frozenset()), {"modes": {}}
     estimates = estimates[required].copy()
     estimates["chartId"] = estimates["chartId"].astype(str)
     estimates["estimatedDifficulty"] = pd.to_numeric(
@@ -835,11 +1172,8 @@ def fit_score_projection_model(
     )
 
     if phoenix1_snapshot is not None:
-        phoenix1_charts, phoenix1_scores = _clean_snapshot_frames(phoenix1_snapshot)
-        phoenix1_charts, phoenix1_scores = retain_catalog_source_rows(
-            phoenix1_charts,
-            phoenix1_scores,
-            set(catalog["chartId"].astype(str)),
+        phoenix1_charts, phoenix1_scores = _prepare_phoenix1_rating_frames(
+            phoenix1_snapshot, catalog
         )
     else:
         phoenix1_scores = phoenix2_scores.iloc[0:0].copy()
@@ -858,7 +1192,7 @@ def fit_score_projection_model(
 
     def attach_source(scores: pd.DataFrame, source: str) -> pd.DataFrame:
         rows = scores.merge(
-            catalog[["chartId", "type"]],
+            catalog[["chartId", "type", "level"]],
             on="chartId",
             how="inner",
             validate="many_to_one",
@@ -883,16 +1217,91 @@ def fit_score_projection_model(
         & merged["score"].between(0, MAX_RAW_SCORE)
         & merged["estimatedDifficulty"].notna()
     ].copy()
-    slopes: dict[str, float] = {}
+
+    # Build the rating used by every outcome from chart difficulty only.  For a
+    # target chart in the selected rating source, its chart is removed from the
+    # rating window so the response cannot directly set its own predictor.
+    def attach_rating_difficulty(scores: pd.DataFrame) -> pd.DataFrame:
+        rows = scores.merge(
+            catalog[["chartId", "type", "level"]],
+            on="chartId",
+            how="inner",
+            validate="many_to_one",
+        ).merge(
+            estimates[["chartId", "estimatedDifficulty"]],
+            on="chartId",
+            how="left",
+            validate="many_to_one",
+        )
+        rows["ratingDifficulty"] = rows["estimatedDifficulty"].where(
+            rows["estimatedDifficulty"].notna(), rows["level"].astype(float) + 0.5
+        )
+        return rows
+
+    rating_frames = {
+        "phoenix1": attach_rating_difficulty(phoenix1_scores),
+        "phoenix2": attach_rating_difficulty(phoenix2_scores),
+    }
+    empty_rating_rows = rating_frames["phoenix2"].iloc[0:0]
+    rating_groups = {
+        source: {
+            (str(player_id), str(chart_type)): group
+            for (player_id, chart_type), group in frame.groupby(
+                ["playerId", "type"], sort=False
+            )
+        }
+        for source, frame in rating_frames.items()
+    }
+    rating_lookups: dict[tuple[str, str], tuple[float | None, dict[str, float | None]]] = {}
+    all_player_modes = set(rating_groups["phoenix1"]) | set(
+        rating_groups["phoenix2"]
+    )
+    for player_id, chart_type in all_player_modes:
+        key = (player_id, chart_type)
+        p2_group = rating_groups["phoenix2"].get(key, empty_rating_rows)
+        p1_group = rating_groups["phoenix1"].get(key, empty_rating_rows)
+        selected = (
+            p2_group
+            if len(p2_group) >= PHOENIX2_RATING_SCORE_THRESHOLD
+            else p1_group
+        )
+        if selected.empty:
+            selected = p2_group
+        rating_lookups[(player_id, chart_type)] = _rating_lookup(selected)
+
+    ratings: list[float | None] = []
+    for row in merged[["playerId", "type", "chartId"]].itertuples(index=False):
+        full, leave_one_out = rating_lookups.get(
+            (str(row.playerId), str(row.type)), (None, {})
+        )
+        ratings.append(leave_one_out.get(str(row.chartId), full))
+    merged["scoringRating"] = pd.to_numeric(
+        np.asarray(ratings, dtype=float), errors="coerce"
+    )
+    merged = merged[merged["scoringRating"].notna()].copy()
+
+    merged["fold"] = merged["playerId"].map(_score_response_fold)
+
+    full_surfaces: dict[str, _ScoreSurface] = {}
+    crossfit_surfaces: dict[int, dict[str, _ScoreSurface]] = {
+        fold: {} for fold in range(SCORE_RESPONSE_FOLDS)
+    }
     mode_metadata: dict[str, Any] = {}
     for chart_type in MODE_TYPES:
         mode_key = _mode_key(chart_type)
         mode = merged[merged["type"] == chart_type].copy()
-        group_columns = ["source", "playerId"]
-        counts = mode.groupby(group_columns, sort=False).size()
-        eligible_groups = counts[counts >= SCORE_PROJECTION_MIN_PLAYER_SCORES].index
-        mode_groups = pd.MultiIndex.from_frame(mode[group_columns])
-        mode = mode[mode_groups.isin(eligible_groups)].copy()
+        calibrated_mode, source_offset = _calibrate_score_rows(mode)
+        surface = _build_score_surface(calibrated_mode)
+        if surface is not None:
+            full_surfaces[mode_key] = surface
+        fold_rows: dict[str, int] = {}
+        for fold in range(SCORE_RESPONSE_FOLDS):
+            training = mode[mode["fold"] != fold]
+            fold_rows[str(fold)] = int(len(training))
+            calibrated_training, _ = _calibrate_score_rows(training)
+            fold_surface = _build_score_surface(calibrated_training)
+            if fold_surface is not None:
+                crossfit_surfaces[fold][mode_key] = fold_surface
         mode_metadata[mode_key] = {
             "rows": int(len(mode)),
             "players": int(mode["playerId"].nunique()),
@@ -906,31 +1315,35 @@ def fit_score_projection_model(
                 )
                 for source in ("phoenix1", "phoenix2")
             },
+            "phoenix1ToPhoenix2ScoreOffset": round(source_offset, 3),
+            "crossfitTrainingRows": fold_rows,
         }
-        if mode.empty:
-            continue
-        difficulty = mode["estimatedDifficulty"].astype(float)
-        score = mode["score"].astype(float)
-        centered_difficulty = difficulty - mode.groupby(group_columns, sort=False)[
-            "estimatedDifficulty"
-        ].transform("mean")
-        centered_score = score - mode.groupby(group_columns, sort=False)["score"].transform(
-            "mean"
-        )
-        denominator = float(np.dot(centered_difficulty, centered_difficulty))
-        slope = (
-            -float(np.dot(centered_difficulty, centered_score) / denominator)
-            if denominator > 0
-            else math.nan
-        )
-        if math.isfinite(slope) and slope > 0:
-            slopes[mode_key] = slope
-    return slopes, {
-        "centering": "within player and source version",
-        "minimumScoresPerPlayerSource": SCORE_PROJECTION_MIN_PLAYER_SCORES,
+    model = ScoreResponseModel(
+        full_surfaces,
+        crossfit_surfaces,
+        frozenset(merged["playerId"].astype(str).unique()),
+    )
+    return model, {
+        "model": SCORE_RESPONSE_MODEL_NAME,
+        "crossfitFolds": SCORE_RESPONSE_FOLDS,
+        "personalRawScoreInput": False,
+        "playerBalanced": True,
+        "minimumLocalSupport": SCORE_RESPONSE_MIN_SUPPORT,
+        "supportNeighborhood": "plus or minus 0.5 rating and difficulty",
+        "confidenceThresholds": {"high": 200, "medium": 50, "low": 5},
+        "phoenix1Calibration": "mode-specific dual-source player intercept offset to the Phoenix 2 raw-score scale",
         "phoenix2OverlapRowsRemovedFromPhoenix1": overlap_rows_removed,
         "modes": mode_metadata,
     }
+
+
+def fit_score_projection_model(
+    phoenix1_snapshot: Mapping[str, Any] | None,
+    phoenix2_snapshot: Mapping[str, Any],
+    combined_charts: Sequence[Mapping[str, Any]],
+) -> tuple[ScoreResponseModel, dict[str, Any]]:
+    """Compatibility name for the population score response fitter."""
+    return fit_score_response_model(phoenix1_snapshot, phoenix2_snapshot, combined_charts)
 
 
 def fit_score_projection_slopes(
@@ -938,14 +1351,14 @@ def fit_score_projection_slopes(
     combined_charts: Sequence[Mapping[str, Any]],
     *,
     phoenix1_snapshot: Mapping[str, Any] | None = None,
-) -> dict[str, float]:
-    """Compatibility wrapper returning joined score-projection slopes only."""
-    slopes, _ = fit_score_projection_model(
+) -> ScoreResponseModel:
+    """Deprecated compatibility wrapper returning the response model."""
+    model, _ = fit_score_response_model(
         phoenix1_snapshot,
         phoenix2_snapshot,
         combined_charts,
     )
-    return slopes
+    return model
 
 
 def _baseline_window(mode_scores: pd.DataFrame) -> tuple[pd.DataFrame, int, int, str]:
@@ -982,7 +1395,7 @@ def _build_player_recommendation_phoenix2_only(
     phoenix2_snapshot: Mapping[str, Any],
     combined_charts: Sequence[Mapping[str, Any]],
     phoenix2_slopes: Mapping[str, float],
-    score_projection_slopes: Mapping[str, float] | None = None,
+    score_response_model: ScoreResponseModel | None = None,
 ) -> dict[str, Any]:
     catalog, scores = _clean_snapshot_frames(phoenix2_snapshot)
     catalog_map = {str(row["chartId"]): row for row in catalog.to_dict(orient="records")}
@@ -1031,11 +1444,6 @@ def _build_player_recommendation_phoenix2_only(
             baseline_label = f"best 50% ({baseline_end} of {score_count})"
         baseline = mode_scores.iloc[baseline_start - 1 : baseline_end].copy()
         baseline_pb = float(baseline["pumbility"].mean())
-        baseline_scores = baseline["score"].dropna().astype(float)
-        baseline_score = (
-            float(baseline_scores.mean()) if not baseline_scores.empty else None
-        )
-        score_projection_slope = (score_projection_slopes or {}).get(mode_key)
         fallback_count = 0
         baseline_difficulties: list[float] = []
         baseline_edges: list[float] = []
@@ -1075,19 +1483,14 @@ def _build_player_recommendation_phoenix2_only(
             chart_id = str(chart["chartId"])
             existing = existing_by_chart.get(chart_id)
             projected = max(existing or 0.0, expected)
-            projected_score: int | None = None
-            if (
-                baseline_score is not None
-                and score_projection_slope is not None
-                and math.isfinite(float(score_projection_slope))
-                and float(score_projection_slope) > 0
-            ):
-                raw_projection = baseline_score + float(score_projection_slope) * (
-                    scoring_rating - estimate
+            projection = (
+                score_response_model.predict(
+                    str(player_id), mode_key, scoring_rating, estimate
                 )
-                projected_score = int(
-                    round(min(MAX_RAW_SCORE, max(0.0, raw_projection)))
-                )
+                if score_response_model is not None
+                else ScoreProjectionResult(None, "population-crossfit", 0, "unavailable")
+            )
+            projected_score = projection.score
             simulated = [
                 projected if str(row["chartId"]) == chart_id else float(row["pumbility"])
                 for row in mode_scores.to_dict(orient="records")
@@ -1104,6 +1507,9 @@ def _build_player_recommendation_phoenix2_only(
                     "expectedPumbility": round(expected, 3),
                     "projectedGain": round(gain, 3),
                     "projectedScore": projected_score,
+                    "scoreProjectionSource": projection.source,
+                    "scoreProjectionSupportCount": projection.support_count,
+                    "scoreProjectionConfidence": projection.confidence,
                     "played": existing is not None,
                 }
             )
@@ -1123,17 +1529,14 @@ def _build_player_recommendation_phoenix2_only(
             "validScoreCount": int(score_count),
             "baselineRanks": [baseline_start, baseline_end],
             "baselineLabel": baseline_label,
-            "baselineScoreCount": int(len(baseline)),
             "baselinePumbility": round(baseline_pb, 3),
-            "baselineScore": round(baseline_score, 3) if baseline_score is not None else None,
             "scoringRating": round(scoring_rating, 3),
             "ratingFallbackCharts": fallback_count,
             "pumbilityPerLevel": round(float(slope), 6),
-            "scorePointsPerDifficulty": (
-                round(float(score_projection_slope), 6)
-                if score_projection_slope is not None
-                else None
+            "projectionAvailable": any(
+                row.get("projectedScore") is not None for row in candidates
             ),
+            "scoreProjectionModel": SCORE_RESPONSE_MODEL_NAME,
             "currentTop50Pumbility": round(current_total, 3),
             "candidateRange": [
                 None,
@@ -1151,7 +1554,7 @@ def build_player_recommendation(
     phoenix2_snapshot: Mapping[str, Any],
     combined_charts: Sequence[Mapping[str, Any]],
     phoenix2_slopes: Mapping[str, float],
-    score_projection_slopes: Mapping[str, float] | None = None,
+    score_response_model: ScoreResponseModel | None = None,
     *,
     phoenix1_snapshot: Mapping[str, Any] | None = None,
     prepared_phoenix2: tuple[pd.DataFrame, pd.DataFrame] | None = None,
@@ -1228,6 +1631,8 @@ def build_player_recommendation(
                     "At least one valid Phoenix 1 or Phoenix 2 score is required "
                     "in this mode."
                 ),
+                "projectionAvailable": False,
+                "scoreProjectionModel": SCORE_RESPONSE_MODEL_NAME,
                 "candidates": [],
                 "topRecommendations": [],
             }
@@ -1248,53 +1653,13 @@ def build_player_recommendation(
             rating_difficulties.append(float(estimate))
         scoring_rating = float(np.mean(rating_difficulties))
 
-        projection_baseline = pd.DataFrame()
-        projection_start: int | None = None
-        projection_end: int | None = None
-        projection_label: str | None = None
-        if phoenix2_score_count > 0:
-            (
-                projection_baseline,
-                projection_start,
-                projection_end,
-                projection_label,
-            ) = _baseline_window(mode_scores)
+        projection_baseline = _baseline_window(mode_scores)[0] if phoenix2_score_count else pd.DataFrame()
         baseline_pb = (
             float(projection_baseline["pumbility"].mean())
             if not projection_baseline.empty
             else None
         )
-        baseline_scores = (
-            projection_baseline["score"].dropna().astype(float)
-            if "score" in projection_baseline.columns
-            else pd.Series(dtype=float)
-        )
-        baseline_score = (
-            float(baseline_scores.mean()) if not baseline_scores.empty else None
-        )
         slope = phoenix2_slopes.get(mode_key)
-        score_projection_slope = (score_projection_slopes or {}).get(mode_key)
-        projection_fallback_count = 0
-        projection_difficulties: list[float] = []
-        for row in projection_baseline.to_dict(orient="records"):
-            chart_id = str(row["chartId"])
-            catalog_chart = catalog_map[chart_id]
-            estimate = chart_map.get(chart_id, {}).get("estimatedDifficulty")
-            if estimate is None or not math.isfinite(float(estimate)):
-                estimate = float(catalog_chart["level"]) + 0.5
-                projection_fallback_count += 1
-            estimate = float(estimate)
-            projection_difficulties.append(estimate)
-        projection_rating = (
-            float(np.mean(projection_difficulties)) if projection_difficulties else None
-        )
-        projection_available = bool(
-            baseline_score is not None
-            and projection_rating is not None
-            and score_projection_slope is not None
-            and math.isfinite(float(score_projection_slope))
-            and float(score_projection_slope) > 0
-        )
 
         current_values = [float(value) for value in mode_scores["pumbility"]]
         current_total = _top_total(current_values)
@@ -1325,20 +1690,14 @@ def build_player_recommendation(
             farm_edge = float(chart["level"]) + 0.5 - estimate
             chart_id = str(chart["chartId"])
             existing = existing_by_chart.get(chart_id)
-            projected_score: int | None = None
-            if (
-                baseline_score is not None
-                and projection_rating is not None
-                and score_projection_slope is not None
-                and math.isfinite(float(score_projection_slope))
-                and float(score_projection_slope) > 0
-            ):
-                raw_projection = baseline_score + float(score_projection_slope) * (
-                    projection_rating - estimate
+            projection = (
+                score_response_model.predict(
+                    str(player_id), mode_key, scoring_rating, estimate
                 )
-                projected_score = int(
-                    round(min(MAX_RAW_SCORE, max(0.0, raw_projection)))
-                )
+                if score_response_model is not None
+                else ScoreProjectionResult(None, "population-crossfit", 0, "unavailable")
+            )
+            projected_score = projection.score
             projected_grade = grade_for_score(projected_score)
             projected_plate: str | None = None
             projected_plate_probability: float | None = None
@@ -1389,6 +1748,9 @@ def build_player_recommendation(
                     ),
                     "projectedGain": round(gain, 3) if gain is not None else None,
                     "projectedScore": projected_score,
+                    "scoreProjectionSource": projection.source,
+                    "scoreProjectionSupportCount": projection.support_count,
+                    "scoreProjectionConfidence": projection.confidence,
                     "projectedGrade": projected_grade,
                     "projectedPlate": projected_plate,
                     "projectedPlateCode": (
@@ -1409,6 +1771,9 @@ def build_player_recommendation(
                 str(row["songName"]).casefold(),
                 str(row["chartId"]),
             )
+        )
+        projection_available = any(
+            row.get("projectedScore") is not None for row in candidates
         )
         if projection_available:
             top = sorted(
@@ -1437,33 +1802,15 @@ def build_player_recommendation(
             "ratingBaselineLabel": rating_label,
             "baselineRanks": [rating_start, rating_end],
             "baselineLabel": rating_label,
-            "baselineScoreCount": int(len(projection_baseline)),
-            "projectionBaselineRanks": (
-                [projection_start, projection_end]
-                if projection_start is not None and projection_end is not None
-                else None
-            ),
-            "projectionBaselineLabel": projection_label,
             "baselinePumbility": (
                 round(baseline_pb, 3) if baseline_pb is not None else None
             ),
-            "baselineScore": (
-                round(baseline_score, 3) if baseline_score is not None else None
-            ),
             "scoringRating": round(scoring_rating, 3),
             "ratingFallbackCharts": rating_fallback_count,
-            "projectionFallbackCharts": projection_fallback_count,
-            "projectionRating": (
-                round(projection_rating, 3) if projection_rating is not None else None
-            ),
             "projectionAvailable": projection_available,
+            "scoreProjectionModel": SCORE_RESPONSE_MODEL_NAME,
             "pumbilityPerLevel": (
                 round(float(slope), 6) if slope is not None else None
-            ),
-            "scorePointsPerDifficulty": (
-                round(float(score_projection_slope), 6)
-                if score_projection_slope is not None
-                else None
             ),
             "currentTop50Pumbility": round(current_total, 3),
             "currentTop50CutoffPumbility": (
@@ -1503,7 +1850,7 @@ def build_recommendation_index(
         phoenix2_slopes = built_slopes
     charts_for_players = _recommendation_chart_rows(combined_charts)
     slopes = dict(phoenix2_slopes)
-    score_projection_slopes, score_projection_metadata = fit_score_projection_model(
+    score_response_model, score_projection_metadata = fit_score_response_model(
         phoenix1_snapshot,
         phoenix2_snapshot,
         charts_for_players,
@@ -1542,7 +1889,7 @@ def build_recommendation_index(
             phoenix2_snapshot,
             charts_for_players,
             slopes,
-            score_projection_slopes,
+            score_response_model,
             prepared_phoenix2=prepared_phoenix2,
             prepared_phoenix1=prepared_phoenix1,
             plate_model=plate_model,
@@ -1608,7 +1955,6 @@ def build_recommendation_index(
             "crossVersionNormalization": "Phoenix 1 scores rebased to Phoenix 2 levels, then version- and mode-specific Pumbility residuals converted to level units",
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
             "pumbilityPerLevel": slopes,
-            "scorePointsPerDifficulty": score_projection_slopes,
             "scoreProjectionCoverage": score_projection_metadata,
             "scoreProjectionData": "matched Phoenix 1 + Phoenix 2 raw scores on the Phoenix 2 catalog, with Phoenix 2 precedence for overlapping player/chart rows",
             "baselineRanks": [BASELINE_START_RANK, BASELINE_END_RANK],
@@ -1627,7 +1973,8 @@ def build_recommendation_index(
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-            "scoreProjection": "player baseline raw score adjusted by a joined Phoenix 1 + Phoenix 2 player-and-version-centered score-points-per-difficulty slope and capped at 1000000",
+            "scoreProjection": "player-balanced, Phoenix 2-calibrated monotone population response surface using only scoring rating, chart estimated difficulty, and mode at inference; deterministic five-fold player exclusion prevents personal raw scores from training the surface serving that player",
+            "scoreProjectionModel": SCORE_RESPONSE_MODEL_NAME,
         },
         "players": output_players,
     }
