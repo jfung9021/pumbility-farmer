@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from analysis_runtime import PrivateBlobStore, RuntimeJobStore, read_latest_payload
+from analysis_runtime import (
+    PrivateBlobStore,
+    RuntimeJobStore,
+    read_latest_payload,
+    update_job,
+)
 from api._shared import start_or_reuse_analysis
+from api.cron import cron_authorized
 from mix_registry import DEFAULT_MIX_KEY, resolve_mix
 
 
@@ -80,4 +87,52 @@ def refresh_analysis(mix: str = Query(default=DEFAULT_MIX_KEY)):
         return JSONResponse(
             status_code=500,
             content={"error": "The analysis job could not be started."},
+        )
+
+
+@router.post("/api/analyze/cancel")
+def cancel_analysis(
+    request: Request,
+    job_id: str = Query(default="", alias="jobId"),
+):
+    secret = os.getenv("CRON_SECRET", "")
+    if not cron_authorized(request.headers.get("authorization") or "", secret):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Unauthorized analysis cancellation request."},
+        )
+    normalized_id = job_id.strip()
+    if not normalized_id:
+        return JSONResponse(status_code=400, content={"error": "A jobId is required."})
+    try:
+        jobs = RuntimeJobStore()
+        job = jobs.get(normalized_id)
+        if job is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Analysis job not found or its status has expired."},
+            )
+        if job.get("status") == "completed":
+            return {"outcome": "completed", "job": job}
+        cancelled = update_job(
+            jobs,
+            normalized_id,
+            status="failed",
+            error="The analysis job was cancelled by an operator.",
+            retryAllowedAtUtc=None,
+            cancelRequested=True,
+            progress={
+                "current": 0,
+                "total": 0,
+                "percent": 0,
+                "message": "The analysis job was cancelled and will not be retried.",
+            },
+        )
+        if jobs.active_job_id() == normalized_id:
+            jobs.set_active_job_id(None)
+        return {"outcome": "cancelled", "job": cancelled}
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "The analysis job could not be cancelled."},
         )

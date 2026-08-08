@@ -697,7 +697,7 @@ def execute_analysis_job(
     existing = job_store.get(job_id)
     if existing is None:
         raise RuntimeError("The queued analysis job status was not found.")
-    if existing.get("status") == "completed":
+    if existing.get("status") == "completed" or existing.get("cancelRequested"):
         return existing
     mix_spec = resolve_mix(existing.get("mix"))
     if mix_spec.archived:
@@ -960,7 +960,8 @@ def execute_analysis_job(
                 "message": "Rankings refreshed successfully.",
             },
         )
-        job_store.set_active_job_id(None)
+        if job_store.active_job_id() == job_id:
+            job_store.set_active_job_id(None)
         return completed
     except Exception as exc:
         failed_at = now()
@@ -981,5 +982,6 @@ def execute_analysis_job(
                 },
             )
         finally:
-            job_store.set_active_job_id(None)
+            if job_store.active_job_id() == job_id:
+                job_store.set_active_job_id(None)
         return failed
