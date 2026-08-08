@@ -392,6 +392,7 @@ export default function RecommendationsPage() {
       <footer>
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
+        <p>The projected-score difficulty slope uses matched Phoenix 1 and Phoenix 2 raw scores, centered within each player and version. Phoenix 2 replaces an overlapping Phoenix 1 score.</p>
         <p>Skill rating uses Phoenix 1 independently for Singles and Doubles until that mode reaches 50 valid Phoenix 2 scores.</p>
         <p>Played status, current top 50, and projected gain always use Phoenix 2. Projections are estimates, not guaranteed results.</p>
       </footer>

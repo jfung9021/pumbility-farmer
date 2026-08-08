@@ -39,7 +39,7 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 7
+RECOMMENDATION_SCHEMA_VERSION = 8
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 1
@@ -803,26 +803,69 @@ def build_manual_recommendation_mode(
     }
 
 
-def fit_score_projection_slopes(
+def fit_score_projection_model(
+    phoenix1_snapshot: Mapping[str, Any] | None,
     phoenix2_snapshot: Mapping[str, Any],
     combined_charts: Sequence[Mapping[str, Any]],
-) -> dict[str, float]:
-    """Estimate raw-score loss per measured difficulty level within players."""
-    catalog, scores = _clean_snapshot_frames(phoenix2_snapshot)
+) -> tuple[dict[str, float], dict[str, Any]]:
+    """Fit joined P1+P2 raw-score loss with player/version centering."""
+    catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
     estimates = pd.DataFrame(combined_charts)
-    required = {"chartId", "type", "estimatedDifficulty"}
-    if estimates.empty or not required.issubset(estimates.columns):
-        return {}
-    merged = scores.merge(
-        catalog[["chartId", "type"]],
-        on="chartId",
-        how="inner",
-        validate="many_to_one",
-    ).merge(
-        estimates[["chartId", "estimatedDifficulty"]],
-        on="chartId",
-        how="inner",
-        validate="many_to_one",
+    required = ["chartId", "type", "estimatedDifficulty"]
+    if estimates.empty or not set(required).issubset(estimates.columns):
+        return {}, {"modes": {}}
+    estimates = estimates[required].copy()
+    estimates["chartId"] = estimates["chartId"].astype(str)
+    estimates["estimatedDifficulty"] = pd.to_numeric(
+        estimates["estimatedDifficulty"], errors="coerce"
+    )
+    estimates = estimates.sort_values("chartId", kind="mergesort").drop_duplicates(
+        "chartId", keep="last"
+    )
+
+    if phoenix1_snapshot is not None:
+        phoenix1_charts, phoenix1_scores = _clean_snapshot_frames(phoenix1_snapshot)
+        phoenix1_charts, phoenix1_scores = retain_catalog_source_rows(
+            phoenix1_charts,
+            phoenix1_scores,
+            set(catalog["chartId"].astype(str)),
+        )
+    else:
+        phoenix1_scores = phoenix2_scores.iloc[0:0].copy()
+
+    phoenix2_keys = pd.MultiIndex.from_frame(
+        phoenix2_scores[["playerId", "chartId"]]
+    )
+    if not phoenix1_scores.empty:
+        phoenix1_keys = pd.MultiIndex.from_frame(
+            phoenix1_scores[["playerId", "chartId"]]
+        )
+        retained_phoenix1 = phoenix1_scores[~phoenix1_keys.isin(phoenix2_keys)].copy()
+    else:
+        retained_phoenix1 = phoenix1_scores.copy()
+    overlap_rows_removed = int(len(phoenix1_scores) - len(retained_phoenix1))
+
+    def attach_source(scores: pd.DataFrame, source: str) -> pd.DataFrame:
+        rows = scores.merge(
+            catalog[["chartId", "type"]],
+            on="chartId",
+            how="inner",
+            validate="many_to_one",
+        ).merge(
+            estimates[["chartId", "estimatedDifficulty"]],
+            on="chartId",
+            how="inner",
+            validate="many_to_one",
+        )
+        rows["source"] = source
+        return rows
+
+    merged = pd.concat(
+        [
+            attach_source(retained_phoenix1, "phoenix1"),
+            attach_source(phoenix2_scores, "phoenix2"),
+        ],
+        ignore_index=True,
     )
     merged = merged[
         merged["score"].notna()
@@ -830,19 +873,39 @@ def fit_score_projection_slopes(
         & merged["estimatedDifficulty"].notna()
     ].copy()
     slopes: dict[str, float] = {}
+    mode_metadata: dict[str, Any] = {}
     for chart_type in MODE_TYPES:
+        mode_key = _mode_key(chart_type)
         mode = merged[merged["type"] == chart_type].copy()
-        counts = mode.groupby("playerId", sort=False).size()
-        eligible_ids = counts[counts >= SCORE_PROJECTION_MIN_PLAYER_SCORES].index
-        mode = mode[mode["playerId"].isin(eligible_ids)]
+        group_columns = ["source", "playerId"]
+        counts = mode.groupby(group_columns, sort=False).size()
+        eligible_groups = counts[counts >= SCORE_PROJECTION_MIN_PLAYER_SCORES].index
+        mode_groups = pd.MultiIndex.from_frame(mode[group_columns])
+        mode = mode[mode_groups.isin(eligible_groups)].copy()
+        mode_metadata[mode_key] = {
+            "rows": int(len(mode)),
+            "players": int(mode["playerId"].nunique()),
+            "sourceRows": {
+                source: int((mode["source"] == source).sum())
+                for source in ("phoenix1", "phoenix2")
+            },
+            "sourcePlayers": {
+                source: int(
+                    mode.loc[mode["source"] == source, "playerId"].nunique()
+                )
+                for source in ("phoenix1", "phoenix2")
+            },
+        }
         if mode.empty:
             continue
         difficulty = mode["estimatedDifficulty"].astype(float)
         score = mode["score"].astype(float)
-        centered_difficulty = difficulty - difficulty.groupby(mode["playerId"]).transform(
+        centered_difficulty = difficulty - mode.groupby(group_columns, sort=False)[
+            "estimatedDifficulty"
+        ].transform("mean")
+        centered_score = score - mode.groupby(group_columns, sort=False)["score"].transform(
             "mean"
         )
-        centered_score = score - score.groupby(mode["playerId"]).transform("mean")
         denominator = float(np.dot(centered_difficulty, centered_difficulty))
         slope = (
             -float(np.dot(centered_difficulty, centered_score) / denominator)
@@ -850,7 +913,27 @@ def fit_score_projection_slopes(
             else math.nan
         )
         if math.isfinite(slope) and slope > 0:
-            slopes[_mode_key(chart_type)] = slope
+            slopes[mode_key] = slope
+    return slopes, {
+        "centering": "within player and source version",
+        "minimumScoresPerPlayerSource": SCORE_PROJECTION_MIN_PLAYER_SCORES,
+        "phoenix2OverlapRowsRemovedFromPhoenix1": overlap_rows_removed,
+        "modes": mode_metadata,
+    }
+
+
+def fit_score_projection_slopes(
+    phoenix2_snapshot: Mapping[str, Any],
+    combined_charts: Sequence[Mapping[str, Any]],
+    *,
+    phoenix1_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, float]:
+    """Compatibility wrapper returning joined score-projection slopes only."""
+    slopes, _ = fit_score_projection_model(
+        phoenix1_snapshot,
+        phoenix2_snapshot,
+        combined_charts,
+    )
     return slopes
 
 
@@ -1419,8 +1502,10 @@ def build_recommendation_index(
         phoenix2_slopes = built_slopes
     charts_for_players = _recommendation_chart_rows(combined_charts)
     slopes = dict(phoenix2_slopes)
-    score_projection_slopes = fit_score_projection_slopes(
-        phoenix2_snapshot, charts_for_players
+    score_projection_slopes, score_projection_metadata = fit_score_projection_model(
+        phoenix1_snapshot,
+        phoenix2_snapshot,
+        charts_for_players,
     )
     prepared_phoenix2 = _clean_snapshot_frames(phoenix2_snapshot)
     prepared_phoenix1 = _prepare_phoenix1_rating_frames(
@@ -1523,6 +1608,8 @@ def build_recommendation_index(
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
             "pumbilityPerLevel": slopes,
             "scorePointsPerDifficulty": score_projection_slopes,
+            "scoreProjectionCoverage": score_projection_metadata,
+            "scoreProjectionData": "matched Phoenix 1 + Phoenix 2 raw scores on the Phoenix 2 catalog, with Phoenix 2 precedence for overlapping player/chart rows",
             "baselineRanks": [BASELINE_START_RANK, BASELINE_END_RANK],
             "phoenix2RatingScoreThreshold": PHOENIX2_RATING_SCORE_THRESHOLD,
             "ratingSource": "per mode, use Phoenix 2 at 50 valid scores; otherwise use Phoenix 1 when available",
@@ -1538,7 +1625,7 @@ def build_recommendation_index(
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-            "scoreProjection": "player baseline raw score adjusted by a Phoenix 2 within-player score-points-per-difficulty slope and capped at 1000000",
+            "scoreProjection": "player baseline raw score adjusted by a joined Phoenix 1 + Phoenix 2 player-and-version-centered score-points-per-difficulty slope and capped at 1000000",
         },
         "players": output_players,
     }

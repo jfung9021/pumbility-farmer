@@ -52,6 +52,16 @@ test("mobile styles keep desktop information visible", async () => {
   assert.deepEqual(hiddenSelectors, [".feature-card > b"]);
 });
 
+test("recommendation methodology describes the joined score projection", async () => {
+  const page = await readFile(
+    path.join(process.cwd(), "app", "recommendations", "page.tsx"),
+    "utf8",
+  );
+
+  assert.match(page, /projected-score difficulty slope uses matched Phoenix 1 and Phoenix 2 raw scores/);
+  assert.match(page, /centered within each player and version/);
+});
+
 test("rejects an empty successful response as non-JSON", async () => {
   const response = new Response("", { status: 200 });
   await assert.rejects(() => readJsonResponse(response), /empty or non-JSON/);
