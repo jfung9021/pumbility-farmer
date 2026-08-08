@@ -540,12 +540,12 @@ footer b { color: #929b93; }
 .recommendation-title { align-items: center; display: flex; gap: 8px; }
 .recommendation-title h3 { font-size: 14px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recommendation-copy > p { color: #697269; font-size: 9px; margin: 5px 0 9px; }
+.recommendation-copy > p b { color: #aab3ab; white-space: nowrap; }
 .recommendation-tags { color: #747d74; display: flex; flex-wrap: wrap; font-size: 9px; gap: 13px; }
 .recommendation-tags b { color: #bdc5bd; }
 .recommendation-value { border-left: 1px solid var(--line); display: flex; flex-direction: column; padding-left: 18px; }
-.recommendation-value span, .recommendation-value small { color: #687169; font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; }
+.recommendation-value span { color: #687169; font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; }
 .recommendation-value strong { color: var(--acid); font-size: 23px; letter-spacing: -0.05em; margin: 3px 0; }
-.recommendation-value small { font-size: 8px; letter-spacing: 0; text-transform: none; }
 .no-recommendations { color: #687168; font-size: 11px; margin: 0; padding: 26px; text-align: center; }
 
 @media (max-width: 820px) {
@@ -596,17 +596,15 @@ footer b { color: #929b93; }
   .top-recommendations { margin-top: 44px; }
   .recommendation-section-heading h2 { font-size: 24px; }
   .recommendation-section-heading > p { line-height: 1.5; }
-  .recommendation-card { align-items: start; gap: 10px; grid-template-columns: 24px 48px minmax(0, 1fr); padding: 14px 10px; }
+  .recommendation-card { align-items: start; gap: 8px; grid-template-columns: 22px 48px minmax(0, 1fr) 92px; padding: 14px 10px; }
   .recommendation-rank { grid-column: 1; grid-row: 1; padding-top: 4px; }
   .recommendation-jacket { height: 48px; width: 48px; }
   .recommendation-copy { grid-column: 3; grid-row: 1; }
   .recommendation-title { align-items: flex-start; flex-wrap: wrap; }
   .recommendation-title h3 { overflow: visible; overflow-wrap: anywhere; white-space: normal; }
   .recommendation-tags { gap: 6px 12px; line-height: 1.45; }
-  .recommendation-value { border-left: 0; border-top: 1px solid var(--line); display: grid; gap: 2px 10px; grid-column: 2 / -1; grid-row: 2; grid-template-columns: auto minmax(0, 1fr); padding: 10px 0 0; }
-  .recommendation-value span { grid-column: 1 / -1; }
+  .recommendation-value { align-self: stretch; border-left: 1px solid var(--line); grid-column: 4; grid-row: 1; justify-content: center; min-width: 0; padding: 0 0 0 10px; }
   .recommendation-value strong { font-size: 18px; }
-  .recommendation-value small { align-self: center; }
   .run-key summary { font-size: 10px; }
   .run-button { min-width: auto; padding: 10px 13px; }
   .hero { padding: 28px 18px 30px; }
