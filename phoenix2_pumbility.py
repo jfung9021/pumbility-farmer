@@ -204,6 +204,62 @@ class PlateProjectionModel:
             grouped[(player_id, mode, grade)][plate] += 1
         return grouped
 
+    def global_payload(self) -> dict[str, Any]:
+        """Serialize population-only state for lightweight per-player inference."""
+        return {
+            "phoenix1Cap": self.phoenix1_cap,
+            "population": {
+                f"{mode}\u001f{grade}": dict(counts)
+                for (mode, grade), counts in self._population.items()
+            },
+            "modePopulation": {
+                mode: dict(counts) for mode, counts in self._mode_population.items()
+            },
+        }
+
+    @classmethod
+    def from_global_payload(
+        cls,
+        payload: Mapping[str, Any],
+        phoenix1_snapshot: Mapping[str, Any],
+        phoenix2_snapshot: Mapping[str, Any],
+        catalog_types: Mapping[str, str],
+    ) -> "PlateProjectionModel":
+        """Restore global priors while deriving only the selected player's counts."""
+        p1_rows, _ = _snapshot_observations(phoenix1_snapshot, catalog_types)
+        p2_rows, p2_keys = _snapshot_observations(phoenix2_snapshot, catalog_types)
+        p1_rows = [row for row in p1_rows if (row[0], row[1]) not in p2_keys]
+        model = cls.__new__(cls)
+        model._p1 = cls._group_player_counts(p1_rows)
+        model._p2 = cls._group_player_counts(p2_rows)
+        model._population = defaultdict(Counter)
+        raw_population = payload.get("population", {})
+        if not isinstance(raw_population, Mapping):
+            raise ValueError("The stored plate population is invalid.")
+        for raw_key, raw_counts in raw_population.items():
+            parts = str(raw_key).split("\u001f", 1)
+            if len(parts) != 2 or not isinstance(raw_counts, Mapping):
+                raise ValueError("The stored plate population is invalid.")
+            model._population[(parts[0], parts[1])] = Counter(
+                {str(plate): int(count) for plate, count in raw_counts.items()}
+            )
+        model._mode_population = defaultdict(Counter)
+        raw_modes = payload.get("modePopulation", {})
+        if not isinstance(raw_modes, Mapping):
+            raise ValueError("The stored plate mode population is invalid.")
+        for mode, raw_counts in raw_modes.items():
+            if not isinstance(raw_counts, Mapping):
+                raise ValueError("The stored plate mode population is invalid.")
+            model._mode_population[str(mode)] = Counter(
+                {str(plate): int(count) for plate, count in raw_counts.items()}
+            )
+        cap = int(payload.get("phoenix1Cap") or DEFAULT_PHOENIX1_CAP)
+        if cap not in PHOENIX1_CAP_CANDIDATES:
+            raise ValueError("The stored Phoenix 1 plate-prior cap is invalid.")
+        model.phoenix1_cap = cap
+        model._distribution_cache = {}
+        return model
+
     def _population_probabilities(self, mode: str, grade: str) -> dict[str, float]:
         counts = self._population.get((mode, grade)) or self._mode_population.get(mode)
         counts = counts or Counter()

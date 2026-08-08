@@ -44,6 +44,10 @@ from piu_recommendations import (
     recommendation_blob_path,
     recommendation_shard_path,
 )
+from recommendation_refresh import recommendation_player_path
+from worker.tasks import (
+    refresh_player_recommendations as refresh_player_recommendations_task,
+)
 NOW = datetime(2026, 8, 7, 6, 30, tzinfo=timezone.utc)
 API_CLIENT = TestClient(api_app)
 
@@ -390,6 +394,78 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual(selected.json()["player"]["playerKey"], "public-key")
         self.assertEqual(missing.status_code, 404)
 
+    def test_player_refresh_routes_cache_dedupe_and_hide_internal_ids(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        index = {
+            "schemaVersion": 10,
+            "storageSchemaVersion": 3,
+            "generationKey": "daily-generation",
+            "generatedAtUtc": isoformat_utc(NOW),
+            "modelGeneratedAtUtc": isoformat_utc(NOW),
+            "method": {"baselineRanks": [11, 30]},
+            "players": [
+                {
+                    "playerKey": "public-key",
+                    "internalPlayerId": "private-id",
+                    "username": "PLAYER",
+                    "displayName": "PLAYER",
+                    "eligibility": {"singles": True, "doubles": False},
+                    "inputShard": 0,
+                }
+            ],
+        }
+        cached = {
+            "schemaVersion": 10,
+            "generatedAtUtc": isoformat_utc(NOW),
+            "modelGeneratedAtUtc": isoformat_utc(NOW),
+            "playerSyncedAtUtc": isoformat_utc(NOW),
+            "modelGeneration": "daily-generation",
+            "stale": False,
+            "method": index["method"],
+            "player": {
+                "playerKey": "public-key",
+                "username": "PLAYER",
+                "displayName": "PLAYER",
+                "modes": {},
+            },
+        }
+        blobs.put_json(recommendation_blob_path(), index)
+        blobs.put_json(recommendation_player_path("public-key"), cached)
+
+        with (
+            patch("api.recommendations.PrivateBlobStore", return_value=blobs),
+            patch("api.recommendations.RuntimeJobStore", return_value=jobs),
+            patch("api.recommendations.utc_now", return_value=NOW),
+            patch("api.recommendations._enqueue_player_refresh") as enqueue,
+        ):
+            players = API_CLIENT.get("/api/recommendations/players")
+            selected = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key"
+            )
+            fresh = API_CLIENT.post(
+                "/api/recommendations/refresh?playerKey=public-key"
+            )
+            stale = {
+                **cached,
+                "playerSyncedAtUtc": isoformat_utc(NOW - timedelta(minutes=2)),
+            }
+            blobs.put_json(recommendation_player_path("public-key"), stale)
+            started = API_CLIENT.post(
+                "/api/recommendations/refresh?playerKey=public-key"
+            )
+            duplicate = API_CLIENT.post(
+                "/api/recommendations/refresh?playerKey=public-key"
+            )
+
+        self.assertTrue(players.json()["refreshSupported"])
+        self.assertNotIn("internalPlayerId", players.json()["players"][0])
+        self.assertEqual(selected.json()["modelGeneration"], "daily-generation")
+        self.assertEqual((fresh.status_code, fresh.json()["outcome"]), (200, "fresh"))
+        self.assertEqual((started.status_code, started.json()["outcome"]), (202, "started"))
+        self.assertEqual((duplicate.status_code, duplicate.json()["outcome"]), (202, "existing"))
+        enqueue.assert_called_once()
+
     def test_recommendations_require_a_player_key_and_generated_index(self) -> None:
         blobs = MemoryBlobStore()
         with patch("api.recommendations.PrivateBlobStore", return_value=blobs):
@@ -422,7 +498,11 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
 
     def test_archived_phoenix1_manual_refresh_and_job_lookup_are_rejected(self) -> None:
-        refresh = API_CLIENT.post("/api/analyze?mix=phoenix1")
+        with patch.dict("os.environ", {"CRON_SECRET": "admin-secret"}):
+            refresh = API_CLIENT.post(
+                "/api/analyze?mix=phoenix1",
+                headers={"X-Analysis-Run-Secret": "admin-secret"},
+            )
         job = API_CLIENT.get("/api/analyze?mix=phoenix1&jobId=stale")
         self.assertEqual((refresh.status_code, refresh.json()["outcome"]), (409, "archived"))
         self.assertEqual((job.status_code, job.json()["outcome"]), (410, "archived"))
@@ -443,7 +523,7 @@ class ApiRouteTests(unittest.TestCase):
             401, "Unauthorized webhook."
         ))
 
-    def test_promoted_deployment_webhook_starts_cached_reanalysis(self) -> None:
+    def test_promoted_deployment_webhook_does_not_start_reanalysis(self) -> None:
         secret = "deployment-secret"
         event = {
             "id": "evt_1",
@@ -455,35 +535,22 @@ class ApiRouteTests(unittest.TestCase):
         }
         raw = json.dumps(event, separators=(",", ":")).encode()
         signature = hmac.new(secret.encode(), raw, hashlib.sha1).hexdigest()
-        job_id = deterministic_deployment_job_id("dpl_example")
-        job = new_job(job_id, NOW, reanalyze_only=True, trigger="deployment")
-        with (
-            patch.dict(
-                "os.environ",
-                {
-                    "VERCEL_DEPLOY_WEBHOOK_SECRET": secret,
-                    "VERCEL_PROJECT_ID": "prj_example",
-                },
-            ),
-            patch(
-                "api.deploy.start_or_reuse_analysis",
-                return_value=(202, {"outcome": "started", "job": job}),
-            ) as start,
+        with patch.dict(
+            "os.environ",
+            {
+                "VERCEL_DEPLOY_WEBHOOK_SECRET": secret,
+                "VERCEL_PROJECT_ID": "prj_example",
+            },
         ):
             response = API_CLIENT.post(
                 "/api/deploy",
                 content=raw,
                 headers={"x-vercel-signature": signature},
             )
-        self.assertEqual((response.status_code, response.json()["outcome"]), (202, "started"))
-        start.assert_called_once_with(
-            force_refresh=True,
-            deterministic_job_id=job_id,
-            reanalyze_only=True,
-            trigger="deployment",
-        )
+        self.assertEqual((response.status_code, response.json()["outcome"]), (202, "ignored"))
+        self.assertEqual(response.json()["deploymentId"], "dpl_example")
 
-    def test_deployment_webhook_retries_while_another_job_is_active(self) -> None:
+    def test_deployment_webhook_is_independent_of_active_analysis_jobs(self) -> None:
         secret = "deployment-secret"
         raw = json.dumps({
             "type": "deployment.promoted",
@@ -493,26 +560,19 @@ class ApiRouteTests(unittest.TestCase):
             },
         }, separators=(",", ":")).encode()
         signature = hmac.new(secret.encode(), raw, hashlib.sha1).hexdigest()
-        other = new_job("analysis-manual", NOW)
-        with (
-            patch.dict(
-                "os.environ",
-                {
-                    "VERCEL_DEPLOY_WEBHOOK_SECRET": secret,
-                    "VERCEL_PROJECT_ID": "prj_example",
-                },
-            ),
-            patch(
-                "api.deploy.start_or_reuse_analysis",
-                return_value=(202, {"outcome": "existing", "job": other}),
-            ),
+        with patch.dict(
+            "os.environ",
+            {
+                "VERCEL_DEPLOY_WEBHOOK_SECRET": secret,
+                "VERCEL_PROJECT_ID": "prj_example",
+            },
         ):
             response = API_CLIENT.post(
                 "/api/deploy",
                 content=raw,
                 headers={"x-vercel-signature": signature},
             )
-        self.assertEqual(response.status_code, 503)
+        self.assertEqual((response.status_code, response.json()["outcome"]), (202, "ignored"))
 
     def test_deployment_webhook_rejects_archived_phoenix1(self) -> None:
         secret = "deployment-secret"
@@ -540,10 +600,16 @@ class ApiRouteTests(unittest.TestCase):
 
     def test_post_returns_async_refresh_contract(self) -> None:
         job = new_job("analysis-20260807T06", NOW)
-        with patch("api.analyze.start_or_reuse_analysis", return_value=(
-            202, {"outcome": "started", "job": job}
-        )):
-            response = API_CLIENT.post("/api/analyze")
+        with (
+            patch.dict("os.environ", {"CRON_SECRET": "admin-secret"}),
+            patch("api.analyze.start_or_reuse_analysis", return_value=(
+                202, {"outcome": "started", "job": job}
+            )),
+        ):
+            response = API_CLIENT.post(
+                "/api/analyze",
+                headers={"X-Analysis-Run-Secret": "admin-secret"},
+            )
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["outcome"], "started")
 
@@ -593,6 +659,43 @@ class WorkerClient:
 
 
 class WorkerTests(unittest.TestCase):
+    def test_player_refresh_task_uses_the_dedicated_lightweight_path(self) -> None:
+        jobs = MemoryJobStore()
+        job = {
+            "id": "recommendation-public-key-20260807T0630",
+            "kind": "player-recommendation-refresh",
+            "playerKey": "public-key",
+            "status": "queued",
+            "stage": "queued",
+            "createdAtUtc": isoformat_utc(NOW),
+            "updatedAtUtc": isoformat_utc(NOW),
+        }
+        jobs.save(job)
+        response = {
+            "generatedAtUtc": isoformat_utc(NOW),
+            "modelGeneratedAtUtc": isoformat_utc(NOW - timedelta(hours=1)),
+            "playerSyncedAtUtc": isoformat_utc(NOW),
+        }
+
+        with (
+            patch.dict("os.environ", {"PIU_SCORES_API_KEY": "test-key"}),
+            patch("worker.tasks.RuntimeJobStore", return_value=jobs),
+            patch("worker.tasks.PrivateBlobStore") as blobs,
+            patch("worker.tasks.PiuScoresClient") as client,
+            patch("worker.tasks.refresh_one_player", return_value=response) as refresh,
+        ):
+            result = refresh_player_recommendations_task.run(job["id"])
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["progress"]["percent"], 100)
+        self.assertIn("durationMs", result)
+        refresh.assert_called_once_with(
+            blobs.return_value,
+            client.return_value,
+            index_path=recommendation_blob_path(),
+            player_key="public-key",
+        )
+
     def test_cancelled_queue_redelivery_is_acknowledged_without_work(self) -> None:
         blobs = MemoryBlobStore()
         jobs = MemoryJobStore()
@@ -645,6 +748,52 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(blobs.list(runs_prefix("phoenix2"))), 1)
         self.assertEqual(blobs.get_json(recommendation_blob_path())["players"], [])
         self.assertEqual(blobs.get_json(combined_tier_blob_path())["singles"], [])
+
+    def test_new_model_publish_removes_superseded_recommendation_generations(self) -> None:
+        blobs = MemoryBlobStore()
+        blobs.put_json("analysis/recommendations/models/old.json", {"old": True})
+        blobs.put_json(
+            "analysis/private/recommendation-inputs/old/phoenix1/0000.json",
+            {"old": True},
+        )
+        blobs.put_json(recommendation_shard_path("legacy", 0), {"old": True})
+        blobs.put_json(
+            "analysis/recommendations/models/current.json", {"current": True}
+        )
+        blobs.put_json(
+            "analysis/private/recommendation-inputs/current/phoenix1/0000.json",
+            {"current": True},
+        )
+
+        publish_success(
+            blobs,
+            job_id="current-model",
+            snapshot={"mix": "Phoenix2", "players": [], "charts": [], "scores": []},
+            payload=latest_payload(NOW, "phoenix2"),
+            recommendations={
+                "storageSchemaVersion": 3,
+                "generationKey": "current",
+                "generatedAtUtc": isoformat_utc(NOW),
+                "players": [],
+            },
+            mix="phoenix2",
+        )
+
+        self.assertIsNone(blobs.get_json("analysis/recommendations/models/old.json"))
+        self.assertIsNone(
+            blobs.get_json(
+                "analysis/private/recommendation-inputs/old/phoenix1/0000.json"
+            )
+        )
+        self.assertIsNone(blobs.get_json(recommendation_shard_path("legacy", 0)))
+        self.assertIsNotNone(
+            blobs.get_json("analysis/recommendations/models/current.json")
+        )
+        self.assertIsNotNone(
+            blobs.get_json(
+                "analysis/private/recommendation-inputs/current/phoenix1/0000.json"
+            )
+        )
 
     def test_stale_archived_job_fails_without_syncing_or_publishing(self) -> None:
         blobs = MemoryBlobStore()

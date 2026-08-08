@@ -33,13 +33,16 @@ from piu_misgrade_analyzer import (
 from piu_recommendations import (
     build_combined_chart_results,
     build_combined_tier_payload,
-    build_recommendation_index,
     combined_tier_blob_path,
     phoenix1_snapshot_path,
     recommendation_blob_path,
     recommendation_generation_key,
-    recommendation_shard_path,
     recommendation_shard_prefix,
+)
+from recommendation_refresh import (
+    build_recommendation_model_artifacts,
+    publish_recommendation_model_artifacts,
+    recommendation_model_path,
 )
 
 
@@ -618,13 +621,35 @@ def publish_success(
     if recommendations is not None:
         blobs.put_json(recommendation_blob_path(), recommendations)
         generation_key = str(recommendations.get("generationKey") or "").strip()
-        if int(recommendations.get("storageSchemaVersion") or 0) >= 2 and generation_key:
+        storage_schema = int(recommendations.get("storageSchemaVersion") or 0)
+        if storage_schema == 2 and generation_key:
             keep_prefix = recommendation_shard_prefix(generation_key)
             stale_recommendations = [
                 item.pathname
                 for item in blobs.list(recommendation_shard_prefix())
                 if not item.pathname.startswith(keep_prefix)
             ]
+            if stale_recommendations:
+                blobs.delete(stale_recommendations)
+        elif storage_schema >= 3 and generation_key:
+            keep_model = recommendation_model_path(generation_key)
+            keep_inputs = (
+                f"analysis/private/recommendation-inputs/{generation_key}/"
+            )
+            stale_recommendations = [
+                item.pathname
+                for item in blobs.list("analysis/recommendations/models/")
+                if item.pathname != keep_model
+            ]
+            stale_recommendations.extend(
+                item.pathname
+                for item in blobs.list("analysis/private/recommendation-inputs/")
+                if not item.pathname.startswith(keep_inputs)
+            )
+            stale_recommendations.extend(
+                item.pathname
+                for item in blobs.list(recommendation_shard_prefix())
+            )
             if stale_recommendations:
                 blobs.delete(stale_recommendations)
     if combined_tier is not None:
@@ -889,57 +914,27 @@ def execute_analysis_job(
                 generated_at_utc=payload.get("generatedAtUtc"),
             )
             recommendation_generation = recommendation_generation_key(job_id)
-            recommendation_player_count = sum(
-                1
-                for row in snapshot.get("players", [])
-                if isinstance(row, Mapping)
-                and str(row.get("playerId") or row.get("userId") or "").strip()
-                and str(row.get("username") or "").strip()
-            )
-            published_recommendation_players = 0
-
-            def write_recommendation_shard(
-                shard: int, value: Mapping[str, Any]
-            ) -> None:
-                nonlocal published_recommendation_players
-                blob_store.put_json(
-                    recommendation_shard_path(recommendation_generation, shard),
-                    value,
-                )
-                published_recommendation_players += len(value.get("players", []))
-                percent = (
-                    int(
-                        published_recommendation_players
-                        / recommendation_player_count
-                        * 100
-                    )
-                    if recommendation_player_count
-                    else 100
-                )
-                update_job(
-                    job_store,
-                    job_id,
-                    status="running",
-                    stage="publishing",
-                    progress={
-                        "current": published_recommendation_players,
-                        "total": recommendation_player_count,
-                        "percent": percent,
-                        "message": (
-                            "Publishing bounded recommendation batches for "
-                            f"{recommendation_player_count:,} named players."
-                        ),
-                    },
-                )
-
-            recommendation_payload = build_recommendation_index(
+            (
+                recommendation_payload,
+                recommendation_model,
+                recommendation_phoenix1_shards,
+                recommendation_phoenix2_shards,
+            ) = build_recommendation_model_artifacts(
                 phoenix1_snapshot,
                 snapshot,
                 generated_at_utc=payload.get("generatedAtUtc"),
                 combined_charts=combined_charts,
                 phoenix2_slopes=combined_slopes,
                 generation_key=recommendation_generation,
-                shard_writer=write_recommendation_shard,
+            )
+            publish_recommendation_model_artifacts(
+                blob_store,
+                index=recommendation_payload,
+                model=recommendation_model,
+                phoenix1_shards=recommendation_phoenix1_shards,
+                phoenix2_shards=recommendation_phoenix2_shards,
+                index_path=recommendation_blob_path(),
+                publish_index=False,
             )
 
         update_job(

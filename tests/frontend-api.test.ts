@@ -76,6 +76,30 @@ test("recommendation page shows one top-50 list without projection evidence deta
   assert.doesNotMatch(css, /\.all-candidates|\.candidate-(?:row|list|copy|jacket|metric|search|heading)/);
 });
 
+test("recommendation page renders cache before a deduplicated player refresh", async () => {
+  const page = await readFile(
+    path.join(process.cwd(), "app", "recommendations", "page.tsx"),
+    "utf8",
+  );
+
+  assert.match(page, /await loadCached\(\);\s*await refresh\(\);/);
+  assert.match(page, /\/api\/recommendations\/refresh\?playerKey=/);
+  assert.match(page, /\/api\/recommendations\/refresh\?jobId=/);
+  assert.match(page, /Showing cached recommendations\. Refresh failed:/);
+  assert.match(page, /playerPayload\.playerSyncedAtUtc/);
+  assert.match(page, /playerPayload\.modelGeneratedAtUtc/);
+});
+
+test("global analysis button sends the protected administrator secret", async () => {
+  const dashboard = await readFile(
+    path.join(process.cwd(), "app", "rankings-dashboard.tsx"),
+    "utf8",
+  );
+
+  assert.match(dashboard, /"X-Analysis-Run-Secret": runSecret/);
+  assert.match(dashboard, /\/api\/analyze\?jobId=/);
+});
+
 test("recommendation cards express projected grade and plate as a concrete goal", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
@@ -391,7 +415,7 @@ test("manual recommendations stop at the scoring rating", () => {
   const singles = response.player.modes.singles;
   assert.deepEqual(singles.candidateRange, [null, 20.5]);
   assert.deepEqual(
-    singles.candidates.map((candidate) => candidate.chartId),
+    (singles.candidates ?? []).map((candidate) => candidate.chartId),
     ["level-16", "rating-edge"],
   );
   assert.equal(singles.topRecommendations[0].chartId, "level-16");
@@ -403,7 +427,7 @@ test("manual recommendations stop at the scoring rating", () => {
     players: [],
   }, 20.5);
   assert.deepEqual(
-    configuredFloor.player.modes.singles.candidates.map((candidate) => candidate.chartId),
+    (configuredFloor.player.modes.singles.candidates ?? []).map((candidate) => candidate.chartId),
     ["level-17"],
   );
 

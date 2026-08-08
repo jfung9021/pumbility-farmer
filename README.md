@@ -195,10 +195,12 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 
 - `GET /api/analyze?mix=phoenix2`: load the latest successful `AnalysisPayload`.
 - `GET /api/analyze?mix=phoenix2&jobId=...`: load a matching 24-hour queue-job status.
-- `POST /api/analyze?mix=phoenix2`: queue or follow a Phoenix 2 refresh.
-- `POST /api/deploy?mix=phoenix2`: accept a signed deployment event for Phoenix 2.
+- `POST /api/analyze?mix=phoenix2`: protected administrator trigger; requires `X-Analysis-Run-Secret` matching `CRON_SECRET` and queues or follows a full Phoenix 2 refresh.
+- `POST /api/deploy?mix=phoenix2`: validate and acknowledge a legacy signed deployment event without starting analysis.
 - `GET /api/recommendations/players`: return consented usernames and mode eligibility without raw IDs; successful lists are cached for five minutes with stale revalidation.
-- `GET /api/recommendations?playerKey=...`: return one precomputed player recommendation slice.
+- `GET /api/recommendations?playerKey=...`: return the last cached recommendation for one player.
+- `POST /api/recommendations/refresh?playerKey=...`: synchronize only that player's new Phoenix 2 scores and queue a lightweight recommendation calculation; requests for the same player within 60 seconds are deduplicated.
+- `GET /api/recommendations/refresh?jobId=...`: poll a player-refresh job.
 - `GET /api/tier-list`: return the public combined Phoenix 1 and Phoenix 2 tier aggregate.
 
 Phoenix 1 POST, cron, deployment, worker, and publisher paths reject updates as archived.
@@ -235,7 +237,11 @@ The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as 
 - `analysis/combined/latest.json` — current combined tier-list aggregate.
 - `analysis/private/phoenix2-current.json` — private, privacy-minimized incremental snapshot.
 - `analysis/private/phoenix1.json` — frozen private Phoenix 1 recommendation and plate evidence.
-- `analysis/recommendations/latest.json` — private precomputed player recommendation index.
+- `analysis/recommendations/latest.json` — compact player index and atomic pointer to the current daily model generation.
+- `analysis/recommendations/models/<generation>.json` — serialized daily population score, plate, catalog, and recommendation model.
+- `analysis/private/recommendation-inputs/<generation>/{phoenix1,phoenix2}/*.json` — private ten-player input shards used by player-only refreshes.
+- `analysis/private/recommendation-player-state/<playerKey>.json` — newest incrementally merged Phoenix 2 state for one player.
+- `analysis/recommendations/players/<playerKey>.json` — cached public-safe top-50 result for one player; full candidate arrays are not stored.
 - `analysis/phoenix2/staging/<job>.json` — resumable 50-player checkpoints.
 - `analysis/phoenix2/runs/*.json` — the latest ten immutable Phoenix 2 aggregate runs.
 
@@ -274,6 +280,14 @@ formula value. Projected gain is calculated separately for every plate outcome a
 player's actual Phoenix 2 top 50, including replacement of the number-50 chart, and then averaged.
 Phoenix 1 Pumbility totals never enter the current Phoenix 2 top 50.
 
+The population models and frozen per-player inputs are rebuilt once in the daily background run.
+Opening or selecting a player on `/recommendations` first renders any cached result, then requests
+only that player's scores newer than the last successful player sync. The lightweight worker loads
+the frozen model and the selected player's small input shard, recalculates at most 50 published
+recommendations per mode, and replaces the page automatically. If the upstream request or worker
+fails, the previous cached result remains visible with a warning. This keeps the interactive path
+independent of the hundreds of player score endpoints and the population-wide model fitting.
+
 To replace all Phoenix 1 data from scratch, run the capture, analysis, public publish, and private
 seed once. The publish command replaces the stable, unversioned artifact paths only after building
 the archive, manifest, and rerates successfully:
@@ -297,11 +311,11 @@ Configure these server-side variables:
 - `BLOB_READ_WRITE_TOKEN` — required; automatically provided after connecting a **private** Vercel Blob store.
 - `CRON_SECRET` — required; a sensitive random value of at least 16 characters used for the secured daily cron route.
 - `ANALYSIS_BOOTSTRAP_SAMPLES` — optional; defaults to 500.
-- `VERCEL_DEPLOY_WEBHOOK_SECRET` — required in Production; generated when creating the project-scoped deployment webhook.
+- `VERCEL_DEPLOY_WEBHOOK_SECRET` — optional compatibility secret only if an old project-scoped deployment webhook still targets `/api/deploy`.
 
-The only daily cron in `vercel.json` refreshes Phoenix 2 at `06:00 UTC`. The five-minute failed-retry rule remains in place, while the one-hour successful-run cooldown is temporarily disabled. The worker has an 800-second function backstop. A promoted deployment reanalyzes the stored private Phoenix 2 snapshot and republishes derived aggregates and recommendation shards without calling the upstream score API; scheduled and manual refreshes retain their normal synchronization behavior.
+The only daily cron in `vercel.json` refreshes Phoenix 2 and rebuilds the global recommendation model at `06:00 UTC`. The protected administrator trigger starts the same global workflow. Deployments do not start analysis. The five-minute failed-retry rule remains in place, while the one-hour successful-run cooldown is temporarily disabled. The global worker has an 800-second function backstop.
 
-Project-scoped Vercel account webhooks may target `/api/deploy?mix=phoenix2`. The endpoint validates Vercel's HMAC-SHA1 `x-vercel-signature`, derives a deterministic job ID from the deployment ID, and requests cached-snapshot model reanalysis without synchronizing players. Phoenix 1 deployment events are rejected as archived.
+Old project-scoped Vercel account webhooks may still target `/api/deploy?mix=phoenix2`. The endpoint validates Vercel's HMAC-SHA1 `x-vercel-signature` and returns `202 ignored`; it never queues a model run. Phoenix 1 deployment events are rejected as archived.
 
 Set the linked Vercel project's Framework Preset to **Services** and its Default Max Duration to **800 seconds**. The backend's generated Celery subscriber inherits that project default; `vercel.json` also applies 800 seconds explicitly to source-backed Python functions.
 
@@ -313,7 +327,14 @@ return raw player IDs or complete score histories.
 
 ## Synchronization behavior
 
-Every worker run fetches the consented `/api/v2/players` list and the complete Phoenix 2 catalog. Six score workers share a 125 ms request-start limiter and any `Retry-After` backoff. Known players use `recordedAfter`, new players receive a full fetch, and previously empty players are rechecked only after 24 hours. Revoked players are removed immediately.
+The daily global worker fetches the consented `/api/v2/players` list and the complete Phoenix 2 catalog. Six score workers share a 125 ms request-start limiter and any `Retry-After` backoff. Known players use `recordedAfter`, new players receive a full fetch, and previously empty players are rechecked only after 24 hours. Revoked players are removed immediately. It then fits and serializes the population models once; it no longer computes every player's full recommendation candidate list.
+
+Interactive player work is sent to the separate `player-recommendations` queue. Each job calls only
+`/api/v2/players/<id>/scores`, supplies `recordedAfter` when prior state exists, merges best scores,
+and evaluates that player against the current frozen model. The API returns a result immediately
+when the same player and model were refreshed less than 60 seconds ago, so repeated opens and
+browser refreshes do not create duplicate upstream work. Upstream `Retry-After` delays are honored;
+those explicit rate-limit waits are outside the healthy-path latency target.
 
 Valid rows are merged deterministically by player/chart within the selected version, retaining the best Pumbility/score. Players with no rows for that version are excluded, and only players with at least 30 valid Singles or 30 valid Doubles scores are passed to the analyzer. Calibration and shrinkage are recalculated independently for each version and mode. No `minLevel` score filter is used.
 
@@ -328,7 +349,8 @@ npm run build
 ```
 
 The suite includes incremental merge/pruning/recheck/checkpoint tests, recommendation catalog and
-Phoenix 2 precedence tests, shared rate-limit tests, queue-state and cron tests, eager Celery
+Phoenix 2 precedence tests, serialized model round-trip and player-only refresh tests, shared
+rate-limit tests, queue-state and cron tests, eager Celery
 execution, optimized/full payload equivalence, JSON fallback handling, and a mocked 809-player
 bounded-concurrency benchmark.
 

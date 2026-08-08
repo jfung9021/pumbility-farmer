@@ -40,7 +40,7 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 9
+RECOMMENDATION_SCHEMA_VERSION = 10
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 1
@@ -93,6 +93,30 @@ class _ScoreSurface:
     score_grid: np.ndarray
     support_grid: np.ndarray
 
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "ratingAxis": self.rating_axis.tolist(),
+            "difficultyAxis": self.difficulty_axis.tolist(),
+            "scoreGrid": self.score_grid.tolist(),
+            "supportGrid": self.support_grid.tolist(),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "_ScoreSurface":
+        rating_axis = np.asarray(payload.get("ratingAxis", []), dtype=float)
+        difficulty_axis = np.asarray(payload.get("difficultyAxis", []), dtype=float)
+        score_grid = np.asarray(payload.get("scoreGrid", []), dtype=float)
+        support_grid = np.asarray(payload.get("supportGrid", []), dtype=float)
+        expected = (len(rating_axis), len(difficulty_axis))
+        if (
+            len(rating_axis) < 2
+            or len(difficulty_axis) < 2
+            or score_grid.shape != expected
+            or support_grid.shape != expected
+        ):
+            raise ValueError("A stored score-response surface has an invalid shape.")
+        return cls(rating_axis, difficulty_axis, score_grid, support_grid)
+
     def predict(self, rating: float, difficulty: float) -> tuple[float, int] | None:
         if (
             not math.isfinite(rating)
@@ -132,6 +156,49 @@ class ScoreResponseModel:
     full_surfaces: Mapping[str, _ScoreSurface]
     crossfit_surfaces: Mapping[int, Mapping[str, _ScoreSurface]]
     training_player_ids: frozenset[str]
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "fullSurfaces": {
+                mode: surface.to_payload()
+                for mode, surface in self.full_surfaces.items()
+            },
+            "crossfitSurfaces": {
+                str(fold): {
+                    mode: surface.to_payload()
+                    for mode, surface in surfaces.items()
+                }
+                for fold, surfaces in self.crossfit_surfaces.items()
+            },
+            "trainingPlayerIds": sorted(self.training_player_ids),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ScoreResponseModel":
+        raw_full = payload.get("fullSurfaces", {})
+        raw_crossfit = payload.get("crossfitSurfaces", {})
+        if not isinstance(raw_full, Mapping) or not isinstance(raw_crossfit, Mapping):
+            raise ValueError("The stored score-response model is invalid.")
+        full = {
+            str(mode): _ScoreSurface.from_payload(surface)
+            for mode, surface in raw_full.items()
+            if isinstance(surface, Mapping)
+        }
+        crossfit: dict[int, dict[str, _ScoreSurface]] = {}
+        for raw_fold, raw_surfaces in raw_crossfit.items():
+            if not isinstance(raw_surfaces, Mapping):
+                continue
+            fold = int(raw_fold)
+            crossfit[fold] = {
+                str(mode): _ScoreSurface.from_payload(surface)
+                for mode, surface in raw_surfaces.items()
+                if isinstance(surface, Mapping)
+            }
+        return cls(
+            full,
+            crossfit,
+            frozenset(str(value) for value in payload.get("trainingPlayerIds", [])),
+        )
 
     def predict(
         self,
@@ -1560,6 +1627,7 @@ def build_player_recommendation(
     prepared_phoenix2: tuple[pd.DataFrame, pd.DataFrame] | None = None,
     prepared_phoenix1: tuple[pd.DataFrame, pd.DataFrame] | None = None,
     plate_model: PlateProjectionModel | None = None,
+    include_candidates: bool = True,
 ) -> dict[str, Any]:
     """Build recommendations with historical rating and current-state separation."""
     catalog, scores = prepared_phoenix2 or _clean_snapshot_frames(phoenix2_snapshot)
@@ -1633,7 +1701,7 @@ def build_player_recommendation(
                 ),
                 "projectionAvailable": False,
                 "scoreProjectionModel": SCORE_RESPONSE_MODEL_NAME,
-                "candidates": [],
+                **({"candidates": []} if include_candidates else {}),
                 "topRecommendations": [],
             }
             continue
@@ -1821,7 +1889,7 @@ def build_player_recommendation(
                 round(scoring_rating + RECOMMENDATION_RADIUS, 3),
             ],
             "candidateCount": len(candidates),
-            "candidates": candidates,
+            **({"candidates": candidates} if include_candidates else {}),
             "topRecommendations": top,
         }
     return {"playerKey": public_player_key(player_id), "modes": modes}
@@ -1893,6 +1961,7 @@ def build_recommendation_index(
             prepared_phoenix2=prepared_phoenix2,
             prepared_phoenix1=prepared_phoenix1,
             plate_model=plate_model,
+            include_candidates=False,
         )
         suffix = recommendation["playerKey"][-4:]
         recommendation.update(

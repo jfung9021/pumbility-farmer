@@ -186,7 +186,7 @@ export interface RecommendationModeResult {
   currentTop50CutoffPumbility?: number | null;
   candidateRange?: [number | null, number];
   candidateCount?: number;
-  candidates: RecommendationChart[];
+  candidates?: RecommendationChart[];
   topRecommendations: RecommendationChart[];
 }
 
@@ -207,12 +207,45 @@ export interface RecommendationPlayer {
 
 export interface RecommendationPlayersResponse {
   generatedAtUtc: string;
+  modelGeneratedAtUtc?: string;
+  refreshSupported?: boolean;
   method: Record<string, unknown>;
   players: RecommendationPlayerSummary[];
 }
 
 export interface PlayerRecommendationsResponse {
   generatedAtUtc: string;
+  recommendationsGeneratedAtUtc?: string;
+  modelGeneratedAtUtc?: string;
+  playerSyncedAtUtc?: string;
+  modelGeneration?: string;
+  stale?: boolean;
   method: Record<string, unknown>;
   player: RecommendationPlayer;
 }
+
+export interface PlayerRefreshJob {
+  id: string;
+  kind: "player-recommendation-refresh";
+  playerKey: string;
+  status: "queued" | "running" | "completed" | "failed";
+  stage: string;
+  error?: string | null;
+  progress?: {
+    current: number;
+    total: number;
+    percent: number;
+    message: string;
+  };
+}
+
+export type PlayerRefreshResponse =
+  | {
+      outcome: "fresh";
+      recommendation: PlayerRecommendationsResponse;
+      refreshEligibleAtUtc: string;
+    }
+  | {
+      outcome: "started" | "existing";
+      job: PlayerRefreshJob;
+    };
