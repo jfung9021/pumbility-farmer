@@ -497,11 +497,6 @@ footer b { color: #929b93; }
 .player-options button:last-of-type { border-bottom: 0; }
 .player-options button:hover, .player-options button[aria-selected="true"] { background: rgba(200, 255, 46, 0.1); color: var(--acid); }
 .player-options p { color: #687169; font-size: 11px; margin: 0; padding: 16px 14px; }
-.manual-rating-picker { display: grid; gap: 8px; grid-column: 1; margin-top: 6px; }
-.manual-rating-picker > div { display: flex; gap: 8px; }
-.manual-rating-picker input { min-width: 0; padding: 0 14px; }
-.manual-rating-picker button { background: rgba(200, 255, 46, 0.12); border: 1px solid rgba(200, 255, 46, 0.28); border-radius: 8px; color: var(--acid); cursor: pointer; flex: 0 0 auto; font-size: 10px; font-weight: 850; padding: 0 16px; text-transform: uppercase; }
-.manual-rating-picker button:hover { background: rgba(200, 255, 46, 0.19); }
 .player-picker > span { align-self: end; color: #69726a; font-size: 10px; grid-column: 2; grid-row: 2; line-height: 1.5; padding: 0 8px 8px; }
 .recommendation-notice { border-radius: 8px; font-size: 11px; margin-top: 14px; max-width: 850px; padding: 13px 15px; }
 .error-notice { background: rgba(133, 41, 41, 0.15); border: 1px solid #673737; color: #e19494; }
@@ -533,7 +528,6 @@ footer b { color: #929b93; }
 .recommendation-section-heading { align-items: end; display: flex; justify-content: space-between; margin-bottom: 18px; }
 .recommendation-section-heading h2 { font-size: 28px; letter-spacing: -0.045em; margin: 0; }
 .recommendation-section-heading > p { color: #6f786f; font-size: 10px; margin: 0; }
-.manual-ranking-copy + p { display: none; }
 .recommendation-list, .candidate-list { background: rgba(13, 18, 14, 0.86); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .recommendation-card { align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.055); display: grid; gap: 15px; grid-template-columns: 34px 62px minmax(0, 1fr) 126px; min-height: 98px; padding: 15px 18px; }
 .recommendation-card:last-child { border-bottom: 0; }

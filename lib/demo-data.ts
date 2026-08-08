@@ -1,5 +1,8 @@
 import type { AnalysisPayload, ChartResult, ModeKey } from "./types";
 
+const DEMO_DIFFICULTY_DELTA_SCALE = 0.7;
+const DEMO_DELTA_CI_HALF_WIDTH = 0.18 * DEMO_DIFFICULTY_DELTA_SCALE;
+
 const groupNames = [
   "Easiest 10%",
   "10–20% percentile",
@@ -40,7 +43,7 @@ function effectBand(delta: number | null) {
 
 const demoRows: Record<ModeKey, Array<[string, number, number | null, number, number]>> = {
   singles: [
-    ["Lucid Dream", 21, -1.08, 34, 1],
+    ["Lucid Dream", 16, -1.08, 34, 1],
     ["Becouse of You", 21, -0.82, 28, 2],
     ["Conflict", 22, -0.62, 25, 3],
     ["Vector", 20, -0.36, 22, 4],
@@ -52,7 +55,7 @@ const demoRows: Record<ModeKey, Array<[string, number, number | null, number, nu
     ["Final Audition", 26, 1.08, 11, 10],
   ],
   doubles: [
-    ["Slam", 24, -1.12, 38, 1],
+    ["Slam", 16, -1.12, 38, 1],
     ["8 6 - FULL SONG -", 23, -0.84, 31, 2],
     ["Tomboy", 22, -0.61, 29, 3],
     ["Energy Synergy Matrix", 22, -0.35, 24, 4],
@@ -66,9 +69,12 @@ const demoRows: Record<ModeKey, Array<[string, number, number | null, number, nu
 };
 
 function makeChart(mode: ModeKey, row: [string, number, number | null, number, number], index: number): ChartResult {
-  const [songName, level, delta, contributors, group] = row;
+  const [songName, level, unscaledDelta, contributors, group] = row;
   const prefix = mode === "singles" ? "S" : "D";
   const averageDifficulty = level + 0.5;
+  const delta = unscaledDelta === null
+    ? null
+    : Number((unscaledDelta * DEMO_DIFFICULTY_DELTA_SCALE).toFixed(6));
   const effect = effectBand(delta);
   return {
     mode: mode === "singles" ? "Singles" : "Doubles",
@@ -92,10 +98,10 @@ function makeChart(mode: ModeKey, row: [string, number, number | null, number, n
     averageDifficulty,
     estimatedDifficulty: delta === null ? null : averageDifficulty + delta,
     difficultyDelta: delta,
-    difficultyDeltaCi95Low: delta === null ? null : delta - 0.18,
-    difficultyDeltaCi95High: delta === null ? null : delta + 0.18,
-    difficultyCi95Low: delta === null ? null : averageDifficulty + delta - 0.18,
-    difficultyCi95High: delta === null ? null : averageDifficulty + delta + 0.18,
+    difficultyDeltaCi95Low: delta === null ? null : delta - DEMO_DELTA_CI_HALF_WIDTH,
+    difficultyDeltaCi95High: delta === null ? null : delta + DEMO_DELTA_CI_HALF_WIDTH,
+    difficultyCi95Low: delta === null ? null : averageDifficulty + delta - DEMO_DELTA_CI_HALF_WIDTH,
+    difficultyCi95High: delta === null ? null : averageDifficulty + delta + DEMO_DELTA_CI_HALF_WIDTH,
     nContributors: contributors,
     nPlayersScored: contributors + 7,
     evidenceStatus: contributors >= 10 ? "Published" : "Provisional",
@@ -106,8 +112,11 @@ export const demoPayload: AnalysisPayload = {
   generatedAtUtc: "2026-08-07T04:20:00Z",
   mix: { key: "phoenix2", apiValue: "Phoenix2", label: "Phoenix 2" },
   summary: {
-    scriptVersion: "5.9.0-quarter-level-bands-and-1.0-scale",
-    method: {},
+    scriptVersion: "6.0.0-level-16-and-0.7-scale",
+    method: {
+      difficultyDeltaScale: DEMO_DIFFICULTY_DELTA_SCALE,
+      displayMinimumOfficialLevel: 16,
+    },
     coverage: { playersReturnedByCredential: 52 },
     modes: {
       singles: {

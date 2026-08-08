@@ -9,62 +9,21 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from analysis_runtime import PrivateBlobStore
-from piu_recommendations import recommendation_blob_path
+from piu_recommendations import (
+    build_manual_recommendation_mode,
+    recommendation_blob_path,
+)
 
 
 router = APIRouter()
+PLAYER_LIST_CACHE_CONTROL = (
+    "public, max-age=300, s-maxage=300, stale-while-revalidate=3600"
+)
+NO_STORE_CACHE_CONTROL = "no-store"
 
 
 def _read_index() -> dict | None:
     return PrivateBlobStore().get_json(recommendation_blob_path())
-
-
-def _manual_mode(charts: list[dict], chart_type: str, scoring_rating: float) -> dict:
-    candidates = []
-    for chart in charts:
-        if chart.get("type") != chart_type:
-            continue
-        level = float(chart.get("level", 0))
-        estimate = float(chart.get("estimatedDifficulty", 0))
-        if level < 20 or estimate > scoring_rating + 0.5 + 1e-9:
-            continue
-        candidate = {
-            **chart,
-            "distanceFromRating": round(estimate - scoring_rating, 6),
-            "farmEdge": round(level + 0.5 - estimate, 6),
-            "existingPumbility": None,
-            "expectedPumbility": 0,
-            "projectedGain": 0,
-            "projectedScore": None,
-            "played": False,
-        }
-        candidates.append(candidate)
-    candidates.sort(
-        key=lambda row: (
-            float(row["estimatedDifficulty"]),
-            str(row.get("songName", "")).casefold(),
-            str(row.get("chartId", "")),
-        )
-    )
-    top_recommendations = sorted(
-        candidates,
-        key=lambda row: (
-            -float(row["farmEdge"]),
-            float(row["estimatedDifficulty"]),
-            str(row.get("songName", "")).casefold(),
-            str(row.get("chartId", "")),
-        ),
-    )[:20]
-    return {
-        "eligible": True,
-        "manual": True,
-        "validScoreCount": 0,
-        "scoringRating": round(scoring_rating, 3),
-        "candidateRange": [None, round(scoring_rating + 0.5, 3)],
-        "candidateCount": len(candidates),
-        "candidates": candidates,
-        "topRecommendations": top_recommendations,
-    }
 
 
 def _manual_recommendations(payload: dict, scoring_rating: float) -> dict:
@@ -77,8 +36,12 @@ def _manual_recommendations(payload: dict, scoring_rating: float) -> dict:
             "displayName": f"Manual {scoring_rating:.2f}",
             "manual": True,
             "modes": {
-                "singles": _manual_mode(payload.get("charts", []), "Single", scoring_rating),
-                "doubles": _manual_mode(payload.get("charts", []), "Double", scoring_rating),
+                "singles": build_manual_recommendation_mode(
+                    payload.get("charts", []), "Single", scoring_rating
+                ),
+                "doubles": build_manual_recommendation_mode(
+                    payload.get("charts", []), "Double", scoring_rating
+                ),
             },
         },
     }
@@ -92,6 +55,7 @@ def get_recommendation_players():
             return JSONResponse(
                 status_code=404,
                 content={"error": "Recommendations have not been generated yet."},
+                headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
             )
         players = []
         for player in payload.get("players", []):
@@ -108,20 +72,25 @@ def get_recommendation_players():
                     },
                 }
             )
-        return {
-            "generatedAtUtc": payload.get("generatedAtUtc"),
-            "method": payload.get("method", {}),
-            "players": players,
-        }
+        return JSONResponse(
+            content={
+                "generatedAtUtc": payload.get("generatedAtUtc"),
+                "method": payload.get("method", {}),
+                "players": players,
+            },
+            headers={"Cache-Control": PLAYER_LIST_CACHE_CONTROL},
+        )
     except (RuntimeError, json.JSONDecodeError):
         return JSONResponse(
             status_code=503,
             content={"error": "The recommendation service is temporarily unavailable."},
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
     except Exception:
         return JSONResponse(
             status_code=500,
             content={"error": "The recommendation player list could not be read."},
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
 
 

@@ -6,7 +6,7 @@ Singles and Doubles are analyzed as completely independent populations:
   1. Rank each player's valid best scores within one mode by Pumbility.
   2. Define that mode's player baseline as the mean of ranks 11 through 30.
   3. Retain only ranks 1 through 100 from that player and mode.
-  4. For every level-20+ chart in that set, compute the signed residual from the
+  4. For every level-16+ chart in that set, compute the signed residual from the
      player's mode-specific baseline.
   5. Compare every chart only with measured charts in its exact mode and
      official level, using that folder's median residual as the reference.
@@ -63,11 +63,11 @@ from mix_registry import DEFAULT_MIX_KEY, resolve_mix
 
 
 DEFAULT_BASE_URL = "https://piuscores.arroweclip.se/"
-MIN_TARGET_LEVEL = 20
+MIN_TARGET_LEVEL = 16
 MODE_TYPES = ("Single", "Double")
 MODE_LABELS = {"Single": "Singles", "Double": "Doubles"}
 SYNTHETIC_FOLDERS = (
-    "S20", "S21", "S22", "S23", "D20", "D21", "D22", "D23", "D24"
+    "S16", "S20", "S21", "S22", "S23", "D16", "D20", "D21", "D22", "D23", "D24"
 )
 RELATIVE_GROUPS = tuple(
     ["Easiest 10%"]
@@ -88,10 +88,10 @@ EFFECT_BANDS = (
 DEFAULT_EMPIRICAL_SHRINKAGE_K = 5.0
 CALIBRATION_SCORE_BIN = 2_500
 CALIBRATION_MIN_SCORE = 900_000
-DIFFICULTY_DELTA_SCALE = 1.0
+DIFFICULTY_DELTA_SCALE = 0.7
 SYNTHETIC_PUMBILITY_PER_LEVEL = 7.3
 KEY_RE = re.compile(r"^(?:piu_scores_live_|pst_live_)[0-9a-f]{64}$")
-SCRIPT_VERSION = "5.9.0-quarter-level-bands-and-1.0-scale"
+SCRIPT_VERSION = "6.0.0-level-16-and-0.7-scale"
 
 
 class ApiError(RuntimeError):
@@ -822,7 +822,10 @@ def analyze_snapshot(
 
     target_catalog = chart_df[chart_df["folder"].notna()].copy()
     if target_catalog.empty:
-        raise ValueError("The chart catalog contained no Single or Double charts at level 20 or above.")
+        raise ValueError(
+            f"The chart catalog contained no Single or Double charts at level "
+            f"{MIN_TARGET_LEVEL} or above."
+        )
 
     rng = np.random.default_rng(config.random_seed)
     mode_results: list[pd.DataFrame] = []
@@ -1232,7 +1235,9 @@ def make_synthetic_snapshot(
     for chart_type in MODE_TYPES:
         prefix = "S" if chart_type == "Single" else "D"
         for i in range(40):
-            level = 16 + (i % 4)
+            # Keep baseline/calibration charts below the analyzed floor so the
+            # controlled target folders are not mixed with background charts.
+            level = (MIN_TARGET_LEVEL - 4) + (i % 4)
             chart_id = f"background-{prefix.lower()}-{i:02d}"
             row = {
                 "id": chart_id,
@@ -1391,8 +1396,12 @@ def validate_synthetic(
             and int(easiest["effectBandRank"]) <= 3
             and int(hardest["effectBandRank"]) >= 7
         )
-        if folder == "S20":
-            passed = passed and float(easiest["estimatedDifficulty"]) < 20.5
+        if folder == f"S{MIN_TARGET_LEVEL}":
+            passed = (
+                passed
+                and float(easiest["estimatedDifficulty"])
+                < MIN_TARGET_LEVEL + 0.5
+            )
         all_ok = all_ok and passed
         folder_results[folder] = {
             "passed": bool(passed),

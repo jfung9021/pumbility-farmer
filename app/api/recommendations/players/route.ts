@@ -11,6 +11,7 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+const PLAYER_LIST_CACHE_CONTROL = "public, max-age=300, s-maxage=300, stale-while-revalidate=3600";
 
 export async function GET() {
   if (!localAnalysisEnabled()) {
@@ -22,7 +23,7 @@ export async function GET() {
   try {
     const payload = await readLocalRecommendationIndex();
     return NextResponse.json(recommendationPlayerList(payload), {
-      headers: { "Cache-Control": "no-store, max-age=0" },
+      headers: { "Cache-Control": PLAYER_LIST_CACHE_CONTROL },
     });
   } catch (error) {
     if (error instanceof LocalRecommendationsNotFoundError) {

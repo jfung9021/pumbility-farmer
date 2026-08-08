@@ -35,14 +35,11 @@ function ratingLabel(mode: ModeKey, value: number): string {
 
 function RecommendationCard({
   chart,
-  manual = false,
   rank,
 }: {
   chart: RecommendationChart;
-  manual?: boolean;
   rank: number;
 }) {
-  const displayedValue = manual ? chart.farmEdge : chart.projectedGain;
   return (
     <article className="recommendation-card">
       <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
@@ -67,21 +64,19 @@ function RecommendationCard({
         </div>
       </div>
       <div className="recommendation-value">
-        <span>{manual ? "farm edge" : "projected gain"}</span>
-        <strong>{displayedValue === null ? "-" : signed(displayedValue)}</strong>
+        <span>projected gain</span>
+        <strong>{chart.projectedGain === null ? "-" : signed(chart.projectedGain)}</strong>
         <small>
-          {manual
-            ? `${chart.estimatedDifficulty.toFixed(2)} scoring difficulty`
-            : chart.expectedPumbility === null
-              ? "Phoenix 2 projection unavailable"
-              : `${chart.expectedPumbility.toFixed(2)} expected`}
+          {chart.expectedPumbility === null
+            ? "Phoenix 2 projection unavailable"
+            : `${chart.expectedPumbility.toFixed(2)} expected`}
         </small>
       </div>
     </article>
   );
 }
 
-function CandidateRow({ chart, manual = false }: { chart: RecommendationChart; manual?: boolean }) {
+function CandidateRow({ chart }: { chart: RecommendationChart }) {
   return (
     <article className="candidate-row">
       <div className="candidate-jacket" aria-hidden="true">
@@ -96,10 +91,8 @@ function CandidateRow({ chart, manual = false }: { chart: RecommendationChart; m
       </div>
       <div className="candidate-metric"><span>from rating</span><b>{signed(chart.distanceFromRating)}</b></div>
       <div className="candidate-metric">
-        <span>{manual ? "farm edge" : "expected"}</span>
-        <b>{manual
-          ? signed(chart.farmEdge)
-          : chart.expectedPumbility === null ? "-" : chart.expectedPumbility.toFixed(2)}</b>
+        <span>expected</span>
+        <b>{chart.expectedPumbility === null ? "-" : chart.expectedPumbility.toFixed(2)}</b>
       </div>
       <div className="candidate-metric candidate-gain"><span>gain</span><b>{chart.projectedGain === null ? "-" : signed(chart.projectedGain)}</b></div>
     </article>
@@ -112,8 +105,6 @@ export default function RecommendationsPage() {
   const [selectedKey, setSelectedKey] = useState("");
   const [playerQuery, setPlayerQuery] = useState("");
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
-  const [manualRatingInput, setManualRatingInput] = useState("");
-  const [manualRating, setManualRating] = useState<number | null>(null);
   const [activeMode, setActiveMode] = useState<ModeKey>("singles");
   const [query, setQuery] = useState("");
   const [loadingPlayers, setLoadingPlayers] = useState(true);
@@ -122,18 +113,12 @@ export default function RecommendationsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/recommendations/players", { cache: "no-store" })
+    fetch("/api/recommendations/players")
       .then((response) => readJsonResponse<RecommendationPlayersResponse>(response))
       .then((payload) => {
         if (cancelled) return;
         setPlayersPayload(payload);
         const params = new URLSearchParams(window.location.search);
-        const requestedRating = Number(params.get("rating"));
-        if (Number.isFinite(requestedRating) && requestedRating >= 1 && requestedRating <= 40) {
-          setManualRating(requestedRating);
-          setManualRatingInput(String(requestedRating));
-          return;
-        }
         const requested = params.get("player") || "";
         const requestedPlayer = payload.players.find((player) => player.playerKey === requested);
         if (requestedPlayer) {
@@ -151,19 +136,14 @@ export default function RecommendationsPage() {
   }, []);
 
   useEffect(() => {
-    const requestQuery = selectedKey
-      ? `playerKey=${encodeURIComponent(selectedKey)}`
-      : manualRating !== null
-        ? `rating=${encodeURIComponent(manualRating)}`
-        : "";
-    if (!requestQuery) {
+    if (!selectedKey) {
       setPlayerPayload(null);
       return;
     }
     const controller = new AbortController();
     setLoadingPlayer(true);
     setError(null);
-    fetch(`/api/recommendations?${requestQuery}`, {
+    fetch(`/api/recommendations?playerKey=${encodeURIComponent(selectedKey)}`, {
       cache: "no-store",
       signal: controller.signal,
     })
@@ -177,16 +157,14 @@ export default function RecommendationsPage() {
         if (!controller.signal.aborted) setLoadingPlayer(false);
       });
     return () => controller.abort();
-  }, [manualRating, selectedKey]);
+  }, [selectedKey]);
 
   const selectPlayer = (playerKey: string, inputValue = "") => {
     setSelectedKey(playerKey);
-    setManualRating(null);
     setPlayerQuery(inputValue);
     setPlayerMenuOpen(false);
     setQuery("");
     const url = new URL(window.location.href);
-    url.searchParams.delete("rating");
     if (playerKey) url.searchParams.set("player", playerKey);
     else url.searchParams.delete("player");
     window.history.replaceState({}, "", url);
@@ -200,31 +178,11 @@ export default function RecommendationsPage() {
   const handlePlayerInput = (value: string) => {
     setPlayerQuery(value);
     setPlayerMenuOpen(true);
-    if (!selectedKey && manualRating === null) return;
+    if (!selectedKey) return;
     setSelectedKey("");
-    setManualRating(null);
     setQuery("");
     const url = new URL(window.location.href);
     url.searchParams.delete("player");
-    url.searchParams.delete("rating");
-    window.history.replaceState({}, "", url);
-  };
-
-  const applyManualRating = () => {
-    const rating = Number(manualRatingInput);
-    if (!Number.isFinite(rating) || rating < 1 || rating > 40) {
-      setError("Enter a skill rating from 1 to 40.");
-      return;
-    }
-    setError(null);
-    setSelectedKey("");
-    setPlayerQuery("");
-    setPlayerMenuOpen(false);
-    setManualRating(rating);
-    setQuery("");
-    const url = new URL(window.location.href);
-    url.searchParams.delete("player");
-    url.searchParams.set("rating", String(rating));
     window.history.replaceState({}, "", url);
   };
 
@@ -247,8 +205,7 @@ export default function RecommendationsPage() {
         .includes(normalized),
     );
   }, [mode, query]);
-  const hasSelection = Boolean(selectedKey || manualRating !== null);
-  const manualMode = Boolean(playerPayload?.player.manual);
+  const hasSelection = Boolean(selectedKey);
 
   return (
     <main className="recommendations-page">
@@ -311,29 +268,6 @@ export default function RecommendationsPage() {
               </div>
             ) : null}
           </div>
-          <form
-            className="manual-rating-picker"
-            onSubmit={(event) => {
-              event.preventDefault();
-              applyManualRating();
-            }}
-          >
-            <label htmlFor="manual-rating">Or enter skill rating</label>
-            <div>
-              <input
-                id="manual-rating"
-                inputMode="decimal"
-                max="40"
-                min="1"
-                onChange={(event) => setManualRatingInput(event.target.value)}
-                placeholder="22.5"
-                step="0.01"
-                type="number"
-                value={manualRatingInput}
-              />
-              <button type="submit">Use rating</button>
-            </div>
-          </form>
           <span>
             {playersPayload
               ? `${playersPayload.players.length.toLocaleString()} usernames · generated ${formatGeneratedAt(playersPayload.generatedAtUtc)}`
@@ -347,7 +281,7 @@ export default function RecommendationsPage() {
         {!hasSelection ? (
           <div className="recommendation-empty">
             <span>PF</span>
-            <h2>Select a username or enter a skill rating</h2>
+            <h2>Select a username</h2>
             <p>Your internal player ID and raw score history are never returned to the browser.</p>
           </div>
         ) : loadingPlayer && !playerPayload ? (
@@ -356,12 +290,8 @@ export default function RecommendationsPage() {
           <>
             <div className="recommendation-player-heading">
               <div>
-                <p>{manualMode ? "MANUAL SKILL RATING" : "SELECTED PLAYER"}</p>
-                <h2>
-                  {manualMode
-                    ? ratingLabel(activeMode, mode?.scoringRating ?? 0)
-                    : playerPayload.player.displayName}
-                </h2>
+                <p>SELECTED PLAYER</p>
+                <h2>{playerPayload.player.displayName}</h2>
               </div>
               <div className="recommendation-mode-tabs" role="tablist" aria-label="Recommendation mode">
                 {(["singles", "doubles"] as ModeKey[]).map((modeKey) => (
@@ -389,46 +319,30 @@ export default function RecommendationsPage() {
             ) : (
               <>
                 <div className="recommendation-stats">
-                  {manualMode ? (
-                    <>
-                      <article><span>Scoring rating</span><strong>{ratingLabel(activeMode, mode.scoringRating ?? 0)}</strong><small>Manually specified skill level</small></article>
-                      <article><span>Upper limit</span><strong>+0.50</strong><small>No lower difficulty bound</small></article>
-                      <article><span>Nearby charts</span><strong>{mode.candidateCount ?? 0}</strong><small>Within the selected rating range</small></article>
-                      <article><span>Ranking</span><strong>Farm edge</strong><small>Official level minus measured difficulty</small></article>
-                    </>
-                  ) : (
-                    <>
                   <article><span>Scoring rating</span><strong>{ratingLabel(activeMode, mode.scoringRating ?? 0)}</strong><small>{ratingSourceLabel} {mode.ratingBaselineLabel ?? mode.baselineLabel ?? "ranks 11-30"}</small></article>
                   <article className="rating-source-stat"><span>Phoenix 2 rating history</span><strong>{phoenix2ThresholdProgress}/{phoenix2ScoreThreshold}</strong><small>{mode.ratingSource === "phoenix1" ? "Using Phoenix 1 until this reaches 50" : "Using Phoenix 2 scores for skill rating"}</small><i><b style={{ width: `${Math.min(100, (phoenix2ThresholdProgress / phoenix2ScoreThreshold) * 100)}%` }} /></i></article>
                   <article><span>Eligible charts</span><strong>{mode.candidateCount ?? 0}</strong><small>At or below {mode.candidateRange?.[1].toFixed(2)}</small></article>
                   <article><span>Current top 50</span><strong>{mode.currentTop50Pumbility?.toFixed(2) ?? "-"}</strong><small>Phoenix 2 only</small></article>
-                    </>
-                  )}
                 </div>
 
                 <section className="top-recommendations" aria-labelledby="top-recommendations-title">
                   <div className="recommendation-section-heading">
                     <div>
-                      <p>{manualMode || mode.projectionAvailable === false ? "HIGHEST FARM EDGE" : "MAXIMUM PROJECTED VALUE"}</p>
+                      <p>{mode.projectionAvailable === false ? "HIGHEST FARM EDGE" : "MAXIMUM PROJECTED VALUE"}</p>
                       <h2 id="top-recommendations-title">
-                        {manualMode || mode.projectionAvailable === false
+                        {mode.projectionAvailable === false
                           ? "Top 20 farmable charts"
                           : "Top 20 Pumbility opportunities"}
                       </h2>
                     </div>
-                    {manualMode ? (
-                      <p className="manual-ranking-copy">
-                        Ranked by official Phoenix 2 level relative to measured scoring difficulty.
-                      </p>
-                    ) : null}
                     <p>{mode.projectionAvailable === false
                       ? "Ranked by farm edge because a Phoenix 2 projection is not available yet."
                       : "Expected gain after simulating the player's Phoenix 2 top 50."}</p>
                   </div>
                   <div className="recommendation-list">
                     {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (
-                      <RecommendationCard chart={chart} key={chart.chartId} manual={manualMode} rank={index + 1} />
-                    )) : <p className="no-recommendations">{manualMode ? "No charts match this rating." : "No nearby chart is projected to improve the current top 50."}</p>}
+                      <RecommendationCard chart={chart} key={chart.chartId} rank={index + 1} />
+                    )) : <p className="no-recommendations">No nearby chart is projected to improve the current top 50.</p>}
                   </div>
                 </section>
 
@@ -447,7 +361,7 @@ export default function RecommendationsPage() {
                     </label>
                   </div>
                   <div className="candidate-list">
-                    {filteredCandidates.map((chart) => <CandidateRow chart={chart} key={chart.chartId} manual={manualMode} />)}
+                    {filteredCandidates.map((chart) => <CandidateRow chart={chart} key={chart.chartId} />)}
                     {!filteredCandidates.length ? <p className="no-recommendations">No charts match this search.</p> : null}
                   </div>
                 </section>

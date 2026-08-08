@@ -25,12 +25,12 @@ class Phoenix1RerateTests(unittest.TestCase):
             chart["chartId"]: chart
             for chart in [*archive["singles"], *archive["doubles"]]
         }
-        self.assertEqual(len(source["rerates"]), 152)
+        self.assertEqual(len(source["rerates"]), 231)
         self.assertEqual(
             Counter(row["direction"] for row in source["rerates"]),
-            {"uprated": 118, "downrated": 34},
+            {"uprated": 197, "downrated": 34},
         )
-        self.assertEqual(len({row["chartId"] for row in source["rerates"]}), 152)
+        self.assertEqual(len({row["chartId"] for row in source["rerates"]}), 231)
         for row in source["rerates"]:
             self.assertIn(row["chartId"], charts)
             self.assertEqual(row["from"], charts[row["chartId"]]["difficulty"])
