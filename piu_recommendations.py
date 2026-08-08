@@ -9,6 +9,7 @@ player/chart score.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 from collections import Counter
@@ -199,6 +200,85 @@ class ScoreResponseModel:
             crossfit,
             frozenset(str(value) for value in payload.get("trainingPlayerIds", [])),
         )
+
+    def to_npz_bytes(self) -> bytes:
+        """Serialize numeric surfaces compactly without executable pickle data."""
+        arrays: dict[str, np.ndarray] = {
+            "training_player_ids": np.asarray(
+                sorted(self.training_player_ids), dtype=np.str_
+            ),
+            "crossfit_folds": np.asarray(
+                sorted(self.crossfit_surfaces), dtype=np.int64
+            ),
+        }
+        for prefix, surfaces in (
+            ("full", self.full_surfaces),
+            *(
+                (f"fold_{fold}", fold_surfaces)
+                for fold, fold_surfaces in sorted(self.crossfit_surfaces.items())
+            ),
+        ):
+            for mode, surface in sorted(surfaces.items()):
+                base = f"{prefix}__{mode}"
+                arrays[f"{base}__rating"] = surface.rating_axis
+                arrays[f"{base}__difficulty"] = surface.difficulty_axis
+                arrays[f"{base}__score"] = surface.score_grid
+                arrays[f"{base}__support"] = surface.support_grid
+        buffer = io.BytesIO()
+        np.savez_compressed(buffer, **arrays)
+        return buffer.getvalue()
+
+    @classmethod
+    def from_npz_bytes(cls, payload: bytes) -> "ScoreResponseModel":
+        """Restore a score model from the non-pickle compressed artifact."""
+        try:
+            with np.load(io.BytesIO(payload), allow_pickle=False) as arrays:
+                names = set(arrays.files)
+                training_ids = frozenset(
+                    str(value) for value in arrays["training_player_ids"].tolist()
+                )
+                fold_ids = [int(value) for value in arrays["crossfit_folds"].tolist()]
+                surfaces: dict[str, dict[str, _ScoreSurface]] = {}
+                for name in sorted(names):
+                    if not name.endswith("__rating"):
+                        continue
+                    base = name.removesuffix("__rating")
+                    prefix, mode = base.split("__", 1)
+                    required = {
+                        f"{base}__difficulty",
+                        f"{base}__score",
+                        f"{base}__support",
+                    }
+                    if not required.issubset(names):
+                        raise ValueError("A stored score-response surface is incomplete.")
+                    surface = _ScoreSurface(
+                        np.asarray(arrays[name], dtype=float),
+                        np.asarray(arrays[f"{base}__difficulty"], dtype=float),
+                        np.asarray(arrays[f"{base}__score"], dtype=float),
+                        np.asarray(arrays[f"{base}__support"], dtype=float),
+                    )
+                    expected = (len(surface.rating_axis), len(surface.difficulty_axis))
+                    if (
+                        len(surface.rating_axis) < 2
+                        or len(surface.difficulty_axis) < 2
+                        or surface.score_grid.shape != expected
+                        or surface.support_grid.shape != expected
+                    ):
+                        raise ValueError(
+                            "A stored score-response surface has an invalid shape."
+                        )
+                    surfaces.setdefault(prefix, {})[mode] = surface
+        except (KeyError, OSError, ValueError) as exc:
+            raise ValueError("The stored score-response model is invalid.") from exc
+        full = surfaces.pop("full", {})
+        crossfit: dict[int, Mapping[str, _ScoreSurface]] = {
+            fold: {} for fold in fold_ids
+        }
+        for prefix, fold_surfaces in surfaces.items():
+            if not prefix.startswith("fold_"):
+                raise ValueError("The stored score-response model is invalid.")
+            crossfit[int(prefix.removeprefix("fold_"))] = fold_surfaces
+        return cls(full, crossfit, training_ids)
 
     def predict(
         self,

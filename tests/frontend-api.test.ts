@@ -21,6 +21,7 @@ import {
 import type { AnalysisPayload } from "../lib/types.ts";
 import {
   recommendationPlayerList,
+  recommendationsForPlayer,
   recommendationsForRating,
 } from "../lib/local-recommendations.ts";
 
@@ -86,8 +87,34 @@ test("recommendation page renders cache before a deduplicated player refresh", a
   assert.match(page, /\/api\/recommendations\/refresh\?playerKey=/);
   assert.match(page, /\/api\/recommendations\/refresh\?jobId=/);
   assert.match(page, /Showing cached recommendations\. Refresh failed:/);
-  assert.match(page, /playerPayload\.playerSyncedAtUtc/);
-  assert.match(page, /playerPayload\.modelGeneratedAtUtc/);
+  assert.match(page, /payload\.playerSyncedAtUtc/);
+  assert.match(page, /payload\.modelGeneratedAtUtc/);
+  assert.match(page, /const deadline = Date\.now\(\) \+ 30_000/);
+  assert.match(page, /Legacy snapshot generated/);
+  assert.doesNotMatch(page, /Unknown generation time/);
+});
+
+test("legacy local player responses carry a complete generation timestamp contract", () => {
+  const generatedAtUtc = "2026-08-08T00:00:00Z";
+  const response = recommendationsForPlayer({
+    generatedAtUtc,
+    method: {},
+    charts: [],
+    players: [{
+      playerKey: "opaque",
+      username: "PLAYER",
+      displayName: "PLAYER",
+      modes: {
+        singles: { eligible: false, validScoreCount: 0, topRecommendations: [] },
+        doubles: { eligible: false, validScoreCount: 0, topRecommendations: [] },
+      },
+    }],
+  }, "opaque");
+
+  assert.equal(response?.legacySnapshot, true);
+  assert.equal(response?.recommendationsGeneratedAtUtc, generatedAtUtc);
+  assert.equal(response?.modelGeneratedAtUtc, generatedAtUtc);
+  assert.equal(response?.playerSyncedAtUtc, generatedAtUtc);
 });
 
 test("global analysis button sends the protected administrator secret", async () => {

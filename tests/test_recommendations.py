@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import pandas as pd
 
 from analysis_runtime import MemoryBlobStore
+from phoenix2_pumbility import PlateProjectionModel
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
     TOP_RECOMMENDATION_COUNT,
@@ -560,7 +561,7 @@ class PlayerRecommendationTests(unittest.TestCase):
 
     def test_player_only_refresh_uses_daily_model_and_publishes_top_fifty_only(self) -> None:
         generated = "2026-08-09T06:00:00Z"
-        index, model, phoenix1_shards, phoenix2_shards = (
+        index, model, score_model_bytes, phoenix1_shards, phoenix2_shards = (
             build_recommendation_model_artifacts(
                 self.snapshot,
                 self.snapshot,
@@ -575,6 +576,7 @@ class PlayerRecommendationTests(unittest.TestCase):
             store,
             index=index,
             model=model,
+            score_model_bytes=score_model_bytes,
             phoenix1_shards=phoenix1_shards,
             phoenix2_shards=phoenix2_shards,
             index_path="analysis/recommendations/latest.json",
@@ -611,6 +613,109 @@ class PlayerRecommendationTests(unittest.TestCase):
             store.get_json(recommendation_player_path(player_key)), response
         )
 
+    def test_binary_score_model_round_trips_without_json_bloat(self) -> None:
+        model, _ = fit_score_response_model(
+            self.snapshot, self.snapshot, _recommendation_chart_rows(self.combined)
+        )
+        binary = model.to_npz_bytes()
+        restored = ScoreResponseModel.from_npz_bytes(binary)
+
+        self.assertEqual(restored.to_payload(), model.to_payload())
+        self.assertLess(len(binary), len(json.dumps(model.to_payload()).encode("utf-8")))
+
+    def test_player_artifacts_match_daily_algorithm_with_zero_pumbility_plate_rows(self) -> None:
+        phoenix1 = {
+            **self.snapshot,
+            "scores": [
+                *self.snapshot["scores"],
+                {
+                    "playerId": "player",
+                    "chartId": "chart-30",
+                    "pumbility": 0,
+                    "score": 985000,
+                    "plate": "WG",
+                    "recordedAt": "2026-08-08T00:00:00Z",
+                    "isBroken": False,
+                },
+            ],
+        }
+        phoenix2 = {
+            **self.snapshot,
+            "scores": [
+                *self.snapshot["scores"],
+                {
+                    "playerId": "player",
+                    "chartId": "chart-31",
+                    "pumbility": 0,
+                    "score": 980000,
+                    "plate": "SG",
+                    "recordedAt": "2026-08-08T00:00:00Z",
+                    "isBroken": False,
+                },
+            ],
+        }
+        generation = "exact-parity-generation"
+        artifacts = build_recommendation_model_artifacts(
+            phoenix1,
+            phoenix2,
+            combined_charts=self.combined,
+            phoenix2_slopes={"singles": 10.0},
+            generation_key=generation,
+            generated_at_utc="2026-08-09T06:00:00Z",
+        )
+        index, model, score_bytes, p1_shards, p2_shards = artifacts
+        store = MemoryBlobStore()
+        publish_recommendation_model_artifacts(
+            store,
+            index=index,
+            model=model,
+            score_model_bytes=score_bytes,
+            phoenix1_shards=p1_shards,
+            phoenix2_shards=p2_shards,
+            index_path="analysis/recommendations/latest.json",
+        )
+        player_key = index["players"][0]["playerKey"]
+        client = Mock()
+        client.fetch_page_collection.return_value = []
+
+        artifact_response = refresh_player_recommendations(
+            store,
+            client,
+            index_path="analysis/recommendations/latest.json",
+            player_key=player_key,
+        )
+        direct_score_model, _ = fit_score_response_model(
+            phoenix1, phoenix2, _recommendation_chart_rows(self.combined)
+        )
+        direct = build_player_recommendation(
+            "player",
+            phoenix2,
+            self.combined,
+            {"singles": 10.0},
+            direct_score_model,
+            phoenix1_snapshot=phoenix1,
+            plate_model=PlateProjectionModel(phoenix1, phoenix2),
+            include_candidates=False,
+        )
+
+        self.assertEqual(
+            artifact_response["player"]["modes"],
+            direct["modes"],
+        )
+        stored_player = p1_shards[0]["players"][0]
+        self.assertTrue(
+            any(row["chartId"] == "chart-30" for row in stored_player["plateScores"])
+        )
+        self.assertFalse(
+            any(row["chartId"] == "chart-30" for row in stored_player["scores"])
+        )
+        self.assertTrue(
+            any(
+                row["chartId"] == "chart-31"
+                for row in p2_shards[0]["players"][0]["scores"]
+            )
+        )
+
     def test_player_refresh_switches_all_inputs_when_daily_model_changes(self) -> None:
         first = build_recommendation_model_artifacts(
             self.snapshot,
@@ -643,8 +748,9 @@ class PlayerRecommendationTests(unittest.TestCase):
             store,
             index=first[0],
             model=first[1],
-            phoenix1_shards=first[2],
-            phoenix2_shards=first[3],
+            score_model_bytes=first[2],
+            phoenix1_shards=first[3],
+            phoenix2_shards=first[4],
             index_path="analysis/recommendations/latest.json",
         )
         player_key = first[0]["players"][0]["playerKey"]
@@ -655,8 +761,9 @@ class PlayerRecommendationTests(unittest.TestCase):
                     store,
                     index=latest[0],
                     model=latest[1],
-                    phoenix1_shards=latest[2],
-                    phoenix2_shards=latest[3],
+                    score_model_bytes=latest[2],
+                    phoenix1_shards=latest[3],
+                    phoenix2_shards=latest[4],
                     index_path="analysis/recommendations/latest.json",
                 )
                 return []

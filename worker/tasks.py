@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import timedelta
 from typing import Any
 
 from time import perf_counter
@@ -13,6 +15,7 @@ from analysis_runtime import (
 )
 from piu_misgrade_analyzer import ApiError, PiuScoresClient
 from piu_recommendations import recommendation_blob_path
+from phoenix2_sync import isoformat_utc, parse_utc, utc_now
 from recommendation_refresh import refresh_player_recommendations as refresh_one_player
 from worker.celery import PLAYER_QUEUE_NAME, QUEUE_NAME, app
 
@@ -34,6 +37,11 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
     if job.get("status") == "completed":
         return job
     started = perf_counter()
+    started_at = utc_now()
+    created_at = parse_utc(job.get("createdAtUtc"))
+    queue_wait_ms = round(
+        max(0.0, (started_at - created_at).total_seconds() * 1000), 3
+    ) if created_at else None
     update_job(
         jobs,
         job_id,
@@ -54,13 +62,15 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
             raise ApiError(
                 "PIU_SCORES_API_KEY is not configured as a server-side environment variable."
             )
+        timings: dict[str, float] = {}
         response = refresh_one_player(
             PrivateBlobStore(),
             PiuScoresClient(api_key=api_key),
             index_path=recommendation_blob_path(),
             player_key=str(job.get("playerKey") or ""),
+            timings=timings,
         )
-        return update_job(
+        completed = update_job(
             jobs,
             job_id,
             status="completed",
@@ -69,6 +79,8 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
             modelGeneratedAtUtc=response.get("modelGeneratedAtUtc"),
             playerSyncedAtUtc=response.get("playerSyncedAtUtc"),
             durationMs=round((perf_counter() - started) * 1000, 3),
+            queueWaitMs=queue_wait_ms,
+            phaseDurationsMs=timings,
             retryAllowedAtUtc=None,
             error=None,
             progress={
@@ -78,13 +90,23 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
                 "message": "Player recommendations refreshed.",
             },
         )
+        print(json.dumps({
+            "event": "player_recommendation_refresh",
+            "status": "completed",
+            "queueWaitMs": queue_wait_ms,
+            "phaseDurationsMs": timings,
+            "durationMs": completed.get("durationMs"),
+        }, separators=(",", ":"), sort_keys=True))
+        return completed
     except Exception as exc:
-        return update_job(
+        failed = update_job(
             jobs,
             job_id,
             status="failed",
             stage="syncing",
             durationMs=round((perf_counter() - started) * 1000, 3),
+            queueWaitMs=queue_wait_ms,
+            retryAllowedAtUtc=isoformat_utc(utc_now() + timedelta(seconds=60)),
             error=safe_error(exc),
             progress={
                 "current": 0,
@@ -93,3 +115,10 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
                 "message": "The player refresh failed; cached recommendations remain available.",
             },
         )
+        print(json.dumps({
+            "event": "player_recommendation_refresh",
+            "status": "failed",
+            "queueWaitMs": queue_wait_ms,
+            "durationMs": failed.get("durationMs"),
+        }, separators=(",", ":"), sort_keys=True))
+        return failed

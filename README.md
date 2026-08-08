@@ -238,7 +238,9 @@ The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as 
 - `analysis/private/phoenix2-current.json` — private, privacy-minimized incremental snapshot.
 - `analysis/private/phoenix1.json` — frozen private Phoenix 1 recommendation and plate evidence.
 - `analysis/recommendations/latest.json` — compact player index and atomic pointer to the current daily model generation.
-- `analysis/recommendations/models/<generation>.json` — serialized daily population score, plate, catalog, and recommendation model.
+- `analysis/recommendations/indexes/<generation>.json` — immutable rollback pointer for a published or shadow generation.
+- `analysis/recommendations/models/<generation>.json` — daily catalog, plate-population, recommendation-method, and score-model metadata.
+- `analysis/recommendations/models/<generation>.npz` — compressed, non-pickle numeric score-response surfaces.
 - `analysis/private/recommendation-inputs/<generation>/{phoenix1,phoenix2}/*.json` — private ten-player input shards used by player-only refreshes.
 - `analysis/private/recommendation-player-state/<playerKey>.json` — newest incrementally merged Phoenix 2 state for one player.
 - `analysis/recommendations/players/<playerKey>.json` — cached public-safe top-50 result for one player; full candidate arrays are not stored.
@@ -287,6 +289,29 @@ the frozen model and the selected player's small input shard, recalculates at mo
 recommendations per mode, and replaces the page automatically. If the upstream request or worker
 fails, the previous cached result remains visible with a warning. This keeps the interactive path
 independent of the hundreds of player score endpoints and the population-wide model fitting.
+Interactive refreshes have a rolling 60-second deduplication window, a 30-second browser and
+server deadline, and a queue concurrency cap of four so independent workers cannot overwhelm the
+score API. Worker logs include queue wait, model load, upstream fetch, merge, compute, publish, and
+end-to-end timings for percentile monitoring.
+
+The interactive path is guarded by `PLAYER_RECOMMENDATION_REFRESH_ENABLED`, which defaults to
+disabled. While disabled, schema-3 runs build immutable shadow artifacts but do not replace the
+stable schema-2 recommendation pointer. Enable it only after the all-player parity check passes;
+the next daily or protected administrator run then promotes the new pointer. The previous schema-2
+generation and at least two schema-3 generations (plus every schema-3 generation younger than 48
+hours) remain available. Player state and cached results are deleted during a promoted daily run
+when that player is no longer present in the consented index.
+
+Rollback uses the same `CRON_SECRET` as the protected analysis trigger:
+
+```powershell
+curl.exe -X POST "https://<backend>/api/recommendations/rollback?generationKey=<generation>" `
+  -H "X-Analysis-Run-Secret: <CRON_SECRET>"
+```
+
+The endpoint verifies the target index and every required model/input shard before replacing the
+stable pointer. Legacy schema-2 shards are never pruned unless
+`PLAYER_RECOMMENDATION_PRUNE_LEGACY=true` is explicitly set for a promoted run.
 
 To replace all Phoenix 1 data from scratch, run the capture, analysis, public publish, and private
 seed once. The publish command replaces the stable, unversioned artifact paths only after building
@@ -311,9 +336,26 @@ Configure these server-side variables:
 - `BLOB_READ_WRITE_TOKEN` — required; automatically provided after connecting a **private** Vercel Blob store.
 - `CRON_SECRET` — required; a sensitive random value of at least 16 characters used for the secured daily cron route.
 - `ANALYSIS_BOOTSTRAP_SAMPLES` — optional; defaults to 500.
+- `PLAYER_RECOMMENDATION_REFRESH_ENABLED` — optional rollout switch; defaults to false.
+- `PLAYER_RECOMMENDATION_PRUNE_LEGACY` — optional destructive cleanup switch; defaults to false.
 - `VERCEL_DEPLOY_WEBHOOK_SECRET` — optional compatibility secret only if an old project-scoped deployment webhook still targets `/api/deploy`.
 
 The only daily cron in `vercel.json` refreshes Phoenix 2 and rebuilds the global recommendation model at `06:00 UTC`. The protected administrator trigger starts the same global workflow. Deployments do not start analysis. The five-minute failed-retry rule remains in place, while the one-hour successful-run cooldown is temporarily disabled. The global worker has an 800-second function backstop.
+
+### Cost controls
+
+The global fit runs only once per day. Interactive work runs only when the rollout switch is enabled,
+is deduplicated for 60 seconds per player, stops browser/server waiting after 30 seconds, and is capped
+at four concurrent queue consumers. Failed player tasks return a cached-safe failure instead of
+requesting queue redelivery. Artifacts use compressed numeric surfaces and bounded generation
+retention to limit Blob storage and transfer.
+
+Before enabling the interactive switch, review the project under **Dashboard → Usage** and configure
+**Team Settings → Billing → Spend Management**. For a strict $20-plan budget, set a small on-demand
+spend threshold (for example, $1) with notifications; enable automatic production pausing only if a
+hard $21 total ceiling is preferable to availability. Keep the switch disabled to incur only the
+existing daily global run. Deployment, environment activation, manual analysis triggers, and rollback
+are operator actions and are never performed by the application automatically.
 
 Old project-scoped Vercel account webhooks may still target `/api/deploy?mix=phoenix2`. The endpoint validates Vercel's HMAC-SHA1 `x-vercel-signature` and returns `202 ignored`; it never queues a model run. Phoenix 1 deployment events are rejected as archived.
 
