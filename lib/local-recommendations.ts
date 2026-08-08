@@ -243,6 +243,10 @@ export function recommendationsForPlayer(
   return player
     ? {
         generatedAtUtc: payload.generatedAtUtc,
+        recommendationsGeneratedAtUtc: payload.generatedAtUtc,
+        modelGeneratedAtUtc: payload.generatedAtUtc,
+        playerSyncedAtUtc: payload.generatedAtUtc,
+        legacySnapshot: true,
         method: payload.method,
         player,
       }

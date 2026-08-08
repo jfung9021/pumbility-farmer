@@ -15,9 +15,9 @@ import type {
 
 
 function formatGeneratedAt(value: string | undefined): string {
-  if (!value) return "Unknown generation time";
+  if (!value) return "generation time unavailable";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unknown generation time";
+  if (Number.isNaN(date.getTime())) return "generation time unavailable";
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
@@ -25,6 +25,18 @@ function formatGeneratedAt(value: string | undefined): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+}
+
+function playerGenerationLabel(payload: PlayerRecommendationsResponse): string {
+  const overall = payload.generatedAtUtc;
+  if (payload.legacySnapshot) {
+    return `Legacy snapshot generated ${formatGeneratedAt(overall)}`;
+  }
+  const scores = payload.playerSyncedAtUtc
+    || payload.recommendationsGeneratedAtUtc
+    || overall;
+  const model = payload.modelGeneratedAtUtc || overall;
+  return `Scores checked ${formatGeneratedAt(scores)} · model ${formatGeneratedAt(model)}`;
 }
 
 function signed(value: number, digits = 2): string {
@@ -177,7 +189,11 @@ export default function RecommendationsPage() {
 
     const waitForJob = async (initial: PlayerRefreshJob) => {
       let job = initial;
+      const deadline = Date.now() + 30_000;
       while (!controller.signal.aborted && ["queued", "running"].includes(job.status)) {
+        if (Date.now() >= deadline) {
+          throw new Error("The refresh took longer than 30 seconds. Please retry.");
+        }
         await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
         if (controller.signal.aborted) return;
         const response = await fetch(
@@ -342,6 +358,16 @@ export default function RecommendationsPage() {
         ) : refreshingPlayer && playerPayload ? (
           <div className="recommendation-notice">Refreshing this player's Phoenix 2 scores…</div>
         ) : null}
+        {playerPayload?.stale ? (
+          <div className="recommendation-notice">
+            Showing the cached model from {formatGeneratedAt(
+              playerPayload.modelGeneratedAtUtc || playerPayload.generatedAtUtc,
+            )}.
+            {playerPayload.currentModelGeneratedAtUtc
+              ? ` The current model is ${formatGeneratedAt(playerPayload.currentModelGeneratedAtUtc)}.`
+              : ""}
+          </div>
+        ) : null}
       </section>
 
       <section className="recommendations-workspace" aria-busy={loadingPlayer}>
@@ -360,7 +386,7 @@ export default function RecommendationsPage() {
                 <p>SELECTED PLAYER</p>
                 <h2>{playerPayload.player.displayName}</h2>
                 <p>
-                  Scores {formatGeneratedAt(playerPayload.playerSyncedAtUtc)} · model {formatGeneratedAt(playerPayload.modelGeneratedAtUtc)}
+                  {playerGenerationLabel(playerPayload)}
                 </p>
               </div>
               <div className="recommendation-mode-tabs" role="tablist" aria-label="Recommendation mode">

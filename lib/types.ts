@@ -217,9 +217,11 @@ export interface PlayerRecommendationsResponse {
   generatedAtUtc: string;
   recommendationsGeneratedAtUtc?: string;
   modelGeneratedAtUtc?: string;
+  currentModelGeneratedAtUtc?: string;
   playerSyncedAtUtc?: string;
   modelGeneration?: string;
   stale?: boolean;
+  legacySnapshot?: boolean;
   method: Record<string, unknown>;
   player: RecommendationPlayer;
 }

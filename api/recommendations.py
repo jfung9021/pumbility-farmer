@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import timedelta
 from typing import Mapping
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from analysis_runtime import PrivateBlobStore, RuntimeJobStore, update_job
+from api.cron import cron_authorized
 from phoenix2_sync import isoformat_utc, parse_utc, utc_now
 from piu_recommendations import recommendation_blob_path, recommendation_shard_path
 from recommendation_refresh import (
@@ -17,7 +19,13 @@ from recommendation_refresh import (
     cached_player_is_fresh,
     find_player_metadata,
     player_refresh_job_id,
+    player_refresh_enabled,
+    recommendation_index_path,
+    recommendation_model_path,
+    recommendation_phoenix1_shard_path,
+    recommendation_phoenix2_shard_path,
     recommendation_player_path,
+    recommendation_score_model_path,
     with_staleness,
 )
 from worker.celery import PLAYER_QUEUE_NAME
@@ -25,10 +33,9 @@ from worker.tasks import refresh_player_recommendations
 
 
 router = APIRouter()
-PLAYER_LIST_CACHE_CONTROL = (
-    "public, max-age=300, s-maxage=300, stale-while-revalidate=3600"
-)
+PLAYER_LIST_CACHE_CONTROL = "public, max-age=30, s-maxage=30, must-revalidate"
 NO_STORE_CACHE_CONTROL = "no-store"
+PLAYER_JOB_STALE_AFTER = timedelta(seconds=30)
 
 
 def _read_index() -> dict | None:
@@ -113,7 +120,7 @@ def get_recommendation_players():
                 "modelGeneratedAtUtc": payload.get(
                     "modelGeneratedAtUtc", payload.get("generatedAtUtc")
                 ),
-                "refreshSupported": int(payload.get("storageSchemaVersion") or 0) >= 3,
+                "refreshSupported": player_refresh_enabled(payload),
                 "method": payload.get("method", {}),
                 "players": players,
             },
@@ -176,11 +183,19 @@ def get_player_recommendations(
                 status_code=404,
                 content={"error": "The selected recommendation player was not found."},
             )
-        return {
-            "generatedAtUtc": payload.get("generatedAtUtc"),
-            "method": payload.get("method", {}),
-            "player": player,
-        }
+        generated = payload.get("generatedAtUtc")
+        return JSONResponse(
+            content={
+                "generatedAtUtc": generated,
+                "recommendationsGeneratedAtUtc": generated,
+                "modelGeneratedAtUtc": generated,
+                "playerSyncedAtUtc": generated,
+                "legacySnapshot": True,
+                "method": payload.get("method", {}),
+                "player": player,
+            },
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
     except (RuntimeError, json.JSONDecodeError):
         return JSONResponse(
             status_code=503,
@@ -207,7 +222,7 @@ def start_player_recommendation_refresh(
     try:
         store = PrivateBlobStore()
         index = store.get_json(recommendation_blob_path())
-        if index is None or int(index.get("storageSchemaVersion") or 0) < 3:
+        if index is None or not player_refresh_enabled(index):
             return JSONResponse(
                 status_code=503,
                 content={"error": "The player-refresh model is not available yet."},
@@ -236,13 +251,22 @@ def start_player_recommendation_refresh(
             )
         jobs = RuntimeJobStore()
         job_id = player_refresh_job_id(normalized_key, effective_now)
-        existing = jobs.get(job_id)
-        if existing and existing.get("status") in {
-            "queued",
-            "running",
-            "completed",
-            "failed",
-        }:
+        prior_job_id = player_refresh_job_id(
+            normalized_key, effective_now - timedelta(minutes=1)
+        )
+        existing = None
+        for candidate_id in (job_id, prior_job_id):
+            candidate = jobs.get(candidate_id)
+            created = parse_utc(candidate.get("createdAtUtc")) if candidate else None
+            if (
+                candidate
+                and created is not None
+                and timedelta(0) <= effective_now - created < PLAYER_REFRESH_FRESHNESS
+                and candidate.get("status") in {"queued", "running", "completed", "failed"}
+            ):
+                existing = candidate
+                break
+        if existing:
             return JSONResponse(
                 status_code=202,
                 content={"outcome": "existing", "job": existing},
@@ -312,12 +336,35 @@ def get_player_recommendation_refresh(
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
     try:
-        job = RuntimeJobStore().get(normalized_id)
+        jobs = RuntimeJobStore()
+        job = jobs.get(normalized_id)
         if job is None or job.get("kind") != "player-recommendation-refresh":
             return JSONResponse(
                 status_code=404,
                 content={"error": "Player refresh job not found or expired."},
                 headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+            )
+        updated = parse_utc(job.get("updatedAtUtc"))
+        effective_now = utc_now()
+        if (
+            job.get("status") in {"queued", "running"}
+            and updated is not None
+            and effective_now - updated >= PLAYER_JOB_STALE_AFTER
+        ):
+            job = update_job(
+                jobs,
+                normalized_id,
+                now=effective_now,
+                status="failed",
+                stage=str(job.get("stage") or "queued"),
+                retryAllowedAtUtc=isoformat_utc(effective_now),
+                error="The player refresh timed out. Please retry.",
+                progress={
+                    "current": 0,
+                    "total": 1,
+                    "percent": 0,
+                    "message": "The player refresh timed out; cached recommendations remain available.",
+                },
             )
         return JSONResponse(
             content=job,
@@ -327,5 +374,93 @@ def get_player_recommendation_refresh(
         return JSONResponse(
             status_code=503,
             content={"error": "The player refresh status is temporarily unavailable."},
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
+
+
+@router.post("/api/recommendations/rollback")
+def rollback_recommendation_generation(
+    request: Request,
+    generation_key: str = Query(default="", alias="generationKey"),
+):
+    secret = os.getenv("CRON_SECRET", "").strip()
+    provided = request.headers.get("x-analysis-run-secret", "")
+    if not secret:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "The protected rollback operation is not configured."},
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
+    if not cron_authorized(f"Bearer {provided}", secret):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Unauthorized recommendation rollback request."},
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
+    generation = generation_key.strip()
+    if not generation or not generation.replace("-", "").isalnum():
+        return JSONResponse(
+            status_code=400,
+            content={"error": "A valid generationKey is required."},
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
+    try:
+        store = PrivateBlobStore()
+        target = store.get_json(recommendation_index_path(generation))
+        if target is None or str(target.get("generationKey") or "") != generation:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "The requested recommendation generation was not found."},
+                headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+            )
+        storage_schema = int(target.get("storageSchemaVersion") or 0)
+        if storage_schema >= 3:
+            shard_count = int(target.get("inputShardCount") or 0)
+            complete = (
+                store.get_json(recommendation_model_path(generation)) is not None
+                and store.get_bytes(recommendation_score_model_path(generation)) is not None
+                and shard_count > 0
+                and all(
+                    store.get_json(recommendation_phoenix1_shard_path(generation, shard))
+                    is not None
+                    and store.get_json(recommendation_phoenix2_shard_path(generation, shard))
+                    is not None
+                    for shard in range(shard_count)
+                )
+            )
+        else:
+            generation_players = target.get("players", [])
+            shards = {
+                int(row["shard"])
+                for row in generation_players
+                if isinstance(row, Mapping) and isinstance(row.get("shard"), int)
+            }
+            complete = all(
+                store.get_json(recommendation_shard_path(generation, shard)) is not None
+                for shard in shards
+            )
+        if not complete:
+            return JSONResponse(
+                status_code=409,
+                content={"error": "The requested recommendation generation is incomplete."},
+                headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+            )
+        current = store.get_json(recommendation_blob_path())
+        current_generation = str((current or {}).get("generationKey") or "").strip()
+        if current is not None and current_generation:
+            store.put_json(recommendation_index_path(current_generation), current)
+        store.put_json(recommendation_blob_path(), target)
+        return JSONResponse(
+            content={
+                "outcome": "rolled-back",
+                "generationKey": generation,
+                "generatedAtUtc": target.get("generatedAtUtc"),
+            },
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "The recommendation rollback could not be completed."},
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )

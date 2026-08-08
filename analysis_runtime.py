@@ -41,8 +41,9 @@ from piu_recommendations import (
 )
 from recommendation_refresh import (
     build_recommendation_model_artifacts,
+    player_refresh_enabled,
     publish_recommendation_model_artifacts,
-    recommendation_model_path,
+    recommendation_index_path,
 )
 
 
@@ -81,6 +82,8 @@ FAILED_RETRY_DELAY = timedelta(minutes=5)
 ACTIVE_JOB_STALE_AFTER = timedelta(minutes=5)
 STAGING_MAX_AGE = timedelta(hours=24)
 RUN_RETENTION = 10
+RECOMMENDATION_GENERATION_MIN_RETENTION = 2
+RECOMMENDATION_GENERATION_MAX_AGE = timedelta(hours=48)
 
 
 def parse_utc(value: object) -> datetime | None:
@@ -104,6 +107,8 @@ class BlobObject:
 class JsonBlobStore(Protocol):
     def get_json(self, pathname: str) -> dict[str, Any] | None: ...
     def put_json(self, pathname: str, payload: Mapping[str, Any]) -> None: ...
+    def get_bytes(self, pathname: str) -> bytes | None: ...
+    def put_bytes(self, pathname: str, payload: bytes, *, content_type: str) -> None: ...
     def delete(self, pathnames: str | Sequence[str]) -> None: ...
     def list(self, prefix: str) -> list[BlobObject]: ...
 
@@ -130,6 +135,17 @@ class PrivateBlobStore:
             raise ValueError(f"Private Blob object {pathname!r} did not contain a JSON object.")
         return value
 
+    def get_bytes(self, pathname: str) -> bytes | None:
+        from vercel.blob import BlobClient
+        from vercel.blob.errors import BlobNotFoundError
+
+        try:
+            with BlobClient(token=self.token) as client:
+                result = client.get(pathname, access="private", use_cache=False)
+        except BlobNotFoundError:
+            return None
+        return bytes(result.content)
+
     def put_json(self, pathname: str, payload: Mapping[str, Any]) -> None:
         from vercel.blob import BlobClient
 
@@ -142,6 +158,22 @@ class PrivateBlobStore:
                 body,
                 access="private",
                 content_type="application/json",
+                add_random_suffix=False,
+                overwrite=True,
+                cache_control_max_age=60,
+            )
+
+    def put_bytes(
+        self, pathname: str, payload: bytes, *, content_type: str
+    ) -> None:
+        from vercel.blob import BlobClient
+
+        with BlobClient(token=self.token) as client:
+            client.put(
+                pathname,
+                payload,
+                access="private",
+                content_type=content_type,
                 add_random_suffix=False,
                 overwrite=True,
                 cache_control_max_age=60,
@@ -178,6 +210,7 @@ class MemoryBlobStore:
 
     def __init__(self) -> None:
         self.values: dict[str, dict[str, Any]] = {}
+        self.binary_values: dict[str, bytes] = {}
         self.uploaded: dict[str, datetime] = {}
         self._lock = threading.RLock()
 
@@ -191,18 +224,32 @@ class MemoryBlobStore:
             self.values[pathname] = json.loads(json.dumps(dict(payload)))
             self.uploaded[pathname] = utc_now()
 
+    def get_bytes(self, pathname: str) -> bytes | None:
+        with self._lock:
+            value = self.binary_values.get(pathname)
+            return bytes(value) if value is not None else None
+
+    def put_bytes(
+        self, pathname: str, payload: bytes, *, content_type: str
+    ) -> None:
+        del content_type
+        with self._lock:
+            self.binary_values[pathname] = bytes(payload)
+            self.uploaded[pathname] = utc_now()
+
     def delete(self, pathnames: str | Sequence[str]) -> None:
         targets = [pathnames] if isinstance(pathnames, str) else list(pathnames)
         with self._lock:
             for pathname in targets:
                 self.values.pop(pathname, None)
+                self.binary_values.pop(pathname, None)
                 self.uploaded.pop(pathname, None)
 
     def list(self, prefix: str) -> list[BlobObject]:
         with self._lock:
             return [
                 BlobObject(pathname, self.uploaded.get(pathname))
-                for pathname in sorted(self.values)
+                for pathname in sorted(set(self.values) | set(self.binary_values))
                 if pathname.startswith(prefix)
             ]
 
@@ -619,10 +666,27 @@ def publish_success(
             sanitize_snapshot(snapshot, mix=mix_spec),
         )
     if recommendations is not None:
-        blobs.put_json(recommendation_blob_path(), recommendations)
         generation_key = str(recommendations.get("generationKey") or "").strip()
         storage_schema = int(recommendations.get("storageSchemaVersion") or 0)
-        if storage_schema == 2 and generation_key:
+        promote = storage_schema < 3 or player_refresh_enabled(recommendations)
+        if promote:
+            previous_recommendations = blobs.get_json(recommendation_blob_path())
+            if previous_recommendations is not None:
+                previous_generation = str(
+                    previous_recommendations.get("generationKey") or ""
+                ).strip()
+                if previous_generation:
+                    blobs.put_json(
+                        recommendation_index_path(previous_generation),
+                        previous_recommendations,
+                    )
+            blobs.put_json(recommendation_blob_path(), recommendations)
+        if (
+            storage_schema == 2
+            and generation_key
+            and os.getenv("PLAYER_RECOMMENDATION_PRUNE_LEGACY", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        ):
             keep_prefix = recommendation_shard_prefix(generation_key)
             stale_recommendations = [
                 item.pathname
@@ -632,26 +696,16 @@ def publish_success(
             if stale_recommendations:
                 blobs.delete(stale_recommendations)
         elif storage_schema >= 3 and generation_key:
-            keep_model = recommendation_model_path(generation_key)
-            keep_inputs = (
-                f"analysis/private/recommendation-inputs/{generation_key}/"
-            )
-            stale_recommendations = [
-                item.pathname
-                for item in blobs.list("analysis/recommendations/models/")
-                if item.pathname != keep_model
-            ]
-            stale_recommendations.extend(
-                item.pathname
-                for item in blobs.list("analysis/private/recommendation-inputs/")
-                if not item.pathname.startswith(keep_inputs)
-            )
-            stale_recommendations.extend(
-                item.pathname
-                for item in blobs.list(recommendation_shard_prefix())
-            )
-            if stale_recommendations:
-                blobs.delete(stale_recommendations)
+            _cleanup_recommendation_generations(blobs, generation_key)
+            _cleanup_revoked_player_artifacts(blobs, recommendations)
+            if promote and os.getenv(
+                "PLAYER_RECOMMENDATION_PRUNE_LEGACY", ""
+            ).strip().lower() in {"1", "true", "yes", "on"}:
+                legacy_paths = [
+                    item.pathname for item in blobs.list(recommendation_shard_prefix())
+                ]
+                if legacy_paths:
+                    blobs.delete(legacy_paths)
     if combined_tier is not None:
         blobs.put_json(combined_tier_blob_path(), combined_tier)
     blobs.put_json(latest_blob_path(mix_spec), payload)
@@ -659,6 +713,71 @@ def publish_success(
         blobs.list(runs_prefix(mix_spec)), key=lambda item: item.pathname, reverse=True
     )
     stale = [item.pathname for item in runs[RUN_RETENTION:]]
+    if stale:
+        blobs.delete(stale)
+
+
+def _cleanup_recommendation_generations(
+    blobs: JsonBlobStore, current_generation: str, *, now: datetime | None = None
+) -> None:
+    effective_now = now or utc_now()
+    indexes = sorted(
+        blobs.list("analysis/recommendations/indexes/"),
+        key=lambda item: item.uploaded_at or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    keep = {current_generation}
+    v3_indexes: list[BlobObject] = []
+    for item in indexes:
+        stored_index = blobs.get_json(item.pathname)
+        generation = Path(item.pathname).stem
+        if int((stored_index or {}).get("storageSchemaVersion") or 0) >= 3:
+            v3_indexes.append(item)
+        else:
+            # Legacy schema-2 generations remain rollback-safe until explicit pruning.
+            keep.add(generation)
+    keep.update(
+        Path(item.pathname).stem
+        for item in v3_indexes[:RECOMMENDATION_GENERATION_MIN_RETENTION]
+    )
+    keep.update(
+        Path(item.pathname).stem
+        for item in v3_indexes
+        if item.uploaded_at is not None
+        and effective_now - item.uploaded_at <= RECOMMENDATION_GENERATION_MAX_AGE
+    )
+    stale: list[str] = []
+    for item in blobs.list("analysis/recommendations/models/"):
+        if Path(item.pathname).stem not in keep:
+            stale.append(item.pathname)
+    for item in blobs.list("analysis/private/recommendation-inputs/"):
+        parts = item.pathname.split("/")
+        generation = parts[3] if len(parts) > 3 else ""
+        if generation not in keep:
+            stale.append(item.pathname)
+    for item in indexes:
+        if Path(item.pathname).stem not in keep:
+            stale.append(item.pathname)
+    if stale:
+        blobs.delete(sorted(set(stale)))
+
+
+def _cleanup_revoked_player_artifacts(
+    blobs: JsonBlobStore, recommendations: Mapping[str, Any]
+) -> None:
+    allowed = {
+        str(row.get("playerKey"))
+        for row in recommendations.get("players", [])
+        if isinstance(row, Mapping) and row.get("playerKey")
+    }
+    stale: list[str] = []
+    for prefix in (
+        "analysis/private/recommendation-player-state/",
+        "analysis/recommendations/players/",
+    ):
+        for item in blobs.list(prefix):
+            if Path(item.pathname).stem not in allowed:
+                stale.append(item.pathname)
     if stale:
         blobs.delete(stale)
 
@@ -917,6 +1036,7 @@ def execute_analysis_job(
             (
                 recommendation_payload,
                 recommendation_model,
+                recommendation_score_model,
                 recommendation_phoenix1_shards,
                 recommendation_phoenix2_shards,
             ) = build_recommendation_model_artifacts(
@@ -931,6 +1051,7 @@ def execute_analysis_job(
                 blob_store,
                 index=recommendation_payload,
                 model=recommendation_model,
+                score_model_bytes=recommendation_score_model,
                 phoenix1_shards=recommendation_phoenix1_shards,
                 phoenix2_shards=recommendation_phoenix2_shards,
                 index_path=recommendation_blob_path(),

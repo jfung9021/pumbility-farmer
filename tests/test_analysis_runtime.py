@@ -2,8 +2,10 @@ import hashlib
 import hmac
 import json
 import time
+import tomllib
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -44,7 +46,12 @@ from piu_recommendations import (
     recommendation_blob_path,
     recommendation_shard_path,
 )
-from recommendation_refresh import recommendation_player_path
+from recommendation_refresh import (
+    player_refresh_job_id,
+    recommendation_index_path,
+    recommendation_player_path,
+    recommendation_player_state_path,
+)
 from worker.tasks import (
     refresh_player_recommendations as refresh_player_recommendations_task,
 )
@@ -392,7 +399,130 @@ class ApiRouteTests(unittest.TestCase):
         )
         self.assertNotIn("modes", players.json()["players"][0])
         self.assertEqual(selected.json()["player"]["playerKey"], "public-key")
+        self.assertTrue(selected.json()["legacySnapshot"])
+        self.assertEqual(selected.json()["modelGeneratedAtUtc"], isoformat_utc(NOW))
+        self.assertEqual(selected.json()["playerSyncedAtUtc"], isoformat_utc(NOW))
+        self.assertEqual(selected.headers["cache-control"], "no-store")
         self.assertEqual(missing.status_code, 404)
+
+    def test_player_refresh_is_disabled_by_default(self) -> None:
+        blobs = MemoryBlobStore()
+        blobs.put_json(
+            recommendation_blob_path(),
+            {
+                "storageSchemaVersion": 3,
+                "refreshSupported": True,
+                "generationKey": "generation",
+                "generatedAtUtc": isoformat_utc(NOW),
+                "players": [{"playerKey": "public-key", "eligibility": {}}],
+            },
+        )
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("api.recommendations.PrivateBlobStore", return_value=blobs),
+        ):
+            players = API_CLIENT.get("/api/recommendations/players")
+            refresh = API_CLIENT.post(
+                "/api/recommendations/refresh?playerKey=public-key"
+            )
+        self.assertFalse(players.json()["refreshSupported"])
+        self.assertEqual(refresh.status_code, 503)
+
+    def test_player_refresh_dedupes_across_a_minute_boundary(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        effective_now = NOW.replace(second=5)
+        player_key = "public-key"
+        index = {
+            "storageSchemaVersion": 3,
+            "refreshSupported": True,
+            "generationKey": "generation",
+            "generatedAtUtc": isoformat_utc(NOW),
+            "players": [{"playerKey": player_key, "eligibility": {}}],
+        }
+        blobs.put_json(recommendation_blob_path(), index)
+        prior_created = effective_now - timedelta(seconds=15)
+        prior = {
+            "id": player_refresh_job_id(player_key, effective_now - timedelta(minutes=1)),
+            "kind": "player-recommendation-refresh",
+            "playerKey": player_key,
+            "status": "running",
+            "createdAtUtc": isoformat_utc(prior_created),
+            "updatedAtUtc": isoformat_utc(prior_created),
+        }
+        jobs.save(prior)
+        with (
+            patch.dict("os.environ", {"PLAYER_RECOMMENDATION_REFRESH_ENABLED": "true"}),
+            patch("api.recommendations.PrivateBlobStore", return_value=blobs),
+            patch("api.recommendations.RuntimeJobStore", return_value=jobs),
+            patch("api.recommendations.utc_now", return_value=effective_now),
+            patch("api.recommendations._enqueue_player_refresh") as enqueue,
+        ):
+            response = API_CLIENT.post(
+                f"/api/recommendations/refresh?playerKey={player_key}"
+            )
+        self.assertEqual((response.status_code, response.json()["outcome"]), (202, "existing"))
+        enqueue.assert_not_called()
+
+    def test_stuck_player_refresh_becomes_retryable(self) -> None:
+        jobs = MemoryJobStore()
+        job = {
+            "id": "stuck-player-job",
+            "kind": "player-recommendation-refresh",
+            "playerKey": "public-key",
+            "status": "running",
+            "stage": "syncing",
+            "createdAtUtc": isoformat_utc(NOW - timedelta(minutes=1)),
+            "updatedAtUtc": isoformat_utc(NOW - timedelta(seconds=31)),
+        }
+        jobs.save(job)
+        with (
+            patch("api.recommendations.RuntimeJobStore", return_value=jobs),
+            patch("api.recommendations.utc_now", return_value=NOW),
+        ):
+            response = API_CLIENT.get(
+                "/api/recommendations/refresh?jobId=stuck-player-job"
+            )
+        self.assertEqual(response.json()["status"], "failed")
+        self.assertEqual(response.json()["retryAllowedAtUtc"], isoformat_utc(NOW))
+
+    def test_protected_recommendation_rollback_repoints_the_stable_index(self) -> None:
+        blobs = MemoryBlobStore()
+        target = {
+            "storageSchemaVersion": 2,
+            "generationKey": "legacy-target",
+            "generatedAtUtc": isoformat_utc(NOW - timedelta(days=1)),
+            "players": [{"playerKey": "public-key", "shard": 0}],
+        }
+        current = {
+            "storageSchemaVersion": 3,
+            "generationKey": "current-generation",
+            "generatedAtUtc": isoformat_utc(NOW),
+            "players": [],
+        }
+        blobs.put_json(recommendation_index_path("legacy-target"), target)
+        blobs.put_json(recommendation_shard_path("legacy-target", 0), {"players": []})
+        blobs.put_json(recommendation_blob_path(), current)
+        with (
+            patch.dict("os.environ", {"CRON_SECRET": "admin-secret"}),
+            patch("api.recommendations.PrivateBlobStore", return_value=blobs),
+        ):
+            unauthorized = API_CLIENT.post(
+                "/api/recommendations/rollback?generationKey=legacy-target"
+            )
+            response = API_CLIENT.post(
+                "/api/recommendations/rollback?generationKey=legacy-target",
+                headers={"X-Analysis-Run-Secret": "admin-secret"},
+            )
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(response.json()["outcome"], "rolled-back")
+        self.assertEqual(
+            blobs.get_json(recommendation_blob_path())["generationKey"],
+            "legacy-target",
+        )
+        self.assertIsNotNone(
+            blobs.get_json(recommendation_index_path("current-generation"))
+        )
 
     def test_player_refresh_routes_cache_dedupe_and_hide_internal_ids(self) -> None:
         blobs = MemoryBlobStore()
@@ -400,6 +530,7 @@ class ApiRouteTests(unittest.TestCase):
         index = {
             "schemaVersion": 10,
             "storageSchemaVersion": 3,
+            "refreshSupported": True,
             "generationKey": "daily-generation",
             "generatedAtUtc": isoformat_utc(NOW),
             "modelGeneratedAtUtc": isoformat_utc(NOW),
@@ -418,7 +549,7 @@ class ApiRouteTests(unittest.TestCase):
         cached = {
             "schemaVersion": 10,
             "generatedAtUtc": isoformat_utc(NOW),
-            "modelGeneratedAtUtc": isoformat_utc(NOW),
+            "modelGeneratedAtUtc": isoformat_utc(NOW - timedelta(hours=1)),
             "playerSyncedAtUtc": isoformat_utc(NOW),
             "modelGeneration": "daily-generation",
             "stale": False,
@@ -434,6 +565,7 @@ class ApiRouteTests(unittest.TestCase):
         blobs.put_json(recommendation_player_path("public-key"), cached)
 
         with (
+            patch.dict("os.environ", {"PLAYER_RECOMMENDATION_REFRESH_ENABLED": "true"}),
             patch("api.recommendations.PrivateBlobStore", return_value=blobs),
             patch("api.recommendations.RuntimeJobStore", return_value=jobs),
             patch("api.recommendations.utc_now", return_value=NOW),
@@ -461,6 +593,11 @@ class ApiRouteTests(unittest.TestCase):
         self.assertTrue(players.json()["refreshSupported"])
         self.assertNotIn("internalPlayerId", players.json()["players"][0])
         self.assertEqual(selected.json()["modelGeneration"], "daily-generation")
+        self.assertEqual(
+            selected.json()["modelGeneratedAtUtc"],
+            isoformat_utc(NOW - timedelta(hours=1)),
+        )
+        self.assertEqual(selected.json()["currentModelGeneratedAtUtc"], isoformat_utc(NOW))
         self.assertEqual((fresh.status_code, fresh.json()["outcome"]), (200, "fresh"))
         self.assertEqual((started.status_code, started.json()["outcome"]), (202, "started"))
         self.assertEqual((duplicate.status_code, duplicate.json()["outcome"]), (202, "existing"))
@@ -659,6 +796,15 @@ class WorkerClient:
 
 
 class WorkerTests(unittest.TestCase):
+    def test_player_queue_has_a_conservative_four_worker_cap(self) -> None:
+        with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as source:
+            project = tomllib.load(source)
+        subscribers = project["tool"]["vercel"]["subscribers"]
+        player = next(
+            row for row in subscribers if row["topics"] == ["player-recommendations"]
+        )
+        self.assertEqual(player["max_concurrency"], 4)
+
     def test_player_refresh_task_uses_the_dedicated_lightweight_path(self) -> None:
         jobs = MemoryJobStore()
         job = {
@@ -694,6 +840,7 @@ class WorkerTests(unittest.TestCase):
             client.return_value,
             index_path=recommendation_blob_path(),
             player_key="public-key",
+            timings={},
         )
 
     def test_cancelled_queue_redelivery_is_acknowledged_without_work(self) -> None:
@@ -749,7 +896,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(blobs.get_json(recommendation_blob_path())["players"], [])
         self.assertEqual(blobs.get_json(combined_tier_blob_path())["singles"], [])
 
-    def test_new_model_publish_removes_superseded_recommendation_generations(self) -> None:
+    def test_new_model_publish_keeps_legacy_shards_and_removes_unretained_v3(self) -> None:
         blobs = MemoryBlobStore()
         blobs.put_json("analysis/recommendations/models/old.json", {"old": True})
         blobs.put_json(
@@ -765,19 +912,23 @@ class WorkerTests(unittest.TestCase):
             {"current": True},
         )
 
-        publish_success(
-            blobs,
-            job_id="current-model",
-            snapshot={"mix": "Phoenix2", "players": [], "charts": [], "scores": []},
-            payload=latest_payload(NOW, "phoenix2"),
-            recommendations={
-                "storageSchemaVersion": 3,
-                "generationKey": "current",
-                "generatedAtUtc": isoformat_utc(NOW),
-                "players": [],
-            },
-            mix="phoenix2",
-        )
+        with patch.dict(
+            "os.environ", {"PLAYER_RECOMMENDATION_REFRESH_ENABLED": "true"}
+        ):
+            publish_success(
+                blobs,
+                job_id="current-model",
+                snapshot={"mix": "Phoenix2", "players": [], "charts": [], "scores": []},
+                payload=latest_payload(NOW, "phoenix2"),
+                recommendations={
+                    "storageSchemaVersion": 3,
+                    "refreshSupported": True,
+                    "generationKey": "current",
+                    "generatedAtUtc": isoformat_utc(NOW),
+                    "players": [],
+                },
+                mix="phoenix2",
+            )
 
         self.assertIsNone(blobs.get_json("analysis/recommendations/models/old.json"))
         self.assertIsNone(
@@ -785,7 +936,7 @@ class WorkerTests(unittest.TestCase):
                 "analysis/private/recommendation-inputs/old/phoenix1/0000.json"
             )
         )
-        self.assertIsNone(blobs.get_json(recommendation_shard_path("legacy", 0)))
+        self.assertIsNotNone(blobs.get_json(recommendation_shard_path("legacy", 0)))
         self.assertIsNotNone(
             blobs.get_json("analysis/recommendations/models/current.json")
         )
@@ -793,6 +944,113 @@ class WorkerTests(unittest.TestCase):
             blobs.get_json(
                 "analysis/private/recommendation-inputs/current/phoenix1/0000.json"
             )
+        )
+
+    def test_disabled_v3_rollout_builds_shadow_generation_without_repointing(self) -> None:
+        blobs = MemoryBlobStore()
+        legacy = {
+            "storageSchemaVersion": 2,
+            "generationKey": "legacy",
+            "generatedAtUtc": isoformat_utc(NOW - timedelta(days=1)),
+            "players": [],
+        }
+        blobs.put_json(recommendation_blob_path(), legacy)
+        candidate = {
+            "storageSchemaVersion": 3,
+            "refreshSupported": True,
+            "generationKey": "candidate",
+            "generatedAtUtc": isoformat_utc(NOW),
+            "players": [],
+        }
+
+        with patch.dict("os.environ", {}, clear=True):
+            publish_success(
+                blobs,
+                job_id="shadow",
+                snapshot={"mix": "Phoenix2", "players": [], "charts": [], "scores": []},
+                payload=latest_payload(NOW),
+                recommendations=candidate,
+            )
+
+        self.assertEqual(
+            blobs.get_json(recommendation_blob_path())["generationKey"], "legacy"
+        )
+
+    def test_v3_publish_removes_revoked_player_state_and_result_only(self) -> None:
+        blobs = MemoryBlobStore()
+        for player_key in ("allowed", "revoked"):
+            blobs.put_json(recommendation_player_state_path(player_key), {"scores": []})
+            blobs.put_json(recommendation_player_path(player_key), {"player": {}})
+        recommendation = {
+            "storageSchemaVersion": 3,
+            "refreshSupported": True,
+            "generationKey": "current",
+            "generatedAtUtc": isoformat_utc(NOW),
+            "players": [{"playerKey": "allowed"}],
+        }
+        with patch.dict(
+            "os.environ", {"PLAYER_RECOMMENDATION_REFRESH_ENABLED": "true"}
+        ):
+            publish_success(
+                blobs,
+                job_id="privacy-cleanup",
+                snapshot={"mix": "Phoenix2", "players": [], "charts": [], "scores": []},
+                payload=latest_payload(NOW),
+                recommendations=recommendation,
+            )
+
+        self.assertIsNotNone(blobs.get_json(recommendation_player_state_path("allowed")))
+        self.assertIsNotNone(blobs.get_json(recommendation_player_path("allowed")))
+        self.assertIsNone(blobs.get_json(recommendation_player_state_path("revoked")))
+        self.assertIsNone(blobs.get_json(recommendation_player_path("revoked")))
+
+    def test_v3_retention_keeps_at_least_two_generations(self) -> None:
+        blobs = MemoryBlobStore()
+        for number, generation in enumerate(("generation-one", "generation-two"), 1):
+            index_path = recommendation_index_path(generation)
+            model_path = f"analysis/recommendations/models/{generation}.json"
+            input_path = (
+                f"analysis/private/recommendation-inputs/{generation}/phoenix1/0000.json"
+            )
+            blobs.put_json(index_path, {
+                "storageSchemaVersion": 3,
+                "generationKey": generation,
+            })
+            blobs.put_json(model_path, {"generationKey": generation})
+            blobs.put_json(input_path, {"generationKey": generation})
+            old = NOW - timedelta(hours=50 - number)
+            for path in (index_path, model_path, input_path):
+                blobs.uploaded[path] = old
+        current = {
+            "storageSchemaVersion": 3,
+            "refreshSupported": True,
+            "generationKey": "generation-three",
+            "generatedAtUtc": isoformat_utc(NOW),
+            "players": [],
+        }
+        blobs.put_json(recommendation_index_path("generation-three"), current)
+        blobs.put_json(
+            "analysis/recommendations/models/generation-three.json", current
+        )
+        with patch.dict(
+            "os.environ", {"PLAYER_RECOMMENDATION_REFRESH_ENABLED": "true"}
+        ):
+            publish_success(
+                blobs,
+                job_id="retention",
+                snapshot={"mix": "Phoenix2", "players": [], "charts": [], "scores": []},
+                payload=latest_payload(NOW),
+                recommendations=current,
+            )
+
+        self.assertIsNone(
+            blobs.get_json("analysis/recommendations/models/generation-one.json")
+        )
+        self.assertIsNotNone(
+            blobs.get_json("analysis/recommendations/models/generation-two.json")
+        )
+        self.assertIsNotNone(
+            blobs.get_json("analysis/recommendations/models/generation-three.json")
         )
 
     def test_stale_archived_job_fails_without_syncing_or_publishing(self) -> None:

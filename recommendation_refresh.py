@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
+import threading
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from time import perf_counter
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import pandas as pd
@@ -33,7 +37,7 @@ from piu_recommendations import (
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)
 PLAYER_ARTIFACT_SHARD_SIZE = 10
-MODEL_ARTIFACT_SCHEMA_VERSION = 1
+MODEL_ARTIFACT_SCHEMA_VERSION = 2
 PLAYER_STATE_SCHEMA_VERSION = 1
 PLAYER_REFRESH_STORAGE_SCHEMA_VERSION = 3
 
@@ -41,10 +45,20 @@ PLAYER_REFRESH_STORAGE_SCHEMA_VERSION = 3
 class JsonStore(Protocol):
     def get_json(self, pathname: str) -> dict[str, Any] | None: ...
     def put_json(self, pathname: str, payload: Mapping[str, Any]) -> None: ...
+    def get_bytes(self, pathname: str) -> bytes | None: ...
+    def put_bytes(self, pathname: str, payload: bytes, *, content_type: str) -> None: ...
 
 
 def recommendation_model_path(generation_key: str) -> str:
     return f"analysis/recommendations/models/{generation_key}.json"
+
+
+def recommendation_score_model_path(generation_key: str) -> str:
+    return f"analysis/recommendations/models/{generation_key}.npz"
+
+
+def recommendation_index_path(generation_key: str) -> str:
+    return f"analysis/recommendations/indexes/{generation_key}.json"
 
 
 def recommendation_phoenix1_shard_path(generation_key: str, shard: int) -> str:
@@ -75,6 +89,16 @@ def player_refresh_job_id(player_key: str, now: datetime | None = None) -> str:
     if not safe_key:
         raise ValueError("A player refresh requires a valid player key.")
     return f"recommendation-{safe_key}-{bucket}"
+
+
+def player_refresh_enabled(index: Mapping[str, Any]) -> bool:
+    configured = os.getenv("PLAYER_RECOMMENDATION_REFRESH_ENABLED", "").strip().lower()
+    return (
+        configured in {"1", "true", "yes", "on"}
+        and bool(index.get("refreshSupported"))
+        and int(index.get("storageSchemaVersion") or 0)
+        >= PLAYER_REFRESH_STORAGE_SCHEMA_VERSION
+    )
 
 
 def _frame_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
@@ -145,7 +169,13 @@ def build_recommendation_model_artifacts(
     phoenix2_slopes: Mapping[str, float],
     generation_key: str,
     generated_at_utc: str,
-) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    bytes,
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     """Build a global model, compact index, and per-player input shards."""
     charts_for_players = _recommendation_chart_rows(combined_charts)
     score_model, score_metadata = fit_score_response_model(
@@ -181,7 +211,7 @@ def build_recommendation_model_artifacts(
         "catalog": _frame_records(phoenix2_catalog[catalog_fields]),
         "recommendationCharts": [dict(row) for row in charts_for_players],
         "phoenix2Slopes": slopes,
-        "scoreResponseModel": score_model.to_payload(),
+        "scoreResponseModelPath": recommendation_score_model_path(generation_key),
         "scoreProjectionMetadata": score_metadata,
         "plateModel": plate_model.global_payload(),
         "method": method,
@@ -194,8 +224,27 @@ def build_recommendation_model_artifacts(
         for player_id, group in phoenix1_scores.groupby("playerId", sort=False)
     }
     p2_by_player = {
-        str(player_id): _frame_records(group)
-        for player_id, group in phoenix2_scores.groupby("playerId", sort=False)
+        str(player_id): [dict(row) for row in group]
+        for player_id, group in _raw_scores_by_player(
+            phoenix2_snapshot, set(phoenix2_catalog["chartId"].astype(str))
+        ).items()
+    }
+    p1_plate_by_player = _raw_scores_by_player(
+        phoenix1_snapshot,
+        set(phoenix2_catalog["chartId"].astype(str)),
+        compact_plate=True,
+    )
+    p1_rating_keys = {
+        (str(row.playerId), str(row.chartId))
+        for row in phoenix1_scores[["playerId", "chartId"]].itertuples(index=False)
+    }
+    p1_plate_by_player = {
+        player_id: [
+            row
+            for row in rows
+            if (player_id, str(row.get("chartId") or "")) not in p1_rating_keys
+        ]
+        for player_id, rows in p1_plate_by_player.items()
     }
     metadata_by_player = {
         str(row.get("playerId") or row.get("userId")): row
@@ -253,7 +302,11 @@ def build_recommendation_model_artifacts(
                 }
             )
             p1_players.append(
-                {"playerId": player_id, "scores": p1_by_player.get(player_id, [])}
+                {
+                    "playerId": player_id,
+                    "scores": p1_by_player.get(player_id, []),
+                    "plateScores": p1_plate_by_player.get(player_id, []),
+                }
             )
             p2_players.append(
                 {
@@ -292,7 +345,37 @@ def build_recommendation_model_artifacts(
         "inputShardCount": len(p1_shards),
         "inputShardSize": PLAYER_ARTIFACT_SHARD_SIZE,
     }
-    return index, model, p1_shards, p2_shards
+    return index, model, score_model.to_npz_bytes(), p1_shards, p2_shards
+
+
+def _raw_scores_by_player(
+    snapshot: Mapping[str, Any],
+    valid_chart_ids: set[str],
+    *,
+    compact_plate: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    """Retain all valid best-score rows, including zero-Pumbility plate history."""
+    result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in snapshot.get("scores", []):
+        if not isinstance(row, Mapping):
+            continue
+        player_id = str(row.get("playerId") or "").strip()
+        chart_id = str(row.get("chartId") or "").strip()
+        if not player_id or chart_id not in valid_chart_ids or bool(row.get("isBroken")):
+            continue
+        if compact_plate:
+            result[player_id].append(
+                {
+                    "playerId": player_id,
+                    "chartId": chart_id,
+                    "score": row.get("score"),
+                    "plate": row.get("plate"),
+                    "isBroken": False,
+                }
+            )
+        else:
+            result[player_id].append(dict(row))
+    return dict(result)
 
 
 def publish_recommendation_model_artifacts(
@@ -300,6 +383,7 @@ def publish_recommendation_model_artifacts(
     *,
     index: Mapping[str, Any],
     model: Mapping[str, Any],
+    score_model_bytes: bytes,
     phoenix1_shards: Sequence[Mapping[str, Any]],
     phoenix2_shards: Sequence[Mapping[str, Any]],
     index_path: str,
@@ -308,11 +392,28 @@ def publish_recommendation_model_artifacts(
     generation_key = str(index.get("generationKey") or "")
     if not generation_key:
         raise ValueError("A recommendation model generation key is required.")
-    store.put_json(recommendation_model_path(generation_key), model)
-    for shard, payload in enumerate(phoenix1_shards):
-        store.put_json(recommendation_phoenix1_shard_path(generation_key, shard), payload)
-    for shard, payload in enumerate(phoenix2_shards):
-        store.put_json(recommendation_phoenix2_shard_path(generation_key, shard), payload)
+    writes: list[tuple[Callable[..., None], tuple[Any, ...], dict[str, Any]]] = [
+        (store.put_json, (recommendation_model_path(generation_key), model), {}),
+        (
+            store.put_bytes,
+            (recommendation_score_model_path(generation_key), score_model_bytes),
+            {"content_type": "application/x-npz"},
+        ),
+    ]
+    writes.extend(
+        (store.put_json, (recommendation_phoenix1_shard_path(generation_key, shard), payload), {})
+        for shard, payload in enumerate(phoenix1_shards)
+    )
+    writes.extend(
+        (store.put_json, (recommendation_phoenix2_shard_path(generation_key, shard), payload), {})
+        for shard, payload in enumerate(phoenix2_shards)
+    )
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(function, *args, **kwargs) for function, args, kwargs in writes]
+        for future in futures:
+            future.result()
+    # A versioned pointer makes every generation directly recoverable.
+    store.put_json(recommendation_index_path(generation_key), index)
     if publish_index:
         # The index is the generation pointer and must be replaced last.
         store.put_json(index_path, index)
@@ -346,16 +447,46 @@ def _find_shard_player(
     )
 
 
-def _newer_player_state(
+def _merged_player_state(
     base: Mapping[str, Any], live: Mapping[str, Any] | None
 ) -> dict[str, Any]:
     if not isinstance(live, Mapping):
         return dict(base)
     base_time = parse_utc(base.get("lastSyncedAtUtc"))
     live_time = parse_utc(live.get("lastSyncedAtUtc"))
-    if live_time is not None and (base_time is None or live_time >= base_time):
-        return dict(live)
-    return dict(base)
+    newer = live if live_time is not None and (base_time is None or live_time >= base_time) else base
+    result = dict(newer)
+    player_id = str(base.get("playerId") or live.get("playerId") or "")
+    result["scores"] = merge_best_scores(
+        [row for row in base.get("scores", []) if isinstance(row, Mapping)],
+        [row for row in live.get("scores", []) if isinstance(row, Mapping)],
+        player_id=player_id or None,
+    )
+    return result
+
+
+_MODEL_CACHE_LOCK = threading.RLock()
+_MODEL_CACHE: dict[str, tuple[dict[str, Any], ScoreResponseModel]] = {}
+
+
+def _load_model(
+    store: JsonStore, generation: str
+) -> tuple[dict[str, Any], ScoreResponseModel]:
+    with _MODEL_CACHE_LOCK:
+        cached = _MODEL_CACHE.get(generation)
+        if cached is not None:
+            return cached
+    model = store.get_json(recommendation_model_path(generation))
+    score_bytes = store.get_bytes(recommendation_score_model_path(generation))
+    if model is None or score_bytes is None:
+        raise RuntimeError("The current recommendation model artifacts are incomplete.")
+    restored = ScoreResponseModel.from_npz_bytes(score_bytes)
+    value = (model, restored)
+    with _MODEL_CACHE_LOCK:
+        _MODEL_CACHE[generation] = value
+        while len(_MODEL_CACHE) > 2:
+            del _MODEL_CACHE[next(iter(_MODEL_CACHE))]
+    return value
 
 
 def _prepared_frames(
@@ -388,7 +519,9 @@ def player_recommendation_response(
     *,
     metadata: Mapping[str, Any],
     model: Mapping[str, Any],
+    score_model: ScoreResponseModel,
     phoenix1_scores: Sequence[Mapping[str, Any]],
+    phoenix1_plate_scores: Sequence[Mapping[str, Any]],
     phoenix2_state: Mapping[str, Any],
     generated_at_utc: str,
 ) -> dict[str, Any]:
@@ -401,10 +534,20 @@ def player_recommendation_response(
         [row for row in phoenix2_state.get("scores", []) if isinstance(row, Mapping)],
     )
     _, p1_scores = _prepared_frames(catalog_rows, phoenix1_scores)
-    score_model = ScoreResponseModel.from_payload(model.get("scoreResponseModel", {}))
     catalog_types = dict(zip(catalog["chartId"].astype(str), catalog["type"].astype(str)))
-    p1_snapshot = {"scores": _frame_records(p1_scores)}
-    p2_snapshot = {"scores": _frame_records(p2_scores)}
+    p1_snapshot = {
+        "scores": [
+            *[dict(row) for row in phoenix1_scores],
+            *[dict(row) for row in phoenix1_plate_scores],
+        ]
+    }
+    p2_snapshot = {
+        "scores": [
+            dict(row)
+            for row in phoenix2_state.get("scores", [])
+            if isinstance(row, Mapping)
+        ]
+    }
     plate_model = PlateProjectionModel.from_global_payload(
         model.get("plateModel", {}),
         p1_snapshot,
@@ -450,9 +593,12 @@ def refresh_player_recommendations(
     index_path: str,
     player_key: str,
     now: Callable[[], datetime] = utc_now,
+    timings: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Synchronize one player's scores and publish a compact recommendation."""
     started = now()
+    total_started = perf_counter()
+    model_started = perf_counter()
     index = store.get_json(index_path)
     if index is None:
         raise ValueError("The daily recommendation model is not available yet.")
@@ -461,15 +607,17 @@ def refresh_player_recommendations(
         raise ValueError("The selected recommendation player was not found.")
     generation = str(index.get("generationKey") or "")
     shard_number = int(metadata.get("inputShard"))
-    model = store.get_json(recommendation_model_path(generation))
+    model, score_model = _load_model(store, generation)
     p1_shard = store.get_json(
         recommendation_phoenix1_shard_path(generation, shard_number)
     )
     p2_shard = store.get_json(
         recommendation_phoenix2_shard_path(generation, shard_number)
     )
-    if model is None or p1_shard is None or p2_shard is None:
+    if p1_shard is None or p2_shard is None:
         raise RuntimeError("The current recommendation model artifacts are incomplete.")
+    if timings is not None:
+        timings["modelLoadMs"] = round((perf_counter() - model_started) * 1000, 3)
     player_id = str(metadata["internalPlayerId"])
     p1_player = _find_shard_player(p1_shard, player_id) or {
         "playerId": player_id,
@@ -479,14 +627,17 @@ def refresh_player_recommendations(
     if base_state is None:
         raise RuntimeError("The selected player's daily score state is unavailable.")
     live_state = store.get_json(recommendation_player_state_path(player_key))
-    state = _newer_player_state(base_state, live_state)
+    state = _merged_player_state(base_state, live_state)
     params: dict[str, Any] = {"mix": "Phoenix2", "limit": 100}
     recorded_after = str(state.get("lastSyncedAtUtc") or "").strip()
     if recorded_after:
         params["recordedAfter"] = recorded_after
+    fetch_started = perf_counter()
     incoming = client.fetch_page_collection(
         f"api/v2/players/{player_id}/scores", params
     )
+    if timings is not None:
+        timings["upstreamFetchMs"] = round((perf_counter() - fetch_started) * 1000, 3)
 
     # If the daily generation changed during the network request, switch all
     # selected-player inputs together once before merging and publishing.
@@ -497,7 +648,7 @@ def refresh_player_recommendations(
             metadata = latest_metadata
             generation = str(latest_index.get("generationKey") or "")
             latest_shard = int(metadata.get("inputShard"))
-            latest_model = store.get_json(recommendation_model_path(generation))
+            latest_model, latest_score_model = _load_model(store, generation)
             latest_p1 = store.get_json(
                 recommendation_phoenix1_shard_path(generation, latest_shard)
             )
@@ -505,29 +656,21 @@ def refresh_player_recommendations(
                 recommendation_phoenix2_shard_path(generation, latest_shard)
             )
             latest_base = _find_shard_player(latest_p2, player_id)
-            if latest_model is None or latest_p1 is None or latest_base is None:
+            if latest_p1 is None or latest_base is None:
                 raise RuntimeError(
                     "The current recommendation model artifacts are incomplete."
                 )
             model = latest_model
+            score_model = latest_score_model
             p1_player = _find_shard_player(latest_p1, player_id) or p1_player
-            selected_state = _newer_player_state(latest_base, state)
-            selected_state["scores"] = merge_best_scores(
-                [
-                    row
-                    for row in latest_base.get("scores", [])
-                    if isinstance(row, Mapping)
-                ],
-                [row for row in state.get("scores", []) if isinstance(row, Mapping)],
-                player_id=player_id,
-            )
-            state = selected_state
+            state = _merged_player_state(latest_base, state)
 
     valid_ids = {
         str(row.get("chartId") or row.get("id"))
         for row in model.get("catalog", [])
         if isinstance(row, Mapping)
     }
+    merge_started = perf_counter()
     merged = merge_best_scores(
         [row for row in state.get("scores", []) if isinstance(row, Mapping)],
         [
@@ -545,18 +688,33 @@ def refresh_player_recommendations(
         "lastSyncedAtUtc": boundary,
         "scores": merged,
     }
+    if timings is not None:
+        timings["mergeMs"] = round((perf_counter() - merge_started) * 1000, 3)
     store.put_json(recommendation_player_state_path(player_key), refreshed_state)
 
+    compute_started = perf_counter()
     response = player_recommendation_response(
         metadata=metadata,
         model=model,
+        score_model=score_model,
         phoenix1_scores=[
             row for row in p1_player.get("scores", []) if isinstance(row, Mapping)
+        ],
+        phoenix1_plate_scores=[
+            row
+            for row in p1_player.get("plateScores", [])
+            if isinstance(row, Mapping)
         ],
         phoenix2_state=refreshed_state,
         generated_at_utc=isoformat_utc(now()),
     )
+    if timings is not None:
+        timings["computeMs"] = round((perf_counter() - compute_started) * 1000, 3)
+    publish_started = perf_counter()
     store.put_json(recommendation_player_path(player_key), response)
+    if timings is not None:
+        timings["publishMs"] = round((perf_counter() - publish_started) * 1000, 3)
+        timings["totalMs"] = round((perf_counter() - total_started) * 1000, 3)
     return response
 
 
@@ -579,5 +737,7 @@ def with_staleness(
 ) -> dict[str, Any]:
     value = dict(payload)
     value["stale"] = payload.get("modelGeneration") != index.get("generationKey")
-    value["modelGeneratedAtUtc"] = index.get("modelGeneratedAtUtc")
+    value["currentModelGeneratedAtUtc"] = index.get(
+        "modelGeneratedAtUtc", index.get("generatedAtUtc")
+    )
     return value
