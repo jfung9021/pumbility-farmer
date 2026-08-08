@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed the immutable private Phoenix 1 score snapshot used by recommendations."""
+"""Seed the frozen private Phoenix 1 score snapshot used by recommendations."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from analysis_runtime import PrivateBlobStore  # noqa: E402
-from phoenix2_sync import sanitize_snapshot  # noqa: E402
+from phoenix2_sync import SNAPSHOT_SCHEMA_VERSION, sanitize_snapshot  # noqa: E402
 from piu_misgrade_analyzer import load_snapshot  # noqa: E402
-from piu_recommendations import frozen_phoenix1_snapshot_path  # noqa: E402
+from piu_recommendations import phoenix1_snapshot_path  # noqa: E402
 from scripts.capture_private_score_snapshot import validate_snapshot_directory  # noqa: E402
 
 
@@ -26,7 +26,7 @@ def main() -> int:
     players, charts, scores = load_snapshot(SOURCE)
     snapshot = sanitize_snapshot(
         {
-            "schemaVersion": 1,
+            "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
             "mix": "Phoenix",
             "generatedAtUtc": manifest.get("captureCompletedAtUtc", ""),
             "players": players,
@@ -36,13 +36,14 @@ def main() -> int:
         mix="phoenix1",
     )
     store = PrivateBlobStore()
-    path = frozen_phoenix1_snapshot_path()
+    path = phoenix1_snapshot_path()
     store.put_json(path, snapshot)
     restored = store.get_json(path)
     if restored is None or len(restored.get("scores", [])) != len(snapshot["scores"]):
-        raise RuntimeError("The frozen Phoenix 1 private snapshot failed verification.")
+        raise RuntimeError("The Phoenix 1 private snapshot failed verification.")
+    store.delete("analysis/private/phoenix1-frozen.json")
     print(
-        f"Seeded immutable Phoenix 1 recommendation evidence: "
+        f"Seeded frozen Phoenix 1 recommendation evidence: "
         f"{len(snapshot['charts']):,} charts and {len(snapshot['scores']):,} scores."
     )
     return 0

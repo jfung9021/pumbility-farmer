@@ -1,4 +1,4 @@
-"""Verify that the immutable Phoenix 1 browser archive matches its manifest."""
+"""Verify that the frozen Phoenix 1 browser archive matches its manifest."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_PATH = ROOT / "public" / "data" / "phoenix1-20260807.manifest.json"
+MANIFEST_PATH = ROOT / "public" / "data" / "phoenix1.manifest.json"
 FORBIDDEN_KEYS = {
     "playerid",
     "username",

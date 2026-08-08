@@ -151,6 +151,11 @@ export interface RecommendationChart extends RecommendationChartEstimate {
   expectedPumbility: number | null;
   projectedGain: number | null;
   projectedScore: number | null;
+  projectedGrade: string | null;
+  projectedPlate: string | null;
+  projectedPlateCode: string | null;
+  projectedPlateProbability: number | null;
+  plateProjectionSource: "phoenix1" | "phoenix2" | "population" | null;
   played: boolean;
 }
 
@@ -181,6 +186,7 @@ export interface RecommendationModeResult {
   pumbilityPerLevel?: number | null;
   scorePointsPerDifficulty?: number | null;
   currentTop50Pumbility?: number;
+  currentTop50CutoffPumbility?: number | null;
   candidateRange?: [number | null, number];
   candidateCount?: number;
   candidates: RecommendationChart[];

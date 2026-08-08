@@ -68,11 +68,11 @@ test("Phoenix 2 is the default and Phoenix 1 is URL-addressable", () => {
   assert.equal(mixFromSearchParams(new URLSearchParams("mix=Fiesta")), "phoenix2");
 });
 
-test("Phoenix 1 is a versioned archive while Phoenix 2 remains refreshable", () => {
-  assert.equal(MIXES.phoenix1.archive?.url, "/data/phoenix1-20260807.json");
+test("Phoenix 1 uses stable frozen paths while Phoenix 2 remains refreshable", () => {
+  assert.equal(MIXES.phoenix1.archive?.url, "/data/phoenix1.json");
   assert.equal(
     MIXES.phoenix1.archive?.reratesUrl,
-    "/data/phoenix1-rerates-20260807.json",
+    "/data/phoenix1-rerates.json",
   );
   assert.equal(MIXES.phoenix1.archive?.sha256.length, 64);
   assert.equal(MIXES.phoenix2.archive, null);
@@ -80,7 +80,7 @@ test("Phoenix 1 is a versioned archive while Phoenix 2 remains refreshable", () 
 
 test("local analysis mode reads Phoenix 1 from disk instead of the archive", () => {
   assert.equal(archiveForMix("phoenix1", true), null);
-  assert.equal(archiveForMix("phoenix1", false)?.url, "/data/phoenix1-20260807.json");
+  assert.equal(archiveForMix("phoenix1", false)?.url, "/data/phoenix1.json");
 });
 
 test("demo payload uses the symmetric quarter-level effect bands", () => {
@@ -112,9 +112,9 @@ test("demo payload represents the level-16 and 0.7-scale methodology", () => {
 
 test("annotates the frozen Phoenix 1 charts with Phoenix 2 rerates", async () => {
   const [archiveRaw, reratesRaw] = await Promise.all([
-    readFile(path.join(process.cwd(), "public", "data", "phoenix1-20260807.json"), "utf8"),
+    readFile(path.join(process.cwd(), "public", "data", "phoenix1.json"), "utf8"),
     readFile(
-      path.join(process.cwd(), "public", "data", "phoenix1-rerates-20260807.json"),
+      path.join(process.cwd(), "public", "data", "phoenix1-rerates.json"),
       "utf8",
     ),
   ]);
@@ -143,11 +143,11 @@ test("annotates the frozen Phoenix 1 charts with Phoenix 2 rerates", async () =>
 
 test("rejects rerates built for a different Phoenix 1 archive", async () => {
   const archive = JSON.parse(
-    await readFile(path.join(process.cwd(), "public", "data", "phoenix1-20260807.json"), "utf8"),
+    await readFile(path.join(process.cwd(), "public", "data", "phoenix1.json"), "utf8"),
   ) as AnalysisPayload;
   const rerates = JSON.parse(
     await readFile(
-      path.join(process.cwd(), "public", "data", "phoenix1-rerates-20260807.json"),
+      path.join(process.cwd(), "public", "data", "phoenix1-rerates.json"),
       "utf8",
     ),
   ) as Phoenix1ReratePayload;

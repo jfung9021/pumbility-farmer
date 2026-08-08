@@ -30,7 +30,7 @@ MIX_SPECS: dict[str, MixSpec] = {
         "Phoenix 1",
         "phoenix1",
         archived=True,
-        archive_url="/data/phoenix1-20260807.json",
+        archive_url="/data/phoenix1.json",
     ),
     "phoenix2": MixSpec("phoenix2", "Phoenix2", "Phoenix 2", "phoenix2"),
 }

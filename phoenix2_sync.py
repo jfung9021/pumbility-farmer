@@ -13,7 +13,7 @@ from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 
 # Compatibility constant for existing Phoenix 2 callers.
 MIX = resolve_mix(DEFAULT_MIX_KEY).api_value
-SNAPSHOT_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 2
 DEFAULT_WORKERS = 6
 DEFAULT_CHECKPOINT_EVERY = 50
 EMPTY_RECHECK_AFTER = timedelta(days=1)
@@ -33,6 +33,8 @@ SCORE_FIELDS = (
     "chartId",
     "pumbility",
     "score",
+    "letterGrade",
+    "plate",
     "recordedAt",
     "isBroken",
 )
@@ -109,17 +111,20 @@ def sanitize_score(row: Mapping[str, Any], player_id: str | None = None) -> dict
         "chartId": str(chart_id),
         "pumbility": pumbility,
         "score": score,
+        "letterGrade": str(row.get("letterGrade") or "").strip() or None,
+        "plate": str(row.get("plate") or "").strip() or None,
         "recordedAt": str(row.get("recordedAt") or ""),
         "isBroken": False,
     }
     return sanitized
 
 
-def _score_priority(row: Mapping[str, Any]) -> tuple[float, float, str, str]:
+def _score_priority(row: Mapping[str, Any]) -> tuple[float, float, str, int, str]:
     return (
         _finite_number(row.get("pumbility")) or -math.inf,
         _finite_number(row.get("score")) or -math.inf,
         str(row.get("recordedAt") or ""),
+        int(bool(row.get("letterGrade"))) + int(bool(row.get("plate"))),
         str(row.get("chartId") or ""),
     )
 
@@ -285,7 +290,14 @@ def synchronize_mix_snapshot(
         raise ApiError(f"The {mix_spec.label} chart catalog was empty.")
     valid_chart_ids = {row["id"] for row in charts}
 
-    current = sanitize_snapshot(current_snapshot, mix=mix_spec)
+    try:
+        source_schema = int((current_snapshot or {}).get("schemaVersion") or 1)
+    except (TypeError, ValueError):
+        source_schema = 1
+    current = sanitize_snapshot(
+        None if source_schema < SNAPSHOT_SCHEMA_VERSION else current_snapshot,
+        mix=mix_spec,
+    )
     resume = resume_staging if isinstance(resume_staging, Mapping) else {}
     resume_mix = resolve_mix(resume.get("mix") or mix_spec.api_value)
     if (
@@ -297,10 +309,20 @@ def synchronize_mix_snapshot(
             f"Resume checkpoint mix {resume_mix.label} does not match requested mix "
             f"{mix_spec.label}."
         )
+    resume_snapshot = resume.get("snapshot")
+    try:
+        resume_schema = int(
+            resume_snapshot.get("schemaVersion")
+            if isinstance(resume_snapshot, Mapping)
+            else 1
+        )
+    except (TypeError, ValueError):
+        resume_schema = 1
     can_resume = (
         resume.get("jobId") == job_id
         and resume_mix.key == mix_spec.key
-        and isinstance(resume.get("snapshot"), Mapping)
+        and isinstance(resume_snapshot, Mapping)
+        and resume_schema >= SNAPSHOT_SCHEMA_VERSION
     )
     working = sanitize_snapshot(
         resume.get("snapshot") if can_resume else current,

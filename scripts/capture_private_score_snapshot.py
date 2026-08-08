@@ -25,8 +25,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from phoenix2_sync import (  # noqa: E402
     CHART_FIELDS,
     SCORE_FIELDS,
+    SNAPSHOT_SCHEMA_VERSION,
     isoformat_utc,
-    synchronize_phoenix2_snapshot,
+    synchronize_mix_snapshot,
 )
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix  # noqa: E402
 from piu_misgrade_analyzer import (  # noqa: E402
@@ -285,10 +286,11 @@ def capture_private_snapshot(
     restart: bool = False,
     now: Callable[[], datetime] = utc_now,
     mix: str | MixSpec = DEFAULT_MIX_KEY,
+    allow_archived_rebuild: bool = False,
 ) -> dict[str, Any]:
     """Capture, validate, and safely promote a complete API-visible snapshot."""
     mix_spec = resolve_mix(mix)
-    if mix_spec.archived:
+    if mix_spec.archived and not allow_archived_rebuild:
         raise ValueError(f"{mix_spec.label} is archived and cannot be captured again.")
     data_root = data_root.resolve()
     staging_dir = data_root / "staging"
@@ -310,10 +312,11 @@ def capture_private_snapshot(
     def progress(current: int, total: int, message: str) -> None:
         print(f"[{current:,}/{total:,}] {message}", flush=True)
 
-    snapshot, _ = synchronize_phoenix2_snapshot(
+    snapshot, _ = synchronize_mix_snapshot(
         client,
         None,
         job_id=job_id,
+        mix=mix_spec,
         resume_staging=resume,
         progress=progress,
         checkpoint=checkpoint,
@@ -341,7 +344,7 @@ def capture_private_snapshot(
 
     completed = now()
     manifest = {
-        "schemaVersion": 1,
+        "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
         "scriptVersion": SCRIPT_VERSION,
         "mix": mix_spec.api_value,
         "captureStartedAtUtc": isoformat_utc(started),
@@ -371,12 +374,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mix",
         default=DEFAULT_MIX_KEY,
-        help="Refreshable mix key (Phoenix 2 only).",
+        help="Mix key to capture (Phoenix 2 by default).",
     )
     parser.add_argument(
         "--restart",
         action="store_true",
         help="Discard an interrupted staging checkpoint and restart the full capture.",
+    )
+    parser.add_argument(
+        "--rebuild-archived",
+        action="store_true",
+        help=(
+            "Explicitly allow a one-time full rebuild of an archived mix. "
+            "Normal runtime refresh remains disabled."
+        ),
     )
     return parser
 
@@ -385,7 +396,7 @@ def main() -> int:
     args = build_parser().parse_args()
     try:
         mix_spec = resolve_mix(args.mix)
-        if mix_spec.archived:
+        if mix_spec.archived and not args.rebuild_archived:
             raise ValueError(f"{mix_spec.label} is archived and cannot be captured again.")
         data_root = DEFAULT_DATA_ROOT / mix_spec.slug
         _ensure_git_ignored(data_root)
@@ -400,6 +411,7 @@ def main() -> int:
             data_root,
             restart=args.restart,
             mix=mix_spec,
+            allow_archived_rebuild=args.rebuild_archived,
         )
         print(
             f"{mix_spec.label} snapshot complete: "

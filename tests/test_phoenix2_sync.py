@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from phoenix2_sync import (
     MIX,
+    SNAPSHOT_SCHEMA_VERSION,
     analyzer_input,
     merge_best_scores,
     sanitize_snapshot,
@@ -41,6 +42,7 @@ def score(player_id: str, chart_id: str, pumbility: float, raw_score: int = 9500
         "recordedAt": "2026-08-07T05:00:00Z",
         "isBroken": False,
         "letterGrade": "SS",
+        "plate": "Fair Game",
     }
 
 
@@ -158,6 +160,7 @@ class Phoenix2SyncTests(unittest.TestCase):
 
     def test_incremental_merge_consent_pruning_and_recent_empty_skip(self) -> None:
         current = {
+            "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
             "players": [
                 {"playerId": "known", "lastSyncedAtUtc": "2026-08-07T04:00:00Z"},
                 {"playerId": "empty", "lastSyncedAtUtc": "2026-08-07T05:00:00Z"},
@@ -181,6 +184,29 @@ class Phoenix2SyncTests(unittest.TestCase):
         self.assertEqual(paths["api/v2/players/known/scores"]["recordedAfter"], "2026-08-07T04:00:00Z")
         self.assertNotIn("recordedAfter", paths["api/v2/players/new/scores"])
         self.assertNotIn("api/v2/players/empty/scores", paths)
+
+    def test_schema_one_snapshot_is_fully_refetched_for_grade_plate_metadata(self) -> None:
+        old_score = score("known", "a", 600)
+        old_score.pop("letterGrade")
+        old_score.pop("plate")
+        current = {
+            "schemaVersion": 1,
+            "players": [
+                {"playerId": "known", "lastSyncedAtUtc": "2026-08-07T04:00:00Z"}
+            ],
+            "charts": [chart("a")],
+            "scores": [old_score],
+        }
+        incoming = score("known", "a", 600)
+        client = FakeClient(["known"], [chart("a")], {"known": [incoming]})
+        snapshot, _ = synchronize_phoenix2_snapshot(
+            client, current, job_id="metadata-backfill", now=lambda: FIXED_NOW
+        )
+        params = next(params for path, params in client.calls if path.endswith("/scores"))
+        self.assertNotIn("recordedAfter", params)
+        self.assertEqual(snapshot["schemaVersion"], SNAPSHOT_SCHEMA_VERSION)
+        self.assertEqual(snapshot["scores"][0]["letterGrade"], "SS")
+        self.assertEqual(snapshot["scores"][0]["plate"], "Fair Game")
 
     def test_stale_empty_player_is_fully_rechecked(self) -> None:
         current = {

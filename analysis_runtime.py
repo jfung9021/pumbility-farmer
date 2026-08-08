@@ -35,7 +35,7 @@ from piu_recommendations import (
     build_combined_tier_payload,
     build_recommendation_index,
     combined_tier_blob_path,
-    frozen_phoenix1_snapshot_path,
+    phoenix1_snapshot_path,
     recommendation_blob_path,
     recommendation_generation_key,
     recommendation_shard_path,
@@ -845,7 +845,7 @@ def execute_analysis_job(
         gc.collect()
         recommendation_payload: dict[str, Any] | None = None
         combined_tier_payload: dict[str, Any] | None = None
-        frozen_phoenix1 = blob_store.get_json(frozen_phoenix1_snapshot_path())
+        frozen_phoenix1 = blob_store.get_json(phoenix1_snapshot_path())
         if frozen_phoenix1 is not None:
             update_job(
                 job_store,

@@ -35,10 +35,10 @@ export const MIXES: Record<MixKey, MixDefinition> = {
     apiValue: "Phoenix",
     label: "Phoenix 1",
     archive: {
-      url: "/data/phoenix1-20260807.json",
-      reratesUrl: "/data/phoenix1-rerates-20260807.json",
-      frozenAtUtc: "2026-08-07T06:10:30.378Z",
-      sha256: "88bab411f0b7ffbccbf6f51733357cc7e7c56fd093c12bf52475cdcfadd471d3",
+      url: "/data/phoenix1.json",
+      reratesUrl: "/data/phoenix1-rerates.json",
+      frozenAtUtc: "2026-08-08T06:31:56.956799Z",
+      sha256: "c08ffab481408d8cbbdc4f1a257e3f8a21fae6b45e3148f9822de89c332cb194",
     },
   },
   phoenix2: {

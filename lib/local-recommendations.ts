@@ -153,6 +153,11 @@ function manualMode(
         expectedPumbility: 0,
         projectedGain: 0,
         projectedScore: null,
+        projectedGrade: null,
+        projectedPlate: null,
+        projectedPlateCode: null,
+        projectedPlateProbability: null,
+        plateProjectionSource: null,
         played: false,
       };
     })

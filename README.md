@@ -141,8 +141,10 @@ npm run snapshot:local
 Remove-Item Env:PIU_SCORES_API_KEY
 ```
 
-`snapshot:local` remains a Phoenix 2 alias. `snapshot:phoenix2` is the only version-specific
-capture command; Phoenix 1 cannot be captured again.
+`snapshot:local` remains a Phoenix 2 alias. Phoenix 1 stays archived in the application, but an
+explicit one-time replacement capture is available with `npm run snapshot:phoenix1:rebuild`.
+That command discards the old local checkpoint and captures Phoenix 1 from scratch; it is not a
+recurring refresh path.
 
 The capture follows every API cursor, uses the shared rate limiter and retry behavior, strips
 profile fields, validates references and uniqueness, and promotes staged files only after the
@@ -187,8 +189,8 @@ npm run build
 
 The frontend is a Next.js application. `/` is the feature landing page, `/tier-list` contains the
 combined Phoenix rankings dashboard, and `/recommendations` contains the player-specific route.
-Phoenix 1 loads the versioned public artifact at
-`/data/phoenix1-20260807.json`; `/api/analyze?mix=phoenix1` redirects to that canonical copy.
+Phoenix 1 loads the frozen public artifact at `/data/phoenix1.json`;
+`/api/analyze?mix=phoenix1` redirects to that canonical copy.
 Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 
 - `GET /api/analyze?mix=phoenix2`: load the latest successful `AnalysisPayload`.
@@ -201,7 +203,7 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 
 Phoenix 1 POST, cron, deployment, worker, and publisher paths reject updates as archived.
 
-The Phoenix 1 chart cards also show official-rating changes in Phoenix 2. A separate versioned
+The Phoenix 1 chart cards also show official-rating changes in Phoenix 2. A separate
 annotation file maps chart IDs to their Phoenix 1 and Phoenix 2 ratings, so these labels do not
 modify the frozen scoring analysis. The current import contains 231 level-16+ changes from the
 `Phoenix 2 build` worksheet: 197 uprates and 34 downrates. Regenerate the annotation layer from
@@ -232,7 +234,7 @@ The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as 
 - `analysis/phoenix2/latest.json` — current Phoenix 2 aggregate.
 - `analysis/combined/latest.json` — current combined tier-list aggregate.
 - `analysis/private/phoenix2-current.json` — private, privacy-minimized incremental snapshot.
-- `analysis/private/phoenix1-frozen.json` — immutable private Phoenix 1 recommendation evidence.
+- `analysis/private/phoenix1.json` — frozen private Phoenix 1 recommendation and plate evidence.
 - `analysis/recommendations/latest.json` — private precomputed player recommendation index.
 - `analysis/phoenix2/staging/<job>.json` — resumable 50-player checkpoints.
 - `analysis/phoenix2/runs/*.json` — the latest ten immutable Phoenix 2 aggregate runs.
@@ -243,7 +245,7 @@ Seed the frozen Phoenix 1 recommendation evidence once, from the verified local 
 the first production recommendation refresh:
 
 ```powershell
-npm run seed:phoenix1-recommendations
+npm run seed:phoenix1
 ```
 
 The recommendation engine treats Phoenix 2 `charts.json` as a strict allowlist. Charts absent
@@ -256,6 +258,25 @@ Phoenix 2 once it has 50 valid, deduplicated Phoenix 2 chart scores; below that 
 Phoenix 1 history when available. Played status, existing Pumbility, current top-50 totals, and
 projected gain always use Phoenix 2. A player with no Phoenix 2 history can still receive a
 Phoenix 1-derived rating and farm-edge ordering, but no Phoenix 2 Pumbility projection is inferred.
+
+Projected raw scores are converted to Phoenix 2 letter grades, then evaluated with the official
+Phoenix 2 grade-and-plate Pumbility formula. The plate distribution combines Phoenix 2 player
+history with a held-out-tuned, capped Phoenix 1 prior and population smoothing; Phoenix 2 wins
+for an overlapping player/chart observation. Expected Pumbility is the probability-weighted
+formula value. Projected gain is calculated separately for every plate outcome against the
+player's actual Phoenix 2 top 50, including replacement of the number-50 chart, and then averaged.
+Phoenix 1 Pumbility totals never enter the current Phoenix 2 top 50.
+
+To replace all Phoenix 1 data from scratch, run the capture, analysis, public publish, and private
+seed once. The publish command replaces the stable, unversioned artifact paths only after building
+the archive, manifest, and rerates successfully:
+
+```powershell
+npm run snapshot:phoenix1:rebuild
+npm run analyze:phoenix1
+npm run publish:phoenix1 -- "C:\path\to\PIU Phoenix 2 chart rerates & removals.xlsx"
+npm run seed:phoenix1
+```
 
 For combined Next.js, Python-function, and in-process queue development, use `vercel dev`. A Python-only worker test can set `PIU_ANALYSIS_RAW_DIR` to an existing snapshot directory instead of configuring a live credential.
 
