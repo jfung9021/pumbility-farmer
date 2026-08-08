@@ -366,7 +366,7 @@ export default function RecommendationsPage() {
 
                 <section className="all-candidates" aria-labelledby="all-candidates-title">
                   <div className="recommendation-section-heading candidate-heading">
-                    <div><p>FULL MATCHING SET</p><h2 id="all-candidates-title">All charts up to +0.5</h2></div>
+                    <div><p>FULL MATCHING SET</p><h2 id="all-candidates-title">All charts at or below your rating</h2></div>
                     <label className="candidate-search">
                       <span>⌕</span>
                       <input

@@ -469,7 +469,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(result["scoringRating"], 20.5)
         ids = {row["chartId"] for row in result["candidates"]}
         self.assertIn("chart-30", ids)
-        self.assertIn("chart-31", ids)
+        self.assertNotIn("chart-31", ids)
         self.assertIn("chart-32", ids)
         self.assertEqual(
             next(row for row in result["candidates"] if row["chartId"] == "chart-32")[
@@ -479,9 +479,8 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertNotIn("chart-33", ids)
         self.assertNotIn("chart-34", ids)
+        self.assertEqual(result["candidateRange"], [None, 20.5])
         easy = next(row for row in result["candidates"] if row["chartId"] == "chart-30")
-        hard = next(row for row in result["candidates"] if row["chartId"] == "chart-31")
-        self.assertGreater(easy["expectedPumbility"], hard["expectedPumbility"])
         self.assertIsNotNone(easy["projectedGrade"])
         self.assertIsNotNone(easy["projectedPlateCode"])
         self.assertEqual(easy["plateProjectionSource"], "population")
@@ -759,6 +758,13 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
                     "type": "Single",
                     "level": 15,
                     "estimatedDifficulty": 15.0,
+                },
+                {
+                    "chartId": "above-rating",
+                    "songName": "Above Rating",
+                    "type": "Single",
+                    "level": 16,
+                    "estimatedDifficulty": 16.0000000001,
                 },
             ],
             "Single",
