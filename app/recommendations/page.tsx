@@ -355,7 +355,7 @@ export default function RecommendationsPage() {
                     </div>
                     <p>{mode.projectionAvailable === false
                       ? "Ranked by farm edge because a Phoenix 2 projection is not available yet."
-                      : "Projected gain after applying every likely grade-plate outcome to the player's Phoenix 2 top 50."}</p>
+                      : "Projected gain after applying every likely grade-plate outcome to the player's Phoenix 2 top 50. Ties favor the easiest estimated difficulty."}</p>
                   </div>
                   <div className="recommendation-list">
                     {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (
