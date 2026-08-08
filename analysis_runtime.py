@@ -75,6 +75,7 @@ JOB_TTL_SECONDS = 24 * 60 * 60
 # Temporarily disabled: successful runs do not impose a manual-refresh cooldown.
 FRESHNESS = timedelta(0)
 FAILED_RETRY_DELAY = timedelta(minutes=5)
+ACTIVE_JOB_STALE_AFTER = timedelta(minutes=5)
 STAGING_MAX_AGE = timedelta(hours=24)
 RUN_RETENTION = 10
 
@@ -453,6 +454,29 @@ def request_refresh(
     effective_now = now or utc_now()
     active_id = jobs.active_job_id()
     active = jobs.get(active_id) if active_id else None
+    if active and active.get("status") in {"queued", "running"}:
+        last_heartbeat = parse_utc(active.get("updatedAtUtc"))
+        if (
+            last_heartbeat is None
+            or effective_now - last_heartbeat > ACTIVE_JOB_STALE_AFTER
+        ):
+            update_job(
+                jobs,
+                str(active["id"]),
+                now=effective_now,
+                status="failed",
+                error="The analysis worker stopped reporting progress.",
+                retryAllowedAtUtc=isoformat_utc(effective_now),
+                progress={
+                    "current": 0,
+                    "total": 0,
+                    "percent": 0,
+                    "message": "The stale analysis worker was released for a safe retry.",
+                },
+            )
+            jobs.set_active_job_id(None)
+            active_id = None
+            active = None
     if active and active.get("status") in {"queued", "running"}:
         active_mix = resolve_mix(active.get("mix")).key
         if active_mix == mix_spec.key:
@@ -846,6 +870,49 @@ def execute_analysis_job(
                 generated_at_utc=payload.get("generatedAtUtc"),
             )
             recommendation_generation = recommendation_generation_key(job_id)
+            recommendation_player_count = sum(
+                1
+                for row in snapshot.get("players", [])
+                if isinstance(row, Mapping)
+                and str(row.get("playerId") or row.get("userId") or "").strip()
+                and str(row.get("username") or "").strip()
+            )
+            published_recommendation_players = 0
+
+            def write_recommendation_shard(
+                shard: int, value: Mapping[str, Any]
+            ) -> None:
+                nonlocal published_recommendation_players
+                blob_store.put_json(
+                    recommendation_shard_path(recommendation_generation, shard),
+                    value,
+                )
+                published_recommendation_players += len(value.get("players", []))
+                percent = (
+                    int(
+                        published_recommendation_players
+                        / recommendation_player_count
+                        * 100
+                    )
+                    if recommendation_player_count
+                    else 100
+                )
+                update_job(
+                    job_store,
+                    job_id,
+                    status="running",
+                    stage="publishing",
+                    progress={
+                        "current": published_recommendation_players,
+                        "total": recommendation_player_count,
+                        "percent": percent,
+                        "message": (
+                            "Publishing bounded recommendation batches for "
+                            f"{recommendation_player_count:,} named players."
+                        ),
+                    },
+                )
+
             recommendation_payload = build_recommendation_index(
                 phoenix1_snapshot,
                 snapshot,
@@ -853,10 +920,7 @@ def execute_analysis_job(
                 combined_charts=combined_charts,
                 phoenix2_slopes=combined_slopes,
                 generation_key=recommendation_generation,
-                shard_writer=lambda shard, value: blob_store.put_json(
-                    recommendation_shard_path(recommendation_generation, shard),
-                    value,
-                ),
+                shard_writer=write_recommendation_shard,
             )
 
         update_job(

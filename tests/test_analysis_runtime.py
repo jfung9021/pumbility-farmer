@@ -197,6 +197,30 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(body["job"]["id"], active["id"])
         self.assertEqual(enqueued, [])
 
+    def test_stale_active_job_is_failed_and_released_for_retry(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        stale = new_job("analysis-stuck", NOW)
+        jobs.save(stale)
+        jobs.set_active_job_id(stale["id"])
+        enqueued: list[str] = []
+
+        status, body = request_refresh(
+            blobs,
+            jobs,
+            enqueued.append,
+            now=NOW + timedelta(minutes=6),
+        )
+
+        self.assertEqual((status, body["outcome"]), (202, "started"))
+        self.assertEqual(jobs.get(stale["id"])["status"], "failed")
+        self.assertEqual(
+            jobs.get(stale["id"])["error"],
+            "The analysis worker stopped reporting progress.",
+        )
+        self.assertEqual(enqueued, [body["job"]["id"]])
+        self.assertEqual(jobs.active_job_id(), body["job"]["id"])
+
     def test_manual_request_coordination_returns_within_two_seconds(self) -> None:
         blobs = MemoryBlobStore()
         jobs = MemoryJobStore()
