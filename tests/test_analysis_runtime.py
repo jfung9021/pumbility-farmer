@@ -276,6 +276,31 @@ class CoordinatorTests(unittest.TestCase):
 
 
 class ApiRouteTests(unittest.TestCase):
+    def test_operator_can_cancel_a_poisoned_job_and_release_its_lock(self) -> None:
+        jobs = MemoryJobStore()
+        job = new_job("poisoned-job", NOW)
+        jobs.save(job)
+        jobs.set_active_job_id(job["id"])
+
+        with (
+            patch.dict("os.environ", {"CRON_SECRET": "cancel-secret"}),
+            patch("api.analyze.RuntimeJobStore", return_value=jobs),
+        ):
+            unauthorized = API_CLIENT.post(
+                "/api/analyze/cancel?jobId=poisoned-job"
+            )
+            cancelled = API_CLIENT.post(
+                "/api/analyze/cancel?jobId=poisoned-job",
+                headers={"Authorization": "Bearer cancel-secret"},
+            )
+
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.json()["outcome"], "cancelled")
+        self.assertTrue(cancelled.json()["job"]["cancelRequested"])
+        self.assertEqual(jobs.get(job["id"])["status"], "failed")
+        self.assertIsNone(jobs.active_job_id())
+
     def test_combined_tier_route_returns_only_the_public_aggregate(self) -> None:
         blobs = MemoryBlobStore()
         blobs.put_json(
@@ -567,6 +592,28 @@ class WorkerClient:
 
 
 class WorkerTests(unittest.TestCase):
+    def test_cancelled_queue_redelivery_is_acknowledged_without_work(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        cancelled = {
+            **new_job("cancelled-job", NOW),
+            "status": "failed",
+            "cancelRequested": True,
+        }
+        jobs.save(cancelled)
+
+        result = execute_analysis_job(
+            cancelled["id"],
+            blobs=blobs,
+            jobs=jobs,
+            client=object(),
+            now=lambda: NOW,
+        )
+
+        self.assertTrue(result["cancelRequested"])
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(blobs.values, {})
+
     def test_archived_phoenix1_cannot_be_published(self) -> None:
         blobs = MemoryBlobStore()
         snapshot1 = {"mix": "Phoenix", "players": [], "charts": [], "scores": []}
