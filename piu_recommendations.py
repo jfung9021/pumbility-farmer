@@ -31,9 +31,15 @@ from piu_misgrade_analyzer import (
     _robust_location,
     apply_within_level_difficulty,
 )
+from phoenix2_pumbility import (
+    PLATE_CODES,
+    PlateProjectionModel,
+    grade_for_score,
+    phoenix2_pumbility,
+)
 
 
-RECOMMENDATION_SCHEMA_VERSION = 6
+RECOMMENDATION_SCHEMA_VERSION = 7
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 1
@@ -88,8 +94,8 @@ def combined_tier_blob_path() -> str:
     return "analysis/combined/latest.json"
 
 
-def frozen_phoenix1_snapshot_path() -> str:
-    return "analysis/private/phoenix1-frozen.json"
+def phoenix1_snapshot_path() -> str:
+    return "analysis/private/phoenix1.json"
 
 
 def public_player_key(player_id: object) -> str:
@@ -705,6 +711,23 @@ def _top_total(values: Sequence[float]) -> float:
     return float(sum(sorted((value for value in values if value > 0), reverse=True)[:TOP_PUMBILITY_COUNT]))
 
 
+def _top50_marginal_gain(
+    candidate_pumbility: float,
+    *,
+    existing_pumbility: float | None,
+    existing_in_top50: bool,
+    current_score_count: int,
+    cutoff: float | None,
+) -> float:
+    """Return the exact top-50 total change for one candidate outcome."""
+    retained = max(existing_pumbility or 0.0, candidate_pumbility)
+    if existing_in_top50:
+        return max(0.0, retained - float(existing_pumbility or 0.0))
+    if current_score_count < TOP_PUMBILITY_COUNT:
+        return retained
+    return max(0.0, retained - float(cutoff or 0.0))
+
+
 def _recommendation_chart_rows(
     combined_charts: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -741,6 +764,11 @@ def build_manual_recommendation_mode(
                 "expectedPumbility": 0,
                 "projectedGain": 0,
                 "projectedScore": None,
+                "projectedGrade": None,
+                "projectedPlate": None,
+                "projectedPlateCode": None,
+                "projectedPlateProbability": None,
+                "plateProjectionSource": None,
                 "played": False,
             }
         )
@@ -1039,6 +1067,7 @@ def build_player_recommendation(
     phoenix1_snapshot: Mapping[str, Any] | None = None,
     prepared_phoenix2: tuple[pd.DataFrame, pd.DataFrame] | None = None,
     prepared_phoenix1: tuple[pd.DataFrame, pd.DataFrame] | None = None,
+    plate_model: PlateProjectionModel | None = None,
 ) -> dict[str, Any]:
     """Build recommendations with historical rating and current-state separation."""
     catalog, scores = prepared_phoenix2 or _clean_snapshot_frames(phoenix2_snapshot)
@@ -1051,6 +1080,9 @@ def build_player_recommendation(
     else:
         phoenix1_catalog = catalog.iloc[0:0].copy()
         phoenix1_scores = scores.iloc[0:0].copy()
+
+    if plate_model is None:
+        plate_model = PlateProjectionModel(phoenix1_snapshot or {}, phoenix2_snapshot)
 
     catalog_map = {
         str(row["chartId"]): row for row in catalog.to_dict(orient="records")
@@ -1155,7 +1187,6 @@ def build_player_recommendation(
         score_projection_slope = (score_projection_slopes or {}).get(mode_key)
         projection_fallback_count = 0
         projection_difficulties: list[float] = []
-        projection_edges: list[float] = []
         for row in projection_baseline.to_dict(orient="records"):
             chart_id = str(row["chartId"])
             catalog_chart = catalog_map[chart_id]
@@ -1165,17 +1196,15 @@ def build_player_recommendation(
                 projection_fallback_count += 1
             estimate = float(estimate)
             projection_difficulties.append(estimate)
-            projection_edges.append(float(catalog_chart["level"]) + 0.5 - estimate)
         projection_rating = (
             float(np.mean(projection_difficulties)) if projection_difficulties else None
         )
-        baseline_edge = float(np.mean(projection_edges)) if projection_edges else None
         projection_available = bool(
-            baseline_pb is not None
-            and baseline_edge is not None
-            and slope is not None
-            and math.isfinite(float(slope))
-            and float(slope) > 0
+            baseline_score is not None
+            and projection_rating is not None
+            and score_projection_slope is not None
+            and math.isfinite(float(score_projection_slope))
+            and float(score_projection_slope) > 0
         )
 
         current_values = [float(value) for value in mode_scores["pumbility"]]
@@ -1184,7 +1213,14 @@ def build_player_recommendation(
             str(row["chartId"]): float(row["pumbility"])
             for row in mode_scores.to_dict(orient="records")
         }
-        current_rows = mode_scores.to_dict(orient="records")
+        top50_chart_ids = set(
+            mode_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str)
+        )
+        top50_cutoff = (
+            float(mode_scores.iloc[TOP_PUMBILITY_COUNT - 1]["pumbility"])
+            if len(mode_scores) >= TOP_PUMBILITY_COUNT
+            else None
+        )
         candidates: list[dict[str, Any]] = []
         for chart in combined_charts:
             if chart.get("type") != chart_type:
@@ -1198,20 +1234,8 @@ def build_player_recommendation(
             if estimate > scoring_rating + RECOMMENDATION_RADIUS + 1e-9:
                 continue
             farm_edge = float(chart["level"]) + 0.5 - estimate
-            expected = (
-                max(
-                    0.0,
-                    float(baseline_pb)
-                    + float(slope) * (farm_edge - float(baseline_edge)),
-                )
-                if projection_available
-                else None
-            )
             chart_id = str(chart["chartId"])
             existing = existing_by_chart.get(chart_id)
-            projected = (
-                max(existing or 0.0, float(expected)) if expected is not None else None
-            )
             projected_score: int | None = None
             if (
                 baseline_score is not None
@@ -1226,17 +1250,43 @@ def build_player_recommendation(
                 projected_score = int(
                     round(min(MAX_RAW_SCORE, max(0.0, raw_projection)))
                 )
+            projected_grade = grade_for_score(projected_score)
+            projected_plate: str | None = None
+            projected_plate_probability: float | None = None
+            plate_projection_source: str | None = None
+            expected: float | None = None
             gain: float | None = None
-            if projected is not None:
-                simulated = [
-                    projected
-                    if str(row["chartId"]) == chart_id
-                    else float(row["pumbility"])
-                    for row in current_rows
+            if projected_grade is not None:
+                distribution = plate_model.distribution(
+                    str(player_id), chart_type, projected_grade
+                )
+                projected_plate = distribution.most_likely
+                projected_plate_probability = distribution.probabilities[projected_plate]
+                plate_projection_source = distribution.source
+                outcomes = [
+                    (
+                        probability,
+                        phoenix2_pumbility(
+                            chart_type,
+                            int(chart["level"]),
+                            projected_grade,
+                            plate,
+                        ),
+                    )
+                    for plate, probability in distribution.probabilities.items()
                 ]
-                if existing is None:
-                    simulated.append(projected)
-                gain = max(0.0, _top_total(simulated) - current_total)
+                expected = sum(probability * value for probability, value in outcomes)
+                gain = sum(
+                    probability
+                    * _top50_marginal_gain(
+                        value,
+                        existing_pumbility=existing,
+                        existing_in_top50=chart_id in top50_chart_ids,
+                        current_score_count=len(mode_scores),
+                        cutoff=top50_cutoff,
+                    )
+                    for probability, value in outcomes
+                )
             candidates.append(
                 {
                     **dict(chart),
@@ -1250,6 +1300,17 @@ def build_player_recommendation(
                     ),
                     "projectedGain": round(gain, 3) if gain is not None else None,
                     "projectedScore": projected_score,
+                    "projectedGrade": projected_grade,
+                    "projectedPlate": projected_plate,
+                    "projectedPlateCode": (
+                        PLATE_CODES[projected_plate] if projected_plate else None
+                    ),
+                    "projectedPlateProbability": (
+                        round(projected_plate_probability, 6)
+                        if projected_plate_probability is not None
+                        else None
+                    ),
+                    "plateProjectionSource": plate_projection_source,
                     "played": existing is not None,
                 }
             )
@@ -1321,6 +1382,9 @@ def build_player_recommendation(
                 else None
             ),
             "currentTop50Pumbility": round(current_total, 3),
+            "currentTop50CutoffPumbility": (
+                round(top50_cutoff, 3) if top50_cutoff is not None else None
+            ),
             "candidateRange": [
                 None,
                 round(scoring_rating + RECOMMENDATION_RADIUS, 3),
@@ -1362,6 +1426,7 @@ def build_recommendation_index(
     prepared_phoenix1 = _prepare_phoenix1_rating_frames(
         phoenix1_snapshot, prepared_phoenix2[0]
     )
+    plate_model = PlateProjectionModel(phoenix1_snapshot, phoenix2_snapshot)
     players = phoenix2_snapshot.get("players", [])
     named_players = [
         row
@@ -1394,6 +1459,7 @@ def build_recommendation_index(
             score_projection_slopes,
             prepared_phoenix2=prepared_phoenix2,
             prepared_phoenix1=prepared_phoenix1,
+            plate_model=plate_model,
         )
         suffix = recommendation["playerKey"][-4:]
         recommendation.update(
@@ -1464,7 +1530,10 @@ def build_recommendation_index(
             "candidateUpperRadius": RECOMMENDATION_RADIUS,
             "candidateLowerBound": None,
             "topPumbilityCount": TOP_PUMBILITY_COUNT,
-            "projection": "baseline achievement quality adjusted by chart farm edge",
+            "projection": "projected raw score converted with the official Phoenix 2 grade-and-plate Pumbility formula",
+            "plateProjection": "hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
+            "phoenix1PlatePriorCap": plate_model.phoenix1_cap,
+            "projectedGain": "probability-weighted change to the Phoenix 2 top-50 total; each plate outcome replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
             "manualRanking": "farm edge at or below the requested scoring rating plus 0.5; no personal top-50 gain is inferred",
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from phoenix2_sync import sanitize_snapshot  # noqa: E402
+from phoenix2_sync import SNAPSHOT_SCHEMA_VERSION, sanitize_snapshot  # noqa: E402
 from piu_misgrade_analyzer import load_snapshot  # noqa: E402
 from piu_recommendations import (  # noqa: E402
     build_combined_chart_results,
@@ -36,7 +36,7 @@ def _read_snapshot(mix: str) -> dict:
     api_mix = "Phoenix" if mix == "phoenix1" else "Phoenix2"
     return sanitize_snapshot(
         {
-            "schemaVersion": 1,
+            "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
             "mix": api_mix,
             "players": players,
             "charts": charts,

@@ -9,6 +9,7 @@ import pandas as pd
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
     _recommendation_chart_rows,
+    _top50_marginal_gain,
     build_combined_tier_payload,
     build_manual_recommendation_mode,
     build_player_recommendation,
@@ -157,6 +158,58 @@ class CombinedEvidenceTests(unittest.TestCase):
 
 
 class PlayerRecommendationTests(unittest.TestCase):
+    def test_projected_gain_replaces_number_fifty_only_when_it_improves_top50(self) -> None:
+        common = {
+            "current_score_count": 50,
+            "cutoff": 300.0,
+        }
+        self.assertEqual(
+            _top50_marginal_gain(
+                349.0,
+                existing_pumbility=None,
+                existing_in_top50=False,
+                **common,
+            ),
+            49.0,
+        )
+        self.assertEqual(
+            _top50_marginal_gain(
+                299.0,
+                existing_pumbility=None,
+                existing_in_top50=False,
+                **common,
+            ),
+            0.0,
+        )
+        self.assertEqual(
+            _top50_marginal_gain(
+                349.0,
+                existing_pumbility=330.0,
+                existing_in_top50=True,
+                **common,
+            ),
+            19.0,
+        )
+        self.assertEqual(
+            _top50_marginal_gain(
+                349.0,
+                existing_pumbility=290.0,
+                existing_in_top50=False,
+                **common,
+            ),
+            49.0,
+        )
+        self.assertEqual(
+            _top50_marginal_gain(
+                349.0,
+                existing_pumbility=None,
+                existing_in_top50=False,
+                current_score_count=49,
+                cutoff=None,
+            ),
+            349.0,
+        )
+
     def setUp(self) -> None:
         charts = []
         scores = []
@@ -287,6 +340,10 @@ class PlayerRecommendationTests(unittest.TestCase):
         easy = next(row for row in result["candidates"] if row["chartId"] == "chart-30")
         hard = next(row for row in result["candidates"] if row["chartId"] == "chart-31")
         self.assertGreater(easy["expectedPumbility"], hard["expectedPumbility"])
+        self.assertIsNotNone(easy["projectedGrade"])
+        self.assertIsNotNone(easy["projectedPlateCode"])
+        self.assertEqual(easy["plateProjectionSource"], "population")
+        self.assertIsNone(result["currentTop50CutoffPumbility"])
         far_easier = next(
             row for row in result["candidates"] if row["chartId"] == "chart-32"
         )

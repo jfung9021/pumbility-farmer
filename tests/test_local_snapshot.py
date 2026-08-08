@@ -83,6 +83,20 @@ class LocalSnapshotTests(unittest.TestCase):
                 )
             self.assertFalse(root.exists())
 
+    def test_explicit_archived_rebuild_captures_phoenix1_from_scratch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / ".local-data" / "piu-scores" / "phoenix1"
+            manifest = capture_private_snapshot(
+                FakeClient(),
+                root,
+                mix="phoenix1",
+                allow_archived_rebuild=True,
+                now=lambda: NOW,
+            )
+            self.assertEqual(manifest["mix"], "Phoenix")
+            _, _, scores = load_snapshot(root / "current")
+            self.assertEqual(len(scores), 2)
+
     def test_capture_writes_cache_compatible_sanitized_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / ".local-data" / "piu-scores"

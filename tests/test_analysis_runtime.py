@@ -95,7 +95,7 @@ class CoordinatorTests(unittest.TestCase):
         )
 
         self.assertEqual((status, body["outcome"]), (409, "archived"))
-        self.assertEqual(body["archiveUrl"], "/data/phoenix1-20260807.json")
+        self.assertEqual(body["archiveUrl"], "/data/phoenix1.json")
         self.assertEqual(enqueued, [])
 
     def test_successful_result_has_no_manual_refresh_cooldown(self) -> None:
@@ -416,7 +416,7 @@ class ApiRouteTests(unittest.TestCase):
             second = API_CLIENT.get("/api/analyze?mix=phoenix2")
             invalid = API_CLIENT.get("/api/analyze?mix=Fiesta")
         self.assertEqual(first.status_code, 307)
-        self.assertEqual(first.headers["location"], "/data/phoenix1-20260807.json")
+        self.assertEqual(first.headers["location"], "/data/phoenix1.json")
         self.assertEqual(second.json()["mix"]["key"], "phoenix2")
         self.assertEqual(invalid.status_code, 400)
 

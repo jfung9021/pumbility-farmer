@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "mix": "phoenix1",
+  "archivePath": "/data/phoenix1.json",
+  "sourceGeneratedAtUtc": "2026-08-08T06:31:52.009814+00:00",
+  "frozenAtUtc": "2026-08-08T06:31:56.956799Z",
+  "methodologyVersion": "6.0.0-level-16-and-0.7-scale",
+  "sha256": "c08ffab481408d8cbbdc4f1a257e3f8a21fae6b45e3148f9822de89c332cb194",
+  "bytes": 3938166,
+  "catalogCharts": 2470,
+  "measuredCharts": 2464,
+  "selectedContributions": 172004
+}

@@ -33,6 +33,12 @@ function ratingLabel(mode: ModeKey, value: number): string {
   return `${mode === "singles" ? "S" : "D"}${value.toFixed(2)}`;
 }
 
+function plateSourceLabel(chart: RecommendationChart): string {
+  if (chart.plateProjectionSource === "phoenix2") return "Phoenix 2 history";
+  if (chart.plateProjectionSource === "phoenix1") return "Phoenix 1 prior";
+  return "population model";
+}
+
 function RecommendationCard({
   chart,
   rank,
@@ -61,6 +67,15 @@ function RecommendationCard({
           {chart.projectedScore !== null ? (
             <span><b>{chart.projectedScore.toLocaleString()}</b> projected score</span>
           ) : null}
+          {chart.projectedGrade && chart.projectedPlateCode ? (
+            <span>
+              <b>{chart.projectedGrade} {chart.projectedPlateCode}</b> most likely
+              {chart.projectedPlateProbability !== null
+                ? ` (${(chart.projectedPlateProbability * 100).toFixed(0)}%)`
+                : ""}
+              {` from ${plateSourceLabel(chart)}`}
+            </span>
+          ) : null}
         </div>
       </div>
       <div className="recommendation-value">
@@ -69,7 +84,7 @@ function RecommendationCard({
         <small>
           {chart.expectedPumbility === null
             ? "Phoenix 2 projection unavailable"
-            : `${chart.expectedPumbility.toFixed(2)} expected`}
+            : `${chart.expectedPumbility.toFixed(2)} formula expected`}
         </small>
       </div>
     </article>
@@ -87,11 +102,14 @@ function CandidateRow({ chart }: { chart: RecommendationChart }) {
         <p>
           {chart.difficulty} official · {chart.estimatedDifficulty.toFixed(2)} estimated · {chart.nContributors} contributors
           {chart.projectedScore !== null ? ` · ${chart.projectedScore.toLocaleString()} projected score` : ""}
+          {chart.projectedGrade && chart.projectedPlateCode
+            ? ` · ${chart.projectedGrade} ${chart.projectedPlateCode} most likely${chart.projectedPlateProbability === null ? "" : ` (${(chart.projectedPlateProbability * 100).toFixed(0)}%)`} from ${plateSourceLabel(chart)}`
+            : ""}
         </p>
       </div>
       <div className="candidate-metric"><span>from rating</span><b>{signed(chart.distanceFromRating)}</b></div>
       <div className="candidate-metric">
-        <span>expected</span>
+        <span>formula expected</span>
         <b>{chart.expectedPumbility === null ? "-" : chart.expectedPumbility.toFixed(2)}</b>
       </div>
       <div className="candidate-metric candidate-gain"><span>gain</span><b>{chart.projectedGain === null ? "-" : signed(chart.projectedGain)}</b></div>
@@ -322,7 +340,7 @@ export default function RecommendationsPage() {
                   <article><span>Scoring rating</span><strong>{ratingLabel(activeMode, mode.scoringRating ?? 0)}</strong><small>{ratingSourceLabel} {mode.ratingBaselineLabel ?? mode.baselineLabel ?? "ranks 11-30"}</small></article>
                   <article className="rating-source-stat"><span>Phoenix 2 rating history</span><strong>{phoenix2ThresholdProgress}/{phoenix2ScoreThreshold}</strong><small>{mode.ratingSource === "phoenix1" ? "Using Phoenix 1 until this reaches 50" : "Using Phoenix 2 scores for skill rating"}</small><i><b style={{ width: `${Math.min(100, (phoenix2ThresholdProgress / phoenix2ScoreThreshold) * 100)}%` }} /></i></article>
                   <article><span>Eligible charts</span><strong>{mode.candidateCount ?? 0}</strong><small>At or below {mode.candidateRange?.[1].toFixed(2)}</small></article>
-                  <article><span>Current top 50</span><strong>{mode.currentTop50Pumbility?.toFixed(2) ?? "-"}</strong><small>Phoenix 2 only</small></article>
+                  <article><span>Current top 50</span><strong>{mode.currentTop50Pumbility?.toFixed(2) ?? "-"}</strong><small>{mode.currentTop50CutoffPumbility === null || mode.currentTop50CutoffPumbility === undefined ? "Fewer than 50 Phoenix 2 charts" : `#50 cutoff ${mode.currentTop50CutoffPumbility.toFixed(2)}`}</small></article>
                 </div>
 
                 <section className="top-recommendations" aria-labelledby="top-recommendations-title">
@@ -337,7 +355,7 @@ export default function RecommendationsPage() {
                     </div>
                     <p>{mode.projectionAvailable === false
                       ? "Ranked by farm edge because a Phoenix 2 projection is not available yet."
-                      : "Expected gain after simulating the player's Phoenix 2 top 50."}</p>
+                      : "Projected gain after applying every likely grade-plate outcome to the player's Phoenix 2 top 50."}</p>
                   </div>
                   <div className="recommendation-list">
                     {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (

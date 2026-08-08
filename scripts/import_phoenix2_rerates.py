@@ -17,8 +17,8 @@ from xml.etree import ElementTree
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ARCHIVE = ROOT / "public" / "data" / "phoenix1-20260807.json"
-DEFAULT_OUTPUT = ROOT / "public" / "data" / "phoenix1-rerates-20260807.json"
+DEFAULT_ARCHIVE = ROOT / "public" / "data" / "phoenix1.json"
+DEFAULT_OUTPUT = ROOT / "public" / "data" / "phoenix1-rerates.json"
 SHEET_NAME = "Phoenix 2 build"
 MIN_ARCHIVE_LEVEL = 16
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"

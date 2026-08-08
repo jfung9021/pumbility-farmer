@@ -14,10 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 class Phoenix1RerateTests(unittest.TestCase):
     def test_checked_in_rerates_match_the_frozen_archive(self) -> None:
         archive = json.loads(
-            (ROOT / "public/data/phoenix1-20260807.json").read_text(encoding="utf-8")
+            (ROOT / "public/data/phoenix1.json").read_text(encoding="utf-8")
         )
         source = json.loads(
-            (ROOT / "public/data/phoenix1-rerates-20260807.json").read_text(
+            (ROOT / "public/data/phoenix1-rerates.json").read_text(
                 encoding="utf-8"
             )
         )
