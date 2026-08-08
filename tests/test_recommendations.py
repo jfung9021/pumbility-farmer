@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
+    ScoreProjectionResult,
     _projected_gain_sort_key,
     _recommendation_chart_rows,
     _top50_marginal_gain,
@@ -15,8 +16,7 @@ from piu_recommendations import (
     build_manual_recommendation_mode,
     build_player_recommendation,
     build_recommendation_index,
-    fit_score_projection_model,
-    fit_score_projection_slopes,
+    fit_score_response_model,
     merge_source_contributions,
     public_player_key,
     rebase_source_rows_to_catalog,
@@ -161,110 +161,193 @@ class CombinedEvidenceTests(unittest.TestCase):
 
 
 class ScoreProjectionFitTests(unittest.TestCase):
-    @staticmethod
-    def _snapshot(
-        chart_ids: list[str],
-        rows: list[tuple[str, str, int]],
-    ) -> dict:
+    def test_joined_fit_uses_both_sources_and_phoenix2_wins_overlap(self) -> None:
         charts = [
             {
-                "id": chart_id,
-                "songName": chart_id,
+                "id": f"joined-{level}",
+                "songName": f"Joined {level}",
                 "type": "Single",
-                "level": 20,
+                "level": level,
             }
-            for chart_id in chart_ids
+            for level in (20, 21, 22)
         ]
-        scores = [
+        phoenix1_scores = [
             {
-                "playerId": player_id,
-                "chartId": chart_id,
-                "pumbility": 100.0,
-                "score": score,
-                "recordedAt": "2026-08-08T00:00:00Z",
+                "playerId": f"player-{player_index:02d}",
+                "chartId": chart["id"],
+                "pumbility": 100.0 + 10.0 * chart["level"],
+                "score": 950_000,
+                "recordedAt": "2026-08-01T00:00:00Z",
                 "isBroken": False,
             }
-            for player_id, chart_id, score in rows
+            for player_index in range(10)
+            for chart in charts
         ]
-        return {"players": [], "charts": charts, "scores": scores}
-
-    @staticmethod
-    def _combined(chart_ids: list[str]) -> list[dict]:
-        return [
+        overlap = {
+            **phoenix1_scores[0],
+            "score": 975_000,
+            "recordedAt": "2026-08-08T00:00:00Z",
+        }
+        phoenix1 = {"players": [], "charts": charts, "scores": phoenix1_scores}
+        phoenix2 = {"players": [], "charts": charts, "scores": [overlap]}
+        combined = [
             {
-                "chartId": chart_id,
+                "chartId": chart["id"],
                 "type": "Single",
-                "estimatedDifficulty": float(16 + index),
+                "estimatedDifficulty": float(chart["level"]) + 0.5,
             }
-            for index, chart_id in enumerate(chart_ids)
+            for chart in charts
         ]
 
-    def test_joined_fit_uses_both_sources_and_phoenix2_wins_overlap(self) -> None:
-        chart_ids = [f"chart-{index}" for index in range(10)]
-        combined = self._combined(chart_ids)
-        phoenix1_rows = [
-            ("player", chart_ids[index], 990_000 - 12_000 * index)
-            for index in range(5)
-        ]
-        phoenix1_rows.append(("player", chart_ids[5], 123_456))
-        phoenix2_rows = [
-            ("player", chart_ids[index], 900_000 - 2_000 * (index - 5))
-            for index in range(5, 10)
-        ]
-        phoenix1 = self._snapshot(chart_ids, phoenix1_rows)
-        phoenix2 = self._snapshot(chart_ids, phoenix2_rows)
-
-        phoenix2_only = fit_score_projection_slopes(phoenix2, combined)
-        joined, coverage = fit_score_projection_model(
+        model, coverage = fit_score_response_model(
             phoenix1,
             phoenix2,
             combined,
         )
 
-        self.assertAlmostEqual(phoenix2_only["singles"], 2_000.0)
-        self.assertAlmostEqual(joined["singles"], 7_000.0)
+        self.assertEqual(coverage["model"], "population-crossfit-monotone-v1")
+        self.assertFalse(coverage["personalRawScoreInput"])
         self.assertEqual(coverage["phoenix2OverlapRowsRemovedFromPhoenix1"], 1)
         self.assertEqual(
             coverage["modes"]["singles"]["sourceRows"],
-            {"phoenix1": 5, "phoenix2": 5},
+            {"phoenix1": 29, "phoenix2": 1},
         )
         self.assertEqual(
             coverage["modes"]["singles"]["sourcePlayers"],
-            {"phoenix1": 1, "phoenix2": 1},
+            {"phoenix1": 10, "phoenix2": 1},
         )
+        self.assertIn("player-00", model.training_player_ids)
 
-    def test_each_version_is_centered_separately_for_the_same_player(self) -> None:
-        chart_ids = [f"chart-{index}" for index in range(10)]
-        combined = self._combined(chart_ids)
-        phoenix1 = self._snapshot(
-            chart_ids,
-            [
-                ("player", chart_ids[index], 990_000 - 10_000 * index)
-                for index in range(5)
+
+class PopulationScoreResponseTests(unittest.TestCase):
+    @staticmethod
+    def _fixture() -> tuple[dict, list[dict]]:
+        difficulties = [17.0 + 0.5 * index for index in range(23)]
+        charts = [
+            {
+                "id": f"surface-chart-{index:02d}",
+                "songName": f"Surface Chart {index}",
+                "type": "Single",
+                "level": int(difficulty),
+            }
+            for index, difficulty in enumerate(difficulties)
+        ]
+        combined = [
+            {
+                "chartId": chart["id"],
+                "type": "Single",
+                "estimatedDifficulty": difficulty,
+            }
+            for chart, difficulty in zip(charts, difficulties, strict=True)
+        ]
+        scores: list[dict] = []
+        for player_index in range(40):
+            ability = 18.0 + 0.25 * (player_index % 33)
+            for chart, difficulty in zip(charts, difficulties, strict=True):
+                # This deliberately has a steeper local response near/above the
+                # player's frontier than on charts well below it.
+                frontier = max(0.0, difficulty - ability + 1.0)
+                deficit = 4_000.0 + 1_500.0 * (difficulty - 16.0) + 6_500.0 * frontier**2
+                scores.append(
+                    {
+                        "playerId": f"surface-player-{player_index:02d}",
+                        "chartId": chart["id"],
+                        "pumbility": 1_000.0 - 20.0 * abs(difficulty - ability),
+                        "score": int(max(0.0, min(1_000_000.0, 1_000_000.0 - deficit))),
+                        "recordedAt": "2026-08-08T00:00:00Z",
+                        "isBroken": False,
+                    }
+                )
+        snapshot = {
+            "players": [
+                {
+                    "playerId": f"surface-player-{index:02d}",
+                    "username": f"SURFACE {index:02d}",
+                }
+                for index in range(40)
             ],
-        )
-        phoenix2 = self._snapshot(
-            chart_ids,
-            [
-                ("player", chart_ids[index], 900_000 - 10_000 * (index - 5))
-                for index in range(5, 10)
-            ],
+            "charts": charts,
+            "scores": scores,
+        }
+        return snapshot, combined
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.snapshot, cls.combined = cls._fixture()
+        cls.model, cls.metadata = fit_score_response_model(
+            None,
+            cls.snapshot,
+            cls.combined,
         )
 
-        slopes, coverage = fit_score_projection_model(
-            phoenix1,
-            phoenix2,
-            combined,
-        )
+    def test_predictions_are_monotone_bounded_and_nonlinear(self) -> None:
+        player_id = "not-a-training-player"
+        easier_player = self.model.predict(player_id, "singles", 21.0, 22.0)
+        stronger_player = self.model.predict(player_id, "singles", 22.0, 22.0)
+        easy = self.model.predict(player_id, "singles", 22.0, 20.0)
+        easy_plus = self.model.predict(player_id, "singles", 22.0, 20.5)
+        hard = self.model.predict(player_id, "singles", 22.0, 22.5)
+        hard_plus = self.model.predict(player_id, "singles", 22.0, 23.0)
 
-        self.assertAlmostEqual(slopes["singles"], 10_000.0)
-        self.assertEqual(
-            coverage["centering"],
-            "within player and source version",
+        predictions = [easier_player, stronger_player, easy, easy_plus, hard, hard_plus]
+        self.assertTrue(all(result.score is not None for result in predictions))
+        self.assertTrue(all(0 <= int(result.score) <= 1_000_000 for result in predictions))
+        self.assertGreaterEqual(stronger_player.score, easier_player.score)
+        self.assertGreaterEqual(easy.score, easy_plus.score)
+        self.assertGreaterEqual(easy_plus.score, hard.score)
+        self.assertGreaterEqual(hard.score, hard_plus.score)
+        easy_drop = int(easy.score) - int(easy_plus.score)
+        hard_drop = int(hard.score) - int(hard_plus.score)
+        self.assertGreater(hard_drop, easy_drop)
+
+    def test_training_players_use_deterministic_crossfit_exclusion(self) -> None:
+        player_id = "surface-player-00"
+        before = self.model.predict(player_id, "singles", 22.0, 22.0)
+        changed_scores = [
+            {
+                **row,
+                "score": 100_000,
+            }
+            if row["playerId"] == player_id
+            else row
+            for row in self.snapshot["scores"]
+        ]
+        changed_model, _ = fit_score_response_model(
+            None,
+            {**self.snapshot, "scores": changed_scores},
+            self.combined,
         )
+        after = changed_model.predict(player_id, "singles", 22.0, 22.0)
+
+        self.assertEqual(before.source, "population-crossfit")
+        self.assertEqual(after.source, "population-crossfit")
+        self.assertEqual(after, before)
+
+    def test_new_players_use_full_surface_and_out_of_support_is_unavailable(self) -> None:
+        supported = self.model.predict("new-player", "singles", 22.0, 22.0)
+        unsupported = self.model.predict("new-player", "singles", 99.0, 99.0)
+
+        self.assertEqual(supported.source, "population-full")
+        self.assertIsNotNone(supported.score)
+        self.assertGreaterEqual(supported.support_count, 5)
+        self.assertIn(supported.confidence, {"low", "medium", "high"})
+        self.assertIsNone(unsupported.score)
+        self.assertEqual(unsupported.support_count, 0)
+        self.assertEqual(unsupported.confidence, "unavailable")
 
 
 class PlayerRecommendationTests(unittest.TestCase):
+    @staticmethod
+    def _fixed_score_model(score: int = 970_000) -> Mock:
+        model = Mock()
+        model.predict.return_value = ScoreProjectionResult(
+            score,
+            "population-crossfit",
+            75,
+            "medium",
+        )
+        return model
+
     def test_equal_projected_gains_prefer_easier_estimated_difficulty(self) -> None:
         rows = [
             {
@@ -444,7 +527,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
 
         self.assertEqual(index["storageSchemaVersion"], 2)
-        self.assertEqual(index["schemaVersion"], 8)
+        self.assertEqual(index["schemaVersion"], 9)
         self.assertEqual(index["shardCount"], 2)
         self.assertEqual(len(index["players"]), 3)
         self.assertNotIn("charts", index)
@@ -460,7 +543,7 @@ class PlayerRecommendationTests(unittest.TestCase):
             self.snapshot,
             self.combined,
             {"singles": 10.0},
-            {"singles": 10_000.0},
+            self._fixed_score_model(),
         )["modes"]["singles"]
 
         self.assertTrue(result["eligible"])
@@ -488,7 +571,11 @@ class PlayerRecommendationTests(unittest.TestCase):
         far_easier = next(
             row for row in result["candidates"] if row["chartId"] == "chart-32"
         )
-        self.assertEqual(far_easier["projectedScore"], 1_000_000)
+        self.assertEqual(far_easier["projectedScore"], 970_000)
+        self.assertEqual(far_easier["scoreProjectionSource"], "population-crossfit")
+        self.assertEqual(far_easier["scoreProjectionSupportCount"], 75)
+        self.assertEqual(far_easier["scoreProjectionConfidence"], "medium")
+        self.assertEqual(result["scoreProjectionModel"], "population-crossfit-monotone-v1")
         self.assertLessEqual(len(result["topRecommendations"]), 20)
 
     def test_fewer_than_thirty_scores_use_best_half(self) -> None:
@@ -499,9 +586,37 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertTrue(mode["eligible"])
         self.assertEqual(mode["validScoreCount"], 29)
         self.assertEqual(mode["baselineRanks"], [1, 15])
-        self.assertEqual(mode["baselineScoreCount"], 15)
         self.assertEqual(mode["baselinePumbility"], 293.0)
         self.assertEqual(mode["baselineLabel"], "best 50% (15 of 29)")
+
+    def test_raw_score_average_is_not_used_as_a_prediction_baseline(self) -> None:
+        model = self._fixed_score_model(965_000)
+        original = build_player_recommendation(
+            "player",
+            self.snapshot,
+            self.combined,
+            {"singles": 10.0},
+            model,
+        )["modes"]["singles"]
+        changed_snapshot = {
+            **self.snapshot,
+            "scores": [{**row, "score": 100_000} for row in self.snapshot["scores"]],
+        }
+        changed = build_player_recommendation(
+            "player",
+            changed_snapshot,
+            self.combined,
+            {"singles": 10.0},
+            model,
+        )["modes"]["singles"]
+
+        self.assertEqual(original["scoringRating"], changed["scoringRating"])
+        self.assertEqual(
+            [row["projectedScore"] for row in original["candidates"]],
+            [row["projectedScore"] for row in changed["candidates"]],
+        )
+        for legacy_field in ("baselineScore", "projectionRating", "scorePointsPerDifficulty"):
+            self.assertNotIn(legacy_field, original)
 
     def test_single_score_uses_that_score_as_baseline(self) -> None:
         snapshot = {**self.snapshot, "scores": self.snapshot["scores"][:1]}
@@ -636,7 +751,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(threshold_mode["ratingSource"], "phoenix2")
         self.assertEqual(threshold_mode["scoringRating"], 20.0)
 
-    def test_phoenix1_rating_without_phoenix2_history_has_no_projection(self) -> None:
+    def test_phoenix1_rating_without_phoenix2_history_or_model_has_no_projection(self) -> None:
         snapshot, combined, prepared_phoenix1 = self._rating_source_fixture()
         empty_scores = pd.DataFrame(columns=pd.DataFrame(snapshot["scores"]).columns)
         prepared_phoenix2 = (
@@ -658,6 +773,30 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(mode["currentTop50Pumbility"], 0.0)
         self.assertTrue(all(not row["played"] for row in mode["candidates"]))
         self.assertTrue(all(row["projectedGain"] is None for row in mode["candidates"]))
+
+    def test_phoenix1_rating_without_phoenix2_history_uses_population_projection(self) -> None:
+        snapshot, combined, prepared_phoenix1 = self._rating_source_fixture()
+        empty_scores = pd.DataFrame(columns=pd.DataFrame(snapshot["scores"]).columns)
+        prepared_phoenix2 = (
+            pd.DataFrame(snapshot["charts"]).rename(columns={"id": "chartId"}),
+            empty_scores,
+        )
+        mode = build_player_recommendation(
+            "player",
+            snapshot,
+            combined,
+            {"singles": 10.0},
+            self._fixed_score_model(970_000),
+            prepared_phoenix1=prepared_phoenix1,
+            prepared_phoenix2=prepared_phoenix2,
+        )["modes"]["singles"]
+
+        self.assertEqual(mode["ratingSource"], "phoenix1")
+        self.assertTrue(mode["projectionAvailable"])
+        self.assertEqual(mode["currentTop50Pumbility"], 0.0)
+        self.assertTrue(all(not row["played"] for row in mode["candidates"]))
+        self.assertTrue(all(row["projectedScore"] == 970_000 for row in mode["candidates"]))
+        self.assertTrue(all(float(row["projectedGain"]) > 0 for row in mode["candidates"]))
 
 
 class CombinedTierPayloadTests(unittest.TestCase):

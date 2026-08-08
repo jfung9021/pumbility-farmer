@@ -156,6 +156,9 @@ export interface RecommendationChart extends RecommendationChartEstimate {
   projectedPlateCode: string | null;
   projectedPlateProbability: number | null;
   plateProjectionSource: "phoenix1" | "phoenix2" | "population" | null;
+  scoreProjectionSource?: string | null;
+  scoreProjectionSupportCount?: number | null;
+  scoreProjectionConfidence?: "high" | "medium" | "low" | "unavailable";
   played: boolean;
 }
 
@@ -173,18 +176,12 @@ export interface RecommendationModeResult {
   reason?: string;
   baselineRanks?: [number, number];
   baselineLabel?: string;
-  baselineScoreCount?: number;
   baselinePumbility?: number | null;
-  baselineScore?: number | null;
   scoringRating?: number;
   ratingFallbackCharts?: number;
-  projectionBaselineRanks?: [number, number] | null;
-  projectionBaselineLabel?: string | null;
-  projectionFallbackCharts?: number;
-  projectionRating?: number | null;
   projectionAvailable?: boolean;
+  scoreProjectionModel?: "population-crossfit-monotone-v1";
   pumbilityPerLevel?: number | null;
-  scorePointsPerDifficulty?: number | null;
   currentTop50Pumbility?: number;
   currentTop50CutoffPumbility?: number | null;
   candidateRange?: [number | null, number];

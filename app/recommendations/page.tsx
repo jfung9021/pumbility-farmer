@@ -39,6 +39,20 @@ function plateSourceLabel(chart: RecommendationChart): string {
   return "population model";
 }
 
+function scoreProjectionEvidenceLabel(chart: RecommendationChart): string | null {
+  if (chart.projectedScore === null || chart.scoreProjectionConfidence === "unavailable") return null;
+  const support = chart.scoreProjectionSupportCount;
+  const confidence = chart.scoreProjectionConfidence;
+  if (support !== null && support !== undefined && confidence) {
+    return `Population model · ${support.toLocaleString()} nearby scores · ${confidence} confidence`;
+  }
+  if (support !== null && support !== undefined) {
+    return `Population model · ${support.toLocaleString()} nearby scores`;
+  }
+  if (confidence) return `Population model · ${confidence} confidence`;
+  return "Population score model";
+}
+
 function RecommendationCard({
   chart,
   rank,
@@ -67,6 +81,9 @@ function RecommendationCard({
           {chart.projectedScore !== null ? (
             <span><b>{chart.projectedScore.toLocaleString()}</b> projected score</span>
           ) : null}
+          {scoreProjectionEvidenceLabel(chart) ? (
+            <span>{scoreProjectionEvidenceLabel(chart)}</span>
+          ) : null}
           {chart.projectedGrade && chart.projectedPlateCode ? (
             <span>
               <b>{chart.projectedGrade} {chart.projectedPlateCode}</b> most likely
@@ -83,7 +100,7 @@ function RecommendationCard({
         <strong>{chart.projectedGain === null ? "-" : signed(chart.projectedGain)}</strong>
         <small>
           {chart.expectedPumbility === null
-            ? "Phoenix 2 projection unavailable"
+            ? "Score projection unavailable"
             : `${chart.expectedPumbility.toFixed(2)} formula expected`}
         </small>
       </div>
@@ -102,6 +119,7 @@ function CandidateRow({ chart }: { chart: RecommendationChart }) {
         <p>
           {chart.difficulty} official · {chart.estimatedDifficulty.toFixed(2)} estimated · {chart.nContributors} contributors
           {chart.projectedScore !== null ? ` · ${chart.projectedScore.toLocaleString()} projected score` : ""}
+          {scoreProjectionEvidenceLabel(chart) ? ` · ${scoreProjectionEvidenceLabel(chart)}` : ""}
           {chart.projectedGrade && chart.projectedPlateCode
             ? ` · ${chart.projectedGrade} ${chart.projectedPlateCode} most likely${chart.projectedPlateProbability === null ? "" : ` (${(chart.projectedPlateProbability * 100).toFixed(0)}%)`} from ${plateSourceLabel(chart)}`
             : ""}
@@ -243,7 +261,8 @@ export default function RecommendationsPage() {
       <section className="recommendations-hero">
         <p className="recommendations-intro">
           Choose a consented player. Skill ratings use Phoenix 1 until each mode reaches
-          50 Phoenix 2 scores, while played status and current value always use Phoenix 2.
+          50 Phoenix 2 scores. Projected scores come from a population model of player rating
+          and chart difficulty; played status and current value always use Phoenix 2.
         </p>
 
         <div className="player-picker">
@@ -354,8 +373,8 @@ export default function RecommendationsPage() {
                       </h2>
                     </div>
                     <p>{mode.projectionAvailable === false
-                      ? "Ranked by farm edge because a Phoenix 2 projection is not available yet."
-                      : "Projected gain after applying every likely grade-plate outcome to the player's Phoenix 2 top 50. Ties favor the easiest estimated difficulty."}</p>
+                      ? "Ranked by farm edge because the population score model is not available yet."
+                      : "Projected gain uses the population-predicted score, every likely grade-plate outcome, and the player's Phoenix 2 top 50. Ties favor the easiest estimated difficulty."}</p>
                   </div>
                   <div className="recommendation-list">
                     {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (
@@ -392,7 +411,7 @@ export default function RecommendationsPage() {
       <footer>
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
-        <p>The projected-score difficulty slope uses matched Phoenix 1 and Phoenix 2 raw scores, centered within each player and version. Phoenix 2 replaces an overlapping Phoenix 1 score.</p>
+        <p>Projected scores come from a player-balanced population response model. It learns how expected score changes with both scoring rating and continuous chart difficulty, so no player's raw-score average is used as their prediction baseline.</p>
         <p>Skill rating uses Phoenix 1 independently for Singles and Doubles until that mode reaches 50 valid Phoenix 2 scores.</p>
         <p>Played status, current top 50, and projected gain always use Phoenix 2. Projections are estimates, not guaranteed results.</p>
       </footer>

@@ -257,7 +257,14 @@ Player skill-rating history is selected independently for Singles and Doubles. A
 Phoenix 2 once it has 50 valid, deduplicated Phoenix 2 chart scores; below that threshold it uses
 Phoenix 1 history when available. Played status, existing Pumbility, current top-50 totals, and
 projected gain always use Phoenix 2. A player with no Phoenix 2 history can still receive a
-Phoenix 1-derived rating and farm-edge ordering, but no Phoenix 2 Pumbility projection is inferred.
+Phoenix 1-derived rating and a population score prediction; their Phoenix 2 top 50 starts empty.
+
+Projected raw scores come from a player-balanced population response model of scoring rating and
+continuous chart difficulty. The response is nonlinear, so the raw-score cost of another 0.1
+difficulty can change with both the player's rating and the chart's absolute difficulty. The
+prediction does not use the selected player's raw-score average as a personal baseline. Phoenix 1
+and Phoenix 2 observations are matched to the Phoenix 2 catalog and combined with Phoenix 2
+precedence; source calibration keeps the prediction on the Phoenix 2 score scale.
 
 Projected raw scores are converted to Phoenix 2 letter grades, then evaluated with the official
 Phoenix 2 grade-and-plate Pumbility formula. The plate distribution combines Phoenix 2 player
@@ -266,12 +273,6 @@ for an overlapping player/chart observation. Expected Pumbility is the probabili
 formula value. Projected gain is calculated separately for every plate outcome against the
 player's actual Phoenix 2 top 50, including replacement of the number-50 chart, and then averaged.
 Phoenix 1 Pumbility totals never enter the current Phoenix 2 top 50.
-
-The raw-score loss per exact difficulty point is fitted from the joined Phoenix 1 and Phoenix 2
-score history after matching both sources to the Phoenix 2 chart catalog and the combined chart
-difficulty estimates. Phoenix 2 wins for an overlapping player/chart score. Scores and difficulty
-are centered within each player and source version before fitting, so a version-wide scoring
-offset cannot be mistaken for a difficulty effect.
 
 To replace all Phoenix 1 data from scratch, run the capture, analysis, public publish, and private
 seed once. The publish command replaces the stable, unversioned artifact paths only after building
