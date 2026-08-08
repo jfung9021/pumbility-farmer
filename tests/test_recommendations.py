@@ -464,7 +464,7 @@ class PlayerRecommendationTests(unittest.TestCase):
             elif index == 32:
                 estimate = 10.0
             elif index == 33:
-                estimate = 21.01
+                estimate = 20.5000000001
             elif index == 34:
                 estimate = 15.1
             combined.append(
@@ -551,6 +551,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(result["baselinePumbility"], 280.5)
         self.assertEqual(result["scoringRating"], 20.5)
         ids = {row["chartId"] for row in result["candidates"]}
+        self.assertIn("chart-00", ids)
         self.assertIn("chart-30", ids)
         self.assertNotIn("chart-31", ids)
         self.assertIn("chart-32", ids)
@@ -562,7 +563,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertNotIn("chart-33", ids)
         self.assertNotIn("chart-34", ids)
-        self.assertEqual(result["candidateRange"], [None, 20.7])
+        self.assertEqual(result["candidateRange"], [None, 20.5])
         easy = next(row for row in result["candidates"] if row["chartId"] == "chart-30")
         self.assertIsNotNone(easy["projectedGrade"])
         self.assertIsNotNone(easy["projectedPlateCode"])
@@ -899,18 +900,18 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
                     "estimatedDifficulty": 15.0,
                 },
                 {
-                    "chartId": "upper-edge",
-                    "songName": "Upper Edge",
+                    "chartId": "rating-edge",
+                    "songName": "Rating Edge",
                     "type": "Single",
                     "level": 16,
-                    "estimatedDifficulty": 16.2,
+                    "estimatedDifficulty": 16.0,
                 },
                 {
-                    "chartId": "above-upper-edge",
-                    "songName": "Above Upper Edge",
+                    "chartId": "above-rating",
+                    "songName": "Above Rating",
                     "type": "Single",
                     "level": 16,
-                    "estimatedDifficulty": 16.2000000001,
+                    "estimatedDifficulty": 16.0000000001,
                 },
             ],
             "Single",
@@ -919,7 +920,7 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
 
         self.assertEqual(
             [row["chartId"] for row in mode["candidates"]],
-            ["sixteen", "upper-edge"],
+            ["rating-edge", "sixteen"],
         )
 
 

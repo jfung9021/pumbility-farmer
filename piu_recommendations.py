@@ -44,7 +44,7 @@ RECOMMENDATION_SCHEMA_VERSION = 9
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 1
-RECOMMENDATION_RADIUS = 0.2
+RECOMMENDATION_RADIUS = 0.0
 BASELINE_START_RANK = 11
 BASELINE_END_RANK = 30
 PHOENIX2_RATING_SCORE_THRESHOLD = 50
@@ -1969,7 +1969,7 @@ def build_recommendation_index(
             "phoenix1PlatePriorCap": plate_model.phoenix1_cap,
             "projectedGain": "probability-weighted change to the Phoenix 2 top-50 total; each plate outcome replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
             "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
-            "manualRanking": "farm edge at or below the requested scoring rating plus 0.2; no personal top-50 gain is inferred",
+            "manualRanking": "farm edge at or below the requested scoring rating; no personal top-50 gain is inferred",
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
