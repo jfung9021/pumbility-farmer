@@ -479,7 +479,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertNotIn("chart-33", ids)
         self.assertNotIn("chart-34", ids)
-        self.assertEqual(result["candidateRange"], [None, 20.5])
+        self.assertEqual(result["candidateRange"], [None, 20.7])
         easy = next(row for row in result["candidates"] if row["chartId"] == "chart-30")
         self.assertIsNotNone(easy["projectedGrade"])
         self.assertIsNotNone(easy["projectedPlateCode"])
@@ -760,11 +760,18 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
                     "estimatedDifficulty": 15.0,
                 },
                 {
-                    "chartId": "above-rating",
-                    "songName": "Above Rating",
+                    "chartId": "upper-edge",
+                    "songName": "Upper Edge",
                     "type": "Single",
                     "level": 16,
-                    "estimatedDifficulty": 16.0000000001,
+                    "estimatedDifficulty": 16.2,
+                },
+                {
+                    "chartId": "above-upper-edge",
+                    "songName": "Above Upper Edge",
+                    "type": "Single",
+                    "level": 16,
+                    "estimatedDifficulty": 16.2000000001,
                 },
             ],
             "Single",
@@ -772,7 +779,8 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [row["chartId"] for row in mode["candidates"]], ["sixteen"]
+            [row["chartId"] for row in mode["candidates"]],
+            ["sixteen", "upper-edge"],
         )
 
 
