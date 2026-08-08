@@ -728,6 +728,17 @@ def _top50_marginal_gain(
     return max(0.0, retained - float(cutoff or 0.0))
 
 
+def _projected_gain_sort_key(row: Mapping[str, Any]) -> tuple[float, float, float, str, str]:
+    """Rank gain first, then prefer easier charts for displayed-gain ties."""
+    return (
+        -float(row.get("projectedGain") or 0),
+        float(row["estimatedDifficulty"]),
+        -float(row.get("expectedPumbility") or 0),
+        str(row.get("songName") or "").casefold(),
+        str(row.get("chartId") or ""),
+    )
+
+
 def _recommendation_chart_rows(
     combined_charts: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1105,12 +1116,7 @@ def _build_player_recommendation_phoenix2_only(
         )
         top = sorted(
             candidates,
-            key=lambda row: (
-                -float(row["projectedGain"]),
-                -float(row["expectedPumbility"]),
-                str(row["songName"]).casefold(),
-                str(row["chartId"]),
-            ),
+            key=_projected_gain_sort_key,
         )[:TOP_RECOMMENDATION_COUNT]
         modes[mode_key] = {
             "eligible": True,
@@ -1407,12 +1413,7 @@ def build_player_recommendation(
         if projection_available:
             top = sorted(
                 candidates,
-                key=lambda row: (
-                    -float(row["projectedGain"] or 0),
-                    -float(row["expectedPumbility"] or 0),
-                    str(row["songName"]).casefold(),
-                    str(row["chartId"]),
-                ),
+                key=_projected_gain_sort_key,
             )[:TOP_RECOMMENDATION_COUNT]
         else:
             top = sorted(
@@ -1621,6 +1622,7 @@ def build_recommendation_index(
             "plateProjection": "hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
             "phoenix1PlatePriorCap": plate_model.phoenix1_cap,
             "projectedGain": "probability-weighted change to the Phoenix 2 top-50 total; each plate outcome replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
+            "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
             "manualRanking": "farm edge at or below the requested scoring rating plus 0.5; no personal top-50 gain is inferred",
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",

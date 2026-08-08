@@ -8,6 +8,7 @@ import pandas as pd
 
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
+    _projected_gain_sort_key,
     _recommendation_chart_rows,
     _top50_marginal_gain,
     build_combined_tier_payload,
@@ -264,6 +265,38 @@ class ScoreProjectionFitTests(unittest.TestCase):
 
 
 class PlayerRecommendationTests(unittest.TestCase):
+    def test_equal_projected_gains_prefer_easier_estimated_difficulty(self) -> None:
+        rows = [
+            {
+                "chartId": "harder",
+                "songName": "Harder",
+                "estimatedDifficulty": 22.4,
+                "projectedGain": 25.0,
+                "expectedPumbility": 400.0,
+            },
+            {
+                "chartId": "easier",
+                "songName": "Easier",
+                "estimatedDifficulty": 21.7,
+                "projectedGain": 25.0,
+                "expectedPumbility": 390.0,
+            },
+            {
+                "chartId": "largest-gain",
+                "songName": "Largest Gain",
+                "estimatedDifficulty": 23.0,
+                "projectedGain": 26.0,
+                "expectedPumbility": 410.0,
+            },
+        ]
+
+        ordered = sorted(rows, key=_projected_gain_sort_key)
+
+        self.assertEqual(
+            [row["chartId"] for row in ordered],
+            ["largest-gain", "easier", "harder"],
+        )
+
     def test_projected_gain_replaces_number_fifty_only_when_it_improves_top50(self) -> None:
         common = {
             "current_score_count": 50,
