@@ -267,6 +267,12 @@ formula value. Projected gain is calculated separately for every plate outcome a
 player's actual Phoenix 2 top 50, including replacement of the number-50 chart, and then averaged.
 Phoenix 1 Pumbility totals never enter the current Phoenix 2 top 50.
 
+The raw-score loss per exact difficulty point is fitted from the joined Phoenix 1 and Phoenix 2
+score history after matching both sources to the Phoenix 2 chart catalog and the combined chart
+difficulty estimates. Phoenix 2 wins for an overlapping player/chart score. Scores and difficulty
+are centered within each player and source version before fitting, so a version-wide scoring
+offset cannot be mistaken for a difficulty effect.
+
 To replace all Phoenix 1 data from scratch, run the capture, analysis, public publish, and private
 seed once. The publish command replaces the stable, unversioned artifact paths only after building
 the archive, manifest, and rerates successfully:

@@ -14,6 +14,8 @@ from piu_recommendations import (
     build_manual_recommendation_mode,
     build_player_recommendation,
     build_recommendation_index,
+    fit_score_projection_model,
+    fit_score_projection_slopes,
     merge_source_contributions,
     public_player_key,
     rebase_source_rows_to_catalog,
@@ -155,6 +157,110 @@ class CombinedEvidenceTests(unittest.TestCase):
 
         self.assertEqual(retained_charts["chartId"].tolist(), ["current"])
         self.assertEqual(retained_scores["chartId"].tolist(), ["current"])
+
+
+class ScoreProjectionFitTests(unittest.TestCase):
+    @staticmethod
+    def _snapshot(
+        chart_ids: list[str],
+        rows: list[tuple[str, str, int]],
+    ) -> dict:
+        charts = [
+            {
+                "id": chart_id,
+                "songName": chart_id,
+                "type": "Single",
+                "level": 20,
+            }
+            for chart_id in chart_ids
+        ]
+        scores = [
+            {
+                "playerId": player_id,
+                "chartId": chart_id,
+                "pumbility": 100.0,
+                "score": score,
+                "recordedAt": "2026-08-08T00:00:00Z",
+                "isBroken": False,
+            }
+            for player_id, chart_id, score in rows
+        ]
+        return {"players": [], "charts": charts, "scores": scores}
+
+    @staticmethod
+    def _combined(chart_ids: list[str]) -> list[dict]:
+        return [
+            {
+                "chartId": chart_id,
+                "type": "Single",
+                "estimatedDifficulty": float(16 + index),
+            }
+            for index, chart_id in enumerate(chart_ids)
+        ]
+
+    def test_joined_fit_uses_both_sources_and_phoenix2_wins_overlap(self) -> None:
+        chart_ids = [f"chart-{index}" for index in range(10)]
+        combined = self._combined(chart_ids)
+        phoenix1_rows = [
+            ("player", chart_ids[index], 990_000 - 12_000 * index)
+            for index in range(5)
+        ]
+        phoenix1_rows.append(("player", chart_ids[5], 123_456))
+        phoenix2_rows = [
+            ("player", chart_ids[index], 900_000 - 2_000 * (index - 5))
+            for index in range(5, 10)
+        ]
+        phoenix1 = self._snapshot(chart_ids, phoenix1_rows)
+        phoenix2 = self._snapshot(chart_ids, phoenix2_rows)
+
+        phoenix2_only = fit_score_projection_slopes(phoenix2, combined)
+        joined, coverage = fit_score_projection_model(
+            phoenix1,
+            phoenix2,
+            combined,
+        )
+
+        self.assertAlmostEqual(phoenix2_only["singles"], 2_000.0)
+        self.assertAlmostEqual(joined["singles"], 7_000.0)
+        self.assertEqual(coverage["phoenix2OverlapRowsRemovedFromPhoenix1"], 1)
+        self.assertEqual(
+            coverage["modes"]["singles"]["sourceRows"],
+            {"phoenix1": 5, "phoenix2": 5},
+        )
+        self.assertEqual(
+            coverage["modes"]["singles"]["sourcePlayers"],
+            {"phoenix1": 1, "phoenix2": 1},
+        )
+
+    def test_each_version_is_centered_separately_for_the_same_player(self) -> None:
+        chart_ids = [f"chart-{index}" for index in range(10)]
+        combined = self._combined(chart_ids)
+        phoenix1 = self._snapshot(
+            chart_ids,
+            [
+                ("player", chart_ids[index], 990_000 - 10_000 * index)
+                for index in range(5)
+            ],
+        )
+        phoenix2 = self._snapshot(
+            chart_ids,
+            [
+                ("player", chart_ids[index], 900_000 - 10_000 * (index - 5))
+                for index in range(5, 10)
+            ],
+        )
+
+        slopes, coverage = fit_score_projection_model(
+            phoenix1,
+            phoenix2,
+            combined,
+        )
+
+        self.assertAlmostEqual(slopes["singles"], 10_000.0)
+        self.assertEqual(
+            coverage["centering"],
+            "within player and source version",
+        )
 
 
 class PlayerRecommendationTests(unittest.TestCase):
@@ -305,10 +411,13 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
 
         self.assertEqual(index["storageSchemaVersion"], 2)
+        self.assertEqual(index["schemaVersion"], 8)
         self.assertEqual(index["shardCount"], 2)
         self.assertEqual(len(index["players"]), 3)
         self.assertNotIn("charts", index)
         self.assertNotIn("modes", index["players"][0])
+        self.assertIn("Phoenix 1 + Phoenix 2", index["method"]["scoreProjectionData"])
+        self.assertIn("scoreProjectionCoverage", index["method"])
         self.assertEqual([len(shards[number]["players"]) for number in shards], [2, 1])
         self.assertIn("modes", shards[0]["players"][0])
 
