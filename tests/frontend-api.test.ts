@@ -43,6 +43,15 @@ test("turns platform-generated text into a useful error", async () => {
   );
 });
 
+test("mobile styles keep desktop information visible", async () => {
+  const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
+  const mobileStyles = css.slice(css.indexOf("@media (max-width: 820px)"));
+  const hiddenSelectors = [...mobileStyles.matchAll(/([^{}]+)\{[^{}]*display:\s*none/g)]
+    .map((match) => match[1].trim());
+
+  assert.deepEqual(hiddenSelectors, [".feature-card > b"]);
+});
+
 test("rejects an empty successful response as non-JSON", async () => {
   const response = new Response("", { status: 200 });
   await assert.rejects(() => readJsonResponse(response), /empty or non-JSON/);
