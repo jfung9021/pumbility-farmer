@@ -298,9 +298,9 @@ Configure these server-side variables:
 - `ANALYSIS_BOOTSTRAP_SAMPLES` — optional; defaults to 500.
 - `VERCEL_DEPLOY_WEBHOOK_SECRET` — required in Production; generated when creating the project-scoped deployment webhook.
 
-The only daily cron in `vercel.json` refreshes Phoenix 2 at `06:00 UTC`. The five-minute failed-retry rule remains in place, while the one-hour successful-run cooldown is temporarily disabled. The worker has an 800-second function backstop.
+The only daily cron in `vercel.json` refreshes Phoenix 2 at `06:00 UTC`. The five-minute failed-retry rule remains in place, while the one-hour successful-run cooldown is temporarily disabled. The worker has an 800-second function backstop. A promoted deployment reanalyzes the stored private Phoenix 2 snapshot and republishes derived aggregates and recommendation shards without calling the upstream score API; scheduled and manual refreshes retain their normal synchronization behavior.
 
-Project-scoped Vercel account webhooks may target `/api/deploy?mix=phoenix2`. The endpoint validates Vercel's HMAC-SHA1 `x-vercel-signature`, derives a deterministic job ID from the deployment ID, and requests a full player synchronization rather than an incremental one. Phoenix 1 deployment events are rejected as archived.
+Project-scoped Vercel account webhooks may target `/api/deploy?mix=phoenix2`. The endpoint validates Vercel's HMAC-SHA1 `x-vercel-signature`, derives a deterministic job ID from the deployment ID, and requests cached-snapshot model reanalysis without synchronizing players. Phoenix 1 deployment events are rejected as archived.
 
 Set the linked Vercel project's Framework Preset to **Services** and its Default Max Duration to **800 seconds**. The backend's generated Celery subscriber inherits that project default; `vercel.json` also applies 800 seconds explicitly to source-backed Python functions.
 

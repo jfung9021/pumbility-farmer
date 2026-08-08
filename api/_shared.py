@@ -21,6 +21,7 @@ def start_or_reuse_analysis(
     force_refresh: bool = False,
     deterministic_job_id: str | None = None,
     full_sync: bool = False,
+    reanalyze_only: bool = False,
     trigger: str = "manual",
     mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> tuple[int, dict[str, Any]]:
@@ -38,6 +39,7 @@ def start_or_reuse_analysis(
         force_refresh=force_refresh,
         deterministic_job_id=deterministic_job_id,
         full_sync=full_sync,
+        reanalyze_only=reanalyze_only,
         trigger=trigger,
         mix=mix_spec,
     )

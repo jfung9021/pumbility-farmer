@@ -1,4 +1,4 @@
-"""Signed Vercel deployment webhook that schedules one full refresh per promotion."""
+"""Signed deployment webhook that reanalyzes the stored snapshot per promotion."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ async def deployment_promoted(
         status, result = start_or_reuse_analysis(
             force_refresh=True,
             deterministic_job_id=job_id,
-            full_sync=True,
+            reanalyze_only=True,
             trigger="deployment",
             **mix_kwargs,
         )
