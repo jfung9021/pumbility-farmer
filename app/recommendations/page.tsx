@@ -7,6 +7,8 @@ import { readJsonResponse } from "../../lib/api-response";
 import type {
   ModeKey,
   PlayerRecommendationsResponse,
+  PlayerRefreshJob,
+  PlayerRefreshResponse,
   RecommendationChart,
   RecommendationPlayersResponse,
 } from "../../lib/types";
@@ -118,6 +120,8 @@ export default function RecommendationsPage() {
   const [activeMode, setActiveMode] = useState<ModeKey>("singles");
   const [loadingPlayers, setLoadingPlayers] = useState(true);
   const [loadingPlayer, setLoadingPlayer] = useState(false);
+  const [refreshingPlayer, setRefreshingPlayer] = useState(false);
+  const [refreshWarning, setRefreshWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -147,26 +151,84 @@ export default function RecommendationsPage() {
   useEffect(() => {
     if (!selectedKey) {
       setPlayerPayload(null);
+      setRefreshWarning(null);
       return;
     }
     const controller = new AbortController();
+    setPlayerPayload(null);
     setLoadingPlayer(true);
+    setRefreshingPlayer(false);
+    setRefreshWarning(null);
     setError(null);
-    fetch(`/api/recommendations?playerKey=${encodeURIComponent(selectedKey)}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then((response) => readJsonResponse<PlayerRecommendationsResponse>(response))
-      .then(setPlayerPayload)
-      .catch((caught) => {
+    let cachedLoaded = false;
+
+    const loadCached = async () => {
+      const response = await fetch(
+        `/api/recommendations?playerKey=${encodeURIComponent(selectedKey)}`,
+        { cache: "no-store", signal: controller.signal },
+      );
+      if (response.status === 404) return null;
+      const payload = await readJsonResponse<PlayerRecommendationsResponse>(response);
+      cachedLoaded = true;
+      setPlayerPayload(payload);
+      setLoadingPlayer(false);
+      return payload;
+    };
+
+    const waitForJob = async (initial: PlayerRefreshJob) => {
+      let job = initial;
+      while (!controller.signal.aborted && ["queued", "running"].includes(job.status)) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
+        if (controller.signal.aborted) return;
+        const response = await fetch(
+          `/api/recommendations/refresh?jobId=${encodeURIComponent(job.id)}`,
+          { cache: "no-store", signal: controller.signal },
+        );
+        job = await readJsonResponse<PlayerRefreshJob>(response);
+      }
+      if (job.status === "failed") {
+        throw new Error(job.error || "Could not refresh this player's recommendations.");
+      }
+    };
+
+    const refresh = async () => {
+      if (playersPayload?.refreshSupported === false) return;
+      setRefreshingPlayer(true);
+      const response = await fetch(
+        `/api/recommendations/refresh?playerKey=${encodeURIComponent(selectedKey)}`,
+        { method: "POST", cache: "no-store", signal: controller.signal },
+      );
+      const started = await readJsonResponse<PlayerRefreshResponse>(response);
+      if (started.outcome === "fresh") {
+        cachedLoaded = true;
+        setPlayerPayload(started.recommendation);
+        return;
+      }
+      await waitForJob(started.job);
+      const refreshed = await loadCached();
+      if (!refreshed) throw new Error("The refreshed recommendations are unavailable.");
+    };
+
+    void (async () => {
+      try {
+        await loadCached();
+        await refresh();
+      } catch (caught) {
         if (caught instanceof DOMException && caught.name === "AbortError") return;
-        setError(caught instanceof Error ? caught.message : "Could not load recommendations.");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoadingPlayer(false);
-      });
+        const message = caught instanceof Error
+          ? caught.message
+          : "Could not refresh recommendations.";
+        if (cachedLoaded) setRefreshWarning(message);
+        else setError(message);
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoadingPlayer(false);
+          setRefreshingPlayer(false);
+        }
+      }
+    })();
     return () => controller.abort();
-  }, [selectedKey]);
+  }, [playersPayload?.refreshSupported, selectedKey]);
 
   const selectPlayer = (playerKey: string, inputValue = "") => {
     setSelectedKey(playerKey);
@@ -273,6 +335,13 @@ export default function RecommendationsPage() {
           </span>
         </div>
         {error ? <div className="recommendation-notice error-notice">{error}</div> : null}
+        {refreshWarning ? (
+          <div className="recommendation-notice error-notice">
+            Showing cached recommendations. Refresh failed: {refreshWarning}
+          </div>
+        ) : refreshingPlayer && playerPayload ? (
+          <div className="recommendation-notice">Refreshing this player's Phoenix 2 scores…</div>
+        ) : null}
       </section>
 
       <section className="recommendations-workspace" aria-busy={loadingPlayer}>
@@ -290,6 +359,9 @@ export default function RecommendationsPage() {
               <div>
                 <p>SELECTED PLAYER</p>
                 <h2>{playerPayload.player.displayName}</h2>
+                <p>
+                  Scores {formatGeneratedAt(playerPayload.playerSyncedAtUtc)} · model {formatGeneratedAt(playerPayload.modelGeneratedAtUtc)}
+                </p>
               </div>
               <div className="recommendation-mode-tabs" role="tablist" aria-label="Recommendation mode">
                 {(["singles", "doubles"] as ModeKey[]).map((modeKey) => (

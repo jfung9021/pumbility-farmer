@@ -75,7 +75,22 @@ def get_analysis(
 
 
 @router.post("/api/analyze")
-def refresh_analysis(mix: str = Query(default=DEFAULT_MIX_KEY)):
+def refresh_analysis(
+    request: Request,
+    mix: str = Query(default=DEFAULT_MIX_KEY),
+):
+    secret = os.getenv("CRON_SECRET", "").strip()
+    provided = request.headers.get("x-analysis-run-secret", "")
+    if not secret:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "The protected analysis trigger is not configured."},
+        )
+    if not cron_authorized(f"Bearer {provided}", secret):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Unauthorized analysis refresh request."},
+        )
     try:
         status, payload = start_or_reuse_analysis(mix=resolve_mix(mix))
         return JSONResponse(status_code=status, content=payload)

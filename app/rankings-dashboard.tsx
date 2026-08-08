@@ -57,6 +57,12 @@ type ResultsPayload = {
   };
 };
 
+type AnalysisJob = {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  error?: string | null;
+};
+
 const FALLBACK_GROUPS = [
   "Extremely Easy",
   "Very Easy",
@@ -150,7 +156,33 @@ export function RankingsDashboard() {
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "The analysis did not complete.");
-      setResults(body as ResultsPayload);
+      const started = body as { outcome?: string; job?: AnalysisJob };
+      if (started.job) {
+        let job = started.job;
+        while (job.status === "queued" || job.status === "running") {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 2000));
+          const statusResponse = await fetch(
+            `/api/analyze?jobId=${encodeURIComponent(job.id)}`,
+            { cache: "no-store" },
+          );
+          const statusBody = await statusResponse.json();
+          if (!statusResponse.ok) {
+            throw new Error(statusBody.error || "The analysis status could not be read.");
+          }
+          job = statusBody as AnalysisJob;
+        }
+        if (job.status === "failed") {
+          throw new Error(job.error || "The analysis did not complete.");
+        }
+        const latestResponse = await fetch("/api/analyze", { cache: "no-store" });
+        const latest = await latestResponse.json();
+        if (!latestResponse.ok) {
+          throw new Error(latest.error || "The refreshed analysis could not be read.");
+        }
+        setResults(latest as ResultsPayload);
+      } else {
+        setResults(body as ResultsPayload);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The analysis did not complete.");
     } finally {

@@ -200,6 +200,7 @@ export function recommendationsForRating(
     : DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL;
   return {
     generatedAtUtc: payload.generatedAtUtc,
+    modelGeneratedAtUtc: payload.generatedAtUtc,
     method: payload.method,
     player: {
       playerKey: "manual",
@@ -219,6 +220,8 @@ export function recommendationPlayerList(
 ): RecommendationPlayersResponse {
   return {
     generatedAtUtc: payload.generatedAtUtc,
+    modelGeneratedAtUtc: payload.generatedAtUtc,
+    refreshSupported: false,
     method: payload.method,
     players: payload.players.map((player) => ({
       playerKey: player.playerKey,

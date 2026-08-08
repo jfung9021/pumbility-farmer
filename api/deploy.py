@@ -1,4 +1,4 @@
-"""Signed deployment webhook that reanalyzes the stored snapshot per promotion."""
+"""Signed deployment webhook retained as a no-op for old Vercel integrations."""
 
 from __future__ import annotations
 
@@ -6,13 +6,11 @@ import hashlib
 import hmac
 import json
 import os
-from typing import Mapping
+from typing import Any, Mapping
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
-from analysis_runtime import deterministic_deployment_job_id
-from api._shared import start_or_reuse_analysis
 from mix_registry import DEFAULT_MIX_KEY, resolve_mix
 
 
@@ -71,27 +69,23 @@ async def deployment_promoted(
 
     try:
         mix_spec = resolve_mix(mix)
-        job_id = deterministic_deployment_job_id(deployment_id, mix=mix_spec)
-        mix_kwargs = {} if mix_spec.key == DEFAULT_MIX_KEY else {"mix": mix_spec}
-        status, result = start_or_reuse_analysis(
-            force_refresh=True,
-            deterministic_job_id=job_id,
-            reanalyze_only=True,
-            trigger="deployment",
-            **mix_kwargs,
+        if mix_spec.archived:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "outcome": "archived",
+                    "error": f"{mix_spec.label} is archived.",
+                    "archiveUrl": mix_spec.archive_url,
+                },
+            )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "outcome": "ignored",
+                "reason": "Population models are refreshed by the daily cron or protected administrator trigger.",
+                "deploymentId": deployment_id,
+            },
         )
-        job = result.get("job") if isinstance(result, dict) else None
-        if isinstance(job, dict) and job.get("id") != job_id:
-            return JSONResponse(
-                status_code=503,
-                content={"error": "Another refresh is active; retry this deployment event."},
-            )
-        if isinstance(job, dict) and job.get("status") == "failed":
-            return JSONResponse(
-                status_code=503,
-                content={"error": "The deployment refresh is waiting for its retry window."},
-            )
-        return JSONResponse(status_code=status, content=result)
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
     except RuntimeError as exc:

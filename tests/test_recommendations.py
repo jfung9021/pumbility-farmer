@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 import pandas as pd
 
+from analysis_runtime import MemoryBlobStore
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
     TOP_RECOMMENDATION_COUNT,
     ScoreProjectionResult,
+    ScoreResponseModel,
     _projected_gain_sort_key,
     _recommendation_chart_rows,
     _top50_marginal_gain,
@@ -23,6 +26,14 @@ from piu_recommendations import (
     rebase_source_rows_to_catalog,
     retain_catalog_source_rows,
     retain_phoenix2_catalog_contributions,
+)
+from recommendation_refresh import (
+    build_recommendation_model_artifacts,
+    cached_player_is_fresh,
+    publish_recommendation_model_artifacts,
+    recommendation_player_path,
+    recommendation_player_state_path,
+    refresh_player_recommendations,
 )
 
 try:
@@ -336,6 +347,15 @@ class PopulationScoreResponseTests(unittest.TestCase):
         self.assertEqual(unsupported.support_count, 0)
         self.assertEqual(unsupported.confidence, "unavailable")
 
+    def test_serialized_model_preserves_predictions(self) -> None:
+        restored = ScoreResponseModel.from_payload(self.model.to_payload())
+
+        for player_id in ("surface-player-00", "new-player"):
+            self.assertEqual(
+                restored.predict(player_id, "singles", 22.0, 22.0),
+                self.model.predict(player_id, "singles", 22.0, 22.0),
+            )
+
 
 class PlayerRecommendationTests(unittest.TestCase):
     @staticmethod
@@ -528,7 +548,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
 
         self.assertEqual(index["storageSchemaVersion"], 2)
-        self.assertEqual(index["schemaVersion"], 9)
+        self.assertEqual(index["schemaVersion"], 10)
         self.assertEqual(index["shardCount"], 2)
         self.assertEqual(len(index["players"]), 3)
         self.assertNotIn("charts", index)
@@ -537,6 +557,121 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertIn("scoreProjectionCoverage", index["method"])
         self.assertEqual([len(shards[number]["players"]) for number in shards], [2, 1])
         self.assertIn("modes", shards[0]["players"][0])
+
+    def test_player_only_refresh_uses_daily_model_and_publishes_top_fifty_only(self) -> None:
+        generated = "2026-08-09T06:00:00Z"
+        index, model, phoenix1_shards, phoenix2_shards = (
+            build_recommendation_model_artifacts(
+                self.snapshot,
+                self.snapshot,
+                combined_charts=self.combined,
+                phoenix2_slopes={"singles": 10.0},
+                generation_key="daily-generation",
+                generated_at_utc=generated,
+            )
+        )
+        store = MemoryBlobStore()
+        publish_recommendation_model_artifacts(
+            store,
+            index=index,
+            model=model,
+            phoenix1_shards=phoenix1_shards,
+            phoenix2_shards=phoenix2_shards,
+            index_path="analysis/recommendations/latest.json",
+        )
+        player_key = index["players"][0]["playerKey"]
+        client = Mock()
+        client.fetch_page_collection.return_value = [
+            {
+                **self.snapshot["scores"][0],
+                "pumbility": 999.0,
+                "recordedAt": "2026-08-09T06:00:01Z",
+            }
+        ]
+        now = datetime(2026, 8, 9, 6, 0, 2, tzinfo=timezone.utc)
+
+        response = refresh_player_recommendations(
+            store,
+            client,
+            index_path="analysis/recommendations/latest.json",
+            player_key=player_key,
+            now=lambda: now,
+        )
+
+        client.fetch_page_collection.assert_called_once_with(
+            "api/v2/players/player/scores",
+            {"mix": "Phoenix2", "limit": 100, "recordedAfter": generated},
+        )
+        self.assertEqual(response["modelGeneration"], "daily-generation")
+        self.assertTrue(cached_player_is_fresh(response, index, now=now))
+        for mode in response["player"]["modes"].values():
+            self.assertNotIn("candidates", mode)
+            self.assertLessEqual(len(mode["topRecommendations"]), 50)
+        self.assertEqual(
+            store.get_json(recommendation_player_path(player_key)), response
+        )
+
+    def test_player_refresh_switches_all_inputs_when_daily_model_changes(self) -> None:
+        first = build_recommendation_model_artifacts(
+            self.snapshot,
+            self.snapshot,
+            combined_charts=self.combined,
+            phoenix2_slopes={"singles": 10.0},
+            generation_key="first-generation",
+            generated_at_utc="2026-08-09T06:00:00Z",
+        )
+        latest_score = {
+            **self.snapshot["scores"][0],
+            "chartId": "chart-30",
+            "pumbility": 350.0,
+            "recordedAt": "2026-08-09T06:00:01Z",
+        }
+        latest_snapshot = {
+            **self.snapshot,
+            "scores": [*self.snapshot["scores"], latest_score],
+        }
+        latest = build_recommendation_model_artifacts(
+            self.snapshot,
+            latest_snapshot,
+            combined_charts=self.combined,
+            phoenix2_slopes={"singles": 10.0},
+            generation_key="latest-generation",
+            generated_at_utc="2026-08-09T06:01:00Z",
+        )
+        store = MemoryBlobStore()
+        publish_recommendation_model_artifacts(
+            store,
+            index=first[0],
+            model=first[1],
+            phoenix1_shards=first[2],
+            phoenix2_shards=first[3],
+            index_path="analysis/recommendations/latest.json",
+        )
+        player_key = first[0]["players"][0]["playerKey"]
+
+        class GenerationChangingClient:
+            def fetch_page_collection(self, path: str, params: dict) -> list[dict]:
+                publish_recommendation_model_artifacts(
+                    store,
+                    index=latest[0],
+                    model=latest[1],
+                    phoenix1_shards=latest[2],
+                    phoenix2_shards=latest[3],
+                    index_path="analysis/recommendations/latest.json",
+                )
+                return []
+
+        response = refresh_player_recommendations(
+            store,
+            GenerationChangingClient(),
+            index_path="analysis/recommendations/latest.json",
+            player_key=player_key,
+        )
+
+        self.assertEqual(response["modelGeneration"], "latest-generation")
+        state = store.get_json(recommendation_player_state_path(player_key))
+        self.assertEqual(len(state["scores"]), 31)
+        self.assertEqual(response["player"]["modes"]["singles"]["validScoreCount"], 31)
 
     def test_rating_uses_ranks_11_through_30_and_one_sided_limit(self) -> None:
         result = build_player_recommendation(
