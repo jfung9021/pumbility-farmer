@@ -8,6 +8,7 @@ import pandas as pd
 
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
+    TOP_RECOMMENDATION_COUNT,
     ScoreProjectionResult,
     _projected_gain_sort_key,
     _recommendation_chart_rows,
@@ -577,7 +578,8 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(far_easier["scoreProjectionSupportCount"], 75)
         self.assertEqual(far_easier["scoreProjectionConfidence"], "medium")
         self.assertEqual(result["scoreProjectionModel"], "population-crossfit-monotone-v1")
-        self.assertLessEqual(len(result["topRecommendations"]), 20)
+        self.assertEqual(TOP_RECOMMENDATION_COUNT, 50)
+        self.assertLessEqual(len(result["topRecommendations"]), 50)
 
     def test_fewer_than_thirty_scores_use_best_half(self) -> None:
         snapshot = {**self.snapshot, "scores": self.snapshot["scores"][:29]}

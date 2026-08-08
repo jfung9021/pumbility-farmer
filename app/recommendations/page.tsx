@@ -33,24 +33,42 @@ function ratingLabel(mode: ModeKey, value: number): string {
   return `${mode === "singles" ? "S" : "D"}${value.toFixed(2)}`;
 }
 
-function plateSourceLabel(chart: RecommendationChart): string {
-  if (chart.plateProjectionSource === "phoenix2") return "Phoenix 2 history";
-  if (chart.plateProjectionSource === "phoenix1") return "Phoenix 1 prior";
-  return "population model";
-}
+const GRADE_GOAL_SCORES: Record<string, number> = {
+  "SSS+": 995_000,
+  SSS: 990_000,
+  "SS+": 985_000,
+  SS: 980_000,
+  "S+": 975_000,
+  S: 970_000,
+  "AAA+": 960_000,
+  AAA: 950_000,
+  "AA+": 940_000,
+  AA: 920_000,
+  "A+": 900_000,
+  A: 800_000,
+  B: 700_000,
+  C: 600_000,
+  D: 500_000,
+  F: 0,
+};
 
-function scoreProjectionEvidenceLabel(chart: RecommendationChart): string | null {
-  if (chart.projectedScore === null || chart.scoreProjectionConfidence === "unavailable") return null;
-  const support = chart.scoreProjectionSupportCount;
-  const confidence = chart.scoreProjectionConfidence;
-  if (support !== null && support !== undefined && confidence) {
-    return `Population model · ${support.toLocaleString()} nearby scores · ${confidence} confidence`;
-  }
-  if (support !== null && support !== undefined) {
-    return `Population model · ${support.toLocaleString()} nearby scores`;
-  }
-  if (confidence) return `Population model · ${confidence} confidence`;
-  return "Population score model";
+const PLATE_GOALS: Record<string, string> = {
+  PG: "all Perfects",
+  UG: "no Good, Bad, or Miss",
+  EG: "no Bad or Miss",
+  SG: "0 misses",
+  MG: "<10 misses",
+  TG: "<20 misses",
+  FG: "<50 misses",
+  RG: "50+ misses",
+};
+
+function recommendationGoal(chart: RecommendationChart): string | null {
+  if (!chart.projectedGrade || !chart.projectedPlateCode) return null;
+  const score = GRADE_GOAL_SCORES[chart.projectedGrade];
+  const plateGoal = PLATE_GOALS[chart.projectedPlateCode];
+  if (score === undefined || !plateGoal) return null;
+  return `Goal: ${chart.projectedGrade} ${chart.projectedPlateCode} (${score.toLocaleString()}, ${plateGoal})`;
 }
 
 function RecommendationCard({
@@ -78,21 +96,7 @@ function RecommendationCard({
           <span><b>{chart.difficulty}</b> official</span>
           <span><b>{chart.type === "Single" ? "S" : "D"}{chart.estimatedDifficulty.toFixed(2)}</b> estimate</span>
           <span>{chart.played ? `Current ${chart.existingPumbility?.toFixed(2)} PB` : "Unplayed in Phoenix 2"}</span>
-          {chart.projectedScore !== null ? (
-            <span><b>{chart.projectedScore.toLocaleString()}</b> projected score</span>
-          ) : null}
-          {scoreProjectionEvidenceLabel(chart) ? (
-            <span>{scoreProjectionEvidenceLabel(chart)}</span>
-          ) : null}
-          {chart.projectedGrade && chart.projectedPlateCode ? (
-            <span>
-              <b>{chart.projectedGrade} {chart.projectedPlateCode}</b> most likely
-              {chart.projectedPlateProbability !== null
-                ? ` (${(chart.projectedPlateProbability * 100).toFixed(0)}%)`
-                : ""}
-              {` from ${plateSourceLabel(chart)}`}
-            </span>
-          ) : null}
+          {recommendationGoal(chart) ? <span><b>{recommendationGoal(chart)}</b></span> : null}
         </div>
       </div>
       <div className="recommendation-value">
@@ -108,33 +112,6 @@ function RecommendationCard({
   );
 }
 
-function CandidateRow({ chart }: { chart: RecommendationChart }) {
-  return (
-    <article className="candidate-row">
-      <div className="candidate-jacket" aria-hidden="true">
-        {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
-      </div>
-      <div className="candidate-copy">
-        <div><h3>{chart.songName}</h3><span>{chart.evidenceStatus}</span></div>
-        <p>
-          {chart.difficulty} official · {chart.estimatedDifficulty.toFixed(2)} estimated · {chart.nContributors} contributors
-          {chart.projectedScore !== null ? ` · ${chart.projectedScore.toLocaleString()} projected score` : ""}
-          {scoreProjectionEvidenceLabel(chart) ? ` · ${scoreProjectionEvidenceLabel(chart)}` : ""}
-          {chart.projectedGrade && chart.projectedPlateCode
-            ? ` · ${chart.projectedGrade} ${chart.projectedPlateCode} most likely${chart.projectedPlateProbability === null ? "" : ` (${(chart.projectedPlateProbability * 100).toFixed(0)}%)`} from ${plateSourceLabel(chart)}`
-            : ""}
-        </p>
-      </div>
-      <div className="candidate-metric"><span>from rating</span><b>{signed(chart.distanceFromRating)}</b></div>
-      <div className="candidate-metric">
-        <span>formula expected</span>
-        <b>{chart.expectedPumbility === null ? "-" : chart.expectedPumbility.toFixed(2)}</b>
-      </div>
-      <div className="candidate-metric candidate-gain"><span>gain</span><b>{chart.projectedGain === null ? "-" : signed(chart.projectedGain)}</b></div>
-    </article>
-  );
-}
-
 export default function RecommendationsPage() {
   const [playersPayload, setPlayersPayload] = useState<RecommendationPlayersResponse | null>(null);
   const [playerPayload, setPlayerPayload] = useState<PlayerRecommendationsResponse | null>(null);
@@ -142,7 +119,6 @@ export default function RecommendationsPage() {
   const [playerQuery, setPlayerQuery] = useState("");
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
   const [activeMode, setActiveMode] = useState<ModeKey>("singles");
-  const [query, setQuery] = useState("");
   const [loadingPlayers, setLoadingPlayers] = useState(true);
   const [loadingPlayer, setLoadingPlayer] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,7 +175,6 @@ export default function RecommendationsPage() {
     setSelectedKey(playerKey);
     setPlayerQuery(inputValue);
     setPlayerMenuOpen(false);
-    setQuery("");
     const url = new URL(window.location.href);
     if (playerKey) url.searchParams.set("player", playerKey);
     else url.searchParams.delete("player");
@@ -216,7 +191,6 @@ export default function RecommendationsPage() {
     setPlayerMenuOpen(true);
     if (!selectedKey) return;
     setSelectedKey("");
-    setQuery("");
     const url = new URL(window.location.href);
     url.searchParams.delete("player");
     window.history.replaceState({}, "", url);
@@ -231,16 +205,6 @@ export default function RecommendationsPage() {
     );
   }, [playerQuery, playersPayload, selectedKey]);
 
-  const filteredCandidates = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
-    const rows = mode?.candidates || [];
-    if (!normalized) return rows;
-    return rows.filter((chart) =>
-      `${chart.songName} ${chart.stepArtist || ""} ${chart.difficulty}`
-        .toLocaleLowerCase()
-        .includes(normalized),
-    );
-  }, [mode, query]);
   const hasSelection = Boolean(selectedKey);
 
   return (
@@ -336,7 +300,7 @@ export default function RecommendationsPage() {
                     aria-selected={activeMode === modeKey}
                     className={activeMode === modeKey ? "active" : ""}
                     key={modeKey}
-                    onClick={() => { setActiveMode(modeKey); setQuery(""); }}
+                    onClick={() => setActiveMode(modeKey)}
                     role="tab"
                     type="button"
                   >
@@ -368,8 +332,8 @@ export default function RecommendationsPage() {
                       <p>{mode.projectionAvailable === false ? "HIGHEST FARM EDGE" : "MAXIMUM PROJECTED VALUE"}</p>
                       <h2 id="top-recommendations-title">
                         {mode.projectionAvailable === false
-                          ? "Top 20 farmable charts"
-                          : "Top 20 Pumbility opportunities"}
+                          ? "Top 50 farmable charts"
+                          : "Top 50 Pumbility opportunities"}
                       </h2>
                     </div>
                     <p>{mode.projectionAvailable === false
@@ -380,26 +344,6 @@ export default function RecommendationsPage() {
                     {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (
                       <RecommendationCard chart={chart} key={chart.chartId} rank={index + 1} />
                     )) : <p className="no-recommendations">No nearby chart is projected to improve the current top 50.</p>}
-                  </div>
-                </section>
-
-                <section className="all-candidates" aria-labelledby="all-candidates-title">
-                  <div className="recommendation-section-heading candidate-heading">
-                    <div><p>FULL MATCHING SET</p><h2 id="all-candidates-title">All charts up to your rating</h2></div>
-                    <label className="candidate-search">
-                      <span>⌕</span>
-                      <input
-                        aria-label="Search nearby charts"
-                        onChange={(event) => setQuery(event.target.value)}
-                        placeholder="Search songs, artists, or levels"
-                        type="search"
-                        value={query}
-                      />
-                    </label>
-                  </div>
-                  <div className="candidate-list">
-                    {filteredCandidates.map((chart) => <CandidateRow chart={chart} key={chart.chartId} />)}
-                    {!filteredCandidates.length ? <p className="no-recommendations">No charts match this search.</p> : null}
                   </div>
                 </section>
               </>

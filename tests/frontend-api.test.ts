@@ -62,6 +62,32 @@ test("recommendation methodology describes the population score response model",
   assert.match(page, /no player's raw-score average is used as their prediction baseline/);
 });
 
+test("recommendation page shows one top-50 list without projection evidence details", async () => {
+  const page = await readFile(
+    path.join(process.cwd(), "app", "recommendations", "page.tsx"),
+    "utf8",
+  );
+  const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
+
+  assert.match(page, /Top 50 farmable charts/);
+  assert.match(page, /Top 50 Pumbility opportunities/);
+  assert.doesNotMatch(page, /FULL MATCHING SET|function CandidateRow|scoreProjectionEvidenceLabel/);
+  assert.doesNotMatch(page, /chart\.projectedScore\.toLocaleString/);
+  assert.doesNotMatch(css, /\.all-candidates|\.candidate-(?:row|list|copy|jacket|metric|search|heading)/);
+});
+
+test("recommendation cards express projected grade and plate as a concrete goal", async () => {
+  const page = await readFile(
+    path.join(process.cwd(), "app", "recommendations", "page.tsx"),
+    "utf8",
+  );
+
+  assert.match(page, /MG: "<10 misses"/);
+  assert.match(page, /Goal: \$\{chart\.projectedGrade\} \$\{chart\.projectedPlateCode\}/);
+  assert.match(page, /"S\+": 975_000/);
+  assert.doesNotMatch(page, /most likely|plateSourceLabel/);
+});
+
 test("rejects an empty successful response as non-JSON", async () => {
   const response = new Response("", { status: 200 });
   await assert.rejects(() => readJsonResponse(response), /empty or non-JSON/);
@@ -365,4 +391,14 @@ test("manual recommendations stop at the scoring rating", () => {
     configuredFloor.player.modes.singles.candidates.map((candidate) => candidate.chartId),
     ["level-17"],
   );
+
+  const fiftyOfFiftyFive = recommendationsForRating({
+    generatedAtUtc: "2026-08-08T00:00:00Z",
+    method: {},
+    charts: Array.from({ length: 55 }, (_, index) =>
+      chart(`chart-${String(index).padStart(2, "0")}`, 16 + index / 100, 16),
+    ),
+    players: [],
+  }, 20.5).player.modes.singles.topRecommendations;
+  assert.equal(fiftyOfFiftyFive.length, 50);
 });

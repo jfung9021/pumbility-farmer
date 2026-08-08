@@ -173,7 +173,7 @@ function manualMode(
       || left.songName.localeCompare(right.songName)
       || left.chartId.localeCompare(right.chartId),
     )
-    .slice(0, 20);
+    .slice(0, 50);
   return {
     eligible: true,
     manual: true,
