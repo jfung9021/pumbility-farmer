@@ -269,6 +269,10 @@ existing Pumbility, current top-50 totals, and projected gain always use Phoenix
 Phoenix 2 history can still receive a Phoenix 1-derived rating and a score prediction when that
 Phoenix 1 window exists; their Phoenix 2 top 50 starts empty.
 
+Suggested-chart eligibility has no lower estimated-difficulty bound and extends through 0.5 points
+above the player's scoring rating. Charts beyond that upper bound are excluded before projected-gain
+ranking.
+
 Projected raw scores target the skill-distance-weighted median (50th percentile) among other players who
 placed the exact chart in their mode's top 100 Pumbility results. After excluding the selected player,
 the peer search starts within 0.2 rating and expands in 0.1 steps through 1.0, stopping at the first

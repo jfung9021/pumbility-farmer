@@ -31,6 +31,7 @@ const FORBIDDEN_KEYS = new Set([
   "scores",
 ]);
 const DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL = 16;
+const RECOMMENDATION_UPPER_RADIUS = 0.5;
 
 export class LocalRecommendationsNotFoundError extends Error {}
 export class LocalRecommendationsValidationError extends Error {}
@@ -137,11 +138,12 @@ function manualMode(
   minimumOfficialLevel: number,
 ): RecommendationModeResult {
   const chartType = modeKey === "singles" ? "Single" : "Double";
+  const maximumEstimatedDifficulty = scoringRating + RECOMMENDATION_UPPER_RADIUS;
   const candidates: RecommendationChart[] = charts
     .filter(
       (chart) => chart.type === chartType
         && chart.level >= minimumOfficialLevel
-        && chart.estimatedDifficulty <= scoringRating,
+        && chart.estimatedDifficulty <= maximumEstimatedDifficulty,
     )
     .map((chart) => {
       const farmEdge = chart.level + 0.5 - chart.estimatedDifficulty;
@@ -181,7 +183,7 @@ function manualMode(
     scoringRating: Number(scoringRating.toFixed(3)),
     candidateRange: [
       null,
-      Number(scoringRating.toFixed(3)),
+      Number(maximumEstimatedDifficulty.toFixed(3)),
     ],
     candidateCount: candidates.length,
     candidates,

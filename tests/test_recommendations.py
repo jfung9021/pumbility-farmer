@@ -702,7 +702,7 @@ class PlayerRecommendationTests(unittest.TestCase):
             elif index == 32:
                 estimate = 10.0
             elif index == 33:
-                estimate = 20.5000000001
+                estimate = 21.0000000001
             elif index == 34:
                 estimate = 15.1
             combined.append(
@@ -778,6 +778,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(index["method"]["recommendationRatingRanks"], [1, 10])
         self.assertEqual(index["method"]["phoenix1RatingRanks"], [11, 20])
         self.assertEqual(index["method"]["phoenix2RatingRanks"], [1, 10])
+        self.assertEqual(index["method"]["candidateUpperRadius"], 0.5)
         self.assertEqual([len(shards[number]["players"]) for number in shards], [2, 1])
         self.assertIn("modes", shards[0]["players"][0])
 
@@ -793,6 +794,8 @@ class PlayerRecommendationTests(unittest.TestCase):
                 generated_at_utc=generated,
             )
         )
+        self.assertEqual(index["method"]["candidateUpperRadius"], 0.5)
+        self.assertEqual(model["method"]["candidateUpperRadius"], 0.5)
         store = MemoryBlobStore()
         publish_recommendation_model_artifacts(
             store,
@@ -1041,7 +1044,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         ids = {row["chartId"] for row in result["candidates"]}
         self.assertIn("chart-00", ids)
         self.assertIn("chart-30", ids)
-        self.assertNotIn("chart-31", ids)
+        self.assertIn("chart-31", ids)
         self.assertIn("chart-32", ids)
         self.assertEqual(
             next(row for row in result["candidates"] if row["chartId"] == "chart-32")[
@@ -1051,7 +1054,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertNotIn("chart-33", ids)
         self.assertNotIn("chart-34", ids)
-        self.assertEqual(result["candidateRange"], [None, 20.5])
+        self.assertEqual(result["candidateRange"], [None, 21.0])
         easy = next(row for row in result["candidates"] if row["chartId"] == "chart-30")
         self.assertEqual(easy["estimatedDifficulty"], 20.0)
         self.assertEqual(easy["difficultyDelta"], -0.5)
@@ -1532,7 +1535,14 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
                     "songName": "Above Rating",
                     "type": "Single",
                     "level": 16,
-                    "estimatedDifficulty": 16.0000000001,
+                    "estimatedDifficulty": 16.5,
+                },
+                {
+                    "chartId": "above-upper-bound",
+                    "songName": "Above Upper Bound",
+                    "type": "Single",
+                    "level": 16,
+                    "estimatedDifficulty": 16.5000000001,
                 },
             ],
             "Single",
@@ -1541,8 +1551,9 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
 
         self.assertEqual(
             [row["chartId"] for row in mode["candidates"]],
-            ["rating-edge", "sixteen"],
+            ["rating-edge", "sixteen", "above-rating"],
         )
+        self.assertEqual(mode["candidateRange"], [None, 16.5])
 
 
 @unittest.skipIf(get_recommendation_players is None, "FastAPI is not installed")
