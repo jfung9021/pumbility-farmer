@@ -2,10 +2,12 @@ import unittest
 
 from phoenix2_pumbility import (
     PLATE_CODES,
+    SKILL_RATING_REFERENCE_MULTIPLIER,
     PlateProjectionModel,
     grade_for_score,
     normalize_plate,
     phoenix2_pumbility,
+    skill_rating_for_pumbility,
 )
 
 
@@ -47,6 +49,26 @@ class Phoenix2PumbilityTests(unittest.TestCase):
         self.assertEqual(phoenix2_pumbility("Single", 24, "SSS+", "PG"), 395.2)
         self.assertEqual(normalize_plate("ug"), "Ultimate Game")
         self.assertEqual(PLATE_CODES["Perfect Game"], "PG")
+
+    def test_skill_rating_inverts_the_continuous_s_fair_game_reference(self) -> None:
+        self.assertAlmostEqual(SKILL_RATING_REFERENCE_MULTIPLIER, 0.968)
+        self.assertAlmostEqual(
+            skill_rating_for_pumbility("Single", 375.0 * 0.968), 23.0
+        )
+        self.assertAlmostEqual(
+            skill_rating_for_pumbility("Double", 375.0 * 0.968), 24.0
+        )
+        self.assertAlmostEqual(
+            skill_rating_for_pumbility("Single", 390.0 * 0.968), 24.0
+        )
+
+    def test_skill_rating_rejects_invalid_inputs(self) -> None:
+        for value in (-1, float("nan"), True):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    skill_rating_for_pumbility("Single", value)
+        with self.assertRaises(ValueError):
+            skill_rating_for_pumbility("Co-op", 300)
 
     def test_plate_model_uses_p2_precedence_and_player_history(self) -> None:
         p1 = snapshot(

@@ -261,20 +261,26 @@ from that catalog are removed completely. For the same player and chart, a Phoen
 supersedes Phoenix 1; Phoenix 1 is used only when no Phoenix 2 score exists. Version-specific
 Pumbility residuals are converted to level units before evidence is combined.
 
-Player skill-rating history is selected independently for Singles and Doubles. A mode uses Phoenix 2
-ranks 1-20 once it has 20 valid, deduplicated Phoenix 2 chart scores. Below that threshold it uses
-Phoenix 1 ranks 1-20 when all 20 are available, then any available Phoenix 2 history. Phoenix 1
-histories shorter than 20 scores do not qualify as a rating source. Played status,
-existing Pumbility, current top-50 totals, and projected gain always use Phoenix 2. A player with no
-Phoenix 2 history can still receive a Phoenix 1-derived rating and a score prediction when that
-Phoenix 1 window exists; their Phoenix 2 top 50 starts empty.
+Player rating history is selected independently for Singles and Doubles. The public recommendation
+rating averages ranks 1-20 by Pumbility and converts that average to the continuous chart level where
+an S with Fair Game earns the same Phoenix 2 Pumbility. A mode uses Phoenix 2 once it has 20 valid,
+deduplicated scores; below that threshold it uses a complete Phoenix 1 top 20, then any available
+Phoenix 2 history. This public rating is displayed on the page and sets the eligible-chart ceiling.
+
+Score projections use a separate rating calculated with the same S-and-Fair-Game conversion from
+Pumbility ranks 11-30. Phoenix 2 supplies that window at 30 valid scores; otherwise a complete
+Phoenix 1 ranks 11-30 window is used. A mode without either complete 30-score source still receives
+top-20-based farm-edge recommendations, but it does not receive personal projected scores. When
+training or projecting an already-played target chart, that chart is removed from the projection
+window and rank 31 is promoted when available. Played status, existing Pumbility, current top-50
+totals, and projected gain always use Phoenix 2.
 
 Suggested-chart eligibility has no lower estimated-difficulty bound and extends through 0.5 points
 above the player's scoring rating. Charts beyond that upper bound are excluded before projected-gain
 ranking.
 
 Projected raw scores target the unweighted median (50th percentile) among all other players with a
-normalized result on the exact chart. Phoenix 1 and Phoenix 2 observations are joined with Phoenix 2
+similar ranks 11-30 projection rating and a normalized result on the exact chart. Phoenix 1 and Phoenix 2 observations are joined with Phoenix 2
 precedence, calibrated to the Phoenix 2 score scale, and normalized with the Phoenix 2 chart catalog
 and grade-and-plate formula. Observations that cannot be normalized are excluded. After excluding the
 selected player, the search tries rating radii 0.2, 0.3, 0.4, and 0.5 seeking at least 20 peers. If
