@@ -258,7 +258,7 @@ export default function RecommendationsPage() {
 
   const mode = playerPayload?.player.modes[activeMode] || null;
   const phoenix2ScoreCount = mode?.phoenix2ScoreCount ?? mode?.validScoreCount ?? 0;
-  const phoenix2ScoreThreshold = mode?.phoenix2ScoreThreshold ?? 50;
+  const phoenix2ScoreThreshold = mode?.phoenix2ScoreThreshold ?? 10;
   const phoenix2ThresholdProgress = Math.min(phoenix2ScoreCount, phoenix2ScoreThreshold);
   const ratingSourceLabel = mode?.ratingSource === "phoenix1" ? "Phoenix 1" : "Phoenix 2";
   const handlePlayerInput = (value: string) => {
@@ -299,9 +299,10 @@ export default function RecommendationsPage() {
 
       <section className="recommendations-hero">
         <p className="recommendations-intro">
-          Choose a consented player. Skill ratings use Phoenix 1 until each mode reaches
-          50 Phoenix 2 scores. Projected scores come from a population model of player rating
-          and chart difficulty; played status and current value always use Phoenix 2.
+          Choose a consented player. Skill ratings use each mode&apos;s top 10 scores, switching
+          from Phoenix 1 to Phoenix 2 at 10 valid Phoenix 2 scores. Projected scores come from a
+          population model of player rating and chart difficulty; played status and current value
+          always use Phoenix 2.
         </p>
 
         <div className="player-picker">
@@ -415,8 +416,8 @@ export default function RecommendationsPage() {
             ) : (
               <>
                 <div className="recommendation-stats">
-                  <article><span>Scoring rating</span><strong>{ratingLabel(activeMode, mode.scoringRating ?? 0)}</strong><small>{ratingSourceLabel} {mode.ratingBaselineLabel ?? mode.baselineLabel ?? "ranks 11-30"}</small></article>
-                  <article className="rating-source-stat"><span>Phoenix 2 rating history</span><strong>{phoenix2ThresholdProgress}/{phoenix2ScoreThreshold}</strong><small>{mode.ratingSource === "phoenix1" ? "Using Phoenix 1 until this reaches 50" : "Using Phoenix 2 scores for skill rating"}</small><i><b style={{ width: `${Math.min(100, (phoenix2ThresholdProgress / phoenix2ScoreThreshold) * 100)}%` }} /></i></article>
+                  <article><span>Scoring rating</span><strong>{ratingLabel(activeMode, mode.scoringRating ?? 0)}</strong><small>{ratingSourceLabel} {mode.ratingBaselineLabel ?? mode.baselineLabel ?? "top 10 scores"}</small></article>
+                  <article className="rating-source-stat"><span>Phoenix 2 rating history</span><strong>{phoenix2ThresholdProgress}/{phoenix2ScoreThreshold}</strong><small>{mode.ratingSource === "phoenix1" ? `Using Phoenix 1 until this reaches ${phoenix2ScoreThreshold}` : "Using Phoenix 2 top scores for skill rating"}</small><i><b style={{ width: `${Math.min(100, (phoenix2ThresholdProgress / phoenix2ScoreThreshold) * 100)}%` }} /></i></article>
                   <article><span>Eligible charts</span><strong>{mode.candidateCount ?? 0}</strong><small>At or below {mode.candidateRange?.[1].toFixed(2)}</small></article>
                   <article><span>Current top 50</span><strong>{mode.currentTop50Pumbility?.toFixed(2) ?? "-"}</strong><small>{mode.currentTop50CutoffPumbility === null || mode.currentTop50CutoffPumbility === undefined ? "Fewer than 50 Phoenix 2 charts" : `#50 cutoff ${mode.currentTop50CutoffPumbility.toFixed(2)}`}</small></article>
                 </div>
@@ -451,7 +452,7 @@ export default function RecommendationsPage() {
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
         <p>Projected scores come from a player-balanced population response model. It learns how expected score changes with both scoring rating and continuous chart difficulty, so no player's raw-score average is used as their prediction baseline.</p>
-        <p>Skill rating uses Phoenix 1 independently for Singles and Doubles until that mode reaches 50 valid Phoenix 2 scores.</p>
+        <p>Skill rating uses each mode&apos;s top 10 Pumbility scores, switching from Phoenix 1 to Phoenix 2 when that mode reaches 10 valid Phoenix 2 scores.</p>
         <p>Played status, current top 50, and projected gain always use Phoenix 2. Projections are estimates, not guaranteed results.</p>
       </footer>
     </main>

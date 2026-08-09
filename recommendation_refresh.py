@@ -22,6 +22,7 @@ from piu_recommendations import (
     DIFFICULTY_DELTA_SCALE,
     MIN_TARGET_LEVEL,
     PHOENIX2_RATING_SCORE_THRESHOLD,
+    RECOMMENDATION_RATING_SCORE_COUNT,
     RECOMMENDATION_SCHEMA_VERSION,
     SCORE_RESPONSE_MODEL_NAME,
     TOP_PUMBILITY_COUNT,
@@ -96,6 +97,7 @@ def player_refresh_enabled(index: Mapping[str, Any]) -> bool:
     return (
         configured in {"1", "true", "yes", "on"}
         and bool(index.get("refreshSupported"))
+        and int(index.get("schemaVersion") or 0) >= RECOMMENDATION_SCHEMA_VERSION
         and int(index.get("storageSchemaVersion") or 0)
         >= PLAYER_REFRESH_STORAGE_SCHEMA_VERSION
     )
@@ -125,9 +127,10 @@ def _recommendation_method(
         "scoreProjectionCoverage": dict(score_projection_metadata),
         "scoreProjectionData": "matched Phoenix 1 + Phoenix 2 raw scores on the Phoenix 2 catalog, with Phoenix 2 precedence for overlapping player/chart rows",
         "baselineRanks": [BASELINE_START_RANK, BASELINE_END_RANK],
+        "recommendationRatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
         "phoenix2RatingScoreThreshold": PHOENIX2_RATING_SCORE_THRESHOLD,
-        "ratingSource": "per mode, use Phoenix 2 at 50 valid scores; otherwise use Phoenix 1 when available",
-        "shortHistoryBaseline": "within the selected rating source, use the best ceil(50%) when fewer than 30 qualifying scores are available",
+        "ratingSource": "per mode, use Phoenix 2 at 10 valid scores; otherwise use Phoenix 1 when available, then available Phoenix 2 history",
+        "shortHistoryBaseline": "within the selected rating source, use all available scores when fewer than 10 qualifying scores are available",
         "candidateUpperRadius": 0.0,
         "candidateLowerBound": None,
         "topPumbilityCount": TOP_PUMBILITY_COUNT,

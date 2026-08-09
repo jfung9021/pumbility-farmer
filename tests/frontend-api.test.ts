@@ -61,6 +61,10 @@ test("recommendation methodology describes the population score response model",
 
   assert.match(page, /Projected scores come from a player-balanced population response model/);
   assert.match(page, /no player's raw-score average is used as their prediction baseline/);
+  assert.match(page, /top 10 Pumbility scores/);
+  assert.match(page, /at 10 valid Phoenix 2 scores/);
+  assert.match(page, /mode\?\.phoenix2ScoreThreshold \?\? 10/);
+  assert.doesNotMatch(page, /reaches 50 valid Phoenix 2 scores/);
 });
 
 test("recommendation page shows one top-50 list without projection evidence details", async () => {

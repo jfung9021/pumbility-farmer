@@ -41,18 +41,19 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 10
+RECOMMENDATION_SCHEMA_VERSION = 11
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 1
 RECOMMENDATION_RADIUS = 0.0
 BASELINE_START_RANK = 11
 BASELINE_END_RANK = 30
-PHOENIX2_RATING_SCORE_THRESHOLD = 50
+RECOMMENDATION_RATING_SCORE_COUNT = 10
+PHOENIX2_RATING_SCORE_THRESHOLD = 10
 TOP_PUMBILITY_COUNT = 50
 TOP_RECOMMENDATION_COUNT = 50
 MAX_RAW_SCORE = 1_000_000
-SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v1"
+SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v2"
 SCORE_RESPONSE_FOLDS = 5
 SCORE_RESPONSE_GRID_STEP = 0.1
 SCORE_RESPONSE_SMOOTHING_RADIUS = 8
@@ -1061,10 +1062,9 @@ def build_manual_recommendation_mode(
     }
 
 
-def _baseline_bounds(score_count: int) -> tuple[int, int]:
-    if score_count >= BASELINE_END_RANK:
-        return BASELINE_START_RANK - 1, BASELINE_END_RANK
-    return 0, max(1, math.ceil(score_count * 0.5))
+def _rating_bounds(score_count: int) -> tuple[int, int]:
+    """Return the recommendation-only top-score window as zero-based bounds."""
+    return 0, min(RECOMMENDATION_RATING_SCORE_COUNT, score_count)
 
 
 def _rating_lookup(rows: pd.DataFrame) -> tuple[float | None, dict[str, float | None]]:
@@ -1082,7 +1082,7 @@ def _rating_lookup(rows: pd.DataFrame) -> tuple[float | None, dict[str, float | 
     def window_mean(count: int, removed: int | None = None) -> float | None:
         if count <= 0:
             return None
-        start, end = _baseline_bounds(count)
+        start, end = _rating_bounds(count)
         if removed is None:
             return float((prefix[end] - prefix[start]) / (end - start))
         if removed < start:
@@ -1099,6 +1099,18 @@ def _rating_lookup(rows: pd.DataFrame) -> tuple[float | None, dict[str, float | 
         for index, chart_id in enumerate(ordered["chartId"])
     }
     return full, leave_one_out
+
+
+def _select_rating_scores(
+    phoenix1_scores: pd.DataFrame,
+    phoenix2_scores: pd.DataFrame,
+) -> tuple[str, pd.DataFrame]:
+    """Choose one mode's recommendation-rating source consistently."""
+    if len(phoenix2_scores) >= PHOENIX2_RATING_SCORE_THRESHOLD:
+        return "phoenix2", phoenix2_scores
+    if not phoenix1_scores.empty:
+        return "phoenix1", phoenix1_scores
+    return "phoenix2", phoenix2_scores
 
 
 def _smooth_grid(values: np.ndarray, kernel: np.ndarray) -> np.ndarray:
@@ -1407,13 +1419,7 @@ def fit_score_response_model(
         key = (player_id, chart_type)
         p2_group = rating_groups["phoenix2"].get(key, empty_rating_rows)
         p1_group = rating_groups["phoenix1"].get(key, empty_rating_rows)
-        selected = (
-            p2_group
-            if len(p2_group) >= PHOENIX2_RATING_SCORE_THRESHOLD
-            else p1_group
-        )
-        if selected.empty:
-            selected = p2_group
+        _, selected = _select_rating_scores(p1_group, p2_group)
         rating_lookups[(player_id, chart_type)] = _rating_lookup(selected)
 
     ratings: list[float | None] = []
@@ -1519,6 +1525,17 @@ def _baseline_window(mode_scores: pd.DataFrame) -> tuple[pd.DataFrame, int, int,
         end = max(1, math.ceil(score_count * 0.5))
         label = f"best 50% ({end} of {score_count})"
     return mode_scores.iloc[start - 1 : end].copy(), start, end, label
+
+
+def _rating_window(mode_scores: pd.DataFrame) -> tuple[pd.DataFrame, int, int, str]:
+    """Return the highest-Pumbility rows used only for recommendations."""
+    end = min(RECOMMENDATION_RATING_SCORE_COUNT, len(mode_scores))
+    label = (
+        f"top {RECOMMENDATION_RATING_SCORE_COUNT} scores"
+        if end == RECOMMENDATION_RATING_SCORE_COUNT
+        else f"all {end} available {'score' if end == 1 else 'scores'}"
+    )
+    return mode_scores.iloc[:end].copy(), 1, end, label
 
 
 def _prepare_phoenix1_rating_frames(
@@ -1756,16 +1773,9 @@ def build_player_recommendation(
         )
 
         phoenix2_score_count = len(mode_scores)
-        phoenix1_score_count = len(phoenix1_mode_scores)
-        if phoenix2_score_count >= PHOENIX2_RATING_SCORE_THRESHOLD:
-            rating_source = "phoenix2"
-            rating_scores = mode_scores
-        elif phoenix1_score_count > 0:
-            rating_source = "phoenix1"
-            rating_scores = phoenix1_mode_scores
-        else:
-            rating_source = "phoenix2"
-            rating_scores = mode_scores
+        rating_source, rating_scores = _select_rating_scores(
+            phoenix1_mode_scores, mode_scores
+        )
 
         if rating_scores.empty:
             modes[mode_key] = {
@@ -1786,7 +1796,7 @@ def build_player_recommendation(
             }
             continue
 
-        rating_baseline, rating_start, rating_end, rating_label = _baseline_window(
+        rating_baseline, rating_start, rating_end, rating_label = _rating_window(
             rating_scores
         )
         rating_fallback_count = 0
@@ -1801,7 +1811,20 @@ def build_player_recommendation(
             rating_difficulties.append(float(estimate))
         scoring_rating = float(np.mean(rating_difficulties))
 
-        projection_baseline = _baseline_window(mode_scores)[0] if phoenix2_score_count else pd.DataFrame()
+        if phoenix2_score_count:
+            (
+                projection_baseline,
+                projection_start,
+                projection_end,
+                projection_label,
+            ) = _baseline_window(mode_scores)
+        else:
+            projection_baseline = pd.DataFrame()
+            projection_start, projection_end, projection_label = (
+                rating_start,
+                rating_end,
+                rating_label,
+            )
         baseline_pb = (
             float(projection_baseline["pumbility"].mean())
             if not projection_baseline.empty
@@ -1948,8 +1971,8 @@ def build_player_recommendation(
             "ratingSourceScoreCount": int(len(rating_scores)),
             "ratingBaselineRanks": [rating_start, rating_end],
             "ratingBaselineLabel": rating_label,
-            "baselineRanks": [rating_start, rating_end],
-            "baselineLabel": rating_label,
+            "baselineRanks": [projection_start, projection_end],
+            "baselineLabel": projection_label,
             "baselinePumbility": (
                 round(baseline_pb, 3) if baseline_pb is not None else None
             ),
@@ -2107,9 +2130,10 @@ def build_recommendation_index(
             "scoreProjectionCoverage": score_projection_metadata,
             "scoreProjectionData": "matched Phoenix 1 + Phoenix 2 raw scores on the Phoenix 2 catalog, with Phoenix 2 precedence for overlapping player/chart rows",
             "baselineRanks": [BASELINE_START_RANK, BASELINE_END_RANK],
+            "recommendationRatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
             "phoenix2RatingScoreThreshold": PHOENIX2_RATING_SCORE_THRESHOLD,
-            "ratingSource": "per mode, use Phoenix 2 at 50 valid scores; otherwise use Phoenix 1 when available",
-            "shortHistoryBaseline": "within the selected rating source, use the best ceil(50%) when fewer than 30 qualifying scores are available",
+            "ratingSource": "per mode, use Phoenix 2 at 10 valid scores; otherwise use Phoenix 1 when available, then available Phoenix 2 history",
+            "shortHistoryBaseline": "within the selected rating source, use all available scores when fewer than 10 qualifying scores are available",
             "candidateUpperRadius": RECOMMENDATION_RADIUS,
             "candidateLowerBound": None,
             "topPumbilityCount": TOP_PUMBILITY_COUNT,
