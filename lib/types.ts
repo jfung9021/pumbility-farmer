@@ -162,7 +162,7 @@ export interface RecommendationChart extends RecommendationChartEstimate {
   plateProjectionSource: "phoenix1" | "phoenix2" | "population" | null;
   scoreProjectionSource?: string | null;
   scoreProjectionSupportCount?: number | null;
-  scoreProjectionConfidence?: "high" | "medium" | "low" | "unavailable";
+  scoreProjectionConfidence?: "high" | "medium" | "low" | "limited" | "unavailable";
   played: boolean;
 }
 
@@ -188,7 +188,8 @@ export interface RecommendationModeResult {
     | "population-crossfit-monotone-v1"
     | "population-crossfit-monotone-v2"
     | "similar-skill-top100-q75-v1"
-    | "similar-skill-top100-q50-v1";
+    | "similar-skill-top100-q50-v1"
+    | "similar-skill-top100-q50-v2";
   pumbilityPerLevel?: number | null;
   currentTop50Pumbility?: number;
   currentTop50CutoffPumbility?: number | null;

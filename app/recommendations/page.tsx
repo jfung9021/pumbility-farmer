@@ -78,21 +78,21 @@ const GRADE_GOAL_SCORES: Record<string, number> = {
   F: 0,
 };
 
-const PLATE_GOALS: Record<string, string> = {
+const PLATE_CRITERIA: Record<string, string> = {
   PG: "all Perfects",
-  UG: "no Good, Bad, or Miss",
-  EG: "no Bad or Miss",
+  UG: "Perfects and Greats only",
+  EG: "Perfects, Greats, and Goods only",
   SG: "0 misses",
-  MG: "<10 misses",
-  TG: "<20 misses",
-  FG: "<50 misses",
-  RG: "50+ misses",
+  MG: "1–5 misses",
+  TG: "6–10 misses",
+  FG: "11–20 misses",
+  RG: "21+ misses",
 };
 
 function recommendationGoal(chart: RecommendationChart): string | null {
   if (!chart.projectedGrade || !chart.projectedPlateCode) return null;
   const score = GRADE_GOAL_SCORES[chart.projectedGrade];
-  const plateGoal = PLATE_GOALS[chart.projectedPlateCode];
+  const plateGoal = PLATE_CRITERIA[chart.projectedPlateCode];
   if (score === undefined || !plateGoal) return null;
   return `Goal: ${chart.projectedGrade} ${chart.projectedPlateCode} (${score.toLocaleString()}, ${plateGoal})`;
 }
@@ -313,10 +313,11 @@ export default function RecommendationsPage() {
 
       <section className="recommendations-hero">
         <p className="recommendations-intro">
-          Choose a consented player. Skill ratings use each mode&apos;s top 10 scores, switching
-          from Phoenix 1 to Phoenix 2 at 10 valid Phoenix 2 scores. Projected scores target the
-          weighted median (50th percentile) from similar players who placed that exact chart in their top
-          100; played status and current value always use Phoenix 2.
+          Choose a consented player. Skill ratings use Phoenix 2 ranks 1–10 at 10 valid scores;
+          otherwise they use Phoenix 1 ranks 11–20 when available, then available Phoenix 2
+          history. Projected scores target the weighted median (50th percentile) from similar
+          players who placed that exact chart in their top 100; played status and current value
+          always use Phoenix 2.
         </p>
 
         <div className="player-picker">
@@ -465,8 +466,8 @@ export default function RecommendationsPage() {
       <footer>
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
-        <p>Projected scores use the skill-weighted median (50th percentile) from at least five other players who placed the exact chart in their mode&apos;s top 100. Similarity expands from plus or minus 0.25 to 0.50 rating before the player-balanced population model is used as a fallback.</p>
-        <p>Skill rating uses each mode&apos;s top 10 Pumbility scores, switching from Phoenix 1 to Phoenix 2 when that mode reaches 10 valid Phoenix 2 scores.</p>
+        <p>Projected scores use the skill-weighted median (50th percentile) from other players who placed the exact chart in their mode&apos;s top 100. Similarity starts at plus or minus 0.2 rating and expands in 0.1 steps through 1.0 seeking five peers; one to four peers are still used at the maximum radius, and the player-balanced population model is used only when no peer is available.</p>
+        <p>Skill rating uses Phoenix 2 ranks 1–10 when a mode reaches 10 valid Phoenix 2 scores. Until then it uses the available portion of Phoenix 1 ranks 11–20 when rank 11 exists, followed by available Phoenix 2 history.</p>
         <p>Played status, current top 50, and projected gain always use Phoenix 2. Projections are estimates, not guaranteed results.</p>
       </footer>
     </main>

@@ -59,12 +59,13 @@ test("recommendation methodology describes the motivated peer score model", asyn
     "utf8",
   );
 
-  assert.match(page, /weighted median \(50th percentile\) from similar players/);
-  assert.match(page, /at least five other players who placed the exact chart/);
-  assert.match(page, /plus or minus 0\.25 to 0\.50 rating/);
-  assert.match(page, /population model is used as a fallback/);
-  assert.match(page, /top 10 Pumbility scores/);
-  assert.match(page, /at 10 valid Phoenix 2 scores/);
+  assert.match(page, /weighted median \(50th percentile\)[\s\S]*from similar\s+players/);
+  assert.match(page, /starts at plus or minus 0\.2 rating and expands in 0\.1 steps through 1\.0/);
+  assert.match(page, /seeking five peers; one to four peers are still used/);
+  assert.match(page, /population model is used only when no peer is available/);
+  assert.match(page, /Phoenix 1 ranks 11–20/);
+  assert.match(page, /Phoenix 2 ranks 1–10/);
+  assert.match(page, /10 valid Phoenix 2 scores/);
   assert.match(page, /mode\?\.phoenix2ScoreThreshold \?\? 10/);
   assert.doesNotMatch(page, /reaches 50 valid Phoenix 2 scores/);
 });
@@ -139,7 +140,14 @@ test("recommendation cards express projected grade and plate as a concrete goal"
     "utf8",
   );
 
-  assert.match(page, /MG: "<10 misses"/);
+  assert.match(page, /PG: "all Perfects"/);
+  assert.match(page, /UG: "Perfects and Greats only"/);
+  assert.match(page, /EG: "Perfects, Greats, and Goods only"/);
+  assert.match(page, /SG: "0 misses"/);
+  assert.match(page, /MG: "1–5 misses"/);
+  assert.match(page, /TG: "6–10 misses"/);
+  assert.match(page, /FG: "11–20 misses"/);
+  assert.match(page, /RG: "21\+ misses"/);
   assert.match(page, /Goal: \$\{chart\.projectedGrade\} \$\{chart\.projectedPlateCode\}/);
   assert.match(page, /"S\+": 975_000/);
   assert.doesNotMatch(page, /most likely|plateSourceLabel/);
