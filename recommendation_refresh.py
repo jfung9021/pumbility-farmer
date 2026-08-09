@@ -142,7 +142,7 @@ def _recommendation_method(
         "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
         "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
         "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-        "scoreProjection": "skill-distance-weighted 75th-percentile raw score from at least five other players of similar rating whose result on the exact chart ranked in their mode's top 100; the rating window expands from plus or minus 0.25 to 0.50 before falling back to the player-balanced population response surface",
+        "scoreProjection": "skill-distance-weighted median (50th-percentile) raw score from at least five other players of similar rating whose result on the exact chart ranked in their mode's top 100; the rating window expands from plus or minus 0.25 to 0.50 before falling back to the player-balanced population response surface",
         "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
     }
 

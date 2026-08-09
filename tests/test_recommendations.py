@@ -284,7 +284,7 @@ class ScoreProjectionFitTests(unittest.TestCase):
             "new-player", "singles", 20.5, 20.5, "ranked-100"
         )
 
-        self.assertEqual(included.source, "peer-top100-q75")
+        self.assertEqual(included.source, "peer-top100-q50")
         self.assertEqual(included.support_count, 6)
         self.assertEqual(excluded.source, "population-full")
 
@@ -461,7 +461,7 @@ class PeerScoreProjectionTests(unittest.TestCase):
             {_peer_cohort_key("singles", "target-chart"): cohort},
         )
 
-    def test_exactly_five_peers_enable_the_weighted_q75_projection(self) -> None:
+    def test_exactly_five_peers_enable_the_weighted_median_projection(self) -> None:
         model = self._model(
             [20.0, 20.0, 20.0, 20.0, 20.0],
             [900_000, 910_000, 920_000, 930_000, 940_000],
@@ -471,10 +471,10 @@ class PeerScoreProjectionTests(unittest.TestCase):
             "target-player", "singles", 20.0, 20.0, "target-chart"
         )
 
-        self.assertEqual(result.source, "peer-top100-q75")
+        self.assertEqual(result.source, "peer-top100-q50")
         self.assertEqual(result.support_count, 5)
         self.assertEqual(result.confidence, "low")
-        self.assertEqual(result.score, 932_500)
+        self.assertEqual(result.score, 920_000)
 
     def test_four_peers_fall_back_to_the_population_surface(self) -> None:
         model = self._model(
@@ -500,11 +500,11 @@ class PeerScoreProjectionTests(unittest.TestCase):
             "target-player", "singles", 20.0, 20.0, "target-chart"
         )
 
-        self.assertEqual(result.source, "peer-top100-q75")
+        self.assertEqual(result.source, "peer-top100-q50")
         self.assertEqual(result.support_count, 5)
         self.assertLess(result.score, 1_000_000)
 
-    def test_peer_q75_replaces_a_higher_population_projection(self) -> None:
+    def test_peer_median_replaces_a_higher_population_projection(self) -> None:
         model = self._model(
             [20.0, 20.0, 20.0, 20.0, 20.0],
             [900_000, 910_000, 920_000, 930_000, 940_000],
@@ -518,7 +518,7 @@ class PeerScoreProjectionTests(unittest.TestCase):
         )
 
         self.assertLess(peer.score, population.score)
-        self.assertEqual(peer.source, "peer-top100-q75")
+        self.assertEqual(peer.source, "peer-top100-q50")
 
 
 class PlayerRecommendationTests(unittest.TestCase):
