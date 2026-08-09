@@ -296,12 +296,13 @@ score API. Worker logs include queue wait, model load, upstream fetch, merge, co
 end-to-end timings for percentile monitoring.
 
 The interactive path is guarded by `PLAYER_RECOMMENDATION_REFRESH_ENABLED`, which defaults to
-disabled. While disabled, schema-3 runs build immutable shadow artifacts but do not replace the
-stable schema-2 recommendation pointer. Enable it only after the all-player parity check passes;
-the next daily or protected administrator run then promotes the new pointer. The previous schema-2
-generation and at least two schema-3 generations (plus every schema-3 generation younger than 48
-hours) remain available. Player state and cached results are deleted during a promoted daily run
-when that player is no longer present in the consented index.
+disabled in source and is enabled explicitly in the production project after the all-player parity
+check passes. While disabled, schema-3 runs build immutable shadow artifacts but do not replace the
+stable schema-2 recommendation pointer. The next daily or protected administrator run after
+activation promotes the new pointer. The previous schema-2 generation and at least two schema-3
+generations (plus every schema-3 generation younger than 48 hours) remain available. Player state
+and cached results are deleted during a promoted daily run when that player is no longer present in
+the consented index.
 
 Rollback uses the same `CRON_SECRET` as the protected analysis trigger:
 
@@ -337,7 +338,7 @@ Configure these server-side variables:
 - `BLOB_READ_WRITE_TOKEN` — required; automatically provided after connecting a **private** Vercel Blob store.
 - `CRON_SECRET` — required; a sensitive random value of at least 16 characters used for the secured daily cron route.
 - `ANALYSIS_BOOTSTRAP_SAMPLES` — optional; defaults to 500.
-- `PLAYER_RECOMMENDATION_REFRESH_ENABLED` — optional rollout switch; defaults to false.
+- `PLAYER_RECOMMENDATION_REFRESH_ENABLED` — optional rollout switch; defaults to false in source and is set to true for the validated production rollout.
 - `PLAYER_RECOMMENDATION_PRUNE_LEGACY` — optional destructive cleanup switch; defaults to false.
 - `VERCEL_DEPLOY_WEBHOOK_SECRET` — optional compatibility secret only if an old project-scoped deployment webhook still targets `/api/deploy`.
 
@@ -354,9 +355,9 @@ retention to limit Blob storage and transfer.
 Before enabling the interactive switch, review the project under **Dashboard → Usage** and configure
 **Team Settings → Billing → Spend Management**. For a strict $20-plan budget, set a small on-demand
 spend threshold (for example, $1) with notifications; enable automatic production pausing only if a
-hard $21 total ceiling is preferable to availability. Keep the switch disabled to incur only the
-existing daily global run. Deployment, environment activation, manual analysis triggers, and rollback
-are operator actions and are never performed by the application automatically.
+hard $21 total ceiling is preferable to availability. Disable the switch to return to daily-only
+global work. Deployment, environment activation, manual analysis triggers, and rollback are operator
+actions and are never performed by the application automatically.
 
 Old project-scoped Vercel account webhooks may still target `/api/deploy?mix=phoenix2`. The endpoint validates Vercel's HMAC-SHA1 `x-vercel-signature` and returns `202 ignored`; it never queues a model run. Phoenix 1 deployment events are rejected as archived.
 
