@@ -53,14 +53,16 @@ test("mobile styles keep desktop information visible", async () => {
   assert.deepEqual(hiddenSelectors, [".feature-card > b"]);
 });
 
-test("recommendation methodology describes the population score response model", async () => {
+test("recommendation methodology describes the motivated peer score model", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
   );
 
-  assert.match(page, /Projected scores come from a player-balanced population response model/);
-  assert.match(page, /no player's raw-score average is used as their prediction baseline/);
+  assert.match(page, /weighted 75th percentile from similar players/);
+  assert.match(page, /at least five other players who placed the exact chart/);
+  assert.match(page, /plus or minus 0\.25 to 0\.50 rating/);
+  assert.match(page, /population model is used as a fallback/);
   assert.match(page, /top 10 Pumbility scores/);
   assert.match(page, /at 10 valid Phoenix 2 scores/);
   assert.match(page, /mode\?\.phoenix2ScoreThreshold \?\? 10/);

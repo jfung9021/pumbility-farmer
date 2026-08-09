@@ -300,9 +300,9 @@ export default function RecommendationsPage() {
       <section className="recommendations-hero">
         <p className="recommendations-intro">
           Choose a consented player. Skill ratings use each mode&apos;s top 10 scores, switching
-          from Phoenix 1 to Phoenix 2 at 10 valid Phoenix 2 scores. Projected scores come from a
-          population model of player rating and chart difficulty; played status and current value
-          always use Phoenix 2.
+          from Phoenix 1 to Phoenix 2 at 10 valid Phoenix 2 scores. Projected scores target the
+          weighted 75th percentile from similar players who placed that exact chart in their top
+          100; played status and current value always use Phoenix 2.
         </p>
 
         <div className="player-picker">
@@ -434,7 +434,7 @@ export default function RecommendationsPage() {
                     </div>
                     <p>{mode.projectionAvailable === false
                       ? "Ranked by farm edge because the population score model is not available yet."
-                      : "Projected gain uses the population-predicted score, every likely grade-plate outcome, and the player's Phoenix 2 top 50. Ties favor the easiest estimated difficulty."}</p>
+                      : "Projected gain uses the motivated peer score, every likely grade-plate outcome, and the player's Phoenix 2 top 50. Ties favor the easiest estimated difficulty."}</p>
                   </div>
                   <div className="recommendation-list">
                     {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (
@@ -451,7 +451,7 @@ export default function RecommendationsPage() {
       <footer>
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
-        <p>Projected scores come from a player-balanced population response model. It learns how expected score changes with both scoring rating and continuous chart difficulty, so no player's raw-score average is used as their prediction baseline.</p>
+        <p>Projected scores use the skill-weighted 75th percentile from at least five other players who placed the exact chart in their mode&apos;s top 100. Similarity expands from plus or minus 0.25 to 0.50 rating before the player-balanced population model is used as a fallback.</p>
         <p>Skill rating uses each mode&apos;s top 10 Pumbility scores, switching from Phoenix 1 to Phoenix 2 when that mode reaches 10 valid Phoenix 2 scores.</p>
         <p>Played status, current top 50, and projected gain always use Phoenix 2. Projections are estimates, not guaranteed results.</p>
       </footer>

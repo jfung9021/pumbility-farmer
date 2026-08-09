@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
+import numpy as np
 import pandas as pd
 
 from analysis_runtime import MemoryBlobStore
@@ -12,10 +14,14 @@ from phoenix2_pumbility import PlateProjectionModel
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
     RECOMMENDATION_SCHEMA_VERSION,
+    SCORE_PROJECTION_MODEL_NAME,
     SCORE_RESPONSE_MODEL_NAME,
     TOP_RECOMMENDATION_COUNT,
     ScoreProjectionResult,
     ScoreResponseModel,
+    _PeerScoreCohort,
+    _ScoreSurface,
+    _peer_cohort_key,
     _projected_gain_sort_key,
     _rating_lookup,
     _recommendation_chart_rows,
@@ -222,7 +228,10 @@ class ScoreProjectionFitTests(unittest.TestCase):
             combined,
         )
 
-        self.assertEqual(coverage["model"], SCORE_RESPONSE_MODEL_NAME)
+        self.assertEqual(coverage["model"], SCORE_PROJECTION_MODEL_NAME)
+        self.assertEqual(
+            coverage["populationFallbackModel"], SCORE_RESPONSE_MODEL_NAME
+        )
         self.assertFalse(coverage["personalRawScoreInput"])
         self.assertEqual(coverage["phoenix2OverlapRowsRemovedFromPhoenix1"], 1)
         self.assertEqual(
@@ -234,6 +243,50 @@ class ScoreProjectionFitTests(unittest.TestCase):
             {"phoenix1": 10, "phoenix2": 1},
         )
         self.assertIn("player-00", model.training_player_ids)
+
+    def test_peer_cohorts_include_only_exact_charts_in_each_players_top_100(self) -> None:
+        charts = [
+            {
+                "id": f"ranked-{index:03d}",
+                "songName": f"Ranked {index:03d}",
+                "type": "Single",
+                "level": 20,
+            }
+            for index in range(101)
+        ]
+        scores = [
+            {
+                "playerId": f"peer-{player_index}",
+                "chartId": chart["id"],
+                "pumbility": 1_000 - chart_index,
+                "score": 900_000 + chart_index,
+                "recordedAt": "2026-08-08T00:00:00Z",
+                "isBroken": False,
+            }
+            for player_index in range(6)
+            for chart_index, chart in enumerate(charts)
+        ]
+        snapshot = {"players": [], "charts": charts, "scores": scores}
+        combined = [
+            {
+                "chartId": chart["id"],
+                "type": "Single",
+                "estimatedDifficulty": 20.5,
+            }
+            for chart in charts
+        ]
+
+        model, _ = fit_score_response_model(None, snapshot, combined)
+        included = model.predict(
+            "new-player", "singles", 20.5, 20.5, "ranked-099"
+        )
+        excluded = model.predict(
+            "new-player", "singles", 20.5, 20.5, "ranked-100"
+        )
+
+        self.assertEqual(included.source, "peer-top100-q75")
+        self.assertEqual(included.support_count, 6)
+        self.assertEqual(excluded.source, "population-full")
 
 
 class PopulationScoreResponseTests(unittest.TestCase):
@@ -379,6 +432,93 @@ class PopulationScoreResponseTests(unittest.TestCase):
         self.assertEqual(full, 5.5)
         self.assertEqual(leave_one_out["chart-00"], 6.5)
         self.assertEqual(leave_one_out["chart-10"], 5.5)
+
+
+class PeerScoreProjectionTests(unittest.TestCase):
+    @staticmethod
+    def _model(
+        ratings: list[float],
+        scores: list[float],
+        *,
+        player_ids: list[str] | None = None,
+    ) -> ScoreResponseModel:
+        surface = _ScoreSurface(
+            np.asarray([19.0, 21.0]),
+            np.asarray([19.0, 21.0]),
+            np.full((2, 2), 990_000.0),
+            np.full((2, 2), 20.0),
+        )
+        ids = player_ids or [f"peer-{index}" for index in range(len(ratings))]
+        cohort = _PeerScoreCohort(
+            np.asarray([public_player_key(value) for value in ids], dtype=np.str_),
+            np.asarray(ratings, dtype=float),
+            np.asarray(scores, dtype=float),
+        )
+        return ScoreResponseModel(
+            {"singles": surface},
+            {},
+            frozenset(),
+            {_peer_cohort_key("singles", "target-chart"): cohort},
+        )
+
+    def test_exactly_five_peers_enable_the_weighted_q75_projection(self) -> None:
+        model = self._model(
+            [20.0, 20.0, 20.0, 20.0, 20.0],
+            [900_000, 910_000, 920_000, 930_000, 940_000],
+        )
+
+        result = model.predict(
+            "target-player", "singles", 20.0, 20.0, "target-chart"
+        )
+
+        self.assertEqual(result.source, "peer-top100-q75")
+        self.assertEqual(result.support_count, 5)
+        self.assertEqual(result.confidence, "low")
+        self.assertEqual(result.score, 932_500)
+
+    def test_four_peers_fall_back_to_the_population_surface(self) -> None:
+        model = self._model(
+            [20.0, 20.0, 20.0, 20.0],
+            [900_000, 910_000, 920_000, 930_000],
+        )
+
+        result = model.predict(
+            "target-player", "singles", 20.0, 20.0, "target-chart"
+        )
+
+        self.assertEqual(result.source, "population-full")
+        self.assertEqual(result.score, 990_000)
+
+    def test_peer_search_expands_to_half_a_rating_and_excludes_self(self) -> None:
+        model = self._model(
+            [20.0, 20.1, 20.2, 20.24, 20.45, 20.0],
+            [900_000, 910_000, 920_000, 930_000, 940_000, 1_000_000],
+            player_ids=["peer-0", "peer-1", "peer-2", "peer-3", "peer-4", "target-player"],
+        )
+
+        result = model.predict(
+            "target-player", "singles", 20.0, 20.0, "target-chart"
+        )
+
+        self.assertEqual(result.source, "peer-top100-q75")
+        self.assertEqual(result.support_count, 5)
+        self.assertLess(result.score, 1_000_000)
+
+    def test_peer_q75_replaces_a_higher_population_projection(self) -> None:
+        model = self._model(
+            [20.0, 20.0, 20.0, 20.0, 20.0],
+            [900_000, 910_000, 920_000, 930_000, 940_000],
+        )
+
+        peer = model.predict(
+            "target-player", "singles", 20.0, 20.0, "target-chart"
+        )
+        population = model.predict(
+            "target-player", "singles", 20.0, 20.0, "other-chart"
+        )
+
+        self.assertLess(peer.score, population.score)
+        self.assertEqual(peer.source, "peer-top100-q75")
 
 
 class PlayerRecommendationTests(unittest.TestCase):
@@ -648,6 +788,27 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(restored.to_payload(), model.to_payload())
         self.assertLess(len(binary), len(json.dumps(model.to_payload()).encode("utf-8")))
 
+    def test_legacy_binary_without_peer_arrays_uses_population_fallback(self) -> None:
+        model, _ = fit_score_response_model(
+            self.snapshot, self.snapshot, _recommendation_chart_rows(self.combined)
+        )
+        with np.load(io.BytesIO(model.to_npz_bytes()), allow_pickle=False) as arrays:
+            legacy_arrays = {
+                name: arrays[name]
+                for name in arrays.files
+                if not name.startswith("peer_")
+            }
+        buffer = io.BytesIO()
+        np.savez_compressed(buffer, **legacy_arrays)
+
+        restored = ScoreResponseModel.from_npz_bytes(buffer.getvalue())
+        result = restored.predict(
+            "new-player", "singles", 20.0, 20.0, "chart-30"
+        )
+
+        self.assertEqual(restored.peer_cohorts, {})
+        self.assertEqual(result.source, "population-full")
+
     def test_player_artifacts_match_daily_algorithm_with_zero_pumbility_plate_rows(self) -> None:
         phoenix1 = {
             **self.snapshot,
@@ -848,7 +1009,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(far_easier["scoreProjectionSource"], "population-crossfit")
         self.assertEqual(far_easier["scoreProjectionSupportCount"], 75)
         self.assertEqual(far_easier["scoreProjectionConfidence"], "medium")
-        self.assertEqual(result["scoreProjectionModel"], "population-crossfit-monotone-v2")
+        self.assertEqual(result["scoreProjectionModel"], SCORE_PROJECTION_MODEL_NAME)
         self.assertEqual(TOP_RECOMMENDATION_COUNT, 50)
         self.assertLessEqual(len(result["topRecommendations"]), 50)
 
@@ -893,6 +1054,26 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         for legacy_field in ("baselineScore", "projectionRating", "scorePointsPerDifficulty"):
             self.assertNotIn(legacy_field, original)
+
+    def test_projected_score_is_not_floored_at_the_existing_raw_score(self) -> None:
+        mode = build_player_recommendation(
+            "player",
+            self.snapshot,
+            self.combined,
+            {"singles": 10.0},
+            self._fixed_score_model(800_000),
+        )["modes"]["singles"]
+
+        played = next(
+            row for row in mode["candidates"] if row["chartId"] == "chart-00"
+        )
+        existing_score = next(
+            row["score"]
+            for row in self.snapshot["scores"]
+            if row["chartId"] == "chart-00"
+        )
+        self.assertGreater(existing_score, played["projectedScore"])
+        self.assertEqual(played["projectedScore"], 800_000)
 
     def test_single_score_uses_that_score_as_baseline(self) -> None:
         snapshot = {**self.snapshot, "scores": self.snapshot["scores"][:1]}

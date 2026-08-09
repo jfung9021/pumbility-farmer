@@ -24,7 +24,7 @@ from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
     RECOMMENDATION_RATING_SCORE_COUNT,
     RECOMMENDATION_SCHEMA_VERSION,
-    SCORE_RESPONSE_MODEL_NAME,
+    SCORE_PROJECTION_MODEL_NAME,
     TOP_PUMBILITY_COUNT,
     ScoreResponseModel,
     _clean_snapshot_frames,
@@ -38,7 +38,7 @@ from piu_recommendations import (
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)
 PLAYER_ARTIFACT_SHARD_SIZE = 10
-MODEL_ARTIFACT_SCHEMA_VERSION = 2
+MODEL_ARTIFACT_SCHEMA_VERSION = 3
 PLAYER_STATE_SCHEMA_VERSION = 1
 PLAYER_REFRESH_STORAGE_SCHEMA_VERSION = 3
 
@@ -142,8 +142,8 @@ def _recommendation_method(
         "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
         "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
         "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-        "scoreProjection": "player-balanced, Phoenix 2-calibrated monotone population response surface using only scoring rating, chart estimated difficulty, and mode at inference; deterministic five-fold player exclusion prevents personal raw scores from training the surface serving that player",
-        "scoreProjectionModel": SCORE_RESPONSE_MODEL_NAME,
+        "scoreProjection": "skill-distance-weighted 75th-percentile raw score from at least five other players of similar rating whose result on the exact chart ranked in their mode's top 100; the rating window expands from plus or minus 0.25 to 0.50 before falling back to the player-balanced population response surface",
+        "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
     }
 
 
