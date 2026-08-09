@@ -59,14 +59,19 @@ test("recommendation methodology describes the motivated peer score model", asyn
     "utf8",
   );
 
-  assert.match(page, /weighted median \(50th percentile\)[\s\S]*from similar\s+players/);
-  assert.match(page, /starts at plus or minus 0\.2 rating and expands in 0\.1 steps through 1\.0/);
-  assert.match(page, /seeking five peers; one to four peers are still used/);
-  assert.match(page, /population model is used only when no peer is available/);
-  assert.match(page, /Phoenix 1 ranks 11–20/);
-  assert.match(page, /Phoenix 2 ranks 1–10/);
-  assert.match(page, /10 valid Phoenix 2 scores/);
-  assert.match(page, /mode\?\.phoenix2ScoreThreshold \?\? 10/);
+  assert.match(page, /median \(50th percentile\)[\s\S]*from similar\s+players/);
+  assert.match(page, /plus or minus 0\.2 through 0\.5 rating in 0\.1 steps seeking 20 peers/);
+  assert.match(page, /repeats those radii seeking 10, then repeats seeking five/);
+  assert.match(page, /Every peer within the narrowest successful radius is used/);
+  assert.match(page, /below five peers, the player-balanced population model is used/);
+  assert.doesNotMatch(page, /top 100 at plus or minus/);
+  assert.doesNotMatch(page, /through 1\.0/);
+  assert.match(page, /Phoenix 1 ranks 1–20/);
+  assert.match(page, /Phoenix 2 ranks 1–20/);
+  assert.match(page, /20 valid Phoenix 2 scores/);
+  assert.match(page, /mode\?\.phoenix2ScoreThreshold \?\? 20/);
+  assert.doesNotMatch(page, /ranks 11–20/);
+  assert.doesNotMatch(page, /ranks 1–10/);
   assert.doesNotMatch(page, /reaches 50 valid Phoenix 2 scores/);
 });
 
