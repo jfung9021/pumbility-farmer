@@ -47,10 +47,19 @@ def score(player_id: str, chart_id: str, pumbility: float, raw_score: int = 9500
 
 
 class FakeClient:
-    def __init__(self, players: list[str], charts: list[dict], scores: dict[str, list[dict]]) -> None:
+    def __init__(
+        self,
+        players: list[str],
+        charts: list[dict],
+        scores: dict[str, list[dict]],
+        songs: list[dict] | None = None,
+    ) -> None:
         self.players = players
         self.charts = charts
         self.scores = scores
+        self.songs = songs if songs is not None else [
+            {"name": row["songName"], "bpm": None} for row in charts
+        ]
         self.calls: list[tuple[str, dict]] = []
         self._lock = threading.Lock()
 
@@ -61,6 +70,8 @@ class FakeClient:
             return [{"userId": player_id, "username": "private"} for player_id in self.players]
         if path == "api/v2/charts":
             return self.charts
+        if path == "api/v2/songs":
+            return self.songs
         player_id = path.split("/")[3]
         value = self.scores.get(player_id, [])
         if isinstance(value, Exception):
@@ -85,9 +96,9 @@ class Phoenix2SyncTests(unittest.TestCase):
         mix_params = [
             params["mix"]
             for path, params in client.calls
-            if path == "api/v2/charts" or path.endswith("/scores")
+            if path in {"api/v2/charts", "api/v2/songs"} or path.endswith("/scores")
         ]
-        self.assertEqual(mix_params, ["Phoenix", "Phoenix"])
+        self.assertEqual(mix_params, ["Phoenix", "Phoenix", "Phoenix"])
         self.assertEqual(snapshot["mix"], "Phoenix")
         self.assertEqual(staging["mix"], "Phoenix")
 
@@ -127,6 +138,25 @@ class Phoenix2SyncTests(unittest.TestCase):
         self.assertNotIn("username", snapshot["charts"][0])
         players, _, _ = analyzer_input(snapshot, eligible_only=False)
         self.assertEqual(players, [{"userId": "has-scores"}])
+
+    def test_song_bpm_ranges_are_joined_into_chart_metadata(self) -> None:
+        client = FakeClient(
+            ["player"],
+            [chart("range"), chart("fixed"), chart("missing")],
+            {"player": [score("player", "range", 500)]},
+            songs=[
+                {"name": "range", "bpm": {"min": 90, "max": 180}},
+                {"name": "fixed", "bpm": {"min": 145, "max": 145}},
+                {"name": "missing", "bpm": None},
+            ],
+        )
+        snapshot, _ = synchronize_phoenix2_snapshot(
+            client, None, job_id="bpm-metadata", now=lambda: FIXED_NOW
+        )
+        charts = {row["id"]: row for row in snapshot["charts"]}
+        self.assertEqual((charts["range"]["bpmMin"], charts["range"]["bpmMax"]), (90.0, 180.0))
+        self.assertEqual((charts["fixed"]["bpmMin"], charts["fixed"]["bpmMax"]), (145.0, 145.0))
+        self.assertEqual((charts["missing"]["bpmMin"], charts["missing"]["bpmMax"]), (None, None))
 
     def test_eligibility_uses_complete_mode_history(self) -> None:
         charts = [chart(f"s-{index}", "Single", 5 + index % 25) for index in range(30)]

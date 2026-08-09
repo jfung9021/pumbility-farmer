@@ -60,6 +60,7 @@ import pandas as pd
 import requests
 
 from mix_registry import DEFAULT_MIX_KEY, resolve_mix
+from phoenix2_sync import attach_song_bpm_metadata
 
 
 DEFAULT_BASE_URL = "https://piuscores.arroweclip.se/"
@@ -374,9 +375,13 @@ def pull_live_snapshot(
         )
 
     print(f"Reading the {mix_label} chart catalog...", flush=True)
-    charts = client.fetch_page_collection(
+    songs = client.fetch_page_collection(
+        "api/v2/songs", {"mix": mix, "limit": 100}
+    )
+    charts_full = client.fetch_page_collection(
         "api/v2/charts", {"mix": mix, "limit": 100}
     )
+    charts = attach_song_bpm_metadata(charts_full, songs)
     if not charts:
         raise ApiError(f"The {mix_label} chart catalog was empty.")
 
@@ -1040,7 +1045,8 @@ def analyze_snapshot(
         "mode", "modeRank", "levelRank", "levelPercentile", "levelComparisonCharts",
         "folder", "relativeGroupRank", "relativeGroup", "effectBandRank", "effectBand",
         "songName", "difficulty", "type", "level", "chartId", "imageUrl", "noteCount",
-        "stepArtist", "estimatedDifficulty", "averageDifficulty", "difficultyDelta",
+        "stepArtist", "bpmMin", "bpmMax", "estimatedDifficulty", "averageDifficulty",
+        "difficultyDelta",
         "difficultyDeltaCi95Low", "difficultyDeltaCi95High",
         "difficultyCi95Low", "difficultyCi95High", "pumbilityPerLevel", "rawEasePb",
         "shrunkEasePb", "meanResidualPb", "medianResidualPb", "residualStdPb",

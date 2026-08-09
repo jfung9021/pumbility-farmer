@@ -203,6 +203,8 @@ def build_recommendation_model_artifacts(
             "imageUrl",
             "noteCount",
             "stepArtist",
+            "bpmMin",
+            "bpmMax",
         )
         if column in phoenix2_catalog.columns
     ]

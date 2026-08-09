@@ -47,6 +47,18 @@ function ratingLabel(mode: ModeKey, value: number): string {
   return `${mode === "singles" ? "S" : "D"}${value.toFixed(2)}`;
 }
 
+function formatBpm(minimum: number | null | undefined, maximum: number | null | undefined): string | null {
+  const min = typeof minimum === "number" && Number.isFinite(minimum) && minimum > 0 ? minimum : null;
+  const max = typeof maximum === "number" && Number.isFinite(maximum) && maximum > 0 ? maximum : null;
+  if (min === null && max === null) return null;
+  const low = (min ?? max) as number;
+  const high = (max ?? min) as number;
+  const format = (value: number) => new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 2,
+  }).format(value);
+  return low === high ? `${format(low)} BPM` : `${format(low)}–${format(high)} BPM`;
+}
+
 const GRADE_GOAL_SCORES: Record<string, number> = {
   "SSS+": 995_000,
   SSS: 990_000,
@@ -92,6 +104,7 @@ function RecommendationCard({
   chart: RecommendationChart;
   rank: number;
 }) {
+  const bpm = formatBpm(chart.bpmMin, chart.bpmMax);
   return (
     <article className="recommendation-card">
       <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
@@ -107,6 +120,7 @@ function RecommendationCard({
         </div>
         <p>
           {chart.stepArtist || "Unknown step artist"}
+          {bpm ? <> · {bpm}</> : null}
           <b> · {chart.difficulty} official</b>
         </p>
         <div className="recommendation-tags">

@@ -639,6 +639,8 @@ class PlayerRecommendationTests(unittest.TestCase):
                     "imageUrl": None,
                     "noteCount": 1000,
                     "stepArtist": "Tester",
+                    "bpmMin": 90,
+                    "bpmMax": 180,
                 }
             )
             estimate = 20.5
@@ -663,6 +665,8 @@ class PlayerRecommendationTests(unittest.TestCase):
                     "imageUrl": None,
                     "noteCount": 1000,
                     "stepArtist": "Tester",
+                    "bpmMin": 90,
+                    "bpmMax": 180,
                     "estimatedDifficulty": estimate,
                     "difficultyDelta": estimate - 20.5,
                     "difficultyCi95Low": estimate - 0.1,
@@ -998,6 +1002,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         easy = next(row for row in result["candidates"] if row["chartId"] == "chart-30")
         self.assertEqual(easy["estimatedDifficulty"], 20.0)
         self.assertEqual(easy["difficultyDelta"], -0.5)
+        self.assertEqual((easy["bpmMin"], easy["bpmMax"]), (90, 180))
         self.assertIsNotNone(easy["projectedGrade"])
         self.assertIsNotNone(easy["projectedPlateCode"])
         self.assertEqual(easy["plateProjectionSource"], "population")

@@ -792,6 +792,11 @@ class WorkerClient:
             return [{"userId": "player", "username": "private"}]
         if path == "api/v2/charts":
             return [chart(index) for index in range(30)]
+        if path == "api/v2/songs":
+            return [
+                {"name": f"Chart {index}", "bpm": {"min": 120, "max": 180}}
+                for index in range(30)
+            ]
         if path == "api/v2/players/player/scores":
             return [score(index) for index in range(30)]
         raise AssertionError(path)
@@ -1090,6 +1095,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(snapshot["players"]), 1)
         serialized = json.dumps(snapshot)
         self.assertEqual(snapshot["players"][0]["username"], "private")
+        self.assertEqual((snapshot["charts"][0]["bpmMin"], snapshot["charts"][0]["bpmMax"]), (120.0, 180.0))
         self.assertNotIn("gameTag", serialized)
         self.assertIsNone(blobs.get_json(f"{STAGING_PREFIX}{job['id']}.json"))
         self.assertIsNone(jobs.active_job_id())
