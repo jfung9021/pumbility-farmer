@@ -187,12 +187,12 @@ class ScoreProjectionFitTests(unittest.TestCase):
     def test_joined_fit_uses_both_sources_and_phoenix2_wins_overlap(self) -> None:
         charts = [
             {
-                "id": f"joined-{level}",
-                "songName": f"Joined {level}",
+                "id": f"joined-{index:02d}",
+                "songName": f"Joined {index:02d}",
                 "type": "Single",
-                "level": level,
+                "level": 20 + index % 3,
             }
-            for level in (20, 21, 22)
+            for index in range(12)
         ]
         phoenix1_scores = [
             {
@@ -234,9 +234,14 @@ class ScoreProjectionFitTests(unittest.TestCase):
         )
         self.assertFalse(coverage["personalRawScoreInput"])
         self.assertEqual(coverage["phoenix2OverlapRowsRemovedFromPhoenix1"], 1)
+        self.assertEqual(coverage["peerProjection"]["minimumUsablePeers"], 1)
+        self.assertEqual(coverage["peerProjection"]["preferredMinimumPeers"], 5)
+        self.assertEqual(coverage["peerProjection"]["initialRatingRadius"], 0.2)
+        self.assertEqual(coverage["peerProjection"]["maximumRatingRadius"], 1.0)
+        self.assertEqual(coverage["peerProjection"]["ratingRadiusStep"], 0.1)
         self.assertEqual(
             coverage["modes"]["singles"]["sourceRows"],
-            {"phoenix1": 29, "phoenix2": 1},
+            {"phoenix1": 119, "phoenix2": 1},
         )
         self.assertEqual(
             coverage["modes"]["singles"]["sourcePlayers"],
@@ -433,6 +438,26 @@ class PopulationScoreResponseTests(unittest.TestCase):
         self.assertEqual(leave_one_out["chart-00"], 6.5)
         self.assertEqual(leave_one_out["chart-10"], 5.5)
 
+    def test_phoenix1_rating_lookup_uses_ranks_eleven_through_twenty(self) -> None:
+        rows = pd.DataFrame(
+            [
+                {
+                    "chartId": f"chart-{index:02d}",
+                    "pumbility": 100 - index,
+                    "score": 990_000 - index,
+                    "ratingDifficulty": float(index + 1),
+                }
+                for index in range(21)
+            ]
+        )
+
+        full, leave_one_out = _rating_lookup(rows, "phoenix1")
+
+        self.assertEqual(full, 15.5)
+        self.assertEqual(leave_one_out["chart-00"], 16.5)
+        self.assertEqual(leave_one_out["chart-10"], 16.5)
+        self.assertEqual(leave_one_out["chart-20"], 15.5)
+
 
 class PeerScoreProjectionTests(unittest.TestCase):
     @staticmethod
@@ -476,11 +501,24 @@ class PeerScoreProjectionTests(unittest.TestCase):
         self.assertEqual(result.confidence, "low")
         self.assertEqual(result.score, 920_000)
 
-    def test_four_peers_fall_back_to_the_population_surface(self) -> None:
-        model = self._model(
-            [20.0, 20.0, 20.0, 20.0],
-            [900_000, 910_000, 920_000, 930_000],
-        )
+    def test_one_to_four_peers_are_used_with_limited_confidence(self) -> None:
+        for support in range(1, 5):
+            with self.subTest(support=support):
+                model = self._model(
+                    [20.0 + 0.1 * index for index in range(support)],
+                    [900_000 + 10_000 * index for index in range(support)],
+                )
+
+                result = model.predict(
+                    "target-player", "singles", 20.0, 20.0, "target-chart"
+                )
+
+                self.assertEqual(result.source, "peer-top100-q50")
+                self.assertEqual(result.support_count, support)
+                self.assertEqual(result.confidence, "limited")
+
+    def test_zero_peers_within_one_rating_falls_back_to_population(self) -> None:
+        model = self._model([21.0001], [900_000])
 
         result = model.predict(
             "target-player", "singles", 20.0, 20.0, "target-chart"
@@ -489,7 +527,7 @@ class PeerScoreProjectionTests(unittest.TestCase):
         self.assertEqual(result.source, "population-full")
         self.assertEqual(result.score, 990_000)
 
-    def test_peer_search_expands_to_half_a_rating_and_excludes_self(self) -> None:
+    def test_peer_search_expands_until_five_peers_and_excludes_self(self) -> None:
         model = self._model(
             [20.0, 20.1, 20.2, 20.24, 20.45, 20.0],
             [900_000, 910_000, 920_000, 930_000, 940_000, 1_000_000],
@@ -503,6 +541,19 @@ class PeerScoreProjectionTests(unittest.TestCase):
         self.assertEqual(result.source, "peer-top100-q50")
         self.assertEqual(result.support_count, 5)
         self.assertLess(result.score, 1_000_000)
+
+    def test_peer_search_includes_the_one_rating_boundary(self) -> None:
+        model = self._model(
+            [20.0, 20.1, 20.2, 20.3, 21.0],
+            [900_000, 910_000, 920_000, 930_000, 940_000],
+        )
+
+        result = model.predict(
+            "target-player", "singles", 20.0, 20.0, "target-chart"
+        )
+
+        self.assertEqual(result.source, "peer-top100-q50")
+        self.assertEqual(result.support_count, 5)
 
     def test_peer_median_replaces_a_higher_population_projection(self) -> None:
         model = self._model(
@@ -725,6 +776,8 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertIn("scoreProjectionCoverage", index["method"])
         self.assertEqual(index["method"]["baselineRanks"], [11, 30])
         self.assertEqual(index["method"]["recommendationRatingRanks"], [1, 10])
+        self.assertEqual(index["method"]["phoenix1RatingRanks"], [11, 20])
+        self.assertEqual(index["method"]["phoenix2RatingRanks"], [1, 10])
         self.assertEqual([len(shards[number]["players"]) for number in shards], [2, 1])
         self.assertIn("modes", shards[0]["players"][0])
 
@@ -1198,7 +1251,8 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertEqual(below_mode["ratingSource"], "phoenix1")
         self.assertEqual(below_mode["scoringRating"], 22.0)
-        self.assertEqual(below_mode["ratingBaselineRanks"], [1, 10])
+        self.assertEqual(below_mode["ratingBaselineRanks"], [11, 20])
+        self.assertEqual(below_mode["ratingBaselineLabel"], "ranks 11-20")
         p1_only_chart = next(
             row for row in below_mode["candidates"] if row["chartId"] == "source-chart-59"
         )
@@ -1238,6 +1292,69 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(mode["ratingBaselineRanks"], [1, 9])
         self.assertEqual(mode["ratingBaselineLabel"], "all 9 available scores")
         self.assertEqual(mode["scoringRating"], 20.0)
+
+    def test_partial_phoenix1_window_uses_available_ranks_eleven_onward(self) -> None:
+        snapshot, combined, prepared_phoenix1 = self._rating_source_fixture()
+        below = {**snapshot, "scores": snapshot["scores"][:9]}
+        partial_phoenix1 = (
+            prepared_phoenix1[0],
+            prepared_phoenix1[1].iloc[:15].copy(),
+        )
+
+        mode = build_player_recommendation(
+            "player",
+            below,
+            combined,
+            {"singles": 10.0},
+            prepared_phoenix1=partial_phoenix1,
+        )["modes"]["singles"]
+
+        self.assertEqual(mode["ratingSource"], "phoenix1")
+        self.assertEqual(mode["ratingBaselineRanks"], [11, 15])
+        self.assertEqual(mode["ratingBaselineLabel"], "ranks 11-15")
+
+    def test_short_phoenix1_history_does_not_replace_available_phoenix2(self) -> None:
+        snapshot, combined, prepared_phoenix1 = self._rating_source_fixture()
+        below = {**snapshot, "scores": snapshot["scores"][:9]}
+        short_phoenix1 = (
+            prepared_phoenix1[0],
+            prepared_phoenix1[1].iloc[:10].copy(),
+        )
+
+        mode = build_player_recommendation(
+            "player",
+            below,
+            combined,
+            {"singles": 10.0},
+            prepared_phoenix1=short_phoenix1,
+        )["modes"]["singles"]
+
+        self.assertEqual(mode["ratingSource"], "phoenix2")
+        self.assertEqual(mode["ratingBaselineRanks"], [1, 9])
+
+    def test_short_phoenix1_history_without_phoenix2_is_ineligible(self) -> None:
+        snapshot, combined, prepared_phoenix1 = self._rating_source_fixture()
+        empty_scores = pd.DataFrame(columns=pd.DataFrame(snapshot["scores"]).columns)
+        prepared_phoenix2 = (
+            pd.DataFrame(snapshot["charts"]).rename(columns={"id": "chartId"}),
+            empty_scores,
+        )
+        short_phoenix1 = (
+            prepared_phoenix1[0],
+            prepared_phoenix1[1].iloc[:10].copy(),
+        )
+
+        mode = build_player_recommendation(
+            "player",
+            snapshot,
+            combined,
+            {"singles": 10.0},
+            prepared_phoenix1=short_phoenix1,
+            prepared_phoenix2=prepared_phoenix2,
+        )["modes"]["singles"]
+
+        self.assertFalse(mode["eligible"])
+        self.assertIsNone(mode["ratingSource"])
 
     def test_player_refresh_requires_the_top_ten_recommendation_schema(self) -> None:
         index = {

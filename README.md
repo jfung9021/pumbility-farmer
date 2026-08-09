@@ -261,20 +261,21 @@ from that catalog are removed completely. For the same player and chart, a Phoen
 supersedes Phoenix 1; Phoenix 1 is used only when no Phoenix 2 score exists. Version-specific
 Pumbility residuals are converted to level units before evidence is combined.
 
-Player skill-rating history is selected independently for Singles and Doubles. A mode uses its
-ten highest-Pumbility Phoenix 2 scores once it has 10 valid, deduplicated Phoenix 2 chart scores;
-below that threshold it uses the ten highest-Pumbility Phoenix 1 scores when available, then any
-available Phoenix 2 history. Played status, existing Pumbility, current top-50 totals, and projected
-gain always use Phoenix 2. A player with no Phoenix 2 history can still receive a Phoenix 1-derived
-rating and a score prediction; their Phoenix 2 top 50 starts empty.
+Player skill-rating history is selected independently for Singles and Doubles. A mode uses Phoenix 2
+ranks 1-10 once it has 10 valid, deduplicated Phoenix 2 chart scores. Below that threshold it uses
+the available portion of Phoenix 1 ranks 11-20 when rank 11 exists, then any available Phoenix 2
+history. Phoenix 1 histories shorter than 11 scores do not qualify as a rating source. Played status,
+existing Pumbility, current top-50 totals, and projected gain always use Phoenix 2. A player with no
+Phoenix 2 history can still receive a Phoenix 1-derived rating and a score prediction when that
+Phoenix 1 window exists; their Phoenix 2 top 50 starts empty.
 
 Projected raw scores target the skill-distance-weighted median (50th percentile) among other players who
-placed the exact chart in their mode's top 100 Pumbility results. The peer search starts within
-0.25 rating, expands in 0.05 steps to 0.50, and requires at least five peers after excluding the
-selected player. Phoenix 1 and Phoenix 2 observations are matched to the Phoenix 2 catalog and
-combined with Phoenix 2 precedence; source calibration keeps both versions on the Phoenix 2 score
-scale. Charts without five comparable peers fall back to the player-balanced nonlinear population
-response model of scoring rating and continuous chart difficulty.
+placed the exact chart in their mode's top 100 Pumbility results. After excluding the selected player,
+the peer search starts within 0.2 rating and expands in 0.1 steps through 1.0, stopping at the first
+radius with at least five peers. If the maximum radius contains only one to four peers, their data is
+still used; the player-balanced nonlinear population response model is used only when no comparable
+peer exists. Phoenix 1 and Phoenix 2 observations are matched to the Phoenix 2 catalog and combined
+with Phoenix 2 precedence; source calibration keeps both versions on the Phoenix 2 score scale.
 
 Projected raw scores are converted to Phoenix 2 letter grades, then evaluated with the official
 Phoenix 2 grade-and-plate Pumbility formula. The plate distribution combines Phoenix 2 player
