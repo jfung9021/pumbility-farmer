@@ -313,11 +313,11 @@ export default function RecommendationsPage() {
 
       <section className="recommendations-hero">
         <p className="recommendations-intro">
-          Choose a consented player. Skill ratings use Phoenix 2 ranks 1–20 at 20 valid scores;
-          otherwise they use Phoenix 1 ranks 1–20 when all 20 are available, then available
-          Phoenix 2 history. Projected scores target the median (50th percentile) from similar
-          players&apos; joined, Phoenix-2-normalized history; played status and current value always
-          use Phoenix 2.
+          Choose a consented player. The displayed skill rating and eligible charts use the top
+          20 average Pumbility converted to the equivalent level for an S with Fair Game.
+          Projected scores match on the same conversion from ranks 11–30 and target the median (50th percentile)
+          from similar players&apos; joined history; played status and current value always use
+          Phoenix 2.
         </p>
 
         <div className="player-picker">
@@ -448,7 +448,7 @@ export default function RecommendationsPage() {
                       </h2>
                     </div>
                     <p>{mode.projectionAvailable === false
-                      ? "Ranked by farm edge because the population score model is not available yet."
+                      ? "Ranked by farm edge because a complete ranks 11–30 projection rating is not available."
                       : "Projected gain uses the motivated peer score, every likely grade-plate outcome, and the player's Phoenix 2 top 50. Ties favor the easiest estimated difficulty."}</p>
                   </div>
                   <div className="recommendation-list">
@@ -466,8 +466,8 @@ export default function RecommendationsPage() {
       <footer>
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
-        <p>Projected scores use the unweighted median (50th percentile) from all other players with a normalized result on the exact chart. The search tries plus or minus 0.2 through 0.5 rating in 0.1 steps seeking 20 peers, repeats those radii seeking 10, then repeats seeking five. Every peer within the narrowest successful radius is used; below five peers, the player-balanced population model is used.</p>
-        <p>Skill rating uses Phoenix 2 ranks 1–20 when a mode reaches 20 valid Phoenix 2 scores. Until then it uses Phoenix 1 ranks 1–20 when all 20 are available, followed by available Phoenix 2 history.</p>
+        <p>Projected scores use the ranks 11–30 Pumbility rating and the unweighted median (50th percentile) from all other players with a normalized result on the exact chart. The search tries plus or minus 0.2 through 0.5 rating in 0.1 steps seeking 20 peers, repeats those radii seeking 10, then repeats seeking five. Every peer within the narrowest successful radius is used; below five peers, the player-balanced population model is used.</p>
+        <p>The visible skill rating and eligible-chart ceiling use top-20 average Pumbility. Both ratings are expressed as the continuous chart level where an S with Fair Game earns the selected window&apos;s average Pumbility. Phoenix 2 supplies a window once it is complete; otherwise a complete Phoenix 1 window is used, followed by partial Phoenix 2 only for the visible top-20 rating.</p>
         <p>Played status, current top 50, and projected gain always use Phoenix 2. Projections are estimates, not guaranteed results.</p>
       </footer>
     </main>

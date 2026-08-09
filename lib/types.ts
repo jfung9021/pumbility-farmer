@@ -182,7 +182,15 @@ export interface RecommendationModeResult {
   baselineLabel?: string;
   baselinePumbility?: number | null;
   scoringRating?: number;
-  ratingFallbackCharts?: number;
+  projectionRating?: number | null;
+  projectionRatingSource?: "phoenix1" | "phoenix2" | null;
+  projectionRatingSourceScoreCount?: number;
+  projectionRatingRequiredScoreCount?: number;
+  projectionRatingRanks?: [number, number];
+  projectionRatingLabel?: string;
+  ratingReferenceGrade?: string;
+  ratingReferencePlate?: string;
+  ratingReferenceMultiplier?: number;
   projectionAvailable?: boolean;
   scoreProjectionModel?:
     | "population-crossfit-monotone-v1"
@@ -192,7 +200,8 @@ export interface RecommendationModeResult {
     | "similar-skill-top100-q50-v2"
     | "similar-skill-staged-q50-v3"
     | "similar-skill-all-q50-v4"
-    | "similar-skill-all-q50-v5";
+    | "similar-skill-all-q50-v5"
+    | "similar-skill-pumbility-11-30-q50-v6";
   pumbilityPerLevel?: number | null;
   currentTop50Pumbility?: number;
   currentTop50CutoffPumbility?: number | null;

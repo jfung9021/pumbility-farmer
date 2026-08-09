@@ -35,14 +35,18 @@ from piu_misgrade_analyzer import (
 )
 from phoenix2_pumbility import (
     PLATE_CODES,
+    SKILL_RATING_REFERENCE_GRADE,
+    SKILL_RATING_REFERENCE_MULTIPLIER,
+    SKILL_RATING_REFERENCE_PLATE,
     PlateProjectionModel,
     grade_for_score,
     normalize_plate,
     phoenix2_pumbility,
+    skill_rating_for_pumbility,
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 14
+RECOMMENDATION_SCHEMA_VERSION = 15
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 1
@@ -51,11 +55,14 @@ BASELINE_START_RANK = 11
 BASELINE_END_RANK = 30
 RECOMMENDATION_RATING_SCORE_COUNT = 20
 PHOENIX2_RATING_SCORE_THRESHOLD = RECOMMENDATION_RATING_SCORE_COUNT
+PROJECTION_RATING_START_RANK = BASELINE_START_RANK
+PROJECTION_RATING_END_RANK = BASELINE_END_RANK
+PROJECTION_RATING_SCORE_THRESHOLD = PROJECTION_RATING_END_RANK
 TOP_PUMBILITY_COUNT = 50
 TOP_RECOMMENDATION_COUNT = 50
 MAX_RAW_SCORE = 1_000_000
 SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v2"
-SCORE_PROJECTION_MODEL_NAME = "similar-skill-all-q50-v5"
+SCORE_PROJECTION_MODEL_NAME = "similar-skill-pumbility-11-30-q50-v6"
 SCORE_RESPONSE_FOLDS = 5
 SCORE_RESPONSE_GRID_STEP = 0.1
 SCORE_RESPONSE_SMOOTHING_RADIUS = 8
@@ -1274,44 +1281,62 @@ def build_manual_recommendation_mode(
     }
 
 
-def _rating_bounds(score_count: int) -> tuple[int, int]:
-    """Return the shared top-score recommendation rating window."""
-    return 0, min(RECOMMENDATION_RATING_SCORE_COUNT, score_count)
+def _skill_rating_from_rows(
+    rows: pd.DataFrame,
+    chart_type: str,
+    *,
+    start_rank: int,
+    end_rank: int,
+) -> float | None:
+    """Convert one ordered Pumbility window to its S+FG-equivalent level."""
+    if rows.empty or start_rank < 1 or end_rank < start_rank:
+        return None
+    window = rows.iloc[start_rank - 1 : end_rank]
+    if window.empty:
+        return None
+    values = pd.to_numeric(window["pumbility"], errors="coerce").dropna()
+    if len(values) != len(window):
+        return None
+    return skill_rating_for_pumbility(chart_type, float(values.mean()))
 
 
 def _rating_lookup(
     rows: pd.DataFrame,
+    chart_type: str,
 ) -> tuple[float | None, dict[str, float | None]]:
-    """Return the full and leave-one-chart-out difficulty baselines in O(n)."""
-    if rows.empty:
+    """Return full and leave-one-out ranks 11-30 Pumbility ratings in O(n)."""
+    if len(rows) < PROJECTION_RATING_SCORE_THRESHOLD:
         return None, {}
     ordered = rows.sort_values(
         ["pumbility", "score", "chartId"],
         ascending=[False, False, True],
         kind="mergesort",
     ).reset_index(drop=True)
-    values = ordered["ratingDifficulty"].astype(float).to_numpy()
+    values = ordered["pumbility"].astype(float).to_numpy()
     prefix = np.concatenate(([0.0], np.cumsum(values)))
+    start = PROJECTION_RATING_START_RANK - 1
+    stop = PROJECTION_RATING_END_RANK
 
-    def window_mean(count: int, removed: int | None = None) -> float | None:
-        if count <= 0:
-            return None
-        start, end = _rating_bounds(count)
+    def window_rating(count: int, removed: int | None = None) -> float | None:
+        end = min(stop, count)
         if end <= start:
             return None
         if removed is None:
-            return float((prefix[end] - prefix[start]) / (end - start))
-        if removed < start:
-            total = prefix[end + 1] - prefix[start + 1]
-        elif removed >= end:
             total = prefix[end] - prefix[start]
         else:
-            total = prefix[end + 1] - prefix[start] - values[removed]
-        return float(total / (end - start))
+            if removed < start:
+                total = prefix[end + 1] - prefix[start + 1]
+            elif removed >= end:
+                total = prefix[end] - prefix[start]
+            else:
+                total = prefix[end + 1] - prefix[start] - values[removed]
+        return skill_rating_for_pumbility(
+            chart_type, float(total / (end - start))
+        )
 
-    full = window_mean(len(ordered))
+    full = window_rating(len(ordered))
     leave_one_out = {
-        str(chart_id): window_mean(len(ordered) - 1, index)
+        str(chart_id): window_rating(len(ordered) - 1, index)
         for index, chart_id in enumerate(ordered["chartId"])
     }
     return full, leave_one_out
@@ -1329,6 +1354,18 @@ def _select_rating_scores(
     if not phoenix2_scores.empty:
         return "phoenix2", phoenix2_scores
     return "phoenix1", phoenix1_scores.iloc[0:0].copy()
+
+
+def _select_projection_rating_scores(
+    phoenix1_scores: pd.DataFrame,
+    phoenix2_scores: pd.DataFrame,
+) -> tuple[str | None, pd.DataFrame]:
+    """Choose a complete ranks 11-30 source for score projection matching."""
+    if len(phoenix2_scores) >= PROJECTION_RATING_SCORE_THRESHOLD:
+        return "phoenix2", phoenix2_scores
+    if len(phoenix1_scores) >= PROJECTION_RATING_SCORE_THRESHOLD:
+        return "phoenix1", phoenix1_scores
+    return None, phoenix2_scores.iloc[0:0].copy()
 
 
 def _smooth_grid(values: np.ndarray, kernel: np.ndarray) -> np.ndarray:
@@ -1615,29 +1652,20 @@ def fit_score_response_model(
         & merged["estimatedDifficulty"].notna()
     ].copy()
 
-    # Build the rating used by every outcome from chart difficulty only.  For a
-    # target chart in the selected rating source, its chart is removed from the
-    # rating window so the response cannot directly set its own predictor.
-    def attach_rating_difficulty(scores: pd.DataFrame) -> pd.DataFrame:
-        rows = scores.merge(
+    # Projection matching uses the S+FG-equivalent rating from Pumbility ranks
+    # 11-30. For a target chart in that source, remove the chart and promote the
+    # next rank when available so an outcome cannot directly set its predictor.
+    def attach_rating_mode(scores: pd.DataFrame) -> pd.DataFrame:
+        return scores.merge(
             catalog[["chartId", "type", "level"]],
             on="chartId",
             how="inner",
             validate="many_to_one",
-        ).merge(
-            estimates[["chartId", "estimatedDifficulty"]],
-            on="chartId",
-            how="left",
-            validate="many_to_one",
         )
-        rows["ratingDifficulty"] = rows["estimatedDifficulty"].where(
-            rows["estimatedDifficulty"].notna(), rows["level"].astype(float) + 0.5
-        )
-        return rows
 
     rating_frames = {
-        "phoenix1": attach_rating_difficulty(phoenix1_scores),
-        "phoenix2": attach_rating_difficulty(phoenix2_scores),
+        "phoenix1": attach_rating_mode(phoenix1_scores),
+        "phoenix2": attach_rating_mode(phoenix2_scores),
     }
     empty_rating_rows = rating_frames["phoenix2"].iloc[0:0]
     rating_groups = {
@@ -1657,8 +1685,10 @@ def fit_score_response_model(
         key = (player_id, chart_type)
         p2_group = rating_groups["phoenix2"].get(key, empty_rating_rows)
         p1_group = rating_groups["phoenix1"].get(key, empty_rating_rows)
-        _, selected = _select_rating_scores(p1_group, p2_group)
-        rating_lookups[(player_id, chart_type)] = _rating_lookup(selected)
+        _, selected = _select_projection_rating_scores(p1_group, p2_group)
+        rating_lookups[(player_id, chart_type)] = _rating_lookup(
+            selected, chart_type
+        )
 
     ratings: list[float | None] = []
     for row in merged[["playerId", "type", "chartId"]].itertuples(index=False):
@@ -1776,6 +1806,14 @@ def fit_score_response_model(
         "playerBalanced": True,
         "minimumLocalSupport": SCORE_RESPONSE_MIN_SUPPORT,
         "supportNeighborhood": "plus or minus 0.5 rating and difficulty",
+        "projectionRating": {
+            "ranks": [PROJECTION_RATING_START_RANK, PROJECTION_RATING_END_RANK],
+            "minimumSourceScores": PROJECTION_RATING_SCORE_THRESHOLD,
+            "referenceGrade": SKILL_RATING_REFERENCE_GRADE,
+            "referencePlate": SKILL_RATING_REFERENCE_PLATE,
+            "referenceMultiplier": SKILL_RATING_REFERENCE_MULTIPLIER,
+            "leaveOneOut": "remove the target chart and promote rank 31 when available",
+        },
         "confidenceThresholds": {"high": 200, "medium": 50, "low": 5},
         "peerProjection": {
             "quantile": PEER_SCORE_QUANTILE,
@@ -1857,13 +1895,35 @@ def _prepare_phoenix1_rating_frames(
     charts, scores = _clean_snapshot_frames(phoenix1_snapshot)
     allowed_ids = set(phoenix2_catalog["chartId"].astype(str))
     charts, scores = retain_catalog_source_rows(charts, scores, allowed_ids)
-    source_slopes = _source_level_slopes(charts, scores)
-    return rebase_source_rows_to_catalog(
-        charts,
-        scores,
-        phoenix2_catalog,
-        source_slopes,
+    retained_ids = set(charts["chartId"].astype(str))
+    rating_catalog = phoenix2_catalog[
+        phoenix2_catalog["chartId"].astype(str).isin(retained_ids)
+    ].copy()
+    rating_rows = scores.merge(
+        rating_catalog[["chartId", "type", "level"]],
+        on="chartId",
+        how="inner",
+        validate="many_to_one",
     )
+    plates = (
+        rating_rows["plate"]
+        if "plate" in rating_rows.columns
+        else pd.Series(None, index=rating_rows.index, dtype=object)
+    )
+    rating_rows["pumbility"] = [
+        _phoenix2_normalized_pumbility(chart_type, level, score, plate)
+        for chart_type, level, score, plate in zip(
+            rating_rows["type"],
+            rating_rows["level"],
+            rating_rows["score"],
+            plates,
+            strict=True,
+        )
+    ]
+    rating_rows = rating_rows[
+        rating_rows["pumbility"].notna() & (rating_rows["pumbility"] > 0)
+    ].drop(columns=["type", "level"])
+    return rating_catalog, rating_rows
 
 
 def _build_player_recommendation_phoenix2_only(
@@ -2053,10 +2113,6 @@ def build_player_recommendation(
     if plate_model is None:
         plate_model = PlateProjectionModel(phoenix1_snapshot or {}, phoenix2_snapshot)
 
-    catalog_map = {
-        str(row["chartId"]): row for row in catalog.to_dict(orient="records")
-    }
-    chart_map = {str(row["chartId"]): dict(row) for row in combined_charts}
     player_scores = scores[scores["playerId"] == str(player_id)].copy()
     player_phoenix1_scores = phoenix1_scores[
         phoenix1_scores["playerId"] == str(player_id)
@@ -2111,32 +2167,29 @@ def build_player_recommendation(
         rating_baseline, rating_start, rating_end, rating_label = _rating_window(
             rating_scores
         )
-        rating_fallback_count = 0
-        rating_difficulties: list[float] = []
-        for row in rating_baseline.to_dict(orient="records"):
-            chart_id = str(row["chartId"])
-            catalog_chart = catalog_map[chart_id]
-            estimate = chart_map.get(chart_id, {}).get("estimatedDifficulty")
-            if estimate is None or not math.isfinite(float(estimate)):
-                estimate = float(catalog_chart["level"]) + 0.5
-                rating_fallback_count += 1
-            rating_difficulties.append(float(estimate))
-        scoring_rating = float(np.mean(rating_difficulties))
+        scoring_rating = _skill_rating_from_rows(
+            rating_baseline,
+            chart_type,
+            start_rank=1,
+            end_rank=len(rating_baseline),
+        )
+        if scoring_rating is None:
+            raise ValueError("A selected recommendation rating window is invalid.")
 
-        if phoenix2_score_count:
-            (
-                projection_baseline,
-                projection_start,
-                projection_end,
-                projection_label,
-            ) = _baseline_window(mode_scores)
-        else:
-            projection_baseline = pd.DataFrame()
-            projection_start, projection_end, projection_label = (
-                rating_start,
-                rating_end,
-                rating_label,
-            )
+        projection_rating_source, projection_rating_scores = (
+            _select_projection_rating_scores(phoenix1_mode_scores, mode_scores)
+        )
+        projection_rating, projection_rating_leave_one_out = _rating_lookup(
+            projection_rating_scores, chart_type
+        )
+        projection_start = PROJECTION_RATING_START_RANK
+        projection_end = PROJECTION_RATING_END_RANK
+        projection_label = "ranks 11-30"
+        projection_baseline = (
+            projection_rating_scores.iloc[projection_start - 1 : projection_end]
+            if projection_rating is not None
+            else projection_rating_scores.iloc[0:0]
+        )
         baseline_pb = (
             float(projection_baseline["pumbility"].mean())
             if not projection_baseline.empty
@@ -2173,11 +2226,19 @@ def build_player_recommendation(
             farm_edge = float(chart["level"]) + 0.5 - estimate
             chart_id = str(chart["chartId"])
             existing = existing_by_chart.get(chart_id)
+            candidate_projection_rating = projection_rating_leave_one_out.get(
+                chart_id, projection_rating
+            )
             projection = (
                 score_response_model.predict(
-                    str(player_id), mode_key, scoring_rating, estimate, chart_id
+                    str(player_id),
+                    mode_key,
+                    candidate_projection_rating,
+                    estimate,
+                    chart_id,
                 )
                 if score_response_model is not None
+                and candidate_projection_rating is not None
                 else ScoreProjectionResult(None, "population-crossfit", 0, "unavailable")
             )
             projected_score = projection.score
@@ -2289,7 +2350,21 @@ def build_player_recommendation(
                 round(baseline_pb, 3) if baseline_pb is not None else None
             ),
             "scoringRating": round(scoring_rating, 3),
-            "ratingFallbackCharts": rating_fallback_count,
+            "projectionRating": (
+                round(projection_rating, 3)
+                if projection_rating is not None
+                else None
+            ),
+            "projectionRatingSource": projection_rating_source,
+            "projectionRatingSourceScoreCount": int(len(projection_rating_scores)),
+            "projectionRatingRequiredScoreCount": PROJECTION_RATING_SCORE_THRESHOLD,
+            "projectionRatingRanks": [projection_start, projection_end],
+            "projectionRatingLabel": projection_label,
+            "ratingReferenceGrade": SKILL_RATING_REFERENCE_GRADE,
+            "ratingReferencePlate": SKILL_RATING_REFERENCE_PLATE,
+            "ratingReferenceMultiplier": round(
+                SKILL_RATING_REFERENCE_MULTIPLIER, 6
+            ),
             "projectionAvailable": projection_available,
             "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
             "pumbilityPerLevel": (
@@ -2435,19 +2510,29 @@ def build_recommendation_index(
         "method": {
             "catalog": "Phoenix 2 authoritative catalog",
             "overlapRule": "best Phoenix 2 score always replaces Phoenix 1 for the same player and chart",
-            "phoenix1RerateHandling": "Phoenix 1 Pumbility is shifted by its source slope times the Phoenix 2 minus Phoenix 1 level delta before ranking and normalization",
-            "crossVersionNormalization": "Phoenix 1 scores rebased to Phoenix 2 levels, then version- and mode-specific Pumbility residuals converted to level units",
+            "phoenix1RerateHandling": "Phoenix 1 rating rows use current Phoenix 2 chart levels and recompute Pumbility from the raw score, Phoenix 2 grade boundaries, and recorded plate",
+            "crossVersionNormalization": "chart-difficulty evidence uses version- and mode-normalized residuals; player ratings use Phoenix 2-formula Pumbility in both versions",
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
             "pumbilityPerLevel": slopes,
             "scoreProjectionCoverage": score_projection_metadata,
             "scoreProjectionData": "joined Phoenix 1 + Phoenix 2 scores normalized with the Phoenix 2 chart catalog and grade-and-plate Pumbility formula, with Phoenix 2 precedence for overlapping player/chart rows",
             "baselineRanks": [BASELINE_START_RANK, BASELINE_END_RANK],
             "recommendationRatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
+            "projectionRatingRanks": [
+                PROJECTION_RATING_START_RANK,
+                PROJECTION_RATING_END_RANK,
+            ],
             "phoenix1RatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
             "phoenix2RatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
             "phoenix2RatingScoreThreshold": PHOENIX2_RATING_SCORE_THRESHOLD,
-            "ratingSource": "per mode, use Phoenix 2 ranks 1-20 at 20 valid scores; otherwise use Phoenix 1 ranks 1-20 when all 20 are available, then available Phoenix 2 history",
-            "shortHistoryBaseline": "Phoenix 1 histories shorter than 20 do not qualify, while short Phoenix 2 history uses all available scores",
+            "projectionRatingScoreThreshold": PROJECTION_RATING_SCORE_THRESHOLD,
+            "ratingReference": "continuous chart level whose Phoenix 2 S with Fair Game Pumbility equals the selected window's average Pumbility",
+            "ratingReferenceGrade": SKILL_RATING_REFERENCE_GRADE,
+            "ratingReferencePlate": SKILL_RATING_REFERENCE_PLATE,
+            "ratingReferenceMultiplier": SKILL_RATING_REFERENCE_MULTIPLIER,
+            "ratingSource": "display and candidate eligibility use Phoenix 2 top 20 at 20 valid scores; otherwise Phoenix 1 top 20 when available, then partial Phoenix 2",
+            "projectionRatingSource": "score projections use Phoenix 2 ranks 11-30 at 30 valid scores; otherwise Phoenix 1 ranks 11-30 when all 30 are available",
+            "shortHistoryBaseline": "a mode without a complete 30-score Phoenix 2 or Phoenix 1 source keeps top-20 farm-edge recommendations but does not receive personal projected scores",
             "candidateUpperRadius": RECOMMENDATION_RADIUS,
             "candidateLowerBound": None,
             "topPumbilityCount": TOP_PUMBILITY_COUNT,
@@ -2460,7 +2545,7 @@ def build_recommendation_index(
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-            "scoreProjection": "unweighted median (50th-percentile) raw score from all other players with a normalized result on the exact chart; search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back to the player-balanced population response surface below five peers",
+            "scoreProjection": "using each player's S+FG-equivalent ranks 11-30 Pumbility rating, take the unweighted median raw score from all other players with a normalized result on the exact chart; search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back to the player-balanced population response surface below five peers",
             "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
         },
         "players": output_players,

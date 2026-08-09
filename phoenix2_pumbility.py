@@ -59,6 +59,13 @@ PLATE_ALIASES = {
     **{code.casefold(): name for name, code in PLATE_CODES.items()},
 }
 PLATES = tuple(PLATE_BONUS_UNITS)
+SKILL_RATING_REFERENCE_GRADE = "S"
+SKILL_RATING_REFERENCE_PLATE = "Fair Game"
+SKILL_RATING_REFERENCE_MULTIPLIER = (
+    750
+    - 5 * GRADE_PENALTY_UNITS[SKILL_RATING_REFERENCE_GRADE]
+    + PLATE_BONUS_UNITS[SKILL_RATING_REFERENCE_PLATE]
+) / 750
 
 POPULATION_PRIOR_STRENGTH = 8.0
 PLATE_LAPLACE_WEIGHT = 0.25
@@ -115,6 +122,28 @@ def phoenix2_pumbility(
     ) / 750
     raw = max(0.0, base * multiplier)
     return math.floor((raw + 1e-9) * 100) / 100
+
+
+def skill_rating_for_pumbility(chart_type: str, pumbility: object) -> float:
+    """Invert average Pumbility to the continuous level earning S with FG."""
+    if chart_type not in {"Single", "Double"}:
+        raise ValueError(f"Unsupported chart type: {chart_type!r}")
+    if isinstance(pumbility, bool):
+        raise ValueError("Pumbility must be a finite non-negative number.")
+    try:
+        value = float(pumbility)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Pumbility must be a finite non-negative number.") from exc
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("Pumbility must be a finite non-negative number.")
+
+    base = value / SKILL_RATING_REFERENCE_MULTIPLIER
+    effective_level = (
+        base / 7.5 - 27.0
+        if base <= 375.0
+        else 23.0 + (base - 375.0) / 15.0
+    )
+    return effective_level + (1.0 if chart_type == "Double" else 0.0)
 
 
 def _finite_float(value: object) -> float | None:

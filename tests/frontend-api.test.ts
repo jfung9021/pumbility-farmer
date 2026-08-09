@@ -53,7 +53,7 @@ test("mobile styles keep desktop information visible", async () => {
   assert.deepEqual(hiddenSelectors, [".feature-card > b"]);
 });
 
-test("recommendation methodology describes the motivated peer score model", async () => {
+test("recommendation methodology separates top-20 display from ranks 11-30 projection", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
@@ -66,12 +66,12 @@ test("recommendation methodology describes the motivated peer score model", asyn
   assert.match(page, /below five peers, the player-balanced population model is used/);
   assert.doesNotMatch(page, /top 100 at plus or minus/);
   assert.doesNotMatch(page, /through 1\.0/);
-  assert.match(page, /Phoenix 1 ranks 1–20/);
-  assert.match(page, /Phoenix 2 ranks 1–20/);
-  assert.match(page, /20 valid Phoenix 2 scores/);
+  assert.match(page, /top-20 average Pumbility/);
+  assert.match(page, /ranks 11–30 Pumbility rating/);
+  assert.match(page, /S with Fair Game/);
+  assert.match(page, /visible skill rating and eligible-chart ceiling use top-20/);
   assert.match(page, /mode\?\.phoenix2ScoreThreshold \?\? 20/);
-  assert.doesNotMatch(page, /ranks 11–20/);
-  assert.doesNotMatch(page, /ranks 1–10/);
+  assert.doesNotMatch(page, /chart difficulty fields are averaged for the skill rating/);
   assert.doesNotMatch(page, /reaches 50 valid Phoenix 2 scores/);
 });
 

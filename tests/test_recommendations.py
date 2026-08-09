@@ -10,7 +10,11 @@ import numpy as np
 import pandas as pd
 
 from analysis_runtime import MemoryBlobStore
-from phoenix2_pumbility import PlateProjectionModel
+from phoenix2_pumbility import (
+    PlateProjectionModel,
+    phoenix2_pumbility,
+    skill_rating_for_pumbility,
+)
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
     RECOMMENDATION_SCHEMA_VERSION,
@@ -22,6 +26,7 @@ from piu_recommendations import (
     _PeerScoreCohort,
     _ScoreSurface,
     _peer_cohort_key,
+    _prepare_phoenix1_rating_frames,
     _projected_gain_sort_key,
     _rating_lookup,
     _recommendation_chart_rows,
@@ -60,6 +65,56 @@ except ModuleNotFoundError as exc:
 
 
 class CombinedEvidenceTests(unittest.TestCase):
+    def test_phoenix1_ratings_recompute_pumbility_with_current_phoenix2_rules(self) -> None:
+        snapshot = {
+            "charts": [
+                {
+                    "id": "current",
+                    "songName": "Current",
+                    "type": "Single",
+                    "level": 18,
+                },
+                {
+                    "id": "missing-plate",
+                    "songName": "Missing Plate",
+                    "type": "Single",
+                    "level": 20,
+                },
+            ],
+            "scores": [
+                {
+                    "playerId": "p",
+                    "chartId": "current",
+                    "pumbility": 999,
+                    "score": 970_000,
+                    "plate": "Fair Game",
+                    "isBroken": False,
+                },
+                {
+                    "playerId": "p",
+                    "chartId": "missing-plate",
+                    "pumbility": 999,
+                    "score": 970_000,
+                    "plate": None,
+                    "isBroken": False,
+                },
+            ],
+        }
+        catalog = pd.DataFrame(
+            [
+                {"chartId": "current", "type": "Single", "level": 20},
+                {"chartId": "missing-plate", "type": "Single", "level": 20},
+            ]
+        )
+
+        _, scores = _prepare_phoenix1_rating_frames(snapshot, catalog)
+
+        self.assertEqual(scores["chartId"].tolist(), ["current"])
+        self.assertEqual(
+            scores.iloc[0]["pumbility"],
+            phoenix2_pumbility("Single", 20, "S", "Fair Game"),
+        )
+
     def test_phoenix1_scores_are_rebased_to_phoenix2_levels(self) -> None:
         chart_id = "spooky-macaron-singles"
         charts = pd.DataFrame(
@@ -192,7 +247,7 @@ class ScoreProjectionFitTests(unittest.TestCase):
                 "type": "Single",
                 "level": 20 + index % 3,
             }
-            for index in range(21)
+            for index in range(31)
         ]
         phoenix1_scores = [
             {
@@ -247,7 +302,7 @@ class ScoreProjectionFitTests(unittest.TestCase):
         )
         self.assertEqual(
             coverage["modes"]["singles"]["sourceRows"],
-            {"phoenix1": 209, "phoenix2": 1},
+            {"phoenix1": 309, "phoenix2": 1},
         )
         self.assertEqual(
             coverage["modes"]["singles"]["sourcePlayers"],
@@ -273,7 +328,7 @@ class ScoreProjectionFitTests(unittest.TestCase):
             {
                 "playerId": f"peer-{player_index}",
                 "chartId": chart["id"],
-                "pumbility": 1_000 - chart_index,
+                "pumbility": 344.85 - chart_index * 0.001,
                 "score": 999_999 - 1_000 * chart_index,
                 "plate": "Fair Game",
                 "recordedAt": "2026-08-08T00:00:00Z",
@@ -318,13 +373,13 @@ class ScoreProjectionFitTests(unittest.TestCase):
                 "type": "Single",
                 "level": 20,
             }
-            for index in range(12)
+            for index in range(32)
         ]
         scores = [
             {
                 "playerId": f"peer-{player_index}",
                 "chartId": chart["id"],
-                "pumbility": 1_000 - chart_index,
+                "pumbility": 344.85 - chart_index * 0.001,
                 "score": 990_000 - chart_index,
                 "plate": None if chart_index == 0 else "Fair Game",
                 "recordedAt": "2026-08-08T00:00:00Z",
@@ -358,7 +413,7 @@ class ScoreProjectionFitTests(unittest.TestCase):
 class PopulationScoreResponseTests(unittest.TestCase):
     @staticmethod
     def _fixture() -> tuple[dict, list[dict]]:
-        difficulties = [17.0 + 0.5 * index for index in range(23)]
+        difficulties = [17.0 + 0.5 * index for index in range(31)]
         charts = [
             {
                 "id": f"surface-chart-{index:02d}",
@@ -388,7 +443,12 @@ class PopulationScoreResponseTests(unittest.TestCase):
                     {
                         "playerId": f"surface-player-{player_index:02d}",
                         "chartId": chart["id"],
-                        "pumbility": 1_000.0 - 20.0 * abs(difficulty - ability),
+                        "pumbility": (
+                            7.5 * (ability + 27.0)
+                            if ability <= 23.0
+                            else 375.0 + 15.0 * (ability - 23.0)
+                        )
+                        * 0.968,
                         "score": int(max(0.0, min(1_000_000.0, 1_000_000.0 - deficit))),
                         "recordedAt": "2026-08-08T00:00:00Z",
                         "isBroken": False,
@@ -480,24 +540,26 @@ class PopulationScoreResponseTests(unittest.TestCase):
                 self.model.predict(player_id, "singles", 22.0, 22.0),
             )
 
-    def test_rating_lookup_uses_top_twenty_and_promotes_rank_twenty_one_on_exclusion(self) -> None:
+    def test_projection_rating_lookup_uses_ranks_eleven_to_thirty_and_promotes_rank_thirty_one(self) -> None:
         rows = pd.DataFrame(
             [
                 {
                     "chartId": f"chart-{index:02d}",
-                    "pumbility": 100 - index,
+                    "pumbility": 400 - index,
                     "score": 990_000 - index,
-                    "ratingDifficulty": float(index + 1),
                 }
-                for index in range(21)
+                for index in range(31)
             ]
         )
 
-        full, leave_one_out = _rating_lookup(rows)
+        full, leave_one_out = _rating_lookup(rows, "Single")
 
-        self.assertEqual(full, 10.5)
-        self.assertEqual(leave_one_out["chart-00"], 11.5)
-        self.assertEqual(leave_one_out["chart-20"], 10.5)
+        self.assertAlmostEqual(full, skill_rating_for_pumbility("Single", 380.5))
+        self.assertAlmostEqual(
+            leave_one_out["chart-00"],
+            skill_rating_for_pumbility("Single", 379.5),
+        )
+        self.assertAlmostEqual(leave_one_out["chart-30"], full)
 
 
 class PeerScoreProjectionTests(unittest.TestCase):
@@ -830,7 +892,7 @@ class PlayerRecommendationTests(unittest.TestCase):
                     {
                         "playerId": "player",
                         "chartId": chart_id,
-                        "pumbility": 300 - index,
+                        "pumbility": 344.85,
                         "score": 990000 - index,
                         "recordedAt": "2026-08-08T00:00:00Z",
                         "isBroken": False,
@@ -1165,7 +1227,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(result["baselineRanks"], [11, 30])
         self.assertEqual(result["ratingBaselineRanks"], [1, 20])
         self.assertEqual(result["ratingBaselineLabel"], "top 20 scores")
-        self.assertEqual(result["baselinePumbility"], 280.5)
+        self.assertEqual(result["baselinePumbility"], 344.85)
         self.assertEqual(result["scoringRating"], 20.5)
         ids = {row["chartId"] for row in result["candidates"]}
         self.assertIn("chart-00", ids)
@@ -1200,18 +1262,50 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(TOP_RECOMMENDATION_COUNT, 50)
         self.assertLessEqual(len(result["topRecommendations"]), 50)
 
-    def test_fewer_than_thirty_scores_use_best_half(self) -> None:
+    def test_top_twenty_controls_display_and_candidates_while_ranks_eleven_to_thirty_control_projection(self) -> None:
+        scores = [
+            {
+                **row,
+                "pumbility": 400.0 if index < 10 else 344.85,
+            }
+            for index, row in enumerate(self.snapshot["scores"])
+        ]
+        model = self._fixed_score_model()
+        mode = build_player_recommendation(
+            "player",
+            {**self.snapshot, "scores": scores},
+            self.combined,
+            {"singles": 10.0},
+            model,
+        )["modes"]["singles"]
+
+        self.assertEqual(
+            mode["scoringRating"],
+            round(skill_rating_for_pumbility("Single", 372.425), 3),
+        )
+        self.assertEqual(mode["projectionRating"], 20.5)
+        self.assertIn("chart-33", {row["chartId"] for row in mode["candidates"]})
+        unplayed_call = next(
+            call
+            for call in model.predict.call_args_list
+            if call.args[-1] == "chart-30"
+        )
+        self.assertAlmostEqual(unplayed_call.args[2], 20.5)
+
+    def test_fewer_than_thirty_scores_keep_top_twenty_rating_without_projection(self) -> None:
         snapshot = {**self.snapshot, "scores": self.snapshot["scores"][:29]}
         mode = build_player_recommendation(
             "player", snapshot, self.combined, {"singles": 10.0}
         )["modes"]["singles"]
         self.assertTrue(mode["eligible"])
         self.assertEqual(mode["validScoreCount"], 29)
-        self.assertEqual(mode["baselineRanks"], [1, 15])
+        self.assertEqual(mode["baselineRanks"], [11, 30])
         self.assertEqual(mode["ratingBaselineRanks"], [1, 20])
         self.assertEqual(mode["ratingBaselineLabel"], "top 20 scores")
-        self.assertEqual(mode["baselinePumbility"], 293.0)
-        self.assertEqual(mode["baselineLabel"], "best 50% (15 of 29)")
+        self.assertIsNone(mode["baselinePumbility"])
+        self.assertEqual(mode["baselineLabel"], "ranks 11-30")
+        self.assertIsNone(mode["projectionRating"])
+        self.assertFalse(mode["projectionAvailable"])
 
     def test_raw_score_average_is_not_used_as_a_prediction_baseline(self) -> None:
         model = self._fixed_score_model(965_000)
@@ -1239,7 +1333,8 @@ class PlayerRecommendationTests(unittest.TestCase):
             [row["projectedScore"] for row in original["candidates"]],
             [row["projectedScore"] for row in changed["candidates"]],
         )
-        for legacy_field in ("baselineScore", "projectionRating", "scorePointsPerDifficulty"):
+        self.assertEqual(original["projectionRating"], changed["projectionRating"])
+        for legacy_field in ("baselineScore", "scorePointsPerDifficulty"):
             self.assertNotIn(legacy_field, original)
 
     def test_projected_score_is_not_floored_at_the_existing_raw_score(self) -> None:
@@ -1268,15 +1363,17 @@ class PlayerRecommendationTests(unittest.TestCase):
             "player", snapshot, self.combined, {"singles": 10.0}
         )["modes"]["singles"]
         self.assertTrue(mode["eligible"])
-        self.assertEqual(mode["baselineRanks"], [1, 1])
+        self.assertEqual(mode["baselineRanks"], [11, 30])
         self.assertEqual(mode["ratingBaselineRanks"], [1, 1])
         self.assertEqual(mode["ratingBaselineLabel"], "all 1 available score")
-        self.assertEqual(mode["baselinePumbility"], 300.0)
+        self.assertIsNone(mode["baselinePumbility"])
+        self.assertIsNone(mode["projectionRating"])
 
     def test_level_fifteen_scores_inform_rating_but_are_not_candidates(self) -> None:
         low_score = {
             **self.snapshot["scores"][0],
             "chartId": "chart-34",
+            "pumbility": 304.92,
         }
         snapshot = {**self.snapshot, "scores": [low_score]}
         mode = build_player_recommendation(
@@ -1284,7 +1381,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         )["modes"]["singles"]
 
         self.assertTrue(mode["eligible"])
-        self.assertEqual(mode["scoringRating"], 15.1)
+        self.assertEqual(mode["scoringRating"], 15.0)
         self.assertNotIn(
             "chart-34", {row["chartId"] for row in mode["candidates"]}
         )
@@ -1379,7 +1476,10 @@ class PlayerRecommendationTests(unittest.TestCase):
             below_mode["phoenix2ScoreThreshold"], PHOENIX2_RATING_SCORE_THRESHOLD
         )
         self.assertEqual(below_mode["ratingSource"], "phoenix1")
-        self.assertEqual(below_mode["scoringRating"], 22.0)
+        self.assertEqual(
+            below_mode["scoringRating"],
+            round(skill_rating_for_pumbility("Single", 549.5), 3),
+        )
         self.assertEqual(below_mode["ratingBaselineRanks"], [1, 20])
         self.assertEqual(below_mode["ratingBaselineLabel"], "top 20 scores")
         p1_only_chart = next(
@@ -1397,8 +1497,23 @@ class PlayerRecommendationTests(unittest.TestCase):
         )["modes"]["singles"]
         self.assertEqual(threshold_mode["phoenix2ScoreCount"], 20)
         self.assertEqual(threshold_mode["ratingSource"], "phoenix2")
-        self.assertEqual(threshold_mode["scoringRating"], 20.0)
+        self.assertEqual(
+            threshold_mode["scoringRating"],
+            round(skill_rating_for_pumbility("Single", 490.5), 3),
+        )
         self.assertEqual(threshold_mode["ratingBaselineLabel"], "top 20 scores")
+        self.assertEqual(threshold_mode["projectionRatingSource"], "phoenix1")
+
+        projection_threshold = {**snapshot, "scores": snapshot["scores"][:30]}
+        projection_mode = build_player_recommendation(
+            "player",
+            projection_threshold,
+            combined,
+            {"singles": 10.0},
+            prepared_phoenix1=prepared_phoenix1,
+        )["modes"]["singles"]
+        self.assertEqual(projection_mode["projectionRatingSource"], "phoenix2")
+        self.assertEqual(projection_mode["projectionRatingRanks"], [11, 30])
 
     def test_available_phoenix2_scores_are_used_when_phoenix1_is_unavailable(self) -> None:
         snapshot, combined, prepared_phoenix1 = self._rating_source_fixture()
@@ -1420,7 +1535,10 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(mode["ratingSourceScoreCount"], 19)
         self.assertEqual(mode["ratingBaselineRanks"], [1, 19])
         self.assertEqual(mode["ratingBaselineLabel"], "all 19 available scores")
-        self.assertEqual(mode["scoringRating"], 20.0)
+        self.assertEqual(
+            mode["scoringRating"],
+            round(skill_rating_for_pumbility("Single", 491.0), 3),
+        )
 
     def test_incomplete_phoenix1_history_does_not_replace_available_phoenix2(self) -> None:
         snapshot, combined, prepared_phoenix1 = self._rating_source_fixture()
