@@ -30,6 +30,8 @@ export interface ChartResult {
   imageUrl: string | null;
   noteCount: number | null;
   stepArtist: string | null;
+  bpmMin?: number | null;
+  bpmMax?: number | null;
   estimatedDifficulty: number | null;
   averageDifficulty: number;
   difficultyDelta: number | null;
@@ -134,6 +136,8 @@ export interface RecommendationChartEstimate {
   imageUrl: string | null;
   noteCount: number | null;
   stepArtist: string | null;
+  bpmMin?: number | null;
+  bpmMax?: number | null;
   estimatedDifficulty: number;
   difficultyDelta: number;
   difficultyCi95Low: number | null;

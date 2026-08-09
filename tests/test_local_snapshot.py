@@ -18,7 +18,7 @@ NOW = datetime(2026, 8, 7, 12, 0, tzinfo=timezone.utc)
 
 
 class FakeClient:
-    request_count = 4
+    request_count = 5
 
     def fetch_page_collection(self, path: str, params=None):
         if path == "api/v2/players":
@@ -40,6 +40,8 @@ class FakeClient:
                     "scoringLevel": 99,
                 }
             ]
+        if path == "api/v2/songs":
+            return [{"name": "Fixture", "bpm": {"min": 128, "max": 256}}]
         if path.endswith("player-1/scores"):
             return [
                 {
@@ -109,6 +111,7 @@ class LocalSnapshotTests(unittest.TestCase):
             self.assertIn("discard me", json.dumps(players))
             self.assertNotIn("gameTag", json.dumps(players))
             self.assertNotIn("scoringLevel", json.dumps(charts))
+            self.assertEqual((charts[0]["bpmMin"], charts[0]["bpmMax"]), (128.0, 256.0))
             self.assertNotIn("username", json.dumps(scores))
             self.assertFalse((root / "staging" / "snapshot.json").exists())
             self.assertEqual(

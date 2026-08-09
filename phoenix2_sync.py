@@ -27,6 +27,8 @@ CHART_FIELDS = (
     "imageUrl",
     "noteCount",
     "stepArtist",
+    "bpmMin",
+    "bpmMax",
 )
 SCORE_FIELDS = (
     "playerId",
@@ -89,7 +91,52 @@ def sanitize_chart(row: Mapping[str, Any]) -> dict[str, Any] | None:
         return None
     sanitized = {field: row.get(field) for field in CHART_FIELDS}
     sanitized["id"] = str(chart_id)
+    bpm_min = _finite_number(row.get("bpmMin"))
+    bpm_max = _finite_number(row.get("bpmMax"))
+    sanitized["bpmMin"] = bpm_min if bpm_min is not None and bpm_min > 0 else None
+    sanitized["bpmMax"] = bpm_max if bpm_max is not None and bpm_max > 0 else None
+    if (
+        sanitized["bpmMin"] is not None
+        and sanitized["bpmMax"] is not None
+        and sanitized["bpmMin"] > sanitized["bpmMax"]
+    ):
+        sanitized["bpmMin"], sanitized["bpmMax"] = (
+            sanitized["bpmMax"],
+            sanitized["bpmMin"],
+        )
     return sanitized
+
+
+def _song_bpm_range(row: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    bpm = row.get("bpm")
+    if not isinstance(bpm, Mapping):
+        return None, None
+    bpm_min = _finite_number(bpm.get("min"))
+    bpm_max = _finite_number(bpm.get("max"))
+    bpm_min = bpm_min if bpm_min is not None and bpm_min > 0 else None
+    bpm_max = bpm_max if bpm_max is not None and bpm_max > 0 else None
+    if bpm_min is not None and bpm_max is not None and bpm_min > bpm_max:
+        return bpm_max, bpm_min
+    return bpm_min, bpm_max
+
+
+def attach_song_bpm_metadata(
+    charts: Sequence[Mapping[str, Any]],
+    songs: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Join the v2 song catalog's BPM range onto chart rows by song name."""
+    bpm_by_song = {
+        str(row.get("name") or ""): _song_bpm_range(row)
+        for row in songs
+        if str(row.get("name") or "").strip()
+    }
+    enriched: list[dict[str, Any]] = []
+    for row in charts:
+        bpm_min, bpm_max = bpm_by_song.get(
+            str(row.get("songName") or ""), (None, None)
+        )
+        enriched.append({**row, "bpmMin": bpm_min, "bpmMax": bpm_max})
+    return enriched
 
 
 def sanitize_score(row: Mapping[str, Any], player_id: str | None = None) -> dict[str, Any] | None:
@@ -275,12 +322,15 @@ def synchronize_mix_snapshot(
     if progress:
         progress(0, len(consented_ids), f"Discovered {len(consented_ids):,} consented players.")
 
+    songs_full = client.fetch_page_collection(
+        "api/v2/songs", {"mix": mix_spec.api_value, "limit": 100}
+    )
     charts_full = client.fetch_page_collection(
         "api/v2/charts", {"mix": mix_spec.api_value, "limit": 100}
     )
     charts = [
         sanitized
-        for raw in charts_full
+        for raw in attach_song_bpm_metadata(charts_full, songs_full)
         if (sanitized := sanitize_chart(raw)) is not None
     ]
     charts.sort(key=lambda row: row["id"])

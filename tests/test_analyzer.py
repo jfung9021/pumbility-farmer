@@ -30,6 +30,8 @@ def chart(chart_id: str, chart_type: str, level: int) -> dict:
         "imageUrl": None,
         "noteCount": 1000,
         "stepArtist": "Test",
+        "bpmMin": 120,
+        "bpmMax": 180,
     }
 
 
@@ -238,6 +240,7 @@ class AnalyzerTests(unittest.TestCase):
             AnalysisConfig(bootstrap_samples=0, pumbility_per_level=7.3),
         )
         recent_only = results[results["chartId"] == "single-125"].iloc[0]
+        self.assertEqual((recent_only["bpmMin"], recent_only["bpmMax"]), (120, 180))
         excluded = results[results["chartId"] == "single-150"].iloc[0]
         self.assertEqual(recent_only["nContributors"], 1)
         self.assertEqual(excluded["nContributors"], 0)

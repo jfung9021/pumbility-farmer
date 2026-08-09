@@ -145,7 +145,7 @@ test("recommendation cards express projected grade and plate as a concrete goal"
   assert.doesNotMatch(page, /most likely|plateSourceLabel/);
 });
 
-test("mobile recommendation cards keep gain on the right and pair official difficulty with stepmaker", async () => {
+test("mobile recommendation cards keep gain on the right and place BPM between stepmaker and official difficulty", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
@@ -153,6 +153,8 @@ test("mobile recommendation cards keep gain on the right and pair official diffi
   const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
 
   assert.match(page, /chart\.stepArtist \|\| "Unknown step artist"/);
+  assert.match(page, /formatBpm\(chart\.bpmMin, chart\.bpmMax\)/);
+  assert.match(page, /bpm \? <> · \{bpm\}<\/> : null/);
   assert.match(page, /chart\.difficulty\} official<\/b>/);
   assert.doesNotMatch(page, /formula expected/);
   assert.match(css, /grid-template-columns: 22px 48px minmax\(0, 1fr\) 92px/);
