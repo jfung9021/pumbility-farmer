@@ -240,7 +240,7 @@ The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as 
 - `analysis/recommendations/latest.json` — compact player index and atomic pointer to the current daily model generation.
 - `analysis/recommendations/indexes/<generation>.json` — immutable rollback pointer for a published or shadow generation.
 - `analysis/recommendations/models/<generation>.json` — daily catalog, plate-population, recommendation-method, and score-model metadata.
-- `analysis/recommendations/models/<generation>.npz` — compressed, non-pickle numeric score-response surfaces.
+- `analysis/recommendations/models/<generation>.npz` — compressed, non-pickle population score surfaces and chart-indexed top-100 peer cohorts.
 - `analysis/private/recommendation-inputs/<generation>/{phoenix1,phoenix2}/*.json` — private ten-player input shards used by player-only refreshes.
 - `analysis/private/recommendation-player-state/<playerKey>.json` — newest incrementally merged Phoenix 2 state for one player.
 - `analysis/recommendations/players/<playerKey>.json` — cached public-safe top-50 result for one player; full candidate arrays are not stored.
@@ -266,14 +266,15 @@ ten highest-Pumbility Phoenix 2 scores once it has 10 valid, deduplicated Phoeni
 below that threshold it uses the ten highest-Pumbility Phoenix 1 scores when available, then any
 available Phoenix 2 history. Played status, existing Pumbility, current top-50 totals, and projected
 gain always use Phoenix 2. A player with no Phoenix 2 history can still receive a Phoenix 1-derived
-rating and a population score prediction; their Phoenix 2 top 50 starts empty.
+rating and a score prediction; their Phoenix 2 top 50 starts empty.
 
-Projected raw scores come from a player-balanced population response model of scoring rating and
-continuous chart difficulty. The response is nonlinear, so the raw-score cost of another 0.1
-difficulty can change with both the player's rating and the chart's absolute difficulty. The
-prediction does not use the selected player's raw-score average as a personal baseline. Phoenix 1
-and Phoenix 2 observations are matched to the Phoenix 2 catalog and combined with Phoenix 2
-precedence; source calibration keeps the prediction on the Phoenix 2 score scale.
+Projected raw scores target the skill-distance-weighted 75th percentile among other players who
+placed the exact chart in their mode's top 100 Pumbility results. The peer search starts within
+0.25 rating, expands in 0.05 steps to 0.50, and requires at least five peers after excluding the
+selected player. Phoenix 1 and Phoenix 2 observations are matched to the Phoenix 2 catalog and
+combined with Phoenix 2 precedence; source calibration keeps both versions on the Phoenix 2 score
+scale. Charts without five comparable peers fall back to the player-balanced nonlinear population
+response model of scoring rating and continuous chart difficulty.
 
 Projected raw scores are converted to Phoenix 2 letter grades, then evaluated with the official
 Phoenix 2 grade-and-plate Pumbility formula. The plate distribution combines Phoenix 2 player

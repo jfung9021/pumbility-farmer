@@ -13,7 +13,7 @@ import io
 import json
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
 
@@ -54,10 +54,18 @@ TOP_PUMBILITY_COUNT = 50
 TOP_RECOMMENDATION_COUNT = 50
 MAX_RAW_SCORE = 1_000_000
 SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v2"
+SCORE_PROJECTION_MODEL_NAME = "similar-skill-top100-q75-v1"
 SCORE_RESPONSE_FOLDS = 5
 SCORE_RESPONSE_GRID_STEP = 0.1
 SCORE_RESPONSE_SMOOTHING_RADIUS = 8
 SCORE_RESPONSE_MIN_SUPPORT = 5
+PEER_SCORE_TOP_COUNT = 100
+PEER_SCORE_QUANTILE = 0.75
+PEER_SCORE_MIN_SUPPORT = 5
+PEER_SCORE_INITIAL_RADIUS = 0.25
+PEER_SCORE_MAX_RADIUS = 0.50
+PEER_SCORE_RADIUS_STEP = 0.05
+PEER_SCORE_WEIGHT_SIGMA = 0.25
 PLAYER_KEY_NAMESPACE = "pumbility-farmer-recommendations-v1"
 RECOMMENDATION_CHART_FIELDS = (
     "mode",
@@ -86,6 +94,79 @@ class ScoreProjectionResult:
     source: str
     support_count: int
     confidence: str
+
+
+@dataclass(frozen=True)
+class _PeerScoreCohort:
+    player_keys: np.ndarray
+    ratings: np.ndarray
+    scores: np.ndarray
+
+    def __post_init__(self) -> None:
+        size = len(self.player_keys)
+        if len(self.ratings) != size or len(self.scores) != size:
+            raise ValueError("A peer score cohort has inconsistent array lengths.")
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "playerKeys": self.player_keys.tolist(),
+            "ratings": self.ratings.tolist(),
+            "scores": self.scores.tolist(),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "_PeerScoreCohort":
+        return cls(
+            np.asarray(payload.get("playerKeys", []), dtype=np.str_),
+            np.asarray(payload.get("ratings", []), dtype=float),
+            np.asarray(payload.get("scores", []), dtype=float),
+        )
+
+    def predict(self, player_key: str, scoring_rating: float) -> tuple[float, int] | None:
+        if not math.isfinite(scoring_rating) or not len(self.ratings):
+            return None
+        distances = np.abs(self.ratings - float(scoring_rating))
+        eligible_player = self.player_keys != str(player_key)
+        for radius in np.arange(
+            PEER_SCORE_INITIAL_RADIUS,
+            PEER_SCORE_MAX_RADIUS + PEER_SCORE_RADIUS_STEP / 2,
+            PEER_SCORE_RADIUS_STEP,
+        ):
+            selected = eligible_player & (distances <= float(radius) + 1e-9)
+            support = int(np.count_nonzero(selected))
+            if support < PEER_SCORE_MIN_SUPPORT:
+                continue
+            selected_distances = distances[selected]
+            selected_scores = self.scores[selected]
+            weights = np.exp(
+                -0.5 * (selected_distances / PEER_SCORE_WEIGHT_SIGMA) ** 2
+            )
+            order = np.argsort(selected_scores, kind="mergesort")
+            ordered_scores = selected_scores[order]
+            ordered_weights = weights[order]
+            total_weight = float(ordered_weights.sum())
+            if not math.isfinite(total_weight) or total_weight <= 0:
+                return None
+            positions = (
+                np.cumsum(ordered_weights) - 0.5 * ordered_weights
+            ) / total_weight
+            score = float(
+                np.interp(
+                    PEER_SCORE_QUANTILE,
+                    positions,
+                    ordered_scores,
+                    left=float(ordered_scores[0]),
+                    right=float(ordered_scores[-1]),
+                )
+            )
+            if math.isfinite(score):
+                return score, support
+            return None
+        return None
+
+
+def _peer_cohort_key(mode_key: str, chart_id: object) -> str:
+    return f"{mode_key}\u001f{str(chart_id)}"
 
 
 @dataclass(frozen=True)
@@ -158,6 +239,7 @@ class ScoreResponseModel:
     full_surfaces: Mapping[str, _ScoreSurface]
     crossfit_surfaces: Mapping[int, Mapping[str, _ScoreSurface]]
     training_player_ids: frozenset[str]
+    peer_cohorts: Mapping[str, _PeerScoreCohort] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -173,6 +255,10 @@ class ScoreResponseModel:
                 for fold, surfaces in self.crossfit_surfaces.items()
             },
             "trainingPlayerIds": sorted(self.training_player_ids),
+            "peerCohorts": {
+                key: cohort.to_payload()
+                for key, cohort in sorted(self.peer_cohorts.items())
+            },
         }
 
     @classmethod
@@ -200,6 +286,13 @@ class ScoreResponseModel:
             full,
             crossfit,
             frozenset(str(value) for value in payload.get("trainingPlayerIds", [])),
+            {
+                str(key): _PeerScoreCohort.from_payload(cohort)
+                for key, cohort in payload.get("peerCohorts", {}).items()
+                if isinstance(cohort, Mapping)
+            }
+            if isinstance(payload.get("peerCohorts", {}), Mapping)
+            else {},
         )
 
     def to_npz_bytes(self) -> bytes:
@@ -212,6 +305,38 @@ class ScoreResponseModel:
                 sorted(self.crossfit_surfaces), dtype=np.int64
             ),
         }
+        cohort_keys = sorted(self.peer_cohorts)
+        cohort_offsets = [0]
+        peer_player_keys: list[np.ndarray] = []
+        peer_ratings: list[np.ndarray] = []
+        peer_scores: list[np.ndarray] = []
+        for key in cohort_keys:
+            cohort = self.peer_cohorts[key]
+            peer_player_keys.append(np.asarray(cohort.player_keys, dtype=np.str_))
+            peer_ratings.append(np.asarray(cohort.ratings, dtype=float))
+            peer_scores.append(np.asarray(cohort.scores, dtype=float))
+            cohort_offsets.append(cohort_offsets[-1] + len(cohort.ratings))
+        arrays.update(
+            {
+                "peer_cohort_keys": np.asarray(cohort_keys, dtype=np.str_),
+                "peer_cohort_offsets": np.asarray(cohort_offsets, dtype=np.int64),
+                "peer_player_keys": (
+                    np.concatenate(peer_player_keys)
+                    if peer_player_keys
+                    else np.asarray([], dtype=np.str_)
+                ),
+                "peer_ratings": (
+                    np.concatenate(peer_ratings)
+                    if peer_ratings
+                    else np.asarray([], dtype=float)
+                ),
+                "peer_scores": (
+                    np.concatenate(peer_scores)
+                    if peer_scores
+                    else np.asarray([], dtype=float)
+                ),
+            }
+        )
         for prefix, surfaces in (
             ("full", self.full_surfaces),
             *(
@@ -239,6 +364,43 @@ class ScoreResponseModel:
                     str(value) for value in arrays["training_player_ids"].tolist()
                 )
                 fold_ids = [int(value) for value in arrays["crossfit_folds"].tolist()]
+                peer_names = {
+                    "peer_cohort_keys",
+                    "peer_cohort_offsets",
+                    "peer_player_keys",
+                    "peer_ratings",
+                    "peer_scores",
+                }
+                peer_cohorts: dict[str, _PeerScoreCohort] = {}
+                present_peer_names = names & peer_names
+                if present_peer_names and present_peer_names != peer_names:
+                    raise ValueError("A stored peer score model is incomplete.")
+                if present_peer_names:
+                    cohort_keys = [
+                        str(value) for value in arrays["peer_cohort_keys"].tolist()
+                    ]
+                    offsets = np.asarray(arrays["peer_cohort_offsets"], dtype=np.int64)
+                    player_keys = np.asarray(arrays["peer_player_keys"], dtype=np.str_)
+                    ratings = np.asarray(arrays["peer_ratings"], dtype=float)
+                    scores = np.asarray(arrays["peer_scores"], dtype=float)
+                    if (
+                        len(offsets) != len(cohort_keys) + 1
+                        or not len(offsets)
+                        or int(offsets[0]) != 0
+                        or np.any(np.diff(offsets) < 0)
+                        or int(offsets[-1]) != len(player_keys)
+                        or len(ratings) != len(player_keys)
+                        or len(scores) != len(player_keys)
+                    ):
+                        raise ValueError("A stored peer score model is invalid.")
+                    for index, key in enumerate(cohort_keys):
+                        start = int(offsets[index])
+                        end = int(offsets[index + 1])
+                        peer_cohorts[key] = _PeerScoreCohort(
+                            player_keys[start:end],
+                            ratings[start:end],
+                            scores[start:end],
+                        )
                 surfaces: dict[str, dict[str, _ScoreSurface]] = {}
                 for name in sorted(names):
                     if not name.endswith("__rating"):
@@ -279,7 +441,7 @@ class ScoreResponseModel:
             if not prefix.startswith("fold_"):
                 raise ValueError("The stored score-response model is invalid.")
             crossfit[int(prefix.removeprefix("fold_"))] = fold_surfaces
-        return cls(full, crossfit, training_ids)
+        return cls(full, crossfit, training_ids, peer_cohorts)
 
     def predict(
         self,
@@ -287,8 +449,26 @@ class ScoreResponseModel:
         mode_key: str,
         scoring_rating: float,
         estimated_difficulty: float,
+        chart_id: str | None = None,
     ) -> ScoreProjectionResult:
         player_id = str(player_id)
+        if chart_id is not None:
+            cohort = self.peer_cohorts.get(_peer_cohort_key(mode_key, chart_id))
+            if cohort is not None:
+                peer_prediction = cohort.predict(
+                    public_player_key(player_id), float(scoring_rating)
+                )
+                if peer_prediction is not None:
+                    score, support = peer_prediction
+                    confidence = (
+                        "high" if support >= 20 else "medium" if support >= 10 else "low"
+                    )
+                    return ScoreProjectionResult(
+                        int(round(min(MAX_RAW_SCORE, max(0.0, score)))),
+                        "peer-top100-q75",
+                        support,
+                        confidence,
+                    )
         if player_id in self.training_player_ids:
             fold = _score_response_fold(player_id)
             surface = self.crossfit_surfaces.get(fold, {}).get(mode_key)
@@ -1412,6 +1592,7 @@ def fit_score_response_model(
         for source, frame in rating_frames.items()
     }
     rating_lookups: dict[tuple[str, str], tuple[float | None, dict[str, float | None]]] = {}
+    peer_top100_keys: set[tuple[str, str]] = set()
     all_player_modes = set(rating_groups["phoenix1"]) | set(
         rating_groups["phoenix2"]
     )
@@ -1421,6 +1602,15 @@ def fit_score_response_model(
         p1_group = rating_groups["phoenix1"].get(key, empty_rating_rows)
         _, selected = _select_rating_scores(p1_group, p2_group)
         rating_lookups[(player_id, chart_type)] = _rating_lookup(selected)
+        selected_top100 = selected.sort_values(
+            ["pumbility", "score", "chartId"],
+            ascending=[False, False, True],
+            kind="mergesort",
+        ).iloc[:PEER_SCORE_TOP_COUNT]
+        peer_top100_keys.update(
+            (player_id, str(chart_id))
+            for chart_id in selected_top100["chartId"].astype(str)
+        )
 
     ratings: list[float | None] = []
     for row in merged[["playerId", "type", "chartId"]].itertuples(index=False):
@@ -1432,6 +1622,12 @@ def fit_score_response_model(
         np.asarray(ratings, dtype=float), errors="coerce"
     )
     merged = merged[merged["scoringRating"].notna()].copy()
+    merged["peerTop100"] = [
+        (str(player_id), str(chart_id)) in peer_top100_keys
+        for player_id, chart_id in merged[["playerId", "chartId"]].itertuples(
+            index=False
+        )
+    ]
 
     merged["fold"] = merged["playerId"].map(_score_response_fold)
 
@@ -1439,6 +1635,7 @@ def fit_score_response_model(
     crossfit_surfaces: dict[int, dict[str, _ScoreSurface]] = {
         fold: {} for fold in range(SCORE_RESPONSE_FOLDS)
     }
+    peer_cohorts: dict[str, _PeerScoreCohort] = {}
     mode_metadata: dict[str, Any] = {}
     for chart_type in MODE_TYPES:
         mode_key = _mode_key(chart_type)
@@ -1447,6 +1644,19 @@ def fit_score_response_model(
         surface = _build_score_surface(calibrated_mode)
         if surface is not None:
             full_surfaces[mode_key] = surface
+        peer_rows = calibrated_mode[calibrated_mode["peerTop100"]].copy()
+        for chart_id, cohort_rows in peer_rows.groupby("chartId", sort=False):
+            ordered = cohort_rows.sort_values(
+                ["scoringRating", "playerId"], kind="mergesort"
+            )
+            peer_cohorts[_peer_cohort_key(mode_key, chart_id)] = _PeerScoreCohort(
+                np.asarray(
+                    [public_player_key(value) for value in ordered["playerId"]],
+                    dtype=np.str_,
+                ),
+                ordered["scoringRating"].to_numpy(float),
+                ordered["calibratedScore"].to_numpy(float),
+            )
         fold_rows: dict[str, int] = {}
         for fold in range(SCORE_RESPONSE_FOLDS):
             training = mode[mode["fold"] != fold]
@@ -1470,20 +1680,35 @@ def fit_score_response_model(
             },
             "phoenix1ToPhoenix2ScoreOffset": round(source_offset, 3),
             "crossfitTrainingRows": fold_rows,
+            "peerTop100Rows": int(len(peer_rows)),
+            "peerTop100Players": int(peer_rows["playerId"].nunique()),
+            "peerTop100Charts": int(peer_rows["chartId"].nunique()),
         }
     model = ScoreResponseModel(
         full_surfaces,
         crossfit_surfaces,
         frozenset(merged["playerId"].astype(str).unique()),
+        peer_cohorts,
     )
     return model, {
-        "model": SCORE_RESPONSE_MODEL_NAME,
+        "model": SCORE_PROJECTION_MODEL_NAME,
+        "populationFallbackModel": SCORE_RESPONSE_MODEL_NAME,
         "crossfitFolds": SCORE_RESPONSE_FOLDS,
         "personalRawScoreInput": False,
         "playerBalanced": True,
         "minimumLocalSupport": SCORE_RESPONSE_MIN_SUPPORT,
         "supportNeighborhood": "plus or minus 0.5 rating and difficulty",
         "confidenceThresholds": {"high": 200, "medium": 50, "low": 5},
+        "peerProjection": {
+            "topPumbilityCount": PEER_SCORE_TOP_COUNT,
+            "quantile": PEER_SCORE_QUANTILE,
+            "minimumPeers": PEER_SCORE_MIN_SUPPORT,
+            "initialRatingRadius": PEER_SCORE_INITIAL_RADIUS,
+            "maximumRatingRadius": PEER_SCORE_MAX_RADIUS,
+            "ratingRadiusStep": PEER_SCORE_RADIUS_STEP,
+            "weightSigma": PEER_SCORE_WEIGHT_SIGMA,
+            "confidenceThresholds": {"high": 20, "medium": 10, "low": 5},
+        },
         "phoenix1Calibration": "mode-specific dual-source player intercept offset to the Phoenix 2 raw-score scale",
         "phoenix2OverlapRowsRemovedFromPhoenix1": overlap_rows_removed,
         "modes": mode_metadata,
@@ -1649,7 +1874,7 @@ def _build_player_recommendation_phoenix2_only(
             projected = max(existing or 0.0, expected)
             projection = (
                 score_response_model.predict(
-                    str(player_id), mode_key, scoring_rating, estimate
+                    str(player_id), mode_key, scoring_rating, estimate, chart_id
                 )
                 if score_response_model is not None
                 else ScoreProjectionResult(None, "population-crossfit", 0, "unavailable")
@@ -1700,7 +1925,7 @@ def _build_player_recommendation_phoenix2_only(
             "projectionAvailable": any(
                 row.get("projectedScore") is not None for row in candidates
             ),
-            "scoreProjectionModel": SCORE_RESPONSE_MODEL_NAME,
+            "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
             "currentTop50Pumbility": round(current_total, 3),
             "candidateRange": [
                 None,
@@ -1790,7 +2015,7 @@ def build_player_recommendation(
                     "in this mode."
                 ),
                 "projectionAvailable": False,
-                "scoreProjectionModel": SCORE_RESPONSE_MODEL_NAME,
+                "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
                 **({"candidates": []} if include_candidates else {}),
                 "topRecommendations": [],
             }
@@ -1863,7 +2088,7 @@ def build_player_recommendation(
             existing = existing_by_chart.get(chart_id)
             projection = (
                 score_response_model.predict(
-                    str(player_id), mode_key, scoring_rating, estimate
+                    str(player_id), mode_key, scoring_rating, estimate, chart_id
                 )
                 if score_response_model is not None
                 else ScoreProjectionResult(None, "population-crossfit", 0, "unavailable")
@@ -1979,7 +2204,7 @@ def build_player_recommendation(
             "scoringRating": round(scoring_rating, 3),
             "ratingFallbackCharts": rating_fallback_count,
             "projectionAvailable": projection_available,
-            "scoreProjectionModel": SCORE_RESPONSE_MODEL_NAME,
+            "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
             "pumbilityPerLevel": (
                 round(float(slope), 6) if slope is not None else None
             ),
@@ -2146,8 +2371,8 @@ def build_recommendation_index(
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-            "scoreProjection": "player-balanced, Phoenix 2-calibrated monotone population response surface using only scoring rating, chart estimated difficulty, and mode at inference; deterministic five-fold player exclusion prevents personal raw scores from training the surface serving that player",
-            "scoreProjectionModel": SCORE_RESPONSE_MODEL_NAME,
+            "scoreProjection": "skill-distance-weighted 75th-percentile raw score from at least five other players of similar rating whose result on the exact chart ranked in their mode's top 100; the rating window expands from plus or minus 0.25 to 0.50 before falling back to the player-balanced population response surface",
+            "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
         },
         "players": output_players,
     }
