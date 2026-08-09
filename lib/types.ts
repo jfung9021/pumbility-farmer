@@ -189,7 +189,10 @@ export interface RecommendationModeResult {
     | "population-crossfit-monotone-v2"
     | "similar-skill-top100-q75-v1"
     | "similar-skill-top100-q50-v1"
-    | "similar-skill-top100-q50-v2";
+    | "similar-skill-top100-q50-v2"
+    | "similar-skill-staged-q50-v3"
+    | "similar-skill-all-q50-v4"
+    | "similar-skill-all-q50-v5";
   pumbilityPerLevel?: number | null;
   currentTop50Pumbility?: number;
   currentTop50CutoffPumbility?: number | null;

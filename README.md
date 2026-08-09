@@ -240,7 +240,7 @@ The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as 
 - `analysis/recommendations/latest.json` — compact player index and atomic pointer to the current daily model generation.
 - `analysis/recommendations/indexes/<generation>.json` — immutable rollback pointer for a published or shadow generation.
 - `analysis/recommendations/models/<generation>.json` — daily catalog, plate-population, recommendation-method, and score-model metadata.
-- `analysis/recommendations/models/<generation>.npz` — compressed, non-pickle population score surfaces and chart-indexed top-100 peer cohorts.
+- `analysis/recommendations/models/<generation>.npz` — compressed, non-pickle population score surfaces and chart-indexed all-score peer cohorts.
 - `analysis/private/recommendation-inputs/<generation>/{phoenix1,phoenix2}/*.json` — private ten-player input shards used by player-only refreshes.
 - `analysis/private/recommendation-player-state/<playerKey>.json` — newest incrementally merged Phoenix 2 state for one player.
 - `analysis/recommendations/players/<playerKey>.json` — cached public-safe top-50 result for one player; full candidate arrays are not stored.
@@ -262,9 +262,9 @@ supersedes Phoenix 1; Phoenix 1 is used only when no Phoenix 2 score exists. Ver
 Pumbility residuals are converted to level units before evidence is combined.
 
 Player skill-rating history is selected independently for Singles and Doubles. A mode uses Phoenix 2
-ranks 1-10 once it has 10 valid, deduplicated Phoenix 2 chart scores. Below that threshold it uses
-the available portion of Phoenix 1 ranks 11-20 when rank 11 exists, then any available Phoenix 2
-history. Phoenix 1 histories shorter than 11 scores do not qualify as a rating source. Played status,
+ranks 1-20 once it has 20 valid, deduplicated Phoenix 2 chart scores. Below that threshold it uses
+Phoenix 1 ranks 1-20 when all 20 are available, then any available Phoenix 2 history. Phoenix 1
+histories shorter than 20 scores do not qualify as a rating source. Played status,
 existing Pumbility, current top-50 totals, and projected gain always use Phoenix 2. A player with no
 Phoenix 2 history can still receive a Phoenix 1-derived rating and a score prediction when that
 Phoenix 1 window exists; their Phoenix 2 top 50 starts empty.
@@ -273,13 +273,15 @@ Suggested-chart eligibility has no lower estimated-difficulty bound and extends 
 above the player's scoring rating. Charts beyond that upper bound are excluded before projected-gain
 ranking.
 
-Projected raw scores target the skill-distance-weighted median (50th percentile) among other players who
-placed the exact chart in their mode's top 100 Pumbility results. After excluding the selected player,
-the peer search starts within 0.2 rating and expands in 0.1 steps through 1.0, stopping at the first
-radius with at least five peers. If the maximum radius contains only one to four peers, their data is
-still used; the player-balanced nonlinear population response model is used only when no comparable
-peer exists. Phoenix 1 and Phoenix 2 observations are matched to the Phoenix 2 catalog and combined
-with Phoenix 2 precedence; source calibration keeps both versions on the Phoenix 2 score scale.
+Projected raw scores target the unweighted median (50th percentile) among all other players with a
+normalized result on the exact chart. Phoenix 1 and Phoenix 2 observations are joined with Phoenix 2
+precedence, calibrated to the Phoenix 2 score scale, and normalized with the Phoenix 2 chart catalog
+and grade-and-plate formula. Observations that cannot be normalized are excluded. After excluding the
+selected player, the search tries rating radii 0.2, 0.3, 0.4, and 0.5 seeking at least 20 peers. If
+none succeeds, it repeats the radii seeking 10, then repeats seeking five. Every peer within the
+narrowest successful radius participates in the ordinary median; peers are not truncated to the
+support target or weighted by distance. Below five peers at the maximum radius, the player-balanced
+nonlinear population response model is used.
 
 Projected raw scores are converted to Phoenix 2 letter grades, then evaluated with the official
 Phoenix 2 grade-and-plate Pumbility formula. The plate distribution combines Phoenix 2 player

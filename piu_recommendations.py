@@ -37,38 +37,35 @@ from phoenix2_pumbility import (
     PLATE_CODES,
     PlateProjectionModel,
     grade_for_score,
+    normalize_plate,
     phoenix2_pumbility,
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 11
+RECOMMENDATION_SCHEMA_VERSION = 14
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 1
 RECOMMENDATION_RADIUS = 0.5
 BASELINE_START_RANK = 11
 BASELINE_END_RANK = 30
-RECOMMENDATION_RATING_SCORE_COUNT = 10
-PHOENIX1_RATING_START_RANK = 11
-PHOENIX1_RATING_END_RANK = 20
-PHOENIX2_RATING_SCORE_THRESHOLD = 10
+RECOMMENDATION_RATING_SCORE_COUNT = 20
+PHOENIX2_RATING_SCORE_THRESHOLD = RECOMMENDATION_RATING_SCORE_COUNT
 TOP_PUMBILITY_COUNT = 50
 TOP_RECOMMENDATION_COUNT = 50
 MAX_RAW_SCORE = 1_000_000
 SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v2"
-SCORE_PROJECTION_MODEL_NAME = "similar-skill-top100-q50-v2"
+SCORE_PROJECTION_MODEL_NAME = "similar-skill-all-q50-v5"
 SCORE_RESPONSE_FOLDS = 5
 SCORE_RESPONSE_GRID_STEP = 0.1
 SCORE_RESPONSE_SMOOTHING_RADIUS = 8
 SCORE_RESPONSE_MIN_SUPPORT = 5
-PEER_SCORE_TOP_COUNT = 100
 PEER_SCORE_QUANTILE = 0.50
-PEER_SCORE_PREFERRED_SUPPORT = 5
-PEER_SCORE_MIN_USABLE_SUPPORT = 1
+PEER_SCORE_SUPPORT_TARGETS = (20, 10, 5)
+PEER_SCORE_MIN_USABLE_SUPPORT = 5
 PEER_SCORE_INITIAL_RADIUS = 0.2
-PEER_SCORE_MAX_RADIUS = 1.0
+PEER_SCORE_MAX_RADIUS = 0.5
 PEER_SCORE_RADIUS_STEP = 0.1
-PEER_SCORE_WEIGHT_SIGMA = 0.25
 PLAYER_KEY_NAMESPACE = "pumbility-farmer-recommendations-v1"
 RECOMMENDATION_CHART_FIELDS = (
     "mode",
@@ -106,10 +103,15 @@ class _PeerScoreCohort:
     player_keys: np.ndarray
     ratings: np.ndarray
     scores: np.ndarray
+    ranks: np.ndarray
 
     def __post_init__(self) -> None:
         size = len(self.player_keys)
-        if len(self.ratings) != size or len(self.scores) != size:
+        if (
+            len(self.ratings) != size
+            or len(self.scores) != size
+            or len(self.ranks) != size
+        ):
             raise ValueError("A peer score cohort has inconsistent array lengths.")
 
     def to_payload(self) -> dict[str, Any]:
@@ -117,17 +119,30 @@ class _PeerScoreCohort:
             "playerKeys": self.player_keys.tolist(),
             "ratings": self.ratings.tolist(),
             "scores": self.scores.tolist(),
+            "ranks": self.ranks.tolist(),
         }
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "_PeerScoreCohort":
+        player_keys = np.asarray(payload.get("playerKeys", []), dtype=np.str_)
+        raw_ranks = payload.get("ranks")
+        if raw_ranks is None and len(player_keys):
+            return cls(
+                np.asarray([], dtype=np.str_),
+                np.asarray([], dtype=float),
+                np.asarray([], dtype=float),
+                np.asarray([], dtype=np.int64),
+            )
         return cls(
-            np.asarray(payload.get("playerKeys", []), dtype=np.str_),
+            player_keys,
             np.asarray(payload.get("ratings", []), dtype=float),
             np.asarray(payload.get("scores", []), dtype=float),
+            np.asarray(raw_ranks if raw_ranks is not None else [], dtype=np.int64),
         )
 
-    def predict(self, player_key: str, scoring_rating: float) -> tuple[float, int] | None:
+    def predict(
+        self, player_key: str, scoring_rating: float
+    ) -> tuple[float, int, str] | None:
         if not math.isfinite(scoring_rating) or not len(self.ratings):
             return None
         distances = np.abs(self.ratings - float(scoring_rating))
@@ -140,40 +155,24 @@ class _PeerScoreCohort:
         )
         selected = np.zeros(len(self.ratings), dtype=bool)
         support = 0
-        for step in range(radius_count + 1):
-            radius = round(
-                PEER_SCORE_INITIAL_RADIUS + step * PEER_SCORE_RADIUS_STEP, 10
-            )
-            selected = eligible_player & (distances <= float(radius) + 1e-9)
-            support = int(np.count_nonzero(selected))
-            if support >= PEER_SCORE_PREFERRED_SUPPORT:
+        for target_support in PEER_SCORE_SUPPORT_TARGETS:
+            for step in range(radius_count + 1):
+                radius = round(
+                    PEER_SCORE_INITIAL_RADIUS + step * PEER_SCORE_RADIUS_STEP, 10
+                )
+                selected = eligible_player & (
+                    distances <= float(radius) + 1e-9
+                )
+                support = int(np.count_nonzero(selected))
+                if support >= target_support:
+                    break
+            if support >= target_support:
                 break
         if support < PEER_SCORE_MIN_USABLE_SUPPORT:
             return None
-        selected_distances = distances[selected]
         selected_scores = self.scores[selected]
-        weights = np.exp(
-            -0.5 * (selected_distances / PEER_SCORE_WEIGHT_SIGMA) ** 2
-        )
-        order = np.argsort(selected_scores, kind="mergesort")
-        ordered_scores = selected_scores[order]
-        ordered_weights = weights[order]
-        total_weight = float(ordered_weights.sum())
-        if not math.isfinite(total_weight) or total_weight <= 0:
-            return None
-        positions = (
-            np.cumsum(ordered_weights) - 0.5 * ordered_weights
-        ) / total_weight
-        score = float(
-            np.interp(
-                PEER_SCORE_QUANTILE,
-                positions,
-                ordered_scores,
-                left=float(ordered_scores[0]),
-                right=float(ordered_scores[-1]),
-            )
-        )
-        return (score, support) if math.isfinite(score) else None
+        score = float(np.quantile(selected_scores, PEER_SCORE_QUANTILE))
+        return (score, support, "peer-all-q50") if math.isfinite(score) else None
 
 
 def _peer_cohort_key(mode_key: str, chart_id: object) -> str:
@@ -321,11 +320,13 @@ class ScoreResponseModel:
         peer_player_keys: list[np.ndarray] = []
         peer_ratings: list[np.ndarray] = []
         peer_scores: list[np.ndarray] = []
+        peer_ranks: list[np.ndarray] = []
         for key in cohort_keys:
             cohort = self.peer_cohorts[key]
             peer_player_keys.append(np.asarray(cohort.player_keys, dtype=np.str_))
             peer_ratings.append(np.asarray(cohort.ratings, dtype=float))
             peer_scores.append(np.asarray(cohort.scores, dtype=float))
+            peer_ranks.append(np.asarray(cohort.ranks, dtype=np.int64))
             cohort_offsets.append(cohort_offsets[-1] + len(cohort.ratings))
         arrays.update(
             {
@@ -345,6 +346,11 @@ class ScoreResponseModel:
                     np.concatenate(peer_scores)
                     if peer_scores
                     else np.asarray([], dtype=float)
+                ),
+                "peer_ranks": (
+                    np.concatenate(peer_ranks)
+                    if peer_ranks
+                    else np.asarray([], dtype=np.int64)
                 ),
             }
         )
@@ -382,11 +388,14 @@ class ScoreResponseModel:
                     "peer_ratings",
                     "peer_scores",
                 }
+                peer_rank_name = "peer_ranks"
                 peer_cohorts: dict[str, _PeerScoreCohort] = {}
                 present_peer_names = names & peer_names
                 if present_peer_names and present_peer_names != peer_names:
                     raise ValueError("A stored peer score model is incomplete.")
-                if present_peer_names:
+                if peer_rank_name in names and present_peer_names != peer_names:
+                    raise ValueError("A stored peer score model is incomplete.")
+                if present_peer_names and peer_rank_name in names:
                     cohort_keys = [
                         str(value) for value in arrays["peer_cohort_keys"].tolist()
                     ]
@@ -394,6 +403,7 @@ class ScoreResponseModel:
                     player_keys = np.asarray(arrays["peer_player_keys"], dtype=np.str_)
                     ratings = np.asarray(arrays["peer_ratings"], dtype=float)
                     scores = np.asarray(arrays["peer_scores"], dtype=float)
+                    ranks = np.asarray(arrays[peer_rank_name], dtype=np.int64)
                     if (
                         len(offsets) != len(cohort_keys) + 1
                         or not len(offsets)
@@ -402,6 +412,8 @@ class ScoreResponseModel:
                         or int(offsets[-1]) != len(player_keys)
                         or len(ratings) != len(player_keys)
                         or len(scores) != len(player_keys)
+                        or len(ranks) != len(player_keys)
+                        or np.any(ranks < 1)
                     ):
                         raise ValueError("A stored peer score model is invalid.")
                     for index, key in enumerate(cohort_keys):
@@ -411,6 +423,7 @@ class ScoreResponseModel:
                             player_keys[start:end],
                             ratings[start:end],
                             scores[start:end],
+                            ranks[start:end],
                         )
                 surfaces: dict[str, dict[str, _ScoreSurface]] = {}
                 for name in sorted(names):
@@ -470,19 +483,19 @@ class ScoreResponseModel:
                     public_player_key(player_id), float(scoring_rating)
                 )
                 if peer_prediction is not None:
-                    score, support = peer_prediction
+                    score, support, source = peer_prediction
                     confidence = (
                         "high"
                         if support >= 20
                         else "medium"
                         if support >= 10
                         else "low"
-                        if support >= PEER_SCORE_PREFERRED_SUPPORT
+                        if support >= PEER_SCORE_MIN_USABLE_SUPPORT
                         else "limited"
                     )
                     return ScoreProjectionResult(
                         int(round(min(MAX_RAW_SCORE, max(0.0, score)))),
-                        "peer-top100-q50",
+                        source,
                         support,
                         confidence,
                     )
@@ -1261,20 +1274,13 @@ def build_manual_recommendation_mode(
     }
 
 
-def _rating_bounds(
-    score_count: int, source: str = "phoenix2"
-) -> tuple[int, int]:
-    """Return the source-specific recommendation rating window as zero-based bounds."""
-    if source == "phoenix1":
-        return (
-            min(PHOENIX1_RATING_START_RANK - 1, score_count),
-            min(PHOENIX1_RATING_END_RANK, score_count),
-        )
+def _rating_bounds(score_count: int) -> tuple[int, int]:
+    """Return the shared top-score recommendation rating window."""
     return 0, min(RECOMMENDATION_RATING_SCORE_COUNT, score_count)
 
 
 def _rating_lookup(
-    rows: pd.DataFrame, source: str = "phoenix2"
+    rows: pd.DataFrame,
 ) -> tuple[float | None, dict[str, float | None]]:
     """Return the full and leave-one-chart-out difficulty baselines in O(n)."""
     if rows.empty:
@@ -1290,7 +1296,7 @@ def _rating_lookup(
     def window_mean(count: int, removed: int | None = None) -> float | None:
         if count <= 0:
             return None
-        start, end = _rating_bounds(count, source)
+        start, end = _rating_bounds(count)
         if end <= start:
             return None
         if removed is None:
@@ -1318,7 +1324,7 @@ def _select_rating_scores(
     """Choose one mode's recommendation-rating source consistently."""
     if len(phoenix2_scores) >= PHOENIX2_RATING_SCORE_THRESHOLD:
         return "phoenix2", phoenix2_scores
-    if len(phoenix1_scores) >= PHOENIX1_RATING_START_RANK:
+    if len(phoenix1_scores) >= RECOMMENDATION_RATING_SCORE_COUNT:
         return "phoenix1", phoenix1_scores
     if not phoenix2_scores.empty:
         return "phoenix2", phoenix2_scores
@@ -1441,6 +1447,26 @@ def _calibrate_score_rows(rows: pd.DataFrame) -> tuple[pd.DataFrame, float]:
         0, MAX_RAW_SCORE
     )
     return calibrated, offset
+
+
+def _phoenix2_normalized_pumbility(
+    chart_type: object,
+    level: object,
+    calibrated_score: object,
+    plate: object,
+) -> float | None:
+    """Return comparable Phoenix 2 Pumbility for one joined score row."""
+    grade = grade_for_score(calibrated_score)
+    normalized_plate = normalize_plate(plate)
+    if grade is None or normalized_plate is None:
+        return None
+    try:
+        value = phoenix2_pumbility(
+            str(chart_type), int(level), grade, normalized_plate
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return float(value) if math.isfinite(value) else None
 
 
 def _build_score_surface(rows: pd.DataFrame) -> _ScoreSurface | None:
@@ -1624,7 +1650,6 @@ def fit_score_response_model(
         for source, frame in rating_frames.items()
     }
     rating_lookups: dict[tuple[str, str], tuple[float | None, dict[str, float | None]]] = {}
-    peer_top100_keys: set[tuple[str, str]] = set()
     all_player_modes = set(rating_groups["phoenix1"]) | set(
         rating_groups["phoenix2"]
     )
@@ -1632,19 +1657,8 @@ def fit_score_response_model(
         key = (player_id, chart_type)
         p2_group = rating_groups["phoenix2"].get(key, empty_rating_rows)
         p1_group = rating_groups["phoenix1"].get(key, empty_rating_rows)
-        rating_source, selected = _select_rating_scores(p1_group, p2_group)
-        rating_lookups[(player_id, chart_type)] = _rating_lookup(
-            selected, rating_source
-        )
-        selected_top100 = selected.sort_values(
-            ["pumbility", "score", "chartId"],
-            ascending=[False, False, True],
-            kind="mergesort",
-        ).iloc[:PEER_SCORE_TOP_COUNT]
-        peer_top100_keys.update(
-            (player_id, str(chart_id))
-            for chart_id in selected_top100["chartId"].astype(str)
-        )
+        _, selected = _select_rating_scores(p1_group, p2_group)
+        rating_lookups[(player_id, chart_type)] = _rating_lookup(selected)
 
     ratings: list[float | None] = []
     for row in merged[["playerId", "type", "chartId"]].itertuples(index=False):
@@ -1656,12 +1670,6 @@ def fit_score_response_model(
         np.asarray(ratings, dtype=float), errors="coerce"
     )
     merged = merged[merged["scoringRating"].notna()].copy()
-    merged["peerTop100"] = [
-        (str(player_id), str(chart_id)) in peer_top100_keys
-        for player_id, chart_id in merged[["playerId", "chartId"]].itertuples(
-            index=False
-        )
-    ]
 
     merged["fold"] = merged["playerId"].map(_score_response_fold)
 
@@ -1678,7 +1686,42 @@ def fit_score_response_model(
         surface = _build_score_surface(calibrated_mode)
         if surface is not None:
             full_surfaces[mode_key] = surface
-        peer_rows = calibrated_mode[calibrated_mode["peerTop100"]].copy()
+        plates = (
+            calibrated_mode["plate"]
+            if "plate" in calibrated_mode.columns
+            else pd.Series(None, index=calibrated_mode.index, dtype=object)
+        )
+        calibrated_mode["normalizedPumbility"] = [
+            _phoenix2_normalized_pumbility(
+                chart_type_value,
+                level,
+                score,
+                plate,
+            )
+            for chart_type_value, level, score, plate in zip(
+                calibrated_mode["type"],
+                calibrated_mode["level"],
+                calibrated_mode["calibratedScore"],
+                plates,
+                strict=True,
+            )
+        ]
+        peer_rows = calibrated_mode[
+            calibrated_mode["normalizedPumbility"].notna()
+        ].copy()
+        peer_rows = peer_rows.sort_values(
+            [
+                "playerId",
+                "normalizedPumbility",
+                "calibratedScore",
+                "chartId",
+            ],
+            ascending=[True, False, False, True],
+            kind="mergesort",
+        )
+        peer_rows["normalizedPumbilityRank"] = (
+            peer_rows.groupby("playerId", sort=False).cumcount() + 1
+        )
         for chart_id, cohort_rows in peer_rows.groupby("chartId", sort=False):
             ordered = cohort_rows.sort_values(
                 ["scoringRating", "playerId"], kind="mergesort"
@@ -1690,6 +1733,7 @@ def fit_score_response_model(
                 ),
                 ordered["scoringRating"].to_numpy(float),
                 ordered["calibratedScore"].to_numpy(float),
+                ordered["normalizedPumbilityRank"].to_numpy(np.int64),
             )
         fold_rows: dict[str, int] = {}
         for fold in range(SCORE_RESPONSE_FOLDS):
@@ -1714,9 +1758,9 @@ def fit_score_response_model(
             },
             "phoenix1ToPhoenix2ScoreOffset": round(source_offset, 3),
             "crossfitTrainingRows": fold_rows,
-            "peerTop100Rows": int(len(peer_rows)),
-            "peerTop100Players": int(peer_rows["playerId"].nunique()),
-            "peerTop100Charts": int(peer_rows["chartId"].nunique()),
+            "peerEligibleRows": int(len(peer_rows)),
+            "peerEligiblePlayers": int(peer_rows["playerId"].nunique()),
+            "peerEligibleCharts": int(peer_rows["chartId"].nunique()),
         }
     model = ScoreResponseModel(
         full_surfaces,
@@ -1734,20 +1778,20 @@ def fit_score_response_model(
         "supportNeighborhood": "plus or minus 0.5 rating and difficulty",
         "confidenceThresholds": {"high": 200, "medium": 50, "low": 5},
         "peerProjection": {
-            "topPumbilityCount": PEER_SCORE_TOP_COUNT,
             "quantile": PEER_SCORE_QUANTILE,
             "minimumPeers": PEER_SCORE_MIN_USABLE_SUPPORT,
             "minimumUsablePeers": PEER_SCORE_MIN_USABLE_SUPPORT,
-            "preferredMinimumPeers": PEER_SCORE_PREFERRED_SUPPORT,
+            "supportTargets": list(PEER_SCORE_SUPPORT_TARGETS),
             "initialRatingRadius": PEER_SCORE_INITIAL_RADIUS,
             "maximumRatingRadius": PEER_SCORE_MAX_RADIUS,
             "ratingRadiusStep": PEER_SCORE_RADIUS_STEP,
-            "weightSigma": PEER_SCORE_WEIGHT_SIGMA,
+            "radiusSearch": "repeat plus or minus 0.2 through 0.5 for support targets 20, 10, then 5; use the narrowest successful radius within each pass",
+            "scoreNormalization": "joined Phoenix 1 + Phoenix 2 observations recomputed with the Phoenix 2 chart catalog and grade-and-plate Pumbility formula; Phoenix 2 replaces overlaps",
+            "percentileWeighting": "unweighted",
             "confidenceThresholds": {
                 "high": 20,
                 "medium": 10,
                 "low": 5,
-                "limited": 1,
             },
         },
         "phoenix1Calibration": "mode-specific dual-source player intercept offset to the Phoenix 2 raw-score scale",
@@ -1794,18 +1838,9 @@ def _baseline_window(mode_scores: pd.DataFrame) -> tuple[pd.DataFrame, int, int,
 
 
 def _rating_window(
-    mode_scores: pd.DataFrame, source: str
+    mode_scores: pd.DataFrame,
 ) -> tuple[pd.DataFrame, int, int, str]:
-    """Return the source-specific Pumbility rows used for recommendations."""
-    if source == "phoenix1":
-        start = PHOENIX1_RATING_START_RANK
-        end = min(PHOENIX1_RATING_END_RANK, len(mode_scores))
-        label = (
-            "ranks 11-20"
-            if end == PHOENIX1_RATING_END_RANK
-            else f"ranks 11-{end}"
-        )
-        return mode_scores.iloc[start - 1 : end].copy(), start, end, label
+    """Return the shared top-score Pumbility rows used for recommendations."""
     end = min(RECOMMENDATION_RATING_SCORE_COUNT, len(mode_scores))
     label = (
         f"top {RECOMMENDATION_RATING_SCORE_COUNT} scores"
@@ -2063,7 +2098,7 @@ def build_player_recommendation(
                 "phoenix2ScoreThreshold": PHOENIX2_RATING_SCORE_THRESHOLD,
                 "ratingSource": None,
                 "reason": (
-                    "At least one valid Phoenix 2 score or 11 valid Phoenix 1 "
+                    "At least one valid Phoenix 2 score or 20 valid Phoenix 1 "
                     "scores are required in this mode."
                 ),
                 "projectionAvailable": False,
@@ -2074,7 +2109,7 @@ def build_player_recommendation(
             continue
 
         rating_baseline, rating_start, rating_end, rating_label = _rating_window(
-            rating_scores, rating_source
+            rating_scores
         )
         rating_fallback_count = 0
         rating_difficulties: list[float] = []
@@ -2405,17 +2440,14 @@ def build_recommendation_index(
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
             "pumbilityPerLevel": slopes,
             "scoreProjectionCoverage": score_projection_metadata,
-            "scoreProjectionData": "matched Phoenix 1 + Phoenix 2 raw scores on the Phoenix 2 catalog, with Phoenix 2 precedence for overlapping player/chart rows",
+            "scoreProjectionData": "joined Phoenix 1 + Phoenix 2 scores normalized with the Phoenix 2 chart catalog and grade-and-plate Pumbility formula, with Phoenix 2 precedence for overlapping player/chart rows",
             "baselineRanks": [BASELINE_START_RANK, BASELINE_END_RANK],
             "recommendationRatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
-            "phoenix1RatingRanks": [
-                PHOENIX1_RATING_START_RANK,
-                PHOENIX1_RATING_END_RANK,
-            ],
+            "phoenix1RatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
             "phoenix2RatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
             "phoenix2RatingScoreThreshold": PHOENIX2_RATING_SCORE_THRESHOLD,
-            "ratingSource": "per mode, use Phoenix 2 ranks 1-10 at 10 valid scores; otherwise use Phoenix 1 ranks 11-20 when rank 11 is available, then available Phoenix 2 history",
-            "shortHistoryBaseline": "use the available portion of Phoenix 1 ranks 11-20; Phoenix 1 histories shorter than 11 do not qualify, while short Phoenix 2 history uses all available scores",
+            "ratingSource": "per mode, use Phoenix 2 ranks 1-20 at 20 valid scores; otherwise use Phoenix 1 ranks 1-20 when all 20 are available, then available Phoenix 2 history",
+            "shortHistoryBaseline": "Phoenix 1 histories shorter than 20 do not qualify, while short Phoenix 2 history uses all available scores",
             "candidateUpperRadius": RECOMMENDATION_RADIUS,
             "candidateLowerBound": None,
             "topPumbilityCount": TOP_PUMBILITY_COUNT,
@@ -2428,7 +2460,7 @@ def build_recommendation_index(
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-            "scoreProjection": "skill-distance-weighted median (50th-percentile) raw score from other players whose result on the exact chart ranked in their mode's top 100; the rating window expands from plus or minus 0.2 to 1.0 in 0.1 steps seeking five peers, uses one to four peers at the maximum radius when necessary, and falls back to the player-balanced population response surface only with zero peers",
+            "scoreProjection": "unweighted median (50th-percentile) raw score from all other players with a normalized result on the exact chart; search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back to the player-balanced population response surface below five peers",
             "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
         },
         "players": output_players,
