@@ -268,7 +268,7 @@ available Phoenix 2 history. Played status, existing Pumbility, current top-50 t
 gain always use Phoenix 2. A player with no Phoenix 2 history can still receive a Phoenix 1-derived
 rating and a score prediction; their Phoenix 2 top 50 starts empty.
 
-Projected raw scores target the skill-distance-weighted 75th percentile among other players who
+Projected raw scores target the skill-distance-weighted median (50th percentile) among other players who
 placed the exact chart in their mode's top 100 Pumbility results. The peer search starts within
 0.25 rating, expands in 0.05 steps to 0.50, and requires at least five peers after excluding the
 selected player. Phoenix 1 and Phoenix 2 observations are matched to the Phoenix 2 catalog and

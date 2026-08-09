@@ -54,13 +54,13 @@ TOP_PUMBILITY_COUNT = 50
 TOP_RECOMMENDATION_COUNT = 50
 MAX_RAW_SCORE = 1_000_000
 SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v2"
-SCORE_PROJECTION_MODEL_NAME = "similar-skill-top100-q75-v1"
+SCORE_PROJECTION_MODEL_NAME = "similar-skill-top100-q50-v1"
 SCORE_RESPONSE_FOLDS = 5
 SCORE_RESPONSE_GRID_STEP = 0.1
 SCORE_RESPONSE_SMOOTHING_RADIUS = 8
 SCORE_RESPONSE_MIN_SUPPORT = 5
 PEER_SCORE_TOP_COUNT = 100
-PEER_SCORE_QUANTILE = 0.75
+PEER_SCORE_QUANTILE = 0.50
 PEER_SCORE_MIN_SUPPORT = 5
 PEER_SCORE_INITIAL_RADIUS = 0.25
 PEER_SCORE_MAX_RADIUS = 0.50
@@ -467,7 +467,7 @@ class ScoreResponseModel:
                     )
                     return ScoreProjectionResult(
                         int(round(min(MAX_RAW_SCORE, max(0.0, score)))),
-                        "peer-top100-q75",
+                        "peer-top100-q50",
                         support,
                         confidence,
                     )
@@ -2375,7 +2375,7 @@ def build_recommendation_index(
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-            "scoreProjection": "skill-distance-weighted 75th-percentile raw score from at least five other players of similar rating whose result on the exact chart ranked in their mode's top 100; the rating window expands from plus or minus 0.25 to 0.50 before falling back to the player-balanced population response surface",
+            "scoreProjection": "skill-distance-weighted median (50th-percentile) raw score from at least five other players of similar rating whose result on the exact chart ranked in their mode's top 100; the rating window expands from plus or minus 0.25 to 0.50 before falling back to the player-balanced population response surface",
             "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
         },
         "players": output_players,

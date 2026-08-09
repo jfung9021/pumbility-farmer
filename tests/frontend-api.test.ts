@@ -59,7 +59,7 @@ test("recommendation methodology describes the motivated peer score model", asyn
     "utf8",
   );
 
-  assert.match(page, /weighted 75th percentile from similar players/);
+  assert.match(page, /weighted median \(50th percentile\) from similar players/);
   assert.match(page, /at least five other players who placed the exact chart/);
   assert.match(page, /plus or minus 0\.25 to 0\.50 rating/);
   assert.match(page, /population model is used as a fallback/);
