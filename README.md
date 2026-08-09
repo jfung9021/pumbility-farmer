@@ -261,11 +261,12 @@ from that catalog are removed completely. For the same player and chart, a Phoen
 supersedes Phoenix 1; Phoenix 1 is used only when no Phoenix 2 score exists. Version-specific
 Pumbility residuals are converted to level units before evidence is combined.
 
-Player skill-rating history is selected independently for Singles and Doubles. A mode uses
-Phoenix 2 once it has 50 valid, deduplicated Phoenix 2 chart scores; below that threshold it uses
-Phoenix 1 history when available. Played status, existing Pumbility, current top-50 totals, and
-projected gain always use Phoenix 2. A player with no Phoenix 2 history can still receive a
-Phoenix 1-derived rating and a population score prediction; their Phoenix 2 top 50 starts empty.
+Player skill-rating history is selected independently for Singles and Doubles. A mode uses its
+ten highest-Pumbility Phoenix 2 scores once it has 10 valid, deduplicated Phoenix 2 chart scores;
+below that threshold it uses the ten highest-Pumbility Phoenix 1 scores when available, then any
+available Phoenix 2 history. Played status, existing Pumbility, current top-50 totals, and projected
+gain always use Phoenix 2. A player with no Phoenix 2 history can still receive a Phoenix 1-derived
+rating and a population score prediction; their Phoenix 2 top 50 starts empty.
 
 Projected raw scores come from a player-balanced population response model of scoring rating and
 continuous chart difficulty. The response is nonlinear, so the raw-score cost of another 0.1

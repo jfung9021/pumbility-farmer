@@ -42,6 +42,7 @@ from piu_misgrade_analyzer import (
     make_synthetic_snapshot,
 )
 from piu_recommendations import (
+    RECOMMENDATION_SCHEMA_VERSION,
     combined_tier_blob_path,
     recommendation_blob_path,
     recommendation_shard_path,
@@ -434,6 +435,7 @@ class ApiRouteTests(unittest.TestCase):
         effective_now = NOW.replace(second=5)
         player_key = "public-key"
         index = {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
             "storageSchemaVersion": 3,
             "refreshSupported": True,
             "generationKey": "generation",
@@ -528,7 +530,7 @@ class ApiRouteTests(unittest.TestCase):
         blobs = MemoryBlobStore()
         jobs = MemoryJobStore()
         index = {
-            "schemaVersion": 10,
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
             "storageSchemaVersion": 3,
             "refreshSupported": True,
             "generationKey": "daily-generation",
@@ -547,7 +549,7 @@ class ApiRouteTests(unittest.TestCase):
             ],
         }
         cached = {
-            "schemaVersion": 10,
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
             "generatedAtUtc": isoformat_utc(NOW),
             "modelGeneratedAtUtc": isoformat_utc(NOW - timedelta(hours=1)),
             "playerSyncedAtUtc": isoformat_utc(NOW),
