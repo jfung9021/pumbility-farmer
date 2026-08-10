@@ -14,7 +14,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import pandas as pd
 
-from phoenix1_score_overrides import phoenix1_score_override_metadata
+from phoenix1_score_overrides import phoenix1_score_overrides_metadata
 from phoenix2_pumbility import PlateProjectionModel
 from phoenix2_sync import isoformat_utc, merge_best_scores, parse_utc, utc_now
 from piu_recommendations import (
@@ -131,7 +131,7 @@ def _recommendation_method(
         "phoenix1RerateHandling": "Phoenix 1 rating rows use current Phoenix 2 chart levels and recompute Pumbility from the raw score, Phoenix 2 grade boundaries, and recorded plate",
         "crossVersionNormalization": "chart-difficulty evidence uses version- and mode-normalized residuals; player ratings use Phoenix 2-formula Pumbility in both versions",
         "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
-        "phoenix1ScoreOverrides": [phoenix1_score_override_metadata()],
+        "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(),
         "pumbilityPerLevel": dict(slopes),
         "scoreProjectionCoverage": dict(score_projection_metadata),
         "scoreProjectionData": "joined Phoenix 1 + Phoenix 2 scores normalized with the Phoenix 2 chart catalog and grade-and-plate Pumbility formula, with Phoenix 2 precedence for overlapping player/chart rows",

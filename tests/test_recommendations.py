@@ -16,8 +16,11 @@ from phoenix2_pumbility import (
     skill_rating_for_pumbility,
 )
 from phoenix1_score_overrides import (
+    SLAM_D24_CHART_ID,
     SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID,
+    convert_phoenix1_pumbility,
     convert_phoenix1_score,
+    phoenix1_score_overrides_metadata,
 )
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
@@ -102,6 +105,57 @@ class CombinedEvidenceTests(unittest.TestCase):
         self.assertEqual(float(ordinary["score"]), 983_532)
         self.assertEqual(float(ordinary["pumbility"]), 1_927.2)
 
+    def test_slam_d24_converts_and_rebands_phoenix1_score_rows(self) -> None:
+        self.assertAlmostEqual(
+            convert_phoenix1_score(SLAM_D24_CHART_ID, 950_000),
+            928_693.1818181818,
+        )
+        self.assertEqual(
+            convert_phoenix1_score(SLAM_D24_CHART_ID, 1_000_000),
+            1_000_000,
+        )
+        self.assertAlmostEqual(
+            convert_phoenix1_score(SLAM_D24_CHART_ID, 909_322),
+            870_680.8068181819,
+        )
+        self.assertEqual(
+            convert_phoenix1_pumbility(SLAM_D24_CHART_ID, 909_322, 1_150),
+            1_035,
+        )
+
+        rows = pd.DataFrame([
+            {
+                "playerId": "p",
+                "chartId": SLAM_D24_CHART_ID,
+                "score": 909_322,
+                "pumbility": 1_150,
+            },
+            {
+                "playerId": "p",
+                "chartId": "another-chart",
+                "score": 909_322,
+                "pumbility": 1_150,
+            },
+        ])
+        adjusted = _apply_phoenix1_score_overrides(rows)
+
+        slam = adjusted[adjusted["chartId"] == SLAM_D24_CHART_ID].iloc[0]
+        ordinary = adjusted[adjusted["chartId"] == "another-chart"].iloc[0]
+        self.assertAlmostEqual(float(slam["score"]), 870_680.8068181819)
+        self.assertEqual(float(slam["pumbility"]), 1_035)
+        self.assertEqual(float(ordinary["score"]), 909_322)
+        self.assertEqual(float(ordinary["pumbility"]), 1_150)
+
+        metadata = phoenix1_score_overrides_metadata()
+        self.assertEqual(
+            [item["chartId"] for item in metadata],
+            [SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID, SLAM_D24_CHART_ID],
+        )
+        self.assertEqual(
+            metadata[1]["formula"],
+            "(((score / 1000000 * 1004) - 300) / 704) * 1000000",
+        )
+
     def test_phoenix1_ratings_recompute_pumbility_with_current_phoenix2_rules(self) -> None:
         snapshot = {
             "charts": [
@@ -180,6 +234,37 @@ class CombinedEvidenceTests(unittest.TestCase):
         self.assertEqual(
             float(scores.iloc[0]["pumbility"]),
             phoenix2_pumbility("Double", 26, "S", "Talented Game"),
+        )
+
+    def test_slam_phoenix1_rating_uses_the_converted_score(self) -> None:
+        snapshot = {
+            "charts": [{
+                "id": SLAM_D24_CHART_ID,
+                "songName": "Slam",
+                "type": "Double",
+                "level": 24,
+            }],
+            "scores": [{
+                "playerId": "p",
+                "chartId": SLAM_D24_CHART_ID,
+                "pumbility": 1_207.5,
+                "score": 925_641,
+                "plate": "Fair Game",
+                "isBroken": False,
+            }],
+        }
+        catalog = pd.DataFrame([{
+            "chartId": SLAM_D24_CHART_ID,
+            "type": "Double",
+            "level": 24,
+        }])
+
+        _, scores = _prepare_phoenix1_rating_frames(snapshot, catalog)
+
+        self.assertAlmostEqual(float(scores.iloc[0]["score"]), 893_953.9261363638)
+        self.assertEqual(
+            float(scores.iloc[0]["pumbility"]),
+            phoenix2_pumbility("Double", 24, "A", "Fair Game"),
         )
 
     def test_phoenix1_scores_are_rebased_to_phoenix2_levels(self) -> None:

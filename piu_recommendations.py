@@ -23,7 +23,7 @@ import pandas as pd
 from phoenix1_score_overrides import (
     convert_phoenix1_pumbility,
     convert_phoenix1_score,
-    phoenix1_score_override_metadata,
+    phoenix1_score_overrides_metadata,
 )
 from piu_misgrade_analyzer import (
     AnalysisConfig,
@@ -52,7 +52,7 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 16
+RECOMMENDATION_SCHEMA_VERSION = 17
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 2
@@ -1179,7 +1179,7 @@ def build_combined_tier_payload(
                 "formula": "min(1, expectedNormalMax(reference) / expectedNormalMax(measured charts in folder))",
                 "expandsFolders": False,
             },
-            "phoenix1ScoreOverrides": [phoenix1_score_override_metadata()],
+            "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(),
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
         },
         "coverage": {
@@ -2563,7 +2563,7 @@ def build_recommendation_index(
                 "formula": "min(1, expectedNormalMax(reference) / expectedNormalMax(measured charts in folder))",
                 "expandsFolders": False,
             },
-            "phoenix1ScoreOverrides": [phoenix1_score_override_metadata()],
+            "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(),
             "pumbilityPerLevel": slopes,
             "scoreProjectionCoverage": score_projection_metadata,
             "scoreProjectionData": "joined Phoenix 1 + Phoenix 2 scores normalized with the Phoenix 2 chart catalog and grade-and-plate Pumbility formula, with Phoenix 2 precedence for overlapping player/chart rows",

@@ -1,9 +1,11 @@
 import unittest
 
+from phoenix1_score_overrides import SLAM_D24_CHART_ID
 from phoenix2_pumbility import (
     PLATE_CODES,
     SKILL_RATING_REFERENCE_MULTIPLIER,
     PlateProjectionModel,
+    _snapshot_observations,
     grade_for_score,
     normalize_plate,
     phoenix2_pumbility,
@@ -42,6 +44,26 @@ class Phoenix2PumbilityTests(unittest.TestCase):
         for score, grade in cases.items():
             with self.subTest(score=score):
                 self.assertEqual(grade_for_score(score), grade)
+
+    def test_slam_score_conversion_is_scoped_to_phoenix1_observations(self) -> None:
+        source = {
+            "scores": [{
+                "playerId": "p",
+                "chartId": SLAM_D24_CHART_ID,
+                "score": 925_641,
+                "plate": "Fair Game",
+                "isBroken": False,
+            }]
+        }
+        catalog_types = {SLAM_D24_CHART_ID: "Double"}
+
+        phoenix1, _ = _snapshot_observations(
+            source, catalog_types, phoenix1=True
+        )
+        phoenix2, _ = _snapshot_observations(source, catalog_types)
+
+        self.assertEqual(phoenix1[0][3], "A")
+        self.assertEqual(phoenix2[0][3], "AA")
 
     def test_formula_uses_mode_grade_plate_and_truncates(self) -> None:
         self.assertEqual(phoenix2_pumbility("Single", 18, "AA+", "Fair Game"), 313.2)
