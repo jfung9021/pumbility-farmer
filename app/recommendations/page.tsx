@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { readJsonResponse } from "../../lib/api-response";
+import { formatEstimatedDifficulty } from "../../lib/format-difficulty";
 import type {
   ModeKey,
   PlayerRecommendationsResponse,
@@ -124,7 +125,7 @@ function RecommendationCard({
           <b> · {chart.difficulty} official</b>
         </p>
         <div className="recommendation-tags">
-          <span><b>{chart.type === "Single" ? "S" : "D"}{chart.estimatedDifficulty.toFixed(2)}</b> estimate</span>
+          <span><b>{chart.type === "Single" ? "S" : "D"}{formatEstimatedDifficulty(chart.estimatedDifficulty)}</b> estimate</span>
           <span>{chart.played ? `Current ${chart.existingPumbility?.toFixed(2)} PB` : "Unplayed in Phoenix 2"}</span>
           {recommendationGoal(chart) ? <span><b>{recommendationGoal(chart)}</b></span> : null}
         </div>

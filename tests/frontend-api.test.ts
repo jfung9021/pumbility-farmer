@@ -7,6 +7,10 @@ import test from "node:test";
 import { readJsonResponse } from "../lib/api-response.ts";
 import { demoPayloads } from "../lib/demo-data.ts";
 import {
+  formatEstimatedDifficulty,
+  truncateEstimatedDifficulty,
+} from "../lib/format-difficulty.ts";
+import {
   LocalAnalysisNotFoundError,
   LocalAnalysisValidationError,
   localAnalysisEnabled,
@@ -139,6 +143,56 @@ test("global analysis button sends the protected administrator secret", async ()
   assert.match(dashboard, /\/api\/analyze\?jobId=/);
 });
 
+test("estimated difficulties truncate to one decimal place everywhere", async () => {
+  const pages = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "rankings-dashboard.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+  ]);
+
+  assert.equal(formatEstimatedDifficulty(17.49), "17.4");
+  assert.equal(formatEstimatedDifficulty(17.99), "17.9");
+  assert.equal(formatEstimatedDifficulty(18.0), "18.0");
+  assert.equal(truncateEstimatedDifficulty(20.89), 20.8);
+  for (const page of pages) {
+    assert.match(page, /formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
+    assert.doesNotMatch(page, /estimatedDifficulty\.toFixed\(/);
+  }
+});
+
+test("tier list can group charts by truncated estimated difficulty", async () => {
+  const page = await readFile(
+    path.join(process.cwd(), "app", "tier-list", "page.tsx"),
+    "utf8",
+  );
+
+  assert.match(page, /type GroupingView = "tiers" \| "estimated"/);
+  assert.match(page, />Tier bands<\/button>/);
+  assert.match(page, />Estimated difficulty<\/button>/);
+  assert.match(page, /truncateEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
+  assert.match(page, /\.sort\(\(\[left\], \[right\]\) => left - right\)/);
+  assert.match(page, /Grouped by truncated one-decimal estimate/);
+});
+
+test("tier list compact layout packs art and song names into group rows", async () => {
+  const [page, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(page, /type LayoutView = "detailed" \| "compact"/);
+  assert.match(page, /aria-label="Chart layout"/);
+  assert.match(page, />Detailed<\/button>/);
+  assert.match(page, />Compact<\/button>/);
+  assert.match(page, /className="compact-chart-card"/);
+  assert.match(page, /<h3>\{chart\.songName\}<\/h3>/);
+  assert.match(page, /compact=\{layoutView === "compact"\}/);
+  assert.match(page, /<h2 id=\{sectionId\}>\{label\}<\/h2>/);
+  assert.match(css, /\.tier-compact \{[^}]*grid-template-columns: 132px minmax\(0, 1fr\);/);
+  assert.match(css, /\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(84px, 96px\)\);/);
+  assert.match(css, /\.compact-jacket \{[^}]*aspect-ratio: 1;/);
+});
+
 test("recommendation cards express projected grade and plate as a concrete goal", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
@@ -206,27 +260,33 @@ test("local analysis mode reads Phoenix 1 from disk instead of the archive", () 
   assert.equal(archiveForMix("phoenix1", false)?.url, "/data/phoenix1.json");
 });
 
-test("demo payload uses the symmetric quarter-level effect bands", () => {
+test("demo payload uses the seven fixed effect bands", () => {
   assert.deepEqual(
     demoPayloads.phoenix2.effectBands.map(({ low, high }) => [low, high]),
     [
-      [null, -1.0],
-      [-1.0, -0.75],
-      [-0.75, -0.5],
-      [-0.5, -0.25],
-      [-0.25, 0.25],
-      [0.25, 0.5],
-      [0.5, 0.75],
-      [0.75, 1.0],
-      [1.0, null],
+      [null, -0.5],
+      [-0.5, -0.3],
+      [-0.3, -0.1],
+      [-0.1, 0.1],
+      [0.1, 0.3],
+      [0.3, 0.5],
+      [0.5, null],
     ],
   );
 });
 
-test("demo payload represents the level-16 and 0.4-scale methodology", () => {
+test("demo payload represents the folder-normalized 0.4-scale methodology", () => {
   const payload = demoPayloads.phoenix2;
-  assert.equal(payload.summary.scriptVersion, "6.1.0-level-16-and-0.4-scale");
+  assert.equal(
+    payload.summary.scriptVersion,
+    "6.3.0-phoenix1-score-override-folder-normalized-0.4-scale",
+  );
   assert.equal(payload.summary.method.difficultyDeltaScale, 0.4);
+  assert.deepEqual(payload.summary.method.folderRangeNormalization, {
+    method: "one-sided expected-normal-maximum order-statistic compression",
+    referenceMeasuredCharts: 30,
+    expandsFolders: false,
+  });
   assert.equal(payload.summary.method.displayMinimumOfficialLevel, 16);
   assert.equal(payload.singles.some((chart) => chart.level === 16), true);
   assert.equal(payload.doubles.some((chart) => chart.level === 16), true);

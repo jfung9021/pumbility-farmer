@@ -5,6 +5,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { readJsonResponse } from "../../lib/api-response";
 import { demoPayload } from "../../lib/demo-data";
+import {
+  formatEstimatedDifficulty,
+  truncateEstimatedDifficulty,
+} from "../../lib/format-difficulty";
 import type {
   AnalysisJobStatus,
   AnalysisPayload,
@@ -24,6 +28,9 @@ type FilterState = {
   showUnrated: boolean;
 };
 
+type GroupingView = "tiers" | "estimated";
+type LayoutView = "detailed" | "compact";
+
 const initialFilter: FilterState = {
   query: "",
   level: "All",
@@ -31,7 +38,7 @@ const initialFilter: FilterState = {
   showUnrated: false,
 };
 
-const groupTone = ["lime", "green", "mint", "cyan", "slate", "amber", "orange", "rose", "red"];
+const groupTone = ["lime", "green", "mint", "slate", "orange", "rose", "red"];
 
 function signed(value: number, digits = 2): string {
   return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
@@ -42,15 +49,15 @@ function signedBoundary(value: number): string {
 }
 
 function effectRange(low: number | null, high: number | null): string {
-  if (low === null) return `difference <= ${signedBoundary(high ?? -1)}`;
-  if (high === null) return `difference >= ${signedBoundary(low)}`;
+  if (low === null) return `difference < ${signedBoundary(high ?? -0.5)}`;
+  if (high === null) return `difference > ${signedBoundary(low)}`;
   return `${signedBoundary(low)} to ${signedBoundary(high)}`;
 }
 
 function chartGrade(chart: ChartResult): string {
   if (chart.estimatedDifficulty === null) return "-";
   const prefix = chart.type === "Single" ? "S" : "D";
-  return `${prefix}${chart.estimatedDifficulty.toFixed(1)}`;
+  return `${prefix}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
 }
 
 function formatRunTime(value: string): string {
@@ -114,19 +121,49 @@ function ChartCard({ chart }: { chart: ChartResult }) {
         <span>difference</span>
         <strong>{delta === null ? "-" : signed(delta)}</strong>
         {chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null ? (
-          <small>{chart.difficultyCi95Low.toFixed(1)}-{chart.difficultyCi95High.toFixed(1)} CI</small>
+          <small>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
         ) : null}
       </div>
     </article>
   );
 }
 
-function TierSection({ rank, name, range, charts }: {
+function CompactChartCard({ chart }: { chart: ChartResult }) {
+  return (
+    <article className="compact-chart-card" title={`${chart.songName} (${chart.difficulty})`}>
+      <div className="compact-jacket" aria-hidden="true">
+        {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
+      </div>
+      <h3>{chart.songName}</h3>
+    </article>
+  );
+}
+
+function CompactChartGrid({ charts }: { charts: ChartResult[] }) {
+  return (
+    <div className="compact-chart-grid">
+      {charts.length
+        ? charts.map((chart) => <CompactChartCard chart={chart} key={chart.chartId} />)
+        : <p className="empty-tier">No charts match the current filters.</p>}
+    </div>
+  );
+}
+
+function TierSection({ rank, name, range, charts, compact }: {
   rank: number;
   name: string;
   range: string;
   charts: ChartResult[];
+  compact: boolean;
 }) {
+  if (compact) {
+    return (
+      <section className={`tier tier-${groupTone[rank - 1]} tier-compact`} aria-labelledby={`tier-${rank}`}>
+        <div className="compact-tier-label"><h2 id={`tier-${rank}`}>{name}</h2></div>
+        <CompactChartGrid charts={charts} />
+      </section>
+    );
+  }
   return (
     <section className={`tier tier-${groupTone[rank - 1]}`} aria-labelledby={`tier-${rank}`}>
       <header className="tier-header">
@@ -143,9 +180,42 @@ function TierSection({ rank, name, range, charts }: {
   );
 }
 
+function EstimatedDifficultySection({ charts, compact, mode, value }: {
+  charts: ChartResult[];
+  compact: boolean;
+  mode: ModeKey;
+  value: number;
+}) {
+  const formatted = formatEstimatedDifficulty(value);
+  const label = `${mode === "singles" ? "S" : "D"}${formatted}`;
+  const sectionId = `estimated-${mode}-${formatted.replace(".", "-")}`;
+  if (compact) {
+    return (
+      <section className="tier tier-sky tier-compact estimated-tier" aria-labelledby={sectionId}>
+        <div className="compact-tier-label"><h2 id={sectionId}>{label}</h2></div>
+        <CompactChartGrid charts={charts} />
+      </section>
+    );
+  }
+  return (
+    <section className="tier tier-sky estimated-tier" aria-labelledby={sectionId}>
+      <header className="tier-header">
+        <div className="tier-rank">{formatted}</div>
+        <div><p>Estimated scoring difficulty</p><h2 id={sectionId}>{label}</h2></div>
+        <span className="tier-count">{charts.length} chart{charts.length === 1 ? "" : "s"}</span>
+      </header>
+      <div className="tier-list">
+        {charts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
+      </div>
+    </section>
+  );
+}
+
 export default function TierListPage() {
   const [payload, setPayload] = useState<AnalysisPayload | null>(null);
   const [activeMode, setActiveMode] = useState<ModeKey>("singles");
+  const [groupingView, setGroupingView] = useState<GroupingView>("tiers");
+  const [layoutView, setLayoutView] = useState<LayoutView>("detailed");
   const [filters, setFilters] = useState<Record<ModeKey, FilterState>>({
     singles: { ...initialFilter },
     doubles: { ...initialFilter },
@@ -299,6 +369,28 @@ export default function TierListPage() {
       return !query || `${chart.songName} ${chart.stepArtist || ""}`.toLocaleLowerCase().includes(query);
     });
   }, [filter, modeCharts]);
+  const estimatedGroups = useMemo(() => {
+    const groups = new Map<number, ChartResult[]>();
+    for (const chart of filteredCharts) {
+      if (chart.estimatedDifficulty === null) continue;
+      const bucket = truncateEstimatedDifficulty(chart.estimatedDifficulty);
+      const charts = groups.get(bucket) ?? [];
+      charts.push(chart);
+      groups.set(bucket, charts);
+    }
+    return [...groups.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([value, charts]) => ({
+        value,
+        charts: charts.sort((left, right) =>
+          (left.estimatedDifficulty ?? 0) - (right.estimatedDifficulty ?? 0)
+          || left.songName.localeCompare(right.songName)),
+      }));
+  }, [filteredCharts]);
+  const unratedCharts = useMemo(
+    () => filteredCharts.filter((chart) => chart.difficultyDelta === null),
+    [filteredCharts],
+  );
   const updateFilter = (patch: Partial<FilterState>) => {
     setFilters((current) => ({
       ...current,
@@ -435,25 +527,85 @@ export default function TierListPage() {
         </div>
 
         <div className="results-heading">
-          <div><p>{activeMode} - easiest first</p><h2>Magnitude-based scoring tiers</h2></div>
-          <p><b>-</b> easier to score <span /> <b>+</b> harder to score</p>
+          <div>
+            <p>{activeMode} - easiest first</p>
+            <h2>{groupingView === "tiers" ? "Magnitude-based scoring tiers" : "Estimated-difficulty groups"}</h2>
+          </div>
+          <div className="results-controls">
+            <div className="results-switchers">
+              <div className="view-switcher" role="group" aria-label="Group charts by">
+                <button
+                  aria-pressed={groupingView === "tiers"}
+                  className={groupingView === "tiers" ? "active" : ""}
+                  onClick={() => setGroupingView("tiers")}
+                  type="button"
+                >Tier bands</button>
+                <button
+                  aria-pressed={groupingView === "estimated"}
+                  className={groupingView === "estimated" ? "active" : ""}
+                  onClick={() => setGroupingView("estimated")}
+                  type="button"
+                >Estimated difficulty</button>
+              </div>
+              <div className="view-switcher layout-switcher" role="group" aria-label="Chart layout">
+                <button
+                  aria-pressed={layoutView === "detailed"}
+                  className={layoutView === "detailed" ? "active" : ""}
+                  onClick={() => setLayoutView("detailed")}
+                  type="button"
+                >Detailed</button>
+                <button
+                  aria-pressed={layoutView === "compact"}
+                  className={layoutView === "compact" ? "active" : ""}
+                  onClick={() => setLayoutView("compact")}
+                  type="button"
+                >Compact</button>
+              </div>
+            </div>
+            {groupingView === "tiers"
+              ? <p className="results-legend"><b>-</b> easier to score <span /> <b>+</b> harder to score</p>
+              : <p className="results-legend">Grouped by truncated one-decimal estimate</p>}
+          </div>
         </div>
 
         <div className="tiers">
-          {(payload?.effectBands || demoPayload.effectBands).map((group) => (
-            <TierSection
-              charts={filteredCharts.filter((chart) => chart.effectBandRank === group.rank)}
-              key={group.rank}
-              name={group.name}
-              rank={group.rank}
-              range={effectRange(group.low, group.high)}
-            />
-          ))}
-          {filter.showUnrated ? (
+          {groupingView === "tiers"
+            ? (payload?.effectBands || demoPayload.effectBands).map((group) => (
+                <TierSection
+                  charts={filteredCharts.filter((chart) => chart.effectBandRank === group.rank)}
+                  compact={layoutView === "compact"}
+                  key={group.rank}
+                  name={group.name}
+                  rank={group.rank}
+                  range={effectRange(group.low, group.high)}
+                />
+              ))
+            : estimatedGroups.map((group) => (
+                <EstimatedDifficultySection
+                  charts={group.charts}
+                  compact={layoutView === "compact"}
+                  key={group.value}
+                  mode={activeMode}
+                  value={group.value}
+                />
+              ))}
+          {groupingView === "estimated" && estimatedGroups.length === 0 ? (
             <section className="unrated-section">
-              <header><div><p>Awaiting evidence</p><h2>Unrated</h2></div><span>{filteredCharts.filter((chart) => chart.difficultyDelta === null).length} charts</span></header>
-              {filteredCharts.filter((chart) => chart.difficultyDelta === null).map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
+              <header><div><p>Current filters</p><h2>No estimated charts</h2></div><span>0 charts</span></header>
             </section>
+          ) : null}
+          {filter.showUnrated ? (
+            layoutView === "compact" ? (
+              <section className="tier tier-compact unrated-section" aria-labelledby="unrated-compact">
+                <div className="compact-tier-label"><h2 id="unrated-compact">Unrated</h2></div>
+                <CompactChartGrid charts={unratedCharts} />
+              </section>
+            ) : (
+              <section className="unrated-section">
+                <header><div><p>Awaiting evidence</p><h2>Unrated</h2></div><span>{unratedCharts.length} charts</span></header>
+                {unratedCharts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
+              </section>
+            )
           ) : null}
         </div>
       </section>

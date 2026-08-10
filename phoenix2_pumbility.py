@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
+from phoenix1_score_overrides import convert_phoenix1_score
+
 
 GRADE_BANDS: tuple[tuple[int, str, int], ...] = (
     (995_000, "SSS+", 0),
@@ -159,6 +161,8 @@ def _finite_float(value: object) -> float | None:
 def _snapshot_observations(
     snapshot: Mapping[str, Any],
     catalog_types: Mapping[str, str],
+    *,
+    phoenix1: bool = False,
 ) -> tuple[list[tuple[str, str, str, str, str]], set[tuple[str, str]]]:
     observations: list[tuple[str, str, str, str, str]] = []
     score_keys: set[tuple[str, str]] = set()
@@ -170,7 +174,12 @@ def _snapshot_observations(
         if not player_id or chart_id not in catalog_types:
             continue
         score_keys.add((player_id, chart_id))
-        grade = grade_for_score(raw.get("score"))
+        score = (
+            convert_phoenix1_score(chart_id, raw.get("score"))
+            if phoenix1
+            else raw.get("score")
+        )
+        grade = grade_for_score(score)
         plate = normalize_plate(raw.get("plate"))
         if grade is None or plate is None:
             continue
@@ -209,7 +218,9 @@ class PlateProjectionModel:
             if isinstance(row, Mapping)
             and str(row.get("type")) in {"Single", "Double"}
         }
-        p1_rows, _ = _snapshot_observations(phoenix1_snapshot, catalog_types)
+        p1_rows, _ = _snapshot_observations(
+            phoenix1_snapshot, catalog_types, phoenix1=True
+        )
         p2_rows, p2_keys = _snapshot_observations(phoenix2_snapshot, catalog_types)
         p1_rows = [row for row in p1_rows if (row[0], row[1]) not in p2_keys]
 
@@ -255,7 +266,9 @@ class PlateProjectionModel:
         catalog_types: Mapping[str, str],
     ) -> "PlateProjectionModel":
         """Restore global priors while deriving only the selected player's counts."""
-        p1_rows, _ = _snapshot_observations(phoenix1_snapshot, catalog_types)
+        p1_rows, _ = _snapshot_observations(
+            phoenix1_snapshot, catalog_types, phoenix1=True
+        )
         p2_rows, p2_keys = _snapshot_observations(phoenix2_snapshot, catalog_types)
         p1_rows = [row for row in p1_rows if (row[0], row[1]) not in p2_keys]
         model = cls.__new__(cls)

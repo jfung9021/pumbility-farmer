@@ -13,6 +13,7 @@ from piu_misgrade_analyzer import (
     build_web_payload,
     difficulty_effect_band,
     folder_for,
+    folder_range_compression,
     make_synthetic_snapshot,
     relative_difficulty_group,
     validate_synthetic,
@@ -67,15 +68,13 @@ class AnalyzerTests(unittest.TestCase):
                 for band in payload["effectBands"]
             ],
             [
-                (1, "Extremely Easy", None, -1.0),
-                (2, "Very Easy", -1.0, -0.75),
-                (3, "Easy", -0.75, -0.5),
-                (4, "Slightly Easy", -0.5, -0.25),
-                (5, "Typical", -0.25, 0.25),
-                (6, "Slightly Hard", 0.25, 0.5),
-                (7, "Hard", 0.5, 0.75),
-                (8, "Very Hard", 0.75, 1.0),
-                (9, "Extremely Hard", 1.0, None),
+                (1, "Overrated", None, -0.5),
+                (2, "Very Easy", -0.5, -0.3),
+                (3, "Easy", -0.3, -0.1),
+                (4, "Medium", -0.1, 0.1),
+                (5, "Hard", 0.1, 0.3),
+                (6, "Very Hard", 0.3, 0.5),
+                (7, "Underrated", 0.5, None),
             ],
         )
 
@@ -91,25 +90,19 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(relative_difficulty_group(0.5), (6, "50–60% percentile"))
         self.assertEqual(relative_difficulty_group(0.98), (10, "Hardest 10%"))
         boundary_cases = [
-            (-1.01, (1, "Extremely Easy")),
-            (-1.00, (1, "Extremely Easy")),
-            (-0.99, (2, "Very Easy")),
-            (-0.75, (2, "Very Easy")),
-            (-0.74, (3, "Easy")),
-            (-0.50, (3, "Easy")),
-            (-0.49, (4, "Slightly Easy")),
-            (-0.25, (4, "Slightly Easy")),
-            (-0.24, (5, "Typical")),
-            (0.00, (5, "Typical")),
-            (0.24, (5, "Typical")),
-            (0.25, (6, "Slightly Hard")),
-            (0.49, (6, "Slightly Hard")),
-            (0.50, (7, "Hard")),
-            (0.74, (7, "Hard")),
-            (0.75, (8, "Very Hard")),
-            (0.99, (8, "Very Hard")),
-            (1.00, (9, "Extremely Hard")),
-            (1.01, (9, "Extremely Hard")),
+            (-0.51, (1, "Overrated")),
+            (-0.50, (2, "Very Easy")),
+            (-0.31, (2, "Very Easy")),
+            (-0.30, (3, "Easy")),
+            (-0.11, (3, "Easy")),
+            (-0.10, (4, "Medium")),
+            (0.00, (4, "Medium")),
+            (0.10, (4, "Medium")),
+            (0.11, (5, "Hard")),
+            (0.30, (5, "Hard")),
+            (0.31, (6, "Very Hard")),
+            (0.50, (6, "Very Hard")),
+            (0.51, (7, "Underrated")),
         ]
         for delta, expected in boundary_cases:
             with self.subTest(delta=delta):
@@ -132,7 +125,7 @@ class AnalyzerTests(unittest.TestCase):
             "within-player fixed effects and 2,500-point score bands",
         )
 
-    def test_difficulty_formula_scales_delta_and_confidence_intervals_by_point_four(self) -> None:
+    def test_difficulty_formula_scales_delta_and_intervals_by_point_four(self) -> None:
         frame = pd.DataFrame([
             {
                 "chartId": "easy",
@@ -171,6 +164,40 @@ class AnalyzerTests(unittest.TestCase):
         self.assertAlmostEqual(float(easy["difficultyDeltaCi95High"]), 0.88)
         self.assertAlmostEqual(float(easy["difficultyCi95Low"]), 21.22)
         self.assertAlmostEqual(float(easy["difficultyCi95High"]), 21.38)
+        self.assertEqual((easy["effectBandRank"], easy["effectBand"]), (7, "Underrated"))
+
+    def test_folder_range_normalization_compresses_only_large_folders(self) -> None:
+        self.assertEqual(folder_range_compression(1), 1.0)
+        self.assertEqual(folder_range_compression(30), 1.0)
+        self.assertGreater(folder_range_compression(60), folder_range_compression(90))
+        self.assertGreater(folder_range_compression(90), 0.0)
+
+        frame = pd.DataFrame([
+            {
+                "folder": "S17",
+                "level": 17,
+                "chartId": f"S17-{index}",
+                "songName": f"S17 {index}",
+                "meanResidualPb": float(index),
+                "residualCi95LowPb": float(index),
+                "residualCi95HighPb": float(index),
+                "nContributors": 10,
+            }
+            for index in range(60)
+        ])
+        result = apply_within_level_difficulty(
+            frame,
+            1.0,
+            AnalysisConfig(bootstrap_samples=0, shrinkage_k=0),
+        )
+        expected = folder_range_compression(60)
+        self.assertTrue((result["folderMeasuredCharts"] == 60).all())
+        self.assertTrue((result["folderRangeCompression"] == expected).all())
+        self.assertLess(expected, 1.0)
+        self.assertAlmostEqual(
+            float(result["difficultyDelta"].abs().max()),
+            0.4 * 29.5 * expected,
+        )
 
     def test_calibration_accepts_legacy_mix_scale_and_rejects_negative_slope(self) -> None:
         rows = []
@@ -353,11 +380,11 @@ class AnalyzerTests(unittest.TestCase):
         self.assertLessEqual(float(easiest_s20["difficultyDelta"]), -0.25)
         self.assertIn(
             str(easiest_s20["effectBand"]),
-            {"Extremely Easy", "Very Easy", "Easy", "Slightly Easy"},
+            {"Overrated", "Very Easy", "Easy"},
         )
         self.assertEqual(int(easiest_s20["relativeGroupRank"]), 1)
         measured = results[results["difficultyDelta"].notna()]
-        self.assertTrue(measured["effectBandRank"].between(1, 9).all())
+        self.assertTrue(measured["effectBandRank"].between(1, 7).all())
         for row in measured.itertuples():
             self.assertEqual(
                 (int(row.effectBandRank), str(row.effectBand)),
@@ -396,10 +423,10 @@ class AnalyzerTests(unittest.TestCase):
             if len(group) >= 10:
                 self.assertEqual(int(group["relativeGroupRank"].min()), 1)
                 self.assertEqual(int(group["relativeGroupRank"].max()), 10)
-        extreme_easy = rescored[rescored["effectBand"] == "Extremely Easy"]
-        extreme_hard = rescored[rescored["effectBand"] == "Extremely Hard"]
-        self.assertTrue((extreme_easy["difficultyDelta"] <= -1.0).all())
-        self.assertTrue((extreme_hard["difficultyDelta"] >= 1.0).all())
+        overrated = rescored[rescored["effectBand"] == "Overrated"]
+        underrated = rescored[rescored["effectBand"] == "Underrated"]
+        self.assertTrue((overrated["difficultyDelta"] < -0.5).all())
+        self.assertTrue((underrated["difficultyDelta"] > 0.5).all())
 
         comparison = rescored[["chartId", "relativeGroupRank"]].merge(
             measured[["chartId", "relativeGroupRank"]],

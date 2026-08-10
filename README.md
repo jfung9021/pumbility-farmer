@@ -37,30 +37,44 @@ difficulty difference = -0.4 × shrunk Pumbility residual / Pumbility per level
 estimated scoring difficulty = official level + 0.5 + difficulty difference
 ```
 
+One frozen Phoenix 1 chart needs a raw-score correction before it enters any
+analysis or recommendation model. For `Solve My Hurt - SHORT CUT - D26` only,
+Phoenix 1 scores use
+`(((score / 1,000,000 × 1,566) - 540) / 1,026) × 1,000,000`. Phoenix 2 scores
+and every other chart are unchanged. The corrected score also selects the
+corresponding Phoenix 1 Pumbility band for combined tier evidence.
+
 A negative value is easier to score than the typical chart in the same mode and official level. Continuous estimates are not hard-clamped to the official folder, but the `L + 0.5` center and evidence shrinkage mean that an estimate below `L` requires an unusually strong within-folder signal.
 
 The analyzer does not use the chart catalog's existing `scoringLevel` or an existing tier list.
 
 ## Magnitude bands and relative ranks
 
-The primary scoring tiers use a symmetric quarter-level ladder. The extreme
-bands begin at `±1.00`, and the remaining boundaries advance in `0.25` level
-increments around the Typical band.
+The primary scoring tiers use seven fixed absolute bands. Overrated and
+Underrated begin beyond `±0.50`; the inner boundaries are `±0.30` and `±0.10`.
 
 The bands are not filled by quota: a folder may contain several charts in a band
 or none when its measured charts genuinely have similar scoring difficulty.
 
+Larger folders naturally have more chances to contain a tail value, so the
+centered differences for every chart in a folder are multiplied by
+`min(1, expectedNormalMax(30) / expectedNormalMax(n))`, where `n` is the number
+of measured charts in that folder. This normalizes the expected range to a
+30-chart reference. The correction grows slowly with the expected extreme
+(roughly with the square root of the log of chart count), never expands a
+folder, and never assigns categories by quota. A genuinely strong point
+estimate can therefore remain Overrated or Underrated regardless of its
+publication status or confidence interval.
+
 | Difficulty difference | Effect band |
 | ---: | --- |
-| `≤ −1.00` | Extremely Easy |
-| `−1.00 to −0.75` | Very Easy |
-| `−0.75 to −0.50` | Easy |
-| `−0.50 to −0.25` | Slightly Easy |
-| `−0.25 to +0.25` | Typical |
-| `+0.25 to +0.50` | Slightly Hard |
-| `+0.50 to +0.75` | Hard |
-| `+0.75 to +1.00` | Very Hard |
-| `≥ +1.00` | Extremely Hard |
+| `< −0.50` | Overrated |
+| `−0.50 to −0.30` | Very Easy |
+| `−0.30 to −0.10` | Easy |
+| `−0.10 to +0.10` | Medium |
+| `+0.10 to +0.30` | Hard |
+| `+0.30 to +0.50` | Very Hard |
+| `> +0.50` | Underrated |
 
 Midpoint-percentile deciles remain available as a separate within-folder rank.
 Their labels are deliberately descriptive rather than semantic:

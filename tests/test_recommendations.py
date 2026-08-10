@@ -15,6 +15,10 @@ from phoenix2_pumbility import (
     phoenix2_pumbility,
     skill_rating_for_pumbility,
 )
+from phoenix1_score_overrides import (
+    SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID,
+    convert_phoenix1_score,
+)
 from piu_recommendations import (
     PHOENIX2_RATING_SCORE_THRESHOLD,
     RECOMMENDATION_SCHEMA_VERSION,
@@ -25,6 +29,7 @@ from piu_recommendations import (
     ScoreResponseModel,
     _PeerScoreCohort,
     _ScoreSurface,
+    _apply_phoenix1_score_overrides,
     _peer_cohort_key,
     _prepare_phoenix1_rating_frames,
     _projected_gain_sort_key,
@@ -65,6 +70,38 @@ except ModuleNotFoundError as exc:
 
 
 class CombinedEvidenceTests(unittest.TestCase):
+    def test_solve_my_hurt_shortcut_converts_only_phoenix1_score_rows(self) -> None:
+        chart_id = SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID
+        self.assertAlmostEqual(
+            convert_phoenix1_score(chart_id, 950_000),
+            923_684.2105263158,
+        )
+        self.assertEqual(convert_phoenix1_score(chart_id, 1_000_000), 1_000_000)
+        self.assertEqual(convert_phoenix1_score("another-chart", 950_000), 950_000)
+
+        rows = pd.DataFrame([
+            {
+                "playerId": "p",
+                "chartId": chart_id,
+                "score": 983_532,
+                "pumbility": 1_927.2,
+            },
+            {
+                "playerId": "p",
+                "chartId": "another-chart",
+                "score": 983_532,
+                "pumbility": 1_927.2,
+            },
+        ])
+        adjusted = _apply_phoenix1_score_overrides(rows)
+
+        special = adjusted[adjusted["chartId"] == chart_id].iloc[0]
+        ordinary = adjusted[adjusted["chartId"] == "another-chart"].iloc[0]
+        self.assertAlmostEqual(float(special["score"]), 974_864.6315789473)
+        self.assertAlmostEqual(float(special["pumbility"]), 1_752.0)
+        self.assertEqual(float(ordinary["score"]), 983_532)
+        self.assertEqual(float(ordinary["pumbility"]), 1_927.2)
+
     def test_phoenix1_ratings_recompute_pumbility_with_current_phoenix2_rules(self) -> None:
         snapshot = {
             "charts": [
@@ -113,6 +150,36 @@ class CombinedEvidenceTests(unittest.TestCase):
         self.assertEqual(
             scores.iloc[0]["pumbility"],
             phoenix2_pumbility("Single", 20, "S", "Fair Game"),
+        )
+
+    def test_special_phoenix1_rating_uses_the_converted_score(self) -> None:
+        chart_id = SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID
+        snapshot = {
+            "charts": [{
+                "id": chart_id,
+                "songName": "Solve My Hurt - SHORT CUT -",
+                "type": "Double",
+                "level": 26,
+            }],
+            "scores": [{
+                "playerId": "p",
+                "chartId": chart_id,
+                "pumbility": 1_927.2,
+                "score": 983_532,
+                "plate": "Talented Game",
+                "isBroken": False,
+            }],
+        }
+        catalog = pd.DataFrame([
+            {"chartId": chart_id, "type": "Double", "level": 26}
+        ])
+
+        _, scores = _prepare_phoenix1_rating_frames(snapshot, catalog)
+
+        self.assertAlmostEqual(float(scores.iloc[0]["score"]), 974_864.6315789473)
+        self.assertEqual(
+            float(scores.iloc[0]["pumbility"]),
+            phoenix2_pumbility("Double", 26, "S", "Talented Game"),
         )
 
     def test_phoenix1_scores_are_rebased_to_phoenix2_levels(self) -> None:
@@ -1680,8 +1747,8 @@ class CombinedTierPayloadTests(unittest.TestCase):
             "folder": "S16",
             "relativeGroupRank": 6,
             "relativeGroup": "50-60% percentile",
-            "effectBandRank": 5,
-            "effectBand": "Typical",
+            "effectBandRank": 4,
+            "effectBand": "Medium",
             "songName": "Current Chart",
             "difficulty": "S16",
             "type": "Single",
@@ -1693,6 +1760,8 @@ class CombinedTierPayloadTests(unittest.TestCase):
             "estimatedDifficulty": 16.5,
             "averageDifficulty": 16.5,
             "difficultyDelta": 0.0,
+            "folderMeasuredCharts": 2,
+            "folderRangeCompression": 1.0,
             "difficultyDeltaCi95Low": -0.1,
             "difficultyDeltaCi95High": 0.1,
             "difficultyCi95Low": 16.4,
@@ -1710,6 +1779,8 @@ class CombinedTierPayloadTests(unittest.TestCase):
             "songName": "Easier Chart",
             "difficultyDelta": -0.5,
             "estimatedDifficulty": 16.0,
+            "effectBandRank": 2,
+            "effectBand": "Very Easy",
         }
         payload = build_combined_tier_payload(
             [
@@ -1736,6 +1807,12 @@ class CombinedTierPayloadTests(unittest.TestCase):
             payload["summary"]["method"]["displayMinimumOfficialLevel"], 16
         )
         self.assertEqual(payload["summary"]["method"]["difficultyDeltaScale"], 0.4)
+        self.assertEqual(
+            payload["summary"]["method"]["folderRangeNormalization"][
+                "referenceMeasuredCharts"
+            ],
+            30,
+        )
 
 
 class RecommendationChartBoundaryTests(unittest.TestCase):
