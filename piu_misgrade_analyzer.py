@@ -66,7 +66,7 @@ from mix_registry import DEFAULT_MIX_KEY, resolve_mix
 from phoenix1_score_overrides import (
     convert_phoenix1_pumbility,
     convert_phoenix1_score,
-    phoenix1_score_override_metadata,
+    phoenix1_score_overrides_metadata,
 )
 from phoenix2_sync import attach_song_bpm_metadata
 
@@ -99,7 +99,7 @@ DIFFICULTY_DELTA_SCALE = 0.4
 FOLDER_RANGE_REFERENCE_CHARTS = 30
 SYNTHETIC_PUMBILITY_PER_LEVEL = 7.3
 KEY_RE = re.compile(r"^(?:piu_scores_live_|pst_live_)[0-9a-f]{64}$")
-SCRIPT_VERSION = "6.3.0-phoenix1-score-override-folder-normalized-0.4-scale"
+SCRIPT_VERSION = "6.4.0-phoenix1-score-overrides-folder-normalized-0.4-scale"
 
 
 class ApiError(RuntimeError):
@@ -1175,7 +1175,7 @@ def analyze_snapshot(
                 "expandsFolders": False,
             },
             "phoenix1ScoreOverrides": (
-                [phoenix1_score_override_metadata()]
+                phoenix1_score_overrides_metadata()
                 if resolve_mix(config.mix).key == "phoenix1"
                 else []
             ),
