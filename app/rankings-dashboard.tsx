@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { formatEstimatedDifficulty } from "../lib/format-difficulty";
+
 type ModeKey = "singles" | "doubles";
 
 type ChartResult = {
@@ -64,33 +66,25 @@ type AnalysisJob = {
 };
 
 const FALLBACK_GROUPS = [
-  "Extremely Easy",
-  "Very Easy",
-  "Easy",
-  "Slightly Easy",
-  "Typical",
-  "Slightly Hard",
-  "Hard",
-  "Very Hard",
-  "Extremely Hard",
-].map((name, index) => ({ rank: index + 1, name }));
-
-const GROUP_RANGES = [
-  "≤ −0.75",
-  "−0.75 to −0.50",
-  "−0.50 to −0.25",
-  "−0.25 to −0.10",
-  "−0.10 to +0.10",
-  "+0.10 to +0.25",
-  "+0.25 to +0.50",
-  "+0.50 to +0.75",
-  "≥ +0.75",
+  { rank: 1, name: "Overrated", low: null, high: -0.5 },
+  { rank: 2, name: "Very Easy", low: -0.5, high: -0.3 },
+  { rank: 3, name: "Easy", low: -0.3, high: -0.1 },
+  { rank: 4, name: "Medium", low: -0.1, high: 0.1 },
+  { rank: 5, name: "Hard", low: 0.1, high: 0.3 },
+  { rank: 6, name: "Very Hard", low: 0.3, high: 0.5 },
+  { rank: 7, name: "Underrated", low: 0.5, high: null },
 ];
 
 function formatSigned(value: number | null, digits = 2) {
   if (value === null || !Number.isFinite(value)) return "—";
   if (Math.abs(value) < 0.005) return (0).toFixed(digits);
   return `${value > 0 ? "+" : "−"}${Math.abs(value).toFixed(digits)}`;
+}
+
+function effectRange(low: number | null, high: number | null) {
+  if (low === null) return `< ${formatSigned(high)}`;
+  if (high === null) return `> ${formatSigned(low)}`;
+  return `${formatSigned(low)} to ${formatSigned(high)}`;
 }
 
 function formatDate(value?: string) {
@@ -103,7 +97,7 @@ function formatDate(value?: string) {
 
 function estimatedLabel(chart: ChartResult) {
   if (chart.estimatedDifficulty === null) return "Unrated";
-  return `${chart.mode === "Singles" ? "S" : "D"}${chart.estimatedDifficulty.toFixed(1)}`;
+  return `${chart.mode === "Singles" ? "S" : "D"}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
 }
 
 function modeLabel(mode: ModeKey) {
@@ -333,10 +327,10 @@ export function RankingsDashboard() {
             <section className="legend" aria-labelledby="legend-title">
               <div className="sectionHeading">
                 <div><p className="eyebrow">THE SCALE</p><h2 id="legend-title">Measured scoring-difficulty effect</h2></div>
-                <p>Extreme means at least half a level from the typical chart in that folder.</p>
+                <p>The outer bands begin beyond half a level after folder-size normalization.</p>
               </div>
               <div className="legendScale">
-                {groups.map((definition, index) => (
+                {groups.map((definition) => (
                   <button
                     key={definition.rank}
                     className={group === String(definition.rank) ? "selected" : ""}
@@ -345,7 +339,7 @@ export function RankingsDashboard() {
                   >
                     <i />
                     <span>{definition.name}</span>
-                    <small>{GROUP_RANGES[index]}</small>
+                    <small>{effectRange(definition.low, definition.high)}</small>
                   </button>
                 ))}
               </div>
@@ -386,14 +380,14 @@ export function RankingsDashboard() {
               </div>
 
               <div className="tierList">
-                {groups.map((definition, index) => {
+                {groups.map((definition) => {
                   const rows = groupedCharts.get(definition.rank) ?? [];
                   if (group !== "all" && group !== String(definition.rank)) return null;
                   return (
                     <section className="tierRow" key={definition.rank} style={{ "--tier": definition.rank } as React.CSSProperties}>
                       <header>
                         <span className="tierNumber">{String(definition.rank).padStart(2, "0")}</span>
-                        <div><h3>{definition.name}</h3><p>{GROUP_RANGES[index]} levels from average</p></div>
+                        <div><h3>{definition.name}</h3><p>{effectRange(definition.low, definition.high)} levels from average</p></div>
                         <strong>{rows.length}</strong>
                       </header>
                       <div className="chartGrid">
@@ -424,7 +418,7 @@ export function RankingsDashboard() {
 
 function ChartCard({ chart }: { chart: ChartResult }) {
   const confidence = chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null
-    ? `${chart.difficultyCi95Low.toFixed(1)}–${chart.difficultyCi95High.toFixed(1)}`
+    ? `${formatEstimatedDifficulty(chart.difficultyCi95Low)}–${formatEstimatedDifficulty(chart.difficultyCi95High)}`
     : "—";
   return (
     <article className="chartCard">

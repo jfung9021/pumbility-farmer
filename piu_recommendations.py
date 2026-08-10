@@ -20,10 +20,16 @@ from typing import Any, Callable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from phoenix1_score_overrides import (
+    convert_phoenix1_pumbility,
+    convert_phoenix1_score,
+    phoenix1_score_override_metadata,
+)
 from piu_misgrade_analyzer import (
     AnalysisConfig,
     DIFFICULTY_DELTA_SCALE,
     EFFECT_BANDS,
+    FOLDER_RANGE_REFERENCE_CHARTS,
     MIN_TARGET_LEVEL,
     MODE_LABELS,
     MODE_TYPES,
@@ -46,10 +52,10 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 15
+RECOMMENDATION_SCHEMA_VERSION = 16
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
-COMBINED_TIER_SCHEMA_VERSION = 1
+COMBINED_TIER_SCHEMA_VERSION = 2
 RECOMMENDATION_RADIUS = 0.5
 BASELINE_START_RANK = 11
 BASELINE_END_RANK = 30
@@ -62,7 +68,7 @@ TOP_PUMBILITY_COUNT = 50
 TOP_RECOMMENDATION_COUNT = 50
 MAX_RAW_SCORE = 1_000_000
 SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v2"
-SCORE_PROJECTION_MODEL_NAME = "similar-skill-pumbility-11-30-q50-v6"
+SCORE_PROJECTION_MODEL_NAME = "similar-skill-pumbility-11-30-q50-v7"
 SCORE_RESPONSE_FOLDS = 5
 SCORE_RESPONSE_GRID_STEP = 0.1
 SCORE_RESPONSE_SMOOTHING_RADIUS = 8
@@ -626,6 +632,28 @@ def _clean_snapshot_frames(
     return charts, scores
 
 
+def _apply_phoenix1_score_overrides(scores: pd.DataFrame) -> pd.DataFrame:
+    """Convert the exceptional Phoenix 1 chart score and its Pumbility band."""
+    result = scores.copy()
+    original_scores = result["score"].copy()
+    result["score"] = [
+        convert_phoenix1_score(chart_id, raw_score)
+        for chart_id, raw_score in zip(
+            result["chartId"], original_scores, strict=True
+        )
+    ]
+    result["pumbility"] = [
+        convert_phoenix1_pumbility(chart_id, raw_score, pumbility)
+        for chart_id, raw_score, pumbility in zip(
+            result["chartId"],
+            original_scores,
+            result["pumbility"],
+            strict=True,
+        )
+    ]
+    return result
+
+
 def retain_catalog_source_rows(
     charts: pd.DataFrame,
     scores: pd.DataFrame,
@@ -720,6 +748,8 @@ def _source_contributions(
     authoritative_catalog: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     charts, scores = _clean_snapshot_frames(snapshot)
+    if source == "phoenix1":
+        scores = _apply_phoenix1_score_overrides(scores)
     if authoritative_catalog is not None:
         authoritative_ids = set(authoritative_catalog["chartId"].astype(str))
         charts, scores = retain_catalog_source_rows(charts, scores, authoritative_ids)
@@ -1019,6 +1049,8 @@ def build_combined_chart_results(
         "estimatedDifficulty",
         "averageDifficulty",
         "difficultyDelta",
+        "folderMeasuredCharts",
+        "folderRangeCompression",
         "difficultyDeltaCi95Low",
         "difficultyDeltaCi95High",
         "difficultyCi95Low",
@@ -1095,11 +1127,14 @@ def build_combined_tier_payload(
                 "medianContributors": (
                     float(contributors.median()) if not contributors.empty else None
                 ),
-                "extremelyEasyCharts": int(
+                "rangeCompression": float(
+                    folder_subset["folderRangeCompression"].iloc[0]
+                ),
+                "overratedCharts": int(
                     (folder_subset["effectBandRank"] == 1).sum()
                 ),
-                "extremelyHardCharts": int(
-                    (folder_subset["effectBandRank"] == 9).sum()
+                "underratedCharts": int(
+                    (folder_subset["effectBandRank"] == 7).sum()
                 ),
             }
         mode_meta = metadata_modes.get(mode_key, {})
@@ -1137,6 +1172,14 @@ def build_combined_tier_payload(
             "levelReference": "median measured chart residual within the exact mode and Phoenix 2 official level",
             "modeSeparation": "Singles and Doubles use independent baselines, calibration, and ranks",
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
+            "effectBands": "seven fixed absolute bands with Overrated and Underrated beyond +/-0.5",
+            "folderRangeNormalization": {
+                "method": "one-sided expected-normal-maximum order-statistic compression",
+                "referenceMeasuredCharts": FOLDER_RANGE_REFERENCE_CHARTS,
+                "formula": "min(1, expectedNormalMax(reference) / expectedNormalMax(measured charts in folder))",
+                "expandsFolders": False,
+            },
+            "phoenix1ScoreOverrides": [phoenix1_score_override_metadata()],
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
         },
         "coverage": {
@@ -1895,6 +1938,7 @@ def _prepare_phoenix1_rating_frames(
     charts, scores = _clean_snapshot_frames(phoenix1_snapshot)
     allowed_ids = set(phoenix2_catalog["chartId"].astype(str))
     charts, scores = retain_catalog_source_rows(charts, scores, allowed_ids)
+    scores = _apply_phoenix1_score_overrides(scores)
     retained_ids = set(charts["chartId"].astype(str))
     rating_catalog = phoenix2_catalog[
         phoenix2_catalog["chartId"].astype(str).isin(retained_ids)
@@ -2513,6 +2557,13 @@ def build_recommendation_index(
             "phoenix1RerateHandling": "Phoenix 1 rating rows use current Phoenix 2 chart levels and recompute Pumbility from the raw score, Phoenix 2 grade boundaries, and recorded plate",
             "crossVersionNormalization": "chart-difficulty evidence uses version- and mode-normalized residuals; player ratings use Phoenix 2-formula Pumbility in both versions",
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
+            "folderRangeNormalization": {
+                "method": "one-sided expected-normal-maximum order-statistic compression",
+                "referenceMeasuredCharts": FOLDER_RANGE_REFERENCE_CHARTS,
+                "formula": "min(1, expectedNormalMax(reference) / expectedNormalMax(measured charts in folder))",
+                "expandsFolders": False,
+            },
+            "phoenix1ScoreOverrides": [phoenix1_score_override_metadata()],
             "pumbilityPerLevel": slopes,
             "scoreProjectionCoverage": score_projection_metadata,
             "scoreProjectionData": "joined Phoenix 1 + Phoenix 2 scores normalized with the Phoenix 2 chart catalog and grade-and-plate Pumbility formula, with Phoenix 2 precedence for overlapping player/chart rows",

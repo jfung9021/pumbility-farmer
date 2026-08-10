@@ -53,8 +53,8 @@ def main() -> int:
             round(float(folder_rows["difficultyDelta"].max()), 4),
         ] if not folder_rows.empty else None,
         "allBelowOfficial": len(below_official),
-        "extremelyEasy": int((results["effectBand"] == "Extremely Easy").sum()),
-        "extremelyHard": int((results["effectBand"] == "Extremely Hard").sum()),
+        "overrated": int((results["effectBand"] == "Overrated").sum()),
+        "underrated": int((results["effectBand"] == "Underrated").sum()),
         "pumbilityPerLevel": {
             mode: details.get("pumbilityPerLevel")
             for mode, details in summary["modes"].items()

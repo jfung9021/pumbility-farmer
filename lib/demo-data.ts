@@ -17,28 +17,24 @@ const groupNames = [
 ] as const;
 
 const effectBands = [
-  { rank: 1, name: "Extremely Easy", low: null, high: -1.0 },
-  { rank: 2, name: "Very Easy", low: -1.0, high: -0.75 },
-  { rank: 3, name: "Easy", low: -0.75, high: -0.5 },
-  { rank: 4, name: "Slightly Easy", low: -0.5, high: -0.25 },
-  { rank: 5, name: "Typical", low: -0.25, high: 0.25 },
-  { rank: 6, name: "Slightly Hard", low: 0.25, high: 0.5 },
-  { rank: 7, name: "Hard", low: 0.5, high: 0.75 },
-  { rank: 8, name: "Very Hard", low: 0.75, high: 1.0 },
-  { rank: 9, name: "Extremely Hard", low: 1.0, high: null },
+  { rank: 1, name: "Overrated", low: null, high: -0.5 },
+  { rank: 2, name: "Very Easy", low: -0.5, high: -0.3 },
+  { rank: 3, name: "Easy", low: -0.3, high: -0.1 },
+  { rank: 4, name: "Medium", low: -0.1, high: 0.1 },
+  { rank: 5, name: "Hard", low: 0.1, high: 0.3 },
+  { rank: 6, name: "Very Hard", low: 0.3, high: 0.5 },
+  { rank: 7, name: "Underrated", low: 0.5, high: null },
 ] as const;
 
 function effectBand(delta: number | null) {
   if (delta === null) return null;
-  if (delta <= -1.0) return effectBands[0];
-  if (delta <= -0.75) return effectBands[1];
-  if (delta <= -0.5) return effectBands[2];
-  if (delta <= -0.25) return effectBands[3];
-  if (delta < 0.25) return effectBands[4];
-  if (delta < 0.5) return effectBands[5];
-  if (delta < 0.75) return effectBands[6];
-  if (delta < 1.0) return effectBands[7];
-  return effectBands[8];
+  if (delta < -0.5) return effectBands[0];
+  if (delta < -0.3) return effectBands[1];
+  if (delta < -0.1) return effectBands[2];
+  if (delta <= 0.1) return effectBands[3];
+  if (delta <= 0.3) return effectBands[4];
+  if (delta <= 0.5) return effectBands[5];
+  return effectBands[6];
 }
 
 const demoRows: Record<ModeKey, Array<[string, number, number | null, number, number]>> = {
@@ -98,6 +94,8 @@ function makeChart(mode: ModeKey, row: [string, number, number | null, number, n
     averageDifficulty,
     estimatedDifficulty: delta === null ? null : averageDifficulty + delta,
     difficultyDelta: delta,
+    folderMeasuredCharts: 10,
+    folderRangeCompression: 1,
     difficultyDeltaCi95Low: delta === null ? null : delta - DEMO_DELTA_CI_HALF_WIDTH,
     difficultyDeltaCi95High: delta === null ? null : delta + DEMO_DELTA_CI_HALF_WIDTH,
     difficultyCi95Low: delta === null ? null : averageDifficulty + delta - DEMO_DELTA_CI_HALF_WIDTH,
@@ -112,9 +110,14 @@ export const demoPayload: AnalysisPayload = {
   generatedAtUtc: "2026-08-07T04:20:00Z",
   mix: { key: "phoenix2", apiValue: "Phoenix2", label: "Phoenix 2" },
   summary: {
-    scriptVersion: "6.1.0-level-16-and-0.4-scale",
+    scriptVersion: "6.3.0-phoenix1-score-override-folder-normalized-0.4-scale",
     method: {
       difficultyDeltaScale: DEMO_DIFFICULTY_DELTA_SCALE,
+      folderRangeNormalization: {
+        method: "one-sided expected-normal-maximum order-statistic compression",
+        referenceMeasuredCharts: 30,
+        expandsFolders: false,
+      },
       displayMinimumOfficialLevel: 16,
     },
     coverage: { playersReturnedByCredential: 52 },

@@ -13,6 +13,8 @@ Singles and Doubles are analyzed as completely independent populations:
   6. Calibrate residual Pumbility into continuous level units and anchor the
      typical official level L chart at L + 0.5. Negative differences are easier
      within that folder and positive differences are harder.
+  7. Compress the centered range of folders with more than 30 measured charts
+     by the expected order-statistic maximum. Smaller folders are never expanded.
 
 The script deliberately does NOT consume PIU Scores' existing scoring-level or tier-list fields.
 It uses only player best scores, the API-computed Pumbility value for each score,
@@ -52,6 +54,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 from urllib.parse import urljoin, urlparse
 
@@ -60,6 +63,11 @@ import pandas as pd
 import requests
 
 from mix_registry import DEFAULT_MIX_KEY, resolve_mix
+from phoenix1_score_overrides import (
+    convert_phoenix1_pumbility,
+    convert_phoenix1_score,
+    phoenix1_score_override_metadata,
+)
 from phoenix2_sync import attach_song_bpm_metadata
 
 
@@ -76,23 +84,22 @@ RELATIVE_GROUPS = tuple(
     + ["Hardest 10%"]
 )
 EFFECT_BANDS = (
-    (1, "Extremely Easy", None, -1.0),
-    (2, "Very Easy", -1.0, -0.75),
-    (3, "Easy", -0.75, -0.5),
-    (4, "Slightly Easy", -0.5, -0.25),
-    (5, "Typical", -0.25, 0.25),
-    (6, "Slightly Hard", 0.25, 0.5),
-    (7, "Hard", 0.5, 0.75),
-    (8, "Very Hard", 0.75, 1.0),
-    (9, "Extremely Hard", 1.0, None),
+    (1, "Overrated", None, -0.5),
+    (2, "Very Easy", -0.5, -0.3),
+    (3, "Easy", -0.3, -0.1),
+    (4, "Medium", -0.1, 0.1),
+    (5, "Hard", 0.1, 0.3),
+    (6, "Very Hard", 0.3, 0.5),
+    (7, "Underrated", 0.5, None),
 )
 DEFAULT_EMPIRICAL_SHRINKAGE_K = 5.0
 CALIBRATION_SCORE_BIN = 2_500
 CALIBRATION_MIN_SCORE = 900_000
 DIFFICULTY_DELTA_SCALE = 0.4
+FOLDER_RANGE_REFERENCE_CHARTS = 30
 SYNTHETIC_PUMBILITY_PER_LEVEL = 7.3
 KEY_RE = re.compile(r"^(?:piu_scores_live_|pst_live_)[0-9a-f]{64}$")
-SCRIPT_VERSION = "6.1.0-level-16-and-0.4-scale"
+SCRIPT_VERSION = "6.3.0-phoenix1-score-override-folder-normalized-0.4-scale"
 
 
 class ApiError(RuntimeError):
@@ -508,23 +515,43 @@ def difficulty_effect_band(delta: float) -> tuple[int, str]:
     """Classify a level-unit effect without forcing a quota within each folder."""
     if not math.isfinite(delta):
         raise ValueError("A difficulty effect band requires a finite delta.")
-    if delta <= -1.0:
-        return (1, "Extremely Easy")
-    if delta <= -0.75:
+    if delta < -0.5:
+        return (1, "Overrated")
+    if delta < -0.3:
         return (2, "Very Easy")
-    if delta <= -0.5:
+    if delta < -0.1:
         return (3, "Easy")
-    if delta <= -0.25:
-        return (4, "Slightly Easy")
-    if delta < 0.25:
-        return (5, "Typical")
-    if delta < 0.5:
-        return (6, "Slightly Hard")
-    if delta < 0.75:
-        return (7, "Hard")
-    if delta < 1.0:
-        return (8, "Very Hard")
-    return (9, "Extremely Hard")
+    if delta <= 0.1:
+        return (4, "Medium")
+    if delta <= 0.3:
+        return (5, "Hard")
+    if delta <= 0.5:
+        return (6, "Very Hard")
+    return (7, "Underrated")
+
+
+def _expected_normal_maximum(chart_count: int) -> float:
+    """Approximate E[max] for chart_count standard-normal draws (Blom)."""
+    if chart_count <= 1:
+        return 0.0
+    probability = (chart_count - 0.375) / (chart_count + 0.25)
+    return NormalDist().inv_cdf(probability)
+
+
+def folder_range_compression(
+    chart_count: int,
+    reference_chart_count: int = FOLDER_RANGE_REFERENCE_CHARTS,
+) -> float:
+    """Return a one-sided order-statistic range correction for a folder."""
+    if reference_chart_count < 2:
+        raise ValueError("The folder range reference must contain at least two charts.")
+    if chart_count <= reference_chart_count:
+        return 1.0
+    reference_maximum = _expected_normal_maximum(reference_chart_count)
+    folder_maximum = _expected_normal_maximum(chart_count)
+    if folder_maximum <= 0 or not math.isfinite(folder_maximum):
+        return 1.0
+    return min(1.0, reference_maximum / folder_maximum)
 
 
 def _fit_level_calibration(
@@ -717,20 +744,38 @@ def apply_within_level_difficulty(
     result["shrunkEasePb"] = np.where(
         chart_location.notna(), weight * result["rawEasePb"], np.nan
     )
+    measured_chart_count = chart_location.notna().groupby(
+        result["folder"], sort=False
+    ).transform("sum").astype(int)
+    result["folderMeasuredCharts"] = measured_chart_count
+    result["folderRangeCompression"] = measured_chart_count.map(
+        folder_range_compression
+    ).astype(float)
     result["pumbilityPerLevel"] = pumbility_per_level
     result["averageDifficulty"] = result["level"].astype(float) + 0.5
     result["difficultyDelta"] = (
-        -DIFFICULTY_DELTA_SCALE * result["shrunkEasePb"] / pumbility_per_level
+        -DIFFICULTY_DELTA_SCALE
+        * result["shrunkEasePb"]
+        / pumbility_per_level
+        * result["folderRangeCompression"]
     )
     result["estimatedDifficulty"] = (
         result["averageDifficulty"] + result["difficultyDelta"]
     )
-    delta_ci_low = -DIFFICULTY_DELTA_SCALE * weight * (
-        result["residualCi95HighPb"] - result["levelReferenceResidualPb"]
-    ) / pumbility_per_level
-    delta_ci_high = -DIFFICULTY_DELTA_SCALE * weight * (
-        result["residualCi95LowPb"] - result["levelReferenceResidualPb"]
-    ) / pumbility_per_level
+    delta_ci_low = (
+        -DIFFICULTY_DELTA_SCALE
+        * weight
+        * (result["residualCi95HighPb"] - result["levelReferenceResidualPb"])
+        / pumbility_per_level
+        * result["folderRangeCompression"]
+    )
+    delta_ci_high = (
+        -DIFFICULTY_DELTA_SCALE
+        * weight
+        * (result["residualCi95LowPb"] - result["levelReferenceResidualPb"])
+        / pumbility_per_level
+        * result["folderRangeCompression"]
+    )
     result["difficultyCi95Low"] = result["averageDifficulty"] + delta_ci_low
     result["difficultyCi95High"] = result["averageDifficulty"] + delta_ci_high
     result["difficultyDeltaCi95Low"] = delta_ci_low
@@ -778,6 +823,23 @@ def analyze_snapshot(
     if "score" not in score_df.columns:
         score_df["score"] = np.nan
     score_df["score"] = pd.to_numeric(score_df["score"], errors="coerce")
+    if resolve_mix(config.mix).key == "phoenix1":
+        original_scores = score_df["score"].copy()
+        score_df["score"] = [
+            convert_phoenix1_score(chart_id, raw_score)
+            for chart_id, raw_score in zip(
+                score_df["chartId"], original_scores, strict=True
+            )
+        ]
+        score_df["pumbility"] = [
+            convert_phoenix1_pumbility(chart_id, raw_score, pumbility)
+            for chart_id, raw_score, pumbility in zip(
+                score_df["chartId"],
+                original_scores,
+                score_df["pumbility"],
+                strict=True,
+            )
+        ]
     score_df["isBroken"] = score_df["isBroken"].fillna(False).astype(bool)
     if "recordedAt" not in score_df.columns:
         score_df["recordedAt"] = ""
@@ -1046,7 +1108,7 @@ def analyze_snapshot(
         "folder", "relativeGroupRank", "relativeGroup", "effectBandRank", "effectBand",
         "songName", "difficulty", "type", "level", "chartId", "imageUrl", "noteCount",
         "stepArtist", "bpmMin", "bpmMax", "estimatedDifficulty", "averageDifficulty",
-        "difficultyDelta",
+        "difficultyDelta", "folderMeasuredCharts", "folderRangeCompression",
         "difficultyDeltaCi95Low", "difficultyDeltaCi95High",
         "difficultyCi95Low", "difficultyCi95High", "pumbilityPerLevel", "rawEasePb",
         "shrunkEasePb", "meanResidualPb", "medianResidualPb", "residualStdPb",
@@ -1105,7 +1167,18 @@ def analyze_snapshot(
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
             "negativeDeltaMeaning": "easier to score than the typical chart at that exact mode and level",
             "relativeGrouping": "midpoint-percentile deciles, labeled only as relative percentiles",
-            "effectBands": "nine fixed quarter-level bands; extreme means |difficultyDelta| >= 1.0",
+            "effectBands": "seven fixed absolute bands with Overrated and Underrated beyond +/-0.5",
+            "folderRangeNormalization": {
+                "method": "one-sided expected-normal-maximum order-statistic compression",
+                "referenceMeasuredCharts": FOLDER_RANGE_REFERENCE_CHARTS,
+                "formula": "min(1, expectedNormalMax(reference) / expectedNormalMax(measured charts in folder))",
+                "expandsFolders": False,
+            },
+            "phoenix1ScoreOverrides": (
+                [phoenix1_score_override_metadata()]
+                if resolve_mix(config.mix).key == "phoenix1"
+                else []
+            ),
             "modeSeparation": "Singles and Doubles use independent eligibility, baselines, calibration, and ranks",
             "usesExistingPiuScoresTierList": False,
             "shrinkage": "mode-wide empirical-Bayes variance ratio" if config.shrinkage_k is None else "configured override",
@@ -1145,8 +1218,9 @@ def analyze_snapshot(
                 "measuredCharts": int(folder_subset["difficultyDelta"].notna().sum()),
                 "publishedCharts": int((folder_subset["evidenceStatus"] == "Published").sum()),
                 "medianContributors": float(contributors.median()) if not contributors.empty else None,
-                "extremelyEasyCharts": int((folder_subset["effectBandRank"] == 1).sum()),
-                "extremelyHardCharts": int((folder_subset["effectBandRank"] == 9).sum()),
+                "rangeCompression": float(folder_subset["folderRangeCompression"].iloc[0]),
+                "overratedCharts": int((folder_subset["effectBandRank"] == 1).sum()),
+                "underratedCharts": int((folder_subset["effectBandRank"] == 7).sum()),
             }
         summary["modes"][mode_name.lower()] = {
             "eligiblePlayers": int(len(mode_baselines)),
@@ -1399,8 +1473,8 @@ def validate_synthetic(
             and hardest["chartId"] == expected_hardest["chartId"]
             and float(easiest["difficultyDelta"]) <= -0.25
             and float(hardest["difficultyDelta"]) >= 0.25
-            and int(easiest["effectBandRank"]) <= 4
-            and int(hardest["effectBandRank"]) >= 6
+            and int(easiest["effectBandRank"]) <= 3
+            and int(hardest["effectBandRank"]) >= 5
         )
         if folder == f"S{MIN_TARGET_LEVEL}":
             passed = (

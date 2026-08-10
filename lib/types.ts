@@ -35,6 +35,8 @@ export interface ChartResult {
   estimatedDifficulty: number | null;
   averageDifficulty: number;
   difficultyDelta: number | null;
+  folderMeasuredCharts?: number;
+  folderRangeCompression?: number;
   difficultyDeltaCi95Low: number | null;
   difficultyDeltaCi95High: number | null;
   difficultyCi95Low: number | null;
@@ -52,8 +54,9 @@ export interface FolderSummary {
   measuredCharts: number;
   publishedCharts: number;
   medianContributors: number | null;
-  extremelyEasyCharts: number;
-  extremelyHardCharts: number;
+  rangeCompression: number;
+  overratedCharts: number;
+  underratedCharts: number;
 }
 
 export interface ModeSummary {
