@@ -29,11 +29,11 @@ Each mode is processed separately:
 10. Anchor the typical official level `L` chart at `L + 0.5` and shrink
     low-evidence estimates toward that reference.
 
-The displayed difference uses 70% of the calibrated residual conversion to keep
+The displayed difference uses 40% of the calibrated residual conversion to keep
 the estimated scoring-difficulty range from becoming overly wide:
 
 ```text
-difficulty difference = -0.7 × shrunk Pumbility residual / Pumbility per level
+difficulty difference = -0.4 × shrunk Pumbility residual / Pumbility per level
 estimated scoring difficulty = official level + 0.5 + difficulty difference
 ```
 

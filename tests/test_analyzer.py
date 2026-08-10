@@ -132,7 +132,7 @@ class AnalyzerTests(unittest.TestCase):
             "within-player fixed effects and 2,500-point score bands",
         )
 
-    def test_difficulty_formula_scales_delta_and_confidence_intervals_by_point_seven(self) -> None:
+    def test_difficulty_formula_scales_delta_and_confidence_intervals_by_point_four(self) -> None:
         frame = pd.DataFrame([
             {
                 "chartId": "easy",
@@ -165,12 +165,12 @@ class AnalyzerTests(unittest.TestCase):
             AnalysisConfig(bootstrap_samples=0, shrinkage_k=0),
         )
         easy = result[result["chartId"] == "easy"].iloc[0]
-        self.assertAlmostEqual(float(easy["difficultyDelta"]), 1.4)
-        self.assertAlmostEqual(float(easy["estimatedDifficulty"]), 21.9)
-        self.assertAlmostEqual(float(easy["difficultyDeltaCi95Low"]), 1.26)
-        self.assertAlmostEqual(float(easy["difficultyDeltaCi95High"]), 1.54)
-        self.assertAlmostEqual(float(easy["difficultyCi95Low"]), 21.76)
-        self.assertAlmostEqual(float(easy["difficultyCi95High"]), 22.04)
+        self.assertAlmostEqual(float(easy["difficultyDelta"]), 0.8)
+        self.assertAlmostEqual(float(easy["estimatedDifficulty"]), 21.3)
+        self.assertAlmostEqual(float(easy["difficultyDeltaCi95Low"]), 0.72)
+        self.assertAlmostEqual(float(easy["difficultyDeltaCi95High"]), 0.88)
+        self.assertAlmostEqual(float(easy["difficultyCi95Low"]), 21.22)
+        self.assertAlmostEqual(float(easy["difficultyCi95High"]), 21.38)
 
     def test_calibration_accepts_legacy_mix_scale_and_rejects_negative_slope(self) -> None:
         rows = []
@@ -215,7 +215,7 @@ class AnalyzerTests(unittest.TestCase):
             rows = result[result["folder"] == folder].sort_values("difficultyDelta")
             self.assertTrue((rows["levelReferenceResidualPb"] == reference).all())
             self.assertAlmostEqual(float(rows["difficultyDelta"].sum()), 0.0)
-            self.assertAlmostEqual(float(rows["difficultyDelta"].abs().max()), 0.14)
+            self.assertAlmostEqual(float(rows["difficultyDelta"].abs().max()), 0.08)
             self.assertEqual(list(rows["relativeGroupRank"]), [3, 8])
         self.assertGreater(
             float(result[result["folder"] == "S23"]["estimatedDifficulty"].min()),
@@ -337,7 +337,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertTrue((results["nContributors"] <= 1).all())
         self.assertEqual(contributions["playerHash"].nunique(), 1)
 
-    def test_synthetic_recovers_order_with_point_seven_scaled_output(self) -> None:
+    def test_synthetic_recovers_order_with_point_four_scaled_output(self) -> None:
         players, charts, scores, truth = make_synthetic_snapshot(players_per_folder=5)
         results, _, _, _ = analyze_snapshot(
             players,
@@ -353,7 +353,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertLessEqual(float(easiest_s20["difficultyDelta"]), -0.25)
         self.assertIn(
             str(easiest_s20["effectBand"]),
-            {"Extremely Easy", "Very Easy", "Easy"},
+            {"Extremely Easy", "Very Easy", "Easy", "Slightly Easy"},
         )
         self.assertEqual(int(easiest_s20["relativeGroupRank"]), 1)
         measured = results[results["difficultyDelta"].notna()]

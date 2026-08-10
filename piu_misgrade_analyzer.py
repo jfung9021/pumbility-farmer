@@ -89,10 +89,10 @@ EFFECT_BANDS = (
 DEFAULT_EMPIRICAL_SHRINKAGE_K = 5.0
 CALIBRATION_SCORE_BIN = 2_500
 CALIBRATION_MIN_SCORE = 900_000
-DIFFICULTY_DELTA_SCALE = 0.7
+DIFFICULTY_DELTA_SCALE = 0.4
 SYNTHETIC_PUMBILITY_PER_LEVEL = 7.3
 KEY_RE = re.compile(r"^(?:piu_scores_live_|pst_live_)[0-9a-f]{64}$")
-SCRIPT_VERSION = "6.0.0-level-16-and-0.7-scale"
+SCRIPT_VERSION = "6.1.0-level-16-and-0.4-scale"
 
 
 class ApiError(RuntimeError):
@@ -1399,8 +1399,8 @@ def validate_synthetic(
             and hardest["chartId"] == expected_hardest["chartId"]
             and float(easiest["difficultyDelta"]) <= -0.25
             and float(hardest["difficultyDelta"]) >= 0.25
-            and int(easiest["effectBandRank"]) <= 3
-            and int(hardest["effectBandRank"]) >= 7
+            and int(easiest["effectBandRank"]) <= 4
+            and int(hardest["effectBandRank"]) >= 6
         )
         if folder == f"S{MIN_TARGET_LEVEL}":
             passed = (

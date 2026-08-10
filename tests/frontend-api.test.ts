@@ -223,14 +223,14 @@ test("demo payload uses the symmetric quarter-level effect bands", () => {
   );
 });
 
-test("demo payload represents the level-16 and 0.7-scale methodology", () => {
+test("demo payload represents the level-16 and 0.4-scale methodology", () => {
   const payload = demoPayloads.phoenix2;
-  assert.equal(payload.summary.scriptVersion, "6.0.0-level-16-and-0.7-scale");
-  assert.equal(payload.summary.method.difficultyDeltaScale, 0.7);
+  assert.equal(payload.summary.scriptVersion, "6.1.0-level-16-and-0.4-scale");
+  assert.equal(payload.summary.method.difficultyDeltaScale, 0.4);
   assert.equal(payload.summary.method.displayMinimumOfficialLevel, 16);
   assert.equal(payload.singles.some((chart) => chart.level === 16), true);
   assert.equal(payload.doubles.some((chart) => chart.level === 16), true);
-  assert.equal(payload.singles[0].difficultyDelta, -0.756);
+  assert.equal(payload.singles[0].difficultyDelta, -0.432);
 });
 
 test("annotates the frozen Phoenix 1 charts with Phoenix 2 rerates", async () => {
