@@ -1,6 +1,6 @@
 import type { AnalysisPayload, ChartResult, ModeKey } from "./types";
 
-const DEMO_DIFFICULTY_DELTA_SCALE = 0.7;
+const DEMO_DIFFICULTY_DELTA_SCALE = 0.4;
 const DEMO_DELTA_CI_HALF_WIDTH = 0.18 * DEMO_DIFFICULTY_DELTA_SCALE;
 
 const groupNames = [
@@ -112,7 +112,7 @@ export const demoPayload: AnalysisPayload = {
   generatedAtUtc: "2026-08-07T04:20:00Z",
   mix: { key: "phoenix2", apiValue: "Phoenix2", label: "Phoenix 2" },
   summary: {
-    scriptVersion: "6.0.0-level-16-and-0.7-scale",
+    scriptVersion: "6.1.0-level-16-and-0.4-scale",
     method: {
       difficultyDeltaScale: DEMO_DIFFICULTY_DELTA_SCALE,
       displayMinimumOfficialLevel: 16,

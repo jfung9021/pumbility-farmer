@@ -1735,7 +1735,7 @@ class CombinedTierPayloadTests(unittest.TestCase):
         self.assertEqual(
             payload["summary"]["method"]["displayMinimumOfficialLevel"], 16
         )
-        self.assertEqual(payload["summary"]["method"]["difficultyDeltaScale"], 0.7)
+        self.assertEqual(payload["summary"]["method"]["difficultyDeltaScale"], 0.4)
 
 
 class RecommendationChartBoundaryTests(unittest.TestCase):
