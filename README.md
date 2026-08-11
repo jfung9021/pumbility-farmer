@@ -323,14 +323,16 @@ narrowest successful radius participates in the ordinary median; peers are not t
 support target or weighted by distance. Below five peers at the maximum radius, the player-balanced
 nonlinear population response model is used.
 
-Projected raw scores are converted to Phoenix 2 letter grades, then evaluated with the official
-Phoenix 2 grade-and-plate Pumbility formula. The plate distribution combines Phoenix 2 player
-history with a held-out-tuned, capped Phoenix 1 prior and population smoothing; Phoenix 2 wins
-for an overlapping player/chart observation. Expected Pumbility is the probability-weighted
-formula value. Projected gain is calculated separately for every plate outcome against the
-active Phoenix 2 top-50 pool, including replacement of the number-50 chart, and then averaged.
-Single and Double use their independent mode pool; Overall uses the shared S+D pool.
-Phoenix 1 Pumbility totals never enter the current Phoenix 2 top 50.
+Projected raw scores are converted to Phoenix 2 letter grades. The plate distribution combines
+Phoenix 2 player history with a held-out-tuned, capped Phoenix 1 prior and population smoothing;
+Phoenix 2 wins for an overlapping player/chart observation. The projected plate is the weighted
+median in the ordered Rough Game-to-Perfect Game ladder, with an exact 50% tie selecting the lower
+plate. Expected Pumbility is calculated once from the displayed projected score's grade, that median
+plate, and the chart mode's screenshot-validated Phoenix 2 projection formula. Projected gain is the
+deterministic change from that same Pumbility value against the active Phoenix 2 top-50 pool,
+including replacement of the number-50 chart. Single and Double use their independent mode pool;
+Overall uses the shared S+D pool. Existing chart Pumbility and all current top-50 totals remain the
+authoritative values supplied by Phoenix 2; Phoenix 1 Pumbility totals never enter that pool.
 
 The population models and frozen per-player inputs are rebuilt once in the daily background run.
 Opening or selecting a player on `/recommendations` first renders any cached result, then requests

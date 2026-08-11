@@ -157,10 +157,13 @@ def _recommendation_method(
         "topPumbilityCount": TOP_PUMBILITY_COUNT,
         "overallPumbility": "the highest 50 Phoenix 2 Pumbility values from the player's combined Single and Double scores",
         "overallRecommendations": "merge the displayed top 50 Single and top 50 Double recommendations, recalculate every projected gain against the shared Phoenix 2 S+D top 50, then retain the best 50",
-        "projection": "projected raw score converted with the official Phoenix 2 grade-and-plate Pumbility formula",
-        "plateProjection": "hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
+        "actualPumbilitySource": "upstream",
+        "projection": "median projected raw score converted with the mode-specific Phoenix 2 projection formula and the weighted-median plate",
+        "plateProjection": "weighted median of the ordered RG-to-PG hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
+        "plateProjectionStatistic": "weighted-median",
+        "pumbilityProjectionStatistic": "median-score-median-plate",
         "phoenix1PlatePriorCap": phoenix1_cap,
-        "projectedGain": "probability-weighted change to the active Phoenix 2 top-50 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; each plate outcome replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
+        "projectedGain": "deterministic change from the median-score and median-plate projected Pumbility to the active Phoenix 2 top-50 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; the projection replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
         "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
         "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
         "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
@@ -754,6 +757,8 @@ def cached_player_is_fresh(
 ) -> bool:
     if not isinstance(payload, Mapping):
         return False
+    if int(payload.get("schemaVersion") or 0) != int(index.get("schemaVersion") or 0):
+        return False
     if payload.get("modelGeneration") != index.get("generationKey"):
         return False
     synced = parse_utc(payload.get("playerSyncedAtUtc"))
@@ -764,7 +769,10 @@ def with_staleness(
     payload: Mapping[str, Any], index: Mapping[str, Any]
 ) -> dict[str, Any]:
     value = dict(payload)
-    value["stale"] = payload.get("modelGeneration") != index.get("generationKey")
+    value["stale"] = (
+        int(payload.get("schemaVersion") or 0) != int(index.get("schemaVersion") or 0)
+        or payload.get("modelGeneration") != index.get("generationKey")
+    )
     value["currentModelGeneratedAtUtc"] = index.get(
         "modelGeneratedAtUtc", index.get("generatedAtUtc")
     )

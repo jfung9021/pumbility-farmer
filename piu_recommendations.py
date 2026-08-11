@@ -52,7 +52,7 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 18
+RECOMMENDATION_SCHEMA_VERSION = 19
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 2
@@ -1277,8 +1277,8 @@ def build_manual_recommendation_mode(
                 "distanceFromRating": round(estimate - scoring_rating, 6),
                 "farmEdge": round(level + 0.5 - estimate, 6),
                 "existingPumbility": None,
-                "expectedPumbility": 0,
-                "projectedGain": 0,
+                "expectedPumbility": None,
+                "projectedGain": None,
                 "projectedScore": None,
                 "scoreProjectionSource": None,
                 "scoreProjectionSupportCount": None,
@@ -2348,44 +2348,29 @@ def build_player_recommendation(
                 distribution = plate_model.distribution(
                     str(player_id), chart_type, projected_grade
                 )
-                projected_plate = distribution.most_likely
+                projected_plate = distribution.median_plate
                 projected_plate_probability = distribution.probabilities[projected_plate]
                 plate_projection_source = distribution.source
-                outcomes = [
-                    (
-                        probability,
-                        phoenix2_pumbility(
-                            chart_type,
-                            int(chart["level"]),
-                            projected_grade,
-                            plate,
-                        ),
-                    )
-                    for plate, probability in distribution.probabilities.items()
-                ]
-                expected = sum(probability * value for probability, value in outcomes)
-                gain = sum(
-                    probability
-                    * _top50_marginal_gain(
-                        value,
-                        existing_pumbility=existing,
-                        existing_in_top50=chart_id in top50_chart_ids,
-                        current_score_count=len(mode_scores),
-                        cutoff=top50_cutoff,
-                    )
-                    for probability, value in outcomes
+                expected = phoenix2_pumbility(
+                    chart_type,
+                    int(chart["level"]),
+                    projected_grade,
+                    projected_plate,
+                )
+                gain = _top50_marginal_gain(
+                    expected,
+                    existing_pumbility=existing,
+                    existing_in_top50=chart_id in top50_chart_ids,
+                    current_score_count=len(mode_scores),
+                    cutoff=top50_cutoff,
                 )
                 overall_existing = overall_existing_by_chart.get(chart_id)
-                overall_gain = sum(
-                    probability
-                    * _top50_marginal_gain(
-                        value,
-                        existing_pumbility=overall_existing,
-                        existing_in_top50=chart_id in overall_top50_chart_ids,
-                        current_score_count=len(overall_scores),
-                        cutoff=overall_top50_cutoff,
-                    )
-                    for probability, value in outcomes
+                overall_gain = _top50_marginal_gain(
+                    expected,
+                    existing_pumbility=overall_existing,
+                    existing_in_top50=chart_id in overall_top50_chart_ids,
+                    current_score_count=len(overall_scores),
+                    cutoff=overall_top50_cutoff,
                 )
             candidates.append(
                 {
@@ -2738,10 +2723,13 @@ def build_recommendation_index(
             "topPumbilityCount": TOP_PUMBILITY_COUNT,
             "overallPumbility": "the highest 50 Phoenix 2 Pumbility values from the player's combined Single and Double scores",
             "overallRecommendations": "merge the displayed top 50 Single and top 50 Double recommendations, recalculate every projected gain against the shared Phoenix 2 S+D top 50, then retain the best 50",
-            "projection": "projected raw score converted with the official Phoenix 2 grade-and-plate Pumbility formula",
-            "plateProjection": "hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
+            "actualPumbilitySource": "upstream",
+            "projection": "median projected raw score converted with the mode-specific Phoenix 2 projection formula and the weighted-median plate",
+            "plateProjection": "weighted median of the ordered RG-to-PG hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
+            "plateProjectionStatistic": "weighted-median",
+            "pumbilityProjectionStatistic": "median-score-median-plate",
             "phoenix1PlatePriorCap": plate_model.phoenix1_cap,
-            "projectedGain": "probability-weighted change to the active Phoenix 2 top-50 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; each plate outcome replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
+            "projectedGain": "deterministic change from the median-score and median-plate projected Pumbility to the active Phoenix 2 top-50 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; the projection replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
             "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
             "manualRanking": "farm edge up to 0.5 estimated-difficulty points above the requested scoring rating; no personal top-50 gain is inferred",
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",

@@ -32,6 +32,15 @@ const FORBIDDEN_KEYS = new Set([
 ]);
 const DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL = 16;
 const RECOMMENDATION_UPPER_RADIUS = 0.5;
+const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 19;
+
+export type LocalRecommendationIndex = {
+  schemaVersion?: number;
+  generatedAtUtc: string;
+  method: Record<string, unknown>;
+  charts: RecommendationChartEstimate[];
+  players: RecommendationPlayer[];
+};
 
 export class LocalRecommendationsNotFoundError extends Error {}
 export class LocalRecommendationsValidationError extends Error {}
@@ -44,42 +53,24 @@ function containsForbiddenKey(value: unknown): boolean {
   );
 }
 
-export async function readLocalRecommendationIndex(): Promise<{
-  generatedAtUtc: string;
-  method: Record<string, unknown>;
-  charts: RecommendationChartEstimate[];
-  players: RecommendationPlayer[];
-}> {
-  let raw: string;
-  try {
-    raw = await readFile(LOCAL_RECOMMENDATIONS_PATH, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new LocalRecommendationsNotFoundError(
-        "No local recommendations have been generated yet.",
-      );
-    }
-    throw error;
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    throw new LocalRecommendationsValidationError(
-      "The local recommendation index is not valid JSON.",
-    );
-  }
+export function validateLocalRecommendationIndex(value: unknown): LocalRecommendationIndex {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new LocalRecommendationsValidationError(
       "The local recommendation index must be an object.",
     );
   }
   const payload = value as {
+    schemaVersion?: unknown;
     generatedAtUtc?: unknown;
     method?: unknown;
     charts?: unknown;
     players?: unknown;
   };
+  if (payload.schemaVersion !== LOCAL_RECOMMENDATION_SCHEMA_VERSION) {
+    throw new LocalRecommendationsValidationError(
+      `The local recommendation index is incompatible. Regenerate schema ${LOCAL_RECOMMENDATION_SCHEMA_VERSION} recommendations.`,
+    );
+  }
   if (
     typeof payload.generatedAtUtc !== "string"
     || !payload.method
@@ -123,12 +114,30 @@ export async function readLocalRecommendationIndex(): Promise<{
       );
     }
   }
-  return payload as {
-    generatedAtUtc: string;
-    method: Record<string, unknown>;
-    charts: RecommendationChartEstimate[];
-    players: RecommendationPlayer[];
-  };
+  return payload as LocalRecommendationIndex;
+}
+
+export async function readLocalRecommendationIndex(): Promise<LocalRecommendationIndex> {
+  let raw: string;
+  try {
+    raw = await readFile(LOCAL_RECOMMENDATIONS_PATH, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new LocalRecommendationsNotFoundError(
+        "No local recommendations have been generated yet.",
+      );
+    }
+    throw error;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new LocalRecommendationsValidationError(
+      "The local recommendation index is not valid JSON.",
+    );
+  }
+  return validateLocalRecommendationIndex(value);
 }
 
 function manualMode(
@@ -152,8 +161,8 @@ function manualMode(
         distanceFromRating: Number((chart.estimatedDifficulty - scoringRating).toFixed(6)),
         farmEdge: Number(farmEdge.toFixed(6)),
         existingPumbility: null,
-        expectedPumbility: 0,
-        projectedGain: 0,
+        expectedPumbility: null,
+        projectedGain: null,
         projectedScore: null,
         projectedGrade: null,
         projectedPlate: null,
@@ -179,6 +188,7 @@ function manualMode(
   return {
     eligible: true,
     manual: true,
+    projectionAvailable: false,
     validScoreCount: 0,
     scoringRating: Number(scoringRating.toFixed(3)),
     candidateRange: [

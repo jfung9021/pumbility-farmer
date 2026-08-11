@@ -58,6 +58,7 @@ from recommendation_refresh import (
     recommendation_player_path,
     recommendation_player_state_path,
     refresh_player_recommendations,
+    with_staleness,
 )
 
 try:
@@ -1143,6 +1144,9 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertEqual(response["modelGeneration"], "daily-generation")
         self.assertTrue(cached_player_is_fresh(response, index, now=now))
+        incompatible = {**response, "schemaVersion": RECOMMENDATION_SCHEMA_VERSION - 1}
+        self.assertFalse(cached_player_is_fresh(incompatible, index, now=now))
+        self.assertTrue(with_staleness(incompatible, index)["stale"])
         for mode in response["player"]["modes"].values():
             self.assertNotIn("candidates", mode)
             self.assertLessEqual(len(mode["topRecommendations"]), 50)
@@ -1402,6 +1406,16 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertIsNotNone(easy["projectedGrade"])
         self.assertIsNotNone(easy["projectedPlateCode"])
         self.assertEqual(easy["plateProjectionSource"], "population")
+        self.assertEqual(
+            easy["expectedPumbility"],
+            phoenix2_pumbility(
+                easy["type"],
+                easy["level"],
+                easy["projectedGrade"],
+                easy["projectedPlate"],
+            ),
+        )
+        self.assertEqual(easy["projectedGain"], easy["expectedPumbility"])
         self.assertIsNone(result["currentTop50CutoffPumbility"])
         far_easier = next(
             row for row in result["candidates"] if row["chartId"] == "chart-32"
@@ -1413,6 +1427,27 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(result["scoreProjectionModel"], SCORE_PROJECTION_MODEL_NAME)
         self.assertEqual(TOP_RECOMMENDATION_COUNT, 50)
         self.assertLessEqual(len(result["topRecommendations"]), 50)
+
+    def test_current_pumbility_uses_the_authoritative_phoenix2_value(self) -> None:
+        authoritative = 123.456
+        scores = [dict(row) for row in self.snapshot["scores"]]
+        scores[-1]["pumbility"] = authoritative
+        mode = build_player_recommendation(
+            "player",
+            {**self.snapshot, "scores": scores},
+            self.combined,
+            {"singles": 10.0},
+            self._fixed_score_model(),
+        )["modes"]["singles"]
+
+        historical = next(
+            row for row in mode["candidates"] if row["chartId"] == "chart-29"
+        )
+        self.assertEqual(historical["existingPumbility"], authoritative)
+        self.assertAlmostEqual(
+            mode["currentTop50Pumbility"],
+            sum(float(row["pumbility"]) for row in scores),
+        )
 
     def test_overall_uses_shared_single_and_double_top_fifty(self) -> None:
         double_charts = []
@@ -2076,6 +2111,10 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
             ["rating-edge", "sixteen", "above-rating"],
         )
         self.assertEqual(mode["candidateRange"], [None, 16.5])
+        self.assertTrue(
+            all(row["expectedPumbility"] is None for row in mode["candidates"])
+        )
+        self.assertTrue(all(row["projectedGain"] is None for row in mode["candidates"]))
 
 
 @unittest.skipIf(get_recommendation_players is None, "FastAPI is not installed")

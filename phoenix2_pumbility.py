@@ -1,8 +1,9 @@
-"""Phoenix 2 Pumbility formula and player plate-outcome projection.
+"""Phoenix 2 Pumbility projection formula and player plate projection.
 
-The score formula in this module was validated against every positive Pumbility
-row available in the Phoenix 2 source snapshot.  Letter grades are always
-recomputed from raw score so Phoenix 1 observations use Phoenix 2 boundaries.
+The mode-specific formula is regression-tested against all 50 cards in an
+official Pumbility-page screenshot, including its exact displayed total.
+Letter grades are always recomputed from raw score so Phoenix 1 observations
+use Phoenix 2 boundaries. Existing Phoenix 2 Pumbility remains authoritative.
 """
 
 from __future__ import annotations
@@ -34,17 +35,40 @@ GRADE_BANDS: tuple[tuple[int, str, int], ...] = (
     (500_000, "D", 50),
     (0, "F", 60),
 )
-GRADE_PENALTY_UNITS = {grade: units for _, grade, units in GRADE_BANDS}
+SINGLE_GRADE_PENALTY_UNITS = {grade: units for _, grade, units in GRADE_BANDS}
+DOUBLE_GRADE_PENALTY_UNITS = {
+    **SINGLE_GRADE_PENALTY_UNITS,
+    "AA": 13,
+    "A+": 15,
+    "A": 20,
+    "B": 25,
+    "C": 30,
+    "D": 40,
+    "F": 50,
+}
+GRADE_PENALTY_UNITS_BY_TYPE = {
+    "Single": SINGLE_GRADE_PENALTY_UNITS,
+    "Double": DOUBLE_GRADE_PENALTY_UNITS,
+}
 
-PLATE_BONUS_UNITS: dict[str, int] = {
+SINGLE_PLATE_BONUS_UNITS: dict[str, float] = {
     "Rough Game": 0,
     "Fair Game": 1,
     "Talented Game": 2,
     "Marvelous Game": 3,
     "Superb Game": 4,
+    "Extreme Game": 7,
+    "Ultimate Game": 8.5,
+    "Perfect Game": 10,
+}
+DOUBLE_PLATE_BONUS_UNITS: dict[str, float] = {
+    **SINGLE_PLATE_BONUS_UNITS,
     "Extreme Game": 6,
     "Ultimate Game": 8,
-    "Perfect Game": 10,
+}
+PLATE_BONUS_UNITS_BY_TYPE = {
+    "Single": SINGLE_PLATE_BONUS_UNITS,
+    "Double": DOUBLE_PLATE_BONUS_UNITS,
 }
 PLATE_CODES = {
     "Rough Game": "RG",
@@ -57,16 +81,16 @@ PLATE_CODES = {
     "Perfect Game": "PG",
 }
 PLATE_ALIASES = {
-    **{name.casefold(): name for name in PLATE_BONUS_UNITS},
+    **{name.casefold(): name for name in SINGLE_PLATE_BONUS_UNITS},
     **{code.casefold(): name for name, code in PLATE_CODES.items()},
 }
-PLATES = tuple(PLATE_BONUS_UNITS)
+PLATES = tuple(SINGLE_PLATE_BONUS_UNITS)
 SKILL_RATING_REFERENCE_GRADE = "S"
 SKILL_RATING_REFERENCE_PLATE = "Fair Game"
 SKILL_RATING_REFERENCE_MULTIPLIER = (
     750
-    - 5 * GRADE_PENALTY_UNITS[SKILL_RATING_REFERENCE_GRADE]
-    + PLATE_BONUS_UNITS[SKILL_RATING_REFERENCE_PLATE]
+    - 5 * SINGLE_GRADE_PENALTY_UNITS[SKILL_RATING_REFERENCE_GRADE]
+    + SINGLE_PLATE_BONUS_UNITS[SKILL_RATING_REFERENCE_PLATE]
 ) / 750
 
 POPULATION_PRIOR_STRENGTH = 8.0
@@ -102,11 +126,13 @@ def phoenix2_pumbility(
     grade: str,
     plate: str,
 ) -> float:
-    """Calculate official Phoenix 2 chart Pumbility, truncated to two decimals."""
+    """Calculate projected Phoenix 2 chart Pumbility, truncated to two decimals."""
     if chart_type not in {"Single", "Double"}:
         raise ValueError(f"Unsupported chart type: {chart_type!r}")
+    grade_penalties = GRADE_PENALTY_UNITS_BY_TYPE[chart_type]
+    plate_bonuses = PLATE_BONUS_UNITS_BY_TYPE[chart_type]
     normalized_grade = str(grade).strip().upper()
-    if normalized_grade not in GRADE_PENALTY_UNITS:
+    if normalized_grade not in grade_penalties:
         raise ValueError(f"Unsupported Phoenix 2 grade: {grade!r}")
     normalized_plate = normalize_plate(plate)
     if normalized_plate is None:
@@ -119,8 +145,8 @@ def phoenix2_pumbility(
     )
     multiplier = (
         750
-        - 5 * GRADE_PENALTY_UNITS[normalized_grade]
-        + PLATE_BONUS_UNITS[normalized_plate]
+        - 5 * grade_penalties[normalized_grade]
+        + plate_bonuses[normalized_plate]
     ) / 750
     raw = max(0.0, base * multiplier)
     return math.floor((raw + 1e-9) * 100) / 100
@@ -197,10 +223,20 @@ def _scaled_counts(counts: Counter[str], cap: int) -> dict[str, float]:
     return {plate: count * scale for plate, count in counts.items()}
 
 
+def _weighted_median_plate(probabilities: Mapping[str, float]) -> str:
+    """Return the lower ordered plate whose cumulative probability reaches 50%."""
+    cumulative = 0.0
+    for plate in PLATES:
+        cumulative += float(probabilities.get(plate, 0.0))
+        if cumulative + 1e-12 >= 0.5:
+            return plate
+    return PLATES[-1]
+
+
 @dataclass(frozen=True)
 class PlateDistribution:
     probabilities: dict[str, float]
-    most_likely: str
+    median_plate: str
     source: str
 
 
@@ -351,8 +387,8 @@ class PlateProjectionModel:
             ) / denominator
             for plate in PLATES
         }
-        most_likely = max(PLATES, key=lambda plate: (probabilities[plate], -PLATES.index(plate)))
+        median_plate = _weighted_median_plate(probabilities)
         source = "phoenix2" if sum(p2.values()) else "phoenix1" if p1 else "population"
-        result = PlateDistribution(probabilities, most_likely, source)
+        result = PlateDistribution(probabilities, median_plate, source)
         self._distribution_cache[key] = result
         return result
