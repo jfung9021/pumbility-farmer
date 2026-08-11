@@ -290,6 +290,66 @@ class CoordinatorTests(unittest.TestCase):
 
 
 class ApiRouteTests(unittest.TestCase):
+    def test_jonathan_refresh_requires_a_configured_matching_password(self) -> None:
+        with patch.dict("os.environ", {"JONATHAN_PASSWORD": ""}):
+            unconfigured = API_CLIENT.post("/api/jonathan/refresh")
+        with patch.dict("os.environ", {"JONATHAN_PASSWORD": "operator-secret"}):
+            missing = API_CLIENT.post("/api/jonathan/refresh")
+            wrong = API_CLIENT.post(
+                "/api/jonathan/refresh",
+                headers={"X-Jonathan-Password": "wrong-secret"},
+            )
+
+        self.assertEqual(unconfigured.status_code, 503)
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong.status_code, 401)
+        self.assertEqual(missing.json(), {"error": "Unauthorized refresh request."})
+        self.assertEqual(missing.headers["cache-control"], "no-store")
+
+    def test_jonathan_incremental_refresh_is_always_forced(self) -> None:
+        job = new_job("analysis-incremental", NOW)
+        with (
+            patch.dict("os.environ", {"JONATHAN_PASSWORD": "operator-secret"}),
+            patch(
+                "api.jonathan.start_or_reuse_analysis",
+                return_value=(202, {"outcome": "started", "job": job}),
+            ) as start,
+        ):
+            response = API_CLIENT.post(
+                "/api/jonathan/refresh?mode=incremental",
+                headers={"X-Jonathan-Password": "operator-secret"},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        start.assert_called_once_with(
+            mix=resolve_mix("phoenix2"),
+            force_refresh=True,
+            full_sync=False,
+            trigger="jonathan",
+        )
+
+    def test_jonathan_full_refresh_requests_a_complete_resync(self) -> None:
+        job = new_job("analysis-full", NOW, full_sync=True)
+        with (
+            patch.dict("os.environ", {"JONATHAN_PASSWORD": "operator-secret"}),
+            patch(
+                "api.jonathan.start_or_reuse_analysis",
+                return_value=(202, {"outcome": "started", "job": job}),
+            ) as start,
+        ):
+            response = API_CLIENT.post(
+                "/api/jonathan/refresh?mode=full",
+                headers={"X-Jonathan-Password": "operator-secret"},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        start.assert_called_once_with(
+            mix=resolve_mix("phoenix2"),
+            force_refresh=True,
+            full_sync=True,
+            trigger="jonathan",
+        )
+
     def test_manual_analysis_refresh_requires_matching_admin_secret(self) -> None:
         with patch.dict("os.environ", {"CRON_SECRET": "admin-secret"}):
             missing = API_CLIENT.post("/api/analyze?mix=phoenix2")

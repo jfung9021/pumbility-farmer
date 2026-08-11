@@ -7,6 +7,7 @@ interface ProgressRung {
 
 export interface PumbilityProgress {
   label: string;
+  rungIndex: number;
   threshold: number;
   nextLabel: string | null;
   nextThreshold: number | null;
@@ -92,6 +93,7 @@ export function pumbilityProgress(
   if (!next) {
     return {
       label: current.label,
+      rungIndex: currentIndex,
       threshold: current.threshold,
       nextLabel: null,
       nextThreshold: null,
@@ -103,6 +105,7 @@ export function pumbilityProgress(
   const span = next.threshold - current.threshold;
   return {
     label: current.label,
+    rungIndex: currentIndex,
     threshold: current.threshold,
     nextLabel: next.label,
     nextThreshold: next.threshold,

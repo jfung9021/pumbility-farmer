@@ -207,6 +207,7 @@ npm run build
 
 The frontend is a Next.js application. `/` is the feature landing page, `/tier-list` contains the
 combined Phoenix rankings dashboard, and `/recommendations` contains the player-specific route.
+The unlinked, `noindex` `/jonathan` page contains the password-protected operator refresh controls.
 Phoenix 1 loads the frozen public artifact at `/data/phoenix1.json`;
 `/api/analyze?mix=phoenix1` redirects to that canonical copy.
 Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
@@ -214,6 +215,7 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 - `GET /api/analyze?mix=phoenix2`: load the latest successful `AnalysisPayload`.
 - `GET /api/analyze?mix=phoenix2&jobId=...`: load a matching 24-hour queue-job status.
 - `POST /api/analyze?mix=phoenix2`: protected administrator trigger; requires `X-Analysis-Run-Secret` matching `CRON_SECRET` and queues or follows a Phoenix 2 refresh. Add `fullSync=true` to discard the incremental watermark and refetch every consented player's complete score history.
+- `POST /api/jonathan/refresh?mode=incremental|full`: operator-page trigger; requires `X-Jonathan-Password` matching `JONATHAN_PASSWORD`. Incremental refresh ignores the freshness cooldown but retains the score watermark; full refresh discards it.
 - `POST /api/deploy?mix=phoenix2`: validate and acknowledge a legacy signed deployment event without starting analysis.
 - `GET /api/recommendations/players`: return consented usernames and mode eligibility without raw IDs; successful lists are cached for five minutes with stale revalidation.
 - `GET /api/recommendations?playerKey=...`: return the last cached recommendation for one player.
@@ -388,6 +390,7 @@ Configure these server-side variables:
 - `PIU_SCORES_API_KEY` — required for live synchronization.
 - `BLOB_READ_WRITE_TOKEN` — required; automatically provided after connecting a **private** Vercel Blob store.
 - `CRON_SECRET` — required; a sensitive random value of at least 16 characters used for the secured daily cron route.
+- `JONATHAN_PASSWORD` — required for the unlinked `/jonathan` operator page. It is validated only by the Python service and must not use a `NEXT_PUBLIC_` prefix.
 - `ANALYSIS_BOOTSTRAP_SAMPLES` — optional; defaults to 500.
 - `PLAYER_RECOMMENDATION_REFRESH_ENABLED` — optional rollout switch; defaults to false in source and is set to true for the validated production rollout.
 - `PLAYER_RECOMMENDATION_PRUNE_LEGACY` — optional destructive cleanup switch; defaults to false.
@@ -457,12 +460,10 @@ python scripts/capture_public_analysis_fixture.py
 
 For an authorized in-memory end-to-end check against the private current snapshot, run `scripts/validate_private_snapshot.py` through `vercel env run -e production`. The validator prints aggregate counts only and never persists raw rows.
 
-## Evidence labels
+## Limited-data presentation
 
-- **Published:** at least 10 contributing players.
-- **Provisional:** 5–9 contributing players.
-- **Insufficient:** 1–4 contributing players.
-- **Unrated:** the chart was not selected for any eligible player under either
-  the deduplicated two-window rule or its top-100 fallback.
-
-The local sample snapshots contain one player. They are useful for functional testing, but their measured charts remain correctly labeled **Insufficient**.
+The public Tier List and Recommendations UI count chart observations after deduplicating by player
+name. A chart with fewer than 20 contributing players receives a **Limited data** warning; a chart
+with 20 or more contributors has no evidence mark. This is a presentation-only rule. Stored payloads
+retain the legacy `evidenceStatus` field for compatibility, and the Evidence filter is no longer
+shown. Local one-player sample snapshots therefore display the limited-data warning.

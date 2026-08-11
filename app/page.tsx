@@ -1,18 +1,13 @@
 import Link from "next/link";
-
+import { ScoreSyncLink } from "./_components/score-sync-link";
+import { SiteHeader } from "./_components/site-header";
 
 export default function HomePage() {
   return (
     <main className="home-page">
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
-      <header className="site-header">
-        <Link className="brand" href="/" aria-label="Pumbility Farmer home">
-          <span className="brand-mark">PF</span>
-          <span>Pumbility <b>Farmer</b></span>
-        </Link>
-        <span className="home-status"><i /> Phoenix scoring tools</span>
-      </header>
+      <SiteHeader />
 
       <section className="home-hero">
         <p className="home-intro">
@@ -22,7 +17,6 @@ export default function HomePage() {
 
         <div className="feature-grid">
           <Link className="feature-card feature-recommendations" href="/recommendations">
-            <span className="feature-index">01</span>
             <div>
               <p>PERSONALIZED ROUTE</p>
               <h2>Recommendations</h2>
@@ -35,18 +29,32 @@ export default function HomePage() {
           </Link>
 
           <Link className="feature-card feature-tier" href="/tier-list">
-            <span className="feature-index">02</span>
             <div>
               <p>GLOBAL ANALYSIS</p>
               <h2>Tier List</h2>
               <span>
-                Browse one current tier list built from normalized Phoenix 1 and
-                Phoenix 2 evidence with every filter and evidence label.
+                Compare scoring-based difficulty estimates across Phoenix 1 and
+                Phoenix 2 charts in compact or detailed views.
               </span>
             </div>
             <b aria-hidden="true">↗</b>
           </Link>
         </div>
+
+        <section className="home-how-to" aria-labelledby="home-how-to-title">
+          <div>
+            <p>HOW TO</p>
+            <h2 id="home-how-to-title">Sync your scores before you start</h2>
+          </div>
+          <div className="home-how-to-copy">
+            <ol>
+              <li>Log in to PIU Scores on its separate website.</li>
+              <li>Open the Phoenix score upload page and sync your latest scores.</li>
+              <li>Return here to view recommendations based on the updated history.</li>
+            </ol>
+            <ScoreSyncLink>Open PIU Scores upload</ScoreSyncLink>
+          </div>
+        </section>
       </section>
 
       <footer className="home-footer">
