@@ -1414,6 +1414,121 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(TOP_RECOMMENDATION_COUNT, 50)
         self.assertLessEqual(len(result["topRecommendations"]), 50)
 
+    def test_overall_uses_shared_single_and_double_top_fifty(self) -> None:
+        double_charts = []
+        double_scores = []
+        double_combined = []
+        for index, chart in enumerate(self.snapshot["charts"]):
+            chart_id = f"double-{index:02d}"
+            double_charts.append(
+                {
+                    **chart,
+                    "id": chart_id,
+                    "songName": f"Double Chart {index}",
+                    "type": "Double",
+                    "difficulty": f"D{chart['level']}",
+                }
+            )
+            source = self.combined[index]
+            double_combined.append(
+                {
+                    **source,
+                    "mode": "Doubles",
+                    "songName": f"Double Chart {index}",
+                    "difficulty": f"D{chart['level']}",
+                    "type": "Double",
+                    "chartId": chart_id,
+                }
+            )
+            if index < 30:
+                double_scores.append(
+                    {
+                        **self.snapshot["scores"][index],
+                        "chartId": chart_id,
+                        "pumbility": 500.0 - index,
+                    }
+                )
+        snapshot = {
+            **self.snapshot,
+            "charts": [*self.snapshot["charts"], *double_charts],
+            "scores": [*self.snapshot["scores"], *double_scores],
+        }
+        modes = build_player_recommendation(
+            "player",
+            snapshot,
+            [*self.combined, *double_combined],
+            {"singles": 10.0, "doubles": 10.0},
+            self._fixed_score_model(),
+        )["modes"]
+        overall = modes["overall"]
+
+        expected_total = sum(500.0 - index for index in range(30)) + 20 * 344.85
+        self.assertAlmostEqual(overall["currentTop50Pumbility"], expected_total)
+        self.assertEqual(overall["currentTop50Count"], 50)
+        self.assertEqual(overall["top50ModeCounts"], {"singles": 20, "doubles": 30})
+        self.assertEqual(
+            overall["sourceRecommendationCounts"],
+            {
+                "singles": len(modes["singles"]["topRecommendations"]),
+                "doubles": len(modes["doubles"]["topRecommendations"]),
+            },
+        )
+        source_ids = {
+            row["chartId"]
+            for mode_key in ("singles", "doubles")
+            for row in modes[mode_key]["topRecommendations"]
+        }
+        self.assertEqual(
+            {row["chartId"] for row in overall["candidates"]},
+            source_ids,
+        )
+        self.assertLessEqual(len(overall["topRecommendations"]), 50)
+        self.assertTrue(
+            {row["type"] for row in overall["topRecommendations"]}
+            .issubset({"Single", "Double"})
+        )
+        single_mode_row = next(
+            row
+            for row in modes["singles"]["topRecommendations"]
+            if row["chartId"] == "chart-30"
+        )
+        overall_row = next(
+            row for row in overall["candidates"] if row["chartId"] == "chart-30"
+        )
+        self.assertLess(overall_row["projectedGain"], single_mode_row["projectedGain"])
+        self.assertTrue(
+            all(
+                not any(str(key).startswith("_") for key in row)
+                for mode in modes.values()
+                for row in mode.get("candidates", [])
+            )
+        )
+
+    def test_overall_remains_available_when_only_one_mode_can_be_rated(self) -> None:
+        modes = build_player_recommendation(
+            "player",
+            self.snapshot,
+            self.combined,
+            {"singles": 10.0},
+            self._fixed_score_model(),
+        )["modes"]
+
+        overall = modes["overall"]
+        self.assertTrue(overall["eligible"])
+        self.assertEqual(
+            overall["sourceModeEligibility"],
+            {"singles": True, "doubles": False},
+        )
+        self.assertEqual(overall["sourceRecommendationCounts"]["doubles"], 0)
+        self.assertEqual(
+            overall["currentTop50Pumbility"],
+            modes["singles"]["currentTop50Pumbility"],
+        )
+        self.assertEqual(
+            [row["chartId"] for row in overall["topRecommendations"]],
+            [row["chartId"] for row in modes["singles"]["topRecommendations"]],
+        )
+
     def test_top_twenty_controls_display_and_candidates_while_ranks_eleven_to_thirty_control_projection(self) -> None:
         scores = [
             {

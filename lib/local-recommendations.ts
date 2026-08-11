@@ -191,6 +191,42 @@ function manualMode(
   };
 }
 
+function manualOverallMode(
+  singles: RecommendationModeResult,
+  doubles: RecommendationModeResult,
+): RecommendationModeResult {
+  const sourceRecommendations = [
+    ...singles.topRecommendations,
+    ...doubles.topRecommendations,
+  ];
+  const topRecommendations = [...sourceRecommendations]
+    .sort((left, right) =>
+      right.farmEdge - left.farmEdge
+      || left.estimatedDifficulty - right.estimatedDifficulty
+      || left.songName.localeCompare(right.songName)
+      || left.chartId.localeCompare(right.chartId),
+    )
+    .slice(0, 50);
+  return {
+    eligible: true,
+    manual: true,
+    validScoreCount: 0,
+    projectionAvailable: false,
+    currentTop50Pumbility: 0,
+    currentTop50CutoffPumbility: null,
+    currentTop50Count: 0,
+    top50ModeCounts: { singles: 0, doubles: 0 },
+    sourceModeEligibility: { singles: true, doubles: true },
+    sourceRecommendationCounts: {
+      singles: singles.topRecommendations.length,
+      doubles: doubles.topRecommendations.length,
+    },
+    candidateCount: sourceRecommendations.length,
+    candidates: sourceRecommendations,
+    topRecommendations,
+  };
+}
+
 export function recommendationsForRating(
   payload: Awaited<ReturnType<typeof readLocalRecommendationIndex>>,
   scoringRating: number,
@@ -200,6 +236,18 @@ export function recommendationsForRating(
     && Number.isFinite(configuredMinimum)
     ? configuredMinimum
     : DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL;
+  const singles = manualMode(
+    payload.charts,
+    "singles",
+    scoringRating,
+    minimumOfficialLevel,
+  );
+  const doubles = manualMode(
+    payload.charts,
+    "doubles",
+    scoringRating,
+    minimumOfficialLevel,
+  );
   return {
     generatedAtUtc: payload.generatedAtUtc,
     modelGeneratedAtUtc: payload.generatedAtUtc,
@@ -210,8 +258,9 @@ export function recommendationsForRating(
       displayName: `Manual ${scoringRating.toFixed(2)}`,
       manual: true,
       modes: {
-        singles: manualMode(payload.charts, "singles", scoringRating, minimumOfficialLevel),
-        doubles: manualMode(payload.charts, "doubles", scoringRating, minimumOfficialLevel),
+        overall: manualOverallMode(singles, doubles),
+        singles,
+        doubles,
       },
     },
   };

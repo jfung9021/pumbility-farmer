@@ -18,6 +18,7 @@ import {
   validateLocalAnalysisPayload,
 } from "../lib/local-analysis.ts";
 import { archiveForMix, MIXES, mixFromSearchParams } from "../lib/mixes.ts";
+import { pumbilityProgress } from "../lib/pumbility-progress.ts";
 import {
   applyPhoenix1Rerates,
   type Phoenix1ReratePayload,
@@ -63,7 +64,7 @@ test("recommendation methodology separates top-20 display from ranks 11-30 proje
     "utf8",
   );
 
-  assert.match(page, /median \(50th percentile\)[\s\S]*from similar\s+players/);
+  assert.match(page, /median \(50th percentile\) from all other players/);
   assert.match(page, /plus or minus 0\.2 through 0\.5 rating in 0\.1 steps seeking 20 peers/);
   assert.match(page, /repeats those radii seeking 10, then repeats seeking five/);
   assert.match(page, /Every peer within the narrowest successful radius is used/);
@@ -74,9 +75,47 @@ test("recommendation methodology separates top-20 display from ranks 11-30 proje
   assert.match(page, /ranks 11–30 Pumbility rating/);
   assert.match(page, /S with Fair Game/);
   assert.match(page, /visible skill rating and eligible-chart ceiling use top-20/);
-  assert.match(page, /mode\?\.phoenix2ScoreThreshold \?\? 20/);
+  assert.match(page, /Skill title progress/);
   assert.doesNotMatch(page, /chart difficulty fields are averaged for the skill rating/);
   assert.doesNotMatch(page, /reaches 50 valid Phoenix 2 scores/);
+});
+
+test("recommendation modes put Overall first and select it by default", async () => {
+  const page = await readFile(
+    path.join(process.cwd(), "app", "recommendations", "page.tsx"),
+    "utf8",
+  );
+
+  assert.match(
+    page,
+    /const RECOMMENDATION_MODES:[\s\S]*"overall",[\s\S]*"singles",[\s\S]*"doubles"/,
+  );
+  assert.match(page, /useState<RecommendationModeKey>\("overall"\)/);
+  assert.match(page, /role="tabpanel"/);
+  assert.match(page, /role="progressbar"/);
+  assert.match(page, /shared Phoenix 2 S\+D top 50/);
+  assert.match(page, /cached recommendation predates the Overall model/);
+});
+
+test("Pumbility progress uses the Phoenix 2 title and rank boundaries", () => {
+  const singleExpert = pumbilityProgress("singles", 17_500);
+  assert.equal(singleExpert.label, "Single Expert Lv. 1");
+  assert.equal(singleExpert.nextThreshold, 17_700);
+  assert.equal(singleExpert.percent, 0);
+
+  const doubleMaster = pumbilityProgress("doubles", 19_000);
+  assert.equal(doubleMaster.label, "Double Master");
+  assert.equal(doubleMaster.nextThreshold, null);
+  assert.equal(doubleMaster.percent, 100);
+
+  const alexandrite = pumbilityProgress("overall", 19_300);
+  assert.equal(alexandrite.label, "Alexandrite Lv. 2");
+  assert.equal(alexandrite.nextLabel, "Alexandrite Lv. 3");
+  assert.equal(alexandrite.percent, 50);
+
+  const phoenix = pumbilityProgress("overall", 20_000);
+  assert.equal(phoenix.label, "Phoenix");
+  assert.equal(phoenix.nextThreshold, null);
 });
 
 test("recommendation page shows one top-50 list without projection evidence details", async () => {
@@ -133,6 +172,7 @@ test("legacy local player responses carry a complete generation timestamp contra
   assert.equal(response?.recommendationsGeneratedAtUtc, generatedAtUtc);
   assert.equal(response?.modelGeneratedAtUtc, generatedAtUtc);
   assert.equal(response?.playerSyncedAtUtc, generatedAtUtc);
+  assert.equal(response?.player.modes.overall, undefined);
 });
 
 test("global analysis button sends the protected administrator secret", async () => {
@@ -464,6 +504,12 @@ test("recommendation player list exposes names and eligibility without mode payl
         username: "PLAYER",
         displayName: "PLAYER",
         modes: {
+          overall: {
+            eligible: true,
+            validScoreCount: 30,
+            candidates: [],
+            topRecommendations: [],
+          },
           singles: {
             eligible: true,
             validScoreCount: 30,
@@ -525,12 +571,20 @@ test("manual recommendations include charts up to 0.5 above the scoring rating",
   }, 20.5);
 
   const singles = response.player.modes.singles;
+  const overall = response.player.modes.overall;
+  assert.ok(overall);
   assert.deepEqual(singles.candidateRange, [null, 21]);
   assert.deepEqual(
     (singles.candidates ?? []).map((candidate) => candidate.chartId),
     ["level-16", "rating-edge", "upper-edge"],
   );
   assert.equal(singles.topRecommendations[0].chartId, "level-16");
+  assert.equal(overall.sourceRecommendationCounts?.singles, 3);
+  assert.equal(overall.sourceRecommendationCounts?.doubles, 0);
+  assert.deepEqual(
+    overall.topRecommendations.map((candidate) => candidate.chartId),
+    ["level-16", "rating-edge", "upper-edge"],
+  );
 
   const configuredFloor = recommendationsForRating({
     generatedAtUtc: "2026-08-08T00:00:00Z",
