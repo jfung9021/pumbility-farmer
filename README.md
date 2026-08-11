@@ -293,6 +293,22 @@ training or projecting an already-played target chart, that chart is removed fro
 window and rank 31 is promoted when available. Played status, existing Pumbility, current top-50
 totals, and projected gain always use Phoenix 2.
 
+The recommendation page opens on **Overall**, followed by **Single** and **Double**. Overall keeps
+the mode-specific rating and projection for every chart, merges the displayed top 50 from each
+eligible mode, recalculates each candidate's gain against one shared Single-and-Double Phoenix 2
+pool, and displays the best 50 merged opportunities. Overall Pumbility is the sum of the highest 50
+Phoenix 2 Pumbility values in the union of the player's Single and Double scores; it is not the sum
+of both mode totals. If only one mode can be rated, Overall still uses that mode's recommendations
+and explains which source is unavailable, while every existing Phoenix 2 score in either mode still
+participates in the Overall total.
+
+The current top-50 total also drives the progress indicator. Single and Double use their separate
+Phoenix 2 skill-title ladders (Beginner, Intermediate, Advanced, Expert, and the mode-specific
+Master title at 19,000). Overall uses the Phoenix 2 Pumbility rank ladder from Unranked through the five
+divisions of Bronze, Silver, Gold, Platinum, Diamond, Red Beryl, and Alexandrite, followed by
+Phoenix at 20,000. Phoenix 1 may supply an existing rating or projection fallback, but never a
+current Pumbility total or progress value.
+
 Suggested-chart eligibility has no lower estimated-difficulty bound and extends through 0.5 points
 above the player's scoring rating. Charts beyond that upper bound are excluded before projected-gain
 ranking.
@@ -312,7 +328,8 @@ Phoenix 2 grade-and-plate Pumbility formula. The plate distribution combines Pho
 history with a held-out-tuned, capped Phoenix 1 prior and population smoothing; Phoenix 2 wins
 for an overlapping player/chart observation. Expected Pumbility is the probability-weighted
 formula value. Projected gain is calculated separately for every plate outcome against the
-player's actual Phoenix 2 top 50, including replacement of the number-50 chart, and then averaged.
+active Phoenix 2 top-50 pool, including replacement of the number-50 chart, and then averaged.
+Single and Double use their independent mode pool; Overall uses the shared S+D pool.
 Phoenix 1 Pumbility totals never enter the current Phoenix 2 top 50.
 
 The population models and frozen per-player inputs are rebuilt once in the daily background run.

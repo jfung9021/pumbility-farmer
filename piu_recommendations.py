@@ -52,7 +52,7 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 17
+RECOMMENDATION_SCHEMA_VERSION = 18
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 2
@@ -2162,6 +2162,50 @@ def build_player_recommendation(
         phoenix1_scores["playerId"] == str(player_id)
     ].copy()
     modes: dict[str, Any] = {}
+    overall_source_rows: dict[str, list[dict[str, Any]]] = {
+        "singles": [],
+        "doubles": [],
+    }
+
+    chart_type_by_id = {
+        str(row["chartId"]): str(row["type"])
+        for row in catalog[["chartId", "type"]].to_dict(orient="records")
+        if row.get("type") in MODE_TYPES
+    }
+    overall_scores = player_scores[
+        player_scores["chartId"].astype(str).isin(set(chart_type_by_id))
+    ].copy()
+    overall_scores = overall_scores.sort_values(
+        ["pumbility", "score", "chartId"],
+        ascending=[False, False, True],
+        kind="mergesort",
+    )
+    overall_values = [float(value) for value in overall_scores["pumbility"]]
+    overall_current_total = _top_total(overall_values)
+    overall_existing_by_chart = {
+        str(row["chartId"]): float(row["pumbility"])
+        for row in overall_scores.to_dict(orient="records")
+    }
+    overall_top50_chart_ids = set(
+        overall_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str)
+    )
+    overall_top50_cutoff = (
+        float(overall_scores.iloc[TOP_PUMBILITY_COUNT - 1]["pumbility"])
+        if len(overall_scores) >= TOP_PUMBILITY_COUNT
+        else None
+    )
+    overall_top50_mode_counts = {"singles": 0, "doubles": 0}
+    for chart_id in overall_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str):
+        chart_type = chart_type_by_id.get(chart_id)
+        if chart_type in MODE_TYPES:
+            overall_top50_mode_counts[_mode_key(chart_type)] += 1
+
+    def public_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in row.items()
+            if not str(key).startswith("_")
+        }
 
     for chart_type in MODE_TYPES:
         mode_key = _mode_key(chart_type)
@@ -2185,6 +2229,20 @@ def build_player_recommendation(
         )
 
         phoenix2_score_count = len(mode_scores)
+        current_values = [float(value) for value in mode_scores["pumbility"]]
+        current_total = _top_total(current_values)
+        existing_by_chart = {
+            str(row["chartId"]): float(row["pumbility"])
+            for row in mode_scores.to_dict(orient="records")
+        }
+        top50_chart_ids = set(
+            mode_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str)
+        )
+        top50_cutoff = (
+            float(mode_scores.iloc[TOP_PUMBILITY_COUNT - 1]["pumbility"])
+            if len(mode_scores) >= TOP_PUMBILITY_COUNT
+            else None
+        )
         rating_source, rating_scores = _select_rating_scores(
             phoenix1_mode_scores, mode_scores
         )
@@ -2203,6 +2261,13 @@ def build_player_recommendation(
                 ),
                 "projectionAvailable": False,
                 "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
+                "currentTop50Pumbility": round(current_total, 3),
+                "currentTop50CutoffPumbility": (
+                    round(top50_cutoff, 3) if top50_cutoff is not None else None
+                ),
+                "currentTop50Count": min(
+                    int(phoenix2_score_count), TOP_PUMBILITY_COUNT
+                ),
                 **({"candidates": []} if include_candidates else {}),
                 "topRecommendations": [],
             }
@@ -2241,20 +2306,6 @@ def build_player_recommendation(
         )
         slope = phoenix2_slopes.get(mode_key)
 
-        current_values = [float(value) for value in mode_scores["pumbility"]]
-        current_total = _top_total(current_values)
-        existing_by_chart = {
-            str(row["chartId"]): float(row["pumbility"])
-            for row in mode_scores.to_dict(orient="records")
-        }
-        top50_chart_ids = set(
-            mode_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str)
-        )
-        top50_cutoff = (
-            float(mode_scores.iloc[TOP_PUMBILITY_COUNT - 1]["pumbility"])
-            if len(mode_scores) >= TOP_PUMBILITY_COUNT
-            else None
-        )
         candidates: list[dict[str, Any]] = []
         for chart in combined_charts:
             if chart.get("type") != chart_type:
@@ -2292,6 +2343,7 @@ def build_player_recommendation(
             plate_projection_source: str | None = None
             expected: float | None = None
             gain: float | None = None
+            overall_gain: float | None = None
             if projected_grade is not None:
                 distribution = plate_model.distribution(
                     str(player_id), chart_type, projected_grade
@@ -2323,6 +2375,18 @@ def build_player_recommendation(
                     )
                     for probability, value in outcomes
                 )
+                overall_existing = overall_existing_by_chart.get(chart_id)
+                overall_gain = sum(
+                    probability
+                    * _top50_marginal_gain(
+                        value,
+                        existing_pumbility=overall_existing,
+                        existing_in_top50=chart_id in overall_top50_chart_ids,
+                        current_score_count=len(overall_scores),
+                        cutoff=overall_top50_cutoff,
+                    )
+                    for probability, value in outcomes
+                )
             candidates.append(
                 {
                     **dict(chart),
@@ -2335,6 +2399,9 @@ def build_player_recommendation(
                         round(expected, 3) if expected is not None else None
                     ),
                     "projectedGain": round(gain, 3) if gain is not None else None,
+                    "_overallProjectedGain": (
+                        round(overall_gain, 3) if overall_gain is not None else None
+                    ),
                     "projectedScore": projected_score,
                     "scoreProjectionSource": projection.source,
                     "scoreProjectionSupportCount": projection.support_count,
@@ -2379,6 +2446,8 @@ def build_player_recommendation(
                 ),
             )[:TOP_RECOMMENDATION_COUNT]
 
+        overall_source_rows[mode_key] = [dict(row) for row in top]
+
         modes[mode_key] = {
             "eligible": True,
             "validScoreCount": int(phoenix2_score_count),
@@ -2418,14 +2487,94 @@ def build_player_recommendation(
             "currentTop50CutoffPumbility": (
                 round(top50_cutoff, 3) if top50_cutoff is not None else None
             ),
+            "currentTop50Count": min(
+                int(phoenix2_score_count), TOP_PUMBILITY_COUNT
+            ),
             "candidateRange": [
                 None,
                 round(scoring_rating + RECOMMENDATION_RADIUS, 3),
             ],
             "candidateCount": len(candidates),
-            **({"candidates": candidates} if include_candidates else {}),
-            "topRecommendations": top,
+            **(
+                {"candidates": [public_candidate(row) for row in candidates]}
+                if include_candidates
+                else {}
+            ),
+            "topRecommendations": [public_candidate(row) for row in top],
         }
+
+    source_mode_eligibility = {
+        mode_key: bool(modes.get(mode_key, {}).get("eligible"))
+        for mode_key in ("singles", "doubles")
+    }
+    source_recommendation_counts = {
+        mode_key: len(overall_source_rows[mode_key])
+        for mode_key in ("singles", "doubles")
+    }
+    overall_candidates: list[dict[str, Any]] = []
+    for mode_key in ("singles", "doubles"):
+        if not source_mode_eligibility[mode_key]:
+            continue
+        for source in overall_source_rows[mode_key]:
+            row = public_candidate(source)
+            row["projectedGain"] = source.get("_overallProjectedGain")
+            overall_candidates.append(row)
+
+    overall_projection_available = any(
+        row.get("projectedScore") is not None for row in overall_candidates
+    )
+    if overall_projection_available:
+        overall_top = sorted(
+            overall_candidates,
+            key=_projected_gain_sort_key,
+        )[:TOP_RECOMMENDATION_COUNT]
+    else:
+        overall_top = sorted(
+            overall_candidates,
+            key=lambda row: (
+                -float(row["farmEdge"]),
+                float(row["estimatedDifficulty"]),
+                str(row["songName"]).casefold(),
+                str(row["chartId"]),
+            ),
+        )[:TOP_RECOMMENDATION_COUNT]
+
+    overall_eligible = any(source_mode_eligibility.values())
+    modes["overall"] = {
+        "eligible": overall_eligible,
+        "validScoreCount": int(len(overall_scores)),
+        "phoenix2ScoreCount": int(len(overall_scores)),
+        "requiredScoreCount": 1,
+        "projectionAvailable": overall_projection_available,
+        "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
+        "currentTop50Pumbility": round(overall_current_total, 3),
+        "currentTop50CutoffPumbility": (
+            round(overall_top50_cutoff, 3)
+            if overall_top50_cutoff is not None
+            else None
+        ),
+        "currentTop50Count": min(len(overall_scores), TOP_PUMBILITY_COUNT),
+        "top50ModeCounts": overall_top50_mode_counts,
+        "sourceModeEligibility": source_mode_eligibility,
+        "sourceRecommendationCounts": source_recommendation_counts,
+        "candidateCount": len(overall_candidates),
+        **(
+            {"candidates": overall_candidates}
+            if include_candidates
+            else {}
+        ),
+        "topRecommendations": overall_top,
+        **(
+            {}
+            if overall_eligible
+            else {
+                "reason": (
+                    "At least one mode needs a valid Phoenix 2 score or 20 valid "
+                    "Phoenix 1 scores before Overall recommendations are available."
+                )
+            }
+        ),
+    }
     return {"playerKey": public_player_key(player_id), "modes": modes}
 
 
@@ -2587,10 +2736,12 @@ def build_recommendation_index(
             "candidateUpperRadius": RECOMMENDATION_RADIUS,
             "candidateLowerBound": None,
             "topPumbilityCount": TOP_PUMBILITY_COUNT,
+            "overallPumbility": "the highest 50 Phoenix 2 Pumbility values from the player's combined Single and Double scores",
+            "overallRecommendations": "merge the displayed top 50 Single and top 50 Double recommendations, recalculate every projected gain against the shared Phoenix 2 S+D top 50, then retain the best 50",
             "projection": "projected raw score converted with the official Phoenix 2 grade-and-plate Pumbility formula",
             "plateProjection": "hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
             "phoenix1PlatePriorCap": plate_model.phoenix1_cap,
-            "projectedGain": "probability-weighted change to the Phoenix 2 top-50 total; each plate outcome replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
+            "projectedGain": "probability-weighted change to the active Phoenix 2 top-50 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; each plate outcome replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
             "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
             "manualRanking": "farm edge up to 0.5 estimated-difficulty points above the requested scoring rating; no personal top-50 gain is inferred",
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",

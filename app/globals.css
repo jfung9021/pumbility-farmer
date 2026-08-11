@@ -590,8 +590,11 @@ footer b { color: #929b93; }
 .recommendation-stats strong { display: block; font-size: 27px; letter-spacing: -0.045em; margin: 10px 0 7px; }
 .recommendation-stats article:first-child strong { color: var(--acid); }
 .recommendation-stats small { font-size: 8px; letter-spacing: 0.02em; line-height: 1.4; text-transform: none; }
-.rating-source-stat i { background: #dce4dd; display: block; height: 3px; margin-top: 12px; overflow: hidden; width: 100%; }
-.rating-source-stat i b { background: var(--acid); display: block; height: 100%; transition: width 180ms ease; }
+.pumbility-progress-stat strong { font-size: 19px; line-height: 1.15; }
+.pumbility-progress { background: #dce4dd; display: block; height: 4px; margin-top: 12px; overflow: hidden; width: 100%; }
+.pumbility-progress b { background: var(--acid); display: block; height: 100%; transition: width 180ms ease; }
+.overall-source-notice { background: rgba(200, 255, 46, 0.07); border: 1px solid rgba(200, 255, 46, 0.18); color: #aeb7af; max-width: none; }
+.overall-source-notice b { color: var(--acid); }
 .top-recommendations { margin-top: 56px; }
 .recommendation-section-heading { align-items: end; display: flex; justify-content: space-between; margin-bottom: 18px; }
 .recommendation-section-heading h2 { font-size: 28px; letter-spacing: -0.045em; margin: 0; }

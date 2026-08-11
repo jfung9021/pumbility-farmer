@@ -1,18 +1,27 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
 import { readJsonResponse } from "../../lib/api-response";
 import { formatEstimatedDifficulty } from "../../lib/format-difficulty";
+import { pumbilityProgress } from "../../lib/pumbility-progress";
 import type {
   ModeKey,
   PlayerRecommendationsResponse,
   PlayerRefreshJob,
   PlayerRefreshResponse,
   RecommendationChart,
+  RecommendationModeKey,
   RecommendationPlayersResponse,
 } from "../../lib/types";
+
+
+const RECOMMENDATION_MODES: RecommendationModeKey[] = [
+  "overall",
+  "singles",
+  "doubles",
+];
 
 
 function formatGeneratedAt(value: string | undefined): string {
@@ -46,6 +55,50 @@ function signed(value: number, digits = 2): string {
 
 function ratingLabel(mode: ModeKey, value: number): string {
   return `${mode === "singles" ? "S" : "D"}${value.toFixed(2)}`;
+}
+
+function pumbilityLabel(value: number): string {
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function ProgressStat({
+  mode,
+  value,
+}: {
+  mode: RecommendationModeKey;
+  value: number;
+}) {
+  const progress = pumbilityProgress(mode, value);
+  const atMaximum = progress.nextThreshold === null;
+  const ariaMinimum = atMaximum ? 0 : progress.threshold;
+  const ariaMaximum = progress.nextThreshold ?? progress.threshold;
+  const ariaNow = atMaximum
+    ? progress.threshold
+    : Math.min(ariaMaximum, Math.max(ariaMinimum, value));
+  return (
+    <article className="pumbility-progress-stat">
+      <span>{mode === "overall" ? "Rank progress" : "Skill title progress"}</span>
+      <strong>{progress.label}</strong>
+      <small>
+        {progress.nextLabel
+          ? `${pumbilityLabel(progress.remaining)} Pumbility to ${progress.nextLabel}`
+          : `Highest ${mode === "overall" ? "rank" : "skill title"} reached`}
+      </small>
+      <div
+        aria-label={`${progress.label} progress`}
+        aria-valuemax={ariaMaximum}
+        aria-valuemin={ariaMinimum}
+        aria-valuenow={ariaNow}
+        className="pumbility-progress"
+        role="progressbar"
+      >
+        <b style={{ width: `${progress.percent}%` }} />
+      </div>
+    </article>
+  );
 }
 
 function formatBpm(minimum: number | null | undefined, maximum: number | null | undefined): string | null {
@@ -144,7 +197,7 @@ export default function RecommendationsPage() {
   const [selectedKey, setSelectedKey] = useState("");
   const [playerQuery, setPlayerQuery] = useState("");
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
-  const [activeMode, setActiveMode] = useState<ModeKey>("singles");
+  const [activeMode, setActiveMode] = useState<RecommendationModeKey>("overall");
   const [loadingPlayers, setLoadingPlayers] = useState(true);
   const [loadingPlayer, setLoadingPlayer] = useState(false);
   const [refreshingPlayer, setRefreshingPlayer] = useState(false);
@@ -272,10 +325,41 @@ export default function RecommendationsPage() {
   };
 
   const mode = playerPayload?.player.modes[activeMode] || null;
-  const phoenix2ScoreCount = mode?.phoenix2ScoreCount ?? mode?.validScoreCount ?? 0;
-  const phoenix2ScoreThreshold = mode?.phoenix2ScoreThreshold ?? 20;
-  const phoenix2ThresholdProgress = Math.min(phoenix2ScoreCount, phoenix2ScoreThreshold);
-  const ratingSourceLabel = mode?.ratingSource === "phoenix1" ? "Phoenix 1" : "Phoenix 2";
+  const singlesMode = playerPayload?.player.modes.singles;
+  const doublesMode = playerPayload?.player.modes.doubles;
+  const modePumbility = mode?.currentTop50Pumbility ?? 0;
+  const sourceRecommendationCounts = mode?.sourceRecommendationCounts;
+  const sourceModeEligibility = mode?.sourceModeEligibility;
+  const unavailableOverallModes = activeMode === "overall" && sourceModeEligibility
+    ? (["singles", "doubles"] as ModeKey[]).filter(
+        (modeKey) => !sourceModeEligibility[modeKey],
+      )
+    : [];
+
+  const handleTabKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    currentIndex: number,
+  ) => {
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowRight") {
+      nextIndex = (currentIndex + 1) % RECOMMENDATION_MODES.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + RECOMMENDATION_MODES.length)
+        % RECOMMENDATION_MODES.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = RECOMMENDATION_MODES.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    const nextMode = RECOMMENDATION_MODES[nextIndex];
+    setActiveMode(nextMode);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`recommendation-tab-${nextMode}`)?.focus();
+    });
+  };
   const handlePlayerInput = (value: string) => {
     setPlayerQuery(value);
     setPlayerMenuOpen(true);
@@ -314,11 +398,9 @@ export default function RecommendationsPage() {
 
       <section className="recommendations-hero">
         <p className="recommendations-intro">
-          Choose a consented player. The displayed skill rating and eligible charts use the top
-          20 average Pumbility converted to the equivalent level for an S with Fair Game.
-          Projected scores match on the same conversion from ranks 11–30 and target the median (50th percentile)
-          from similar players&apos; joined history; played status and current value always use
-          Phoenix 2.
+          Choose a consented player. Overall combines the best Single and Double opportunities,
+          using each mode&apos;s own skill rating, and measures them against one shared Phoenix 2
+          top-50 Pumbility total. Single and Double remain available as independent views.
         </p>
 
         <div className="player-picker">
@@ -411,37 +493,119 @@ export default function RecommendationsPage() {
                 </p>
               </div>
               <div className="recommendation-mode-tabs" role="tablist" aria-label="Recommendation mode">
-                {(["singles", "doubles"] as ModeKey[]).map((modeKey) => (
+                {RECOMMENDATION_MODES.map((modeKey, index) => (
                   <button
+                    aria-controls="recommendation-panel"
                     aria-selected={activeMode === modeKey}
                     className={activeMode === modeKey ? "active" : ""}
+                    id={`recommendation-tab-${modeKey}`}
                     key={modeKey}
                     onClick={() => setActiveMode(modeKey)}
+                    onKeyDown={(event) => handleTabKeyDown(event, index)}
                     role="tab"
+                    tabIndex={activeMode === modeKey ? 0 : -1}
                     type="button"
                   >
-                    <b>{modeKey === "singles" ? "S" : "D"}</b>
+                    <b>{modeKey === "overall" ? "O" : modeKey === "singles" ? "S" : "D"}</b>
                     <span>{modeKey}</span>
                   </button>
                 ))}
               </div>
             </div>
 
-            {!mode?.eligible ? (
-              <div className="recommendation-empty insufficient-state">
-                <span>{mode?.validScoreCount ?? 0}/{mode?.requiredScoreCount ?? 1}</span>
-                <h2>Not enough score data yet</h2>
-                <p>{mode?.reason || "This mode cannot be rated yet."}</p>
-              </div>
-            ) : (
-              <>
+            <div
+              aria-labelledby={`recommendation-tab-${activeMode}`}
+              id="recommendation-panel"
+              role="tabpanel"
+            >
+              {mode ? (
                 <div className="recommendation-stats">
-                  <article><span>Scoring rating</span><strong>{ratingLabel(activeMode, mode.scoringRating ?? 0)}</strong><small>{ratingSourceLabel} {mode.ratingBaselineLabel ?? mode.baselineLabel ?? "top 20 scores"}</small></article>
-                  <article className="rating-source-stat"><span>Phoenix 2 rating history</span><strong>{phoenix2ThresholdProgress}/{phoenix2ScoreThreshold}</strong><small>{mode.ratingSource === "phoenix1" ? `Using Phoenix 1 until this reaches ${phoenix2ScoreThreshold}` : "Using Phoenix 2 top scores for skill rating"}</small><i><b style={{ width: `${Math.min(100, (phoenix2ThresholdProgress / phoenix2ScoreThreshold) * 100)}%` }} /></i></article>
-                  <article><span>Eligible charts</span><strong>{mode.candidateCount ?? 0}</strong><small>At or below {mode.candidateRange?.[1].toFixed(2)}</small></article>
-                  <article><span>Current top 50</span><strong>{mode.currentTop50Pumbility?.toFixed(2) ?? "-"}</strong><small>{mode.currentTop50CutoffPumbility === null || mode.currentTop50CutoffPumbility === undefined ? "Fewer than 50 Phoenix 2 charts" : `#50 cutoff ${mode.currentTop50CutoffPumbility.toFixed(2)}`}</small></article>
+                  {activeMode === "overall" ? (
+                    <article>
+                      <span>Scoring ratings</span>
+                      <strong>
+                        {singlesMode?.eligible && singlesMode.scoringRating !== undefined
+                          ? ratingLabel("singles", singlesMode.scoringRating)
+                          : "S—"}
+                        {" · "}
+                        {doublesMode?.eligible && doublesMode.scoringRating !== undefined
+                          ? ratingLabel("doubles", doublesMode.scoringRating)
+                          : "D—"}
+                      </strong>
+                      <small>Each chart keeps its mode-specific rating and projection</small>
+                    </article>
+                  ) : (
+                    <article>
+                      <span>Scoring rating</span>
+                      <strong>
+                        {mode.scoringRating === undefined
+                          ? "—"
+                          : ratingLabel(activeMode, mode.scoringRating)}
+                      </strong>
+                      <small>
+                        {mode.ratingSource === "phoenix1" ? "Phoenix 1" : "Phoenix 2"}{" "}
+                        {mode.ratingBaselineLabel ?? mode.baselineLabel ?? "top 20 scores"}
+                      </small>
+                    </article>
+                  )}
+                  <ProgressStat mode={activeMode} value={modePumbility} />
+                  {activeMode === "overall" ? (
+                    <article>
+                      <span>Recommendation pool</span>
+                      <strong>{mode.candidateCount ?? 0}</strong>
+                      <small>
+                        {sourceRecommendationCounts?.singles ?? 0} Single · {sourceRecommendationCounts?.doubles ?? 0} Double
+                      </small>
+                    </article>
+                  ) : (
+                    <article>
+                      <span>Eligible charts</span>
+                      <strong>{mode.candidateCount ?? 0}</strong>
+                      <small>
+                        {mode.candidateRange?.[1] === undefined
+                          ? "No rating-based chart ceiling"
+                          : `At or below ${mode.candidateRange[1].toFixed(2)}`}
+                      </small>
+                    </article>
+                  )}
+                  <article>
+                    <span>{activeMode === "overall" ? "Overall Pumbility" : "Current top 50"}</span>
+                    <strong>{pumbilityLabel(modePumbility)}</strong>
+                    <small>
+                      {activeMode === "overall"
+                        ? `${mode.top50ModeCounts?.singles ?? 0} Single · ${mode.top50ModeCounts?.doubles ?? 0} Double in the top 50`
+                        : mode.currentTop50CutoffPumbility === null || mode.currentTop50CutoffPumbility === undefined
+                          ? `${mode.currentTop50Count ?? mode.validScoreCount} of 50 Phoenix 2 charts`
+                          : `#50 cutoff ${mode.currentTop50CutoffPumbility.toFixed(2)}`}
+                    </small>
+                  </article>
                 </div>
+              ) : null}
 
+              {unavailableOverallModes.map((modeKey) => (
+                <div className="recommendation-notice overall-source-notice" key={modeKey}>
+                  <b>{modeKey === "singles" ? "Single" : "Double"} recommendations unavailable.</b>{" "}
+                  {playerPayload.player.modes[modeKey].reason || "This mode cannot be rated yet."}{" "}
+                  Existing {modeKey === "singles" ? "Single" : "Double"} Phoenix 2 scores still count toward Overall Pumbility.
+                </div>
+              ))}
+
+              {activeMode === "overall" && !mode ? (
+                <div className="recommendation-empty insufficient-state">
+                  <span>O</span>
+                  <h2>Overall is being prepared</h2>
+                  <p>
+                    This cached recommendation predates the Overall model. Single and Double
+                    remain available while the latest analysis is published.
+                  </p>
+                </div>
+              ) : !mode?.eligible ? (
+                <div className="recommendation-empty insufficient-state">
+                  <span>{mode?.validScoreCount ?? 0}/{mode?.requiredScoreCount ?? 1}</span>
+                  <h2>Not enough score data yet</h2>
+                  <p>{mode?.reason || "This mode cannot be rated yet."}</p>
+                </div>
+              ) : (
                 <section className="top-recommendations" aria-labelledby="top-recommendations-title">
                   <div className="recommendation-section-heading">
                     <div>
@@ -449,12 +613,16 @@ export default function RecommendationsPage() {
                       <h2 id="top-recommendations-title">
                         {mode.projectionAvailable === false
                           ? "Top 50 farmable charts"
-                          : "Top 50 Pumbility opportunities"}
+                          : activeMode === "overall"
+                            ? "Top 50 overall opportunities"
+                            : "Top 50 Pumbility opportunities"}
                       </h2>
                     </div>
                     <p>{mode.projectionAvailable === false
                       ? "Ranked by farm edge because a complete ranks 11–30 projection rating is not available."
-                      : "Projected gain uses the motivated peer score, every likely grade-plate outcome, and the player's Phoenix 2 top 50. Ties favor the easiest estimated difficulty."}</p>
+                      : activeMode === "overall"
+                        ? "The best 50 from each mode are combined, then reranked by projected gain to the shared Phoenix 2 S+D top 50."
+                        : "Projected gain uses the motivated peer score, every likely grade-plate outcome, and the player's Phoenix 2 top 50. Ties favor the easiest estimated difficulty."}</p>
                   </div>
                   <div className="recommendation-list">
                     {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (
@@ -462,8 +630,8 @@ export default function RecommendationsPage() {
                     )) : <p className="no-recommendations">No nearby chart is projected to improve the current top 50.</p>}
                   </div>
                 </section>
-              </>
-            )}
+              )}
+            </div>
           </>
         ) : null}
       </section>
@@ -473,7 +641,7 @@ export default function RecommendationsPage() {
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
         <p>Projected scores use the ranks 11–30 Pumbility rating and the unweighted median (50th percentile) from all other players with a normalized result on the exact chart. The search tries plus or minus 0.2 through 0.5 rating in 0.1 steps seeking 20 peers, repeats those radii seeking 10, then repeats seeking five. Every peer within the narrowest successful radius is used; below five peers, the player-balanced population model is used.</p>
         <p>The visible skill rating and eligible-chart ceiling use top-20 average Pumbility. Both ratings are expressed as the continuous chart level where an S with Fair Game earns the selected window&apos;s average Pumbility. Phoenix 2 supplies a window once it is complete; otherwise a complete Phoenix 1 window is used, followed by partial Phoenix 2 only for the visible top-20 rating.</p>
-        <p>Played status, current top 50, and projected gain always use Phoenix 2. Projections are estimates, not guaranteed results.</p>
+        <p>Played status, current top 50, and projected gain always use Phoenix 2. Overall Pumbility is the best 50 values across both modes; Overall recommendations merge each mode&apos;s displayed top 50 and recalculate their gain against that shared pool. Projections are estimates, not guaranteed results.</p>
       </footer>
     </main>
   );

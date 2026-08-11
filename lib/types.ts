@@ -1,6 +1,7 @@
 import type { CombinedMixInfo, MixInfo, MixKey } from "./mixes";
 
 export type ModeKey = "singles" | "doubles";
+export type RecommendationModeKey = "overall" | ModeKey;
 export type EvidenceStatus = "Published" | "Provisional" | "Insufficient" | "Unrated";
 
 export interface ChartRerate {
@@ -208,6 +209,10 @@ export interface RecommendationModeResult {
   pumbilityPerLevel?: number | null;
   currentTop50Pumbility?: number;
   currentTop50CutoffPumbility?: number | null;
+  currentTop50Count?: number;
+  top50ModeCounts?: Record<ModeKey, number>;
+  sourceModeEligibility?: Record<ModeKey, boolean>;
+  sourceRecommendationCounts?: Record<ModeKey, number>;
   candidateRange?: [number | null, number];
   candidateCount?: number;
   candidates?: RecommendationChart[];
@@ -226,7 +231,8 @@ export interface RecommendationPlayer {
   username: string;
   displayName: string;
   manual?: boolean;
-  modes: Record<ModeKey, RecommendationModeResult>;
+  modes: Record<ModeKey, RecommendationModeResult>
+    & Partial<Record<"overall", RecommendationModeResult>>;
 }
 
 export interface RecommendationPlayersResponse {
