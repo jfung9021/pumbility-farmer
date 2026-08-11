@@ -64,16 +64,20 @@ test("mobile styles keep desktop information visible", async () => {
   assert.deepEqual(hiddenSelectors, [".feature-card > b"]);
 });
 
-test("homepage removes feature numbering and explains the external score sync", async () => {
-  const [page, syncLink] = await Promise.all([
+test("homepage leads with feature cards and explains the external score sync", async () => {
+  const [page, syncLink, css] = await Promise.all([
     readFile(path.join(process.cwd(), "app", "page.tsx"), "utf8"),
     readFile(
       path.join(process.cwd(), "app", "_components", "score-sync-link.tsx"),
       "utf8",
     ),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
   ]);
 
   assert.doesNotMatch(page, /feature-index|Phoenix scoring tools|home-status/);
+  assert.doesNotMatch(page, /Use your Phoenix history|home-intro/);
+  assert.match(css, /\.home-hero \{[^}]*margin: 0 auto;[^}]*padding: 18px 24px 110px;/);
+  assert.match(css, /\.feature-grid \{[^}]*gap: 18px;[^}]*margin-top: 0;/);
   assert.match(page, /Sync your scores before you start/);
   assert.match(page, /Log in to PIU Scores/);
   assert.match(page, /<ScoreSyncLink>/);

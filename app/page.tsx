@@ -10,11 +10,6 @@ export default function HomePage() {
       <SiteHeader />
 
       <section className="home-hero">
-        <p className="home-intro">
-          Use your Phoenix history to find charts near your current skill that offer
-          the most Pumbility, or explore the combined scoring-difficulty tier list.
-        </p>
-
         <div className="feature-grid">
           <Link className="feature-card feature-recommendations" href="/recommendations">
             <div>
