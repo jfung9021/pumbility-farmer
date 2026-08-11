@@ -1,9 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
+import { ScoreSyncLink } from "../_components/score-sync-link";
+import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
+import { hasLimitedData } from "../../lib/chart-evidence";
 import { formatEstimatedDifficulty } from "../../lib/format-difficulty";
 import { pumbilityProgress } from "../../lib/pumbility-progress";
 import type {
@@ -37,24 +39,8 @@ function formatGeneratedAt(value: string | undefined): string {
   }).format(date);
 }
 
-function playerGenerationLabel(payload: PlayerRecommendationsResponse): string {
-  const overall = payload.generatedAtUtc;
-  if (payload.legacySnapshot) {
-    return `Legacy snapshot generated ${formatGeneratedAt(overall)}`;
-  }
-  const scores = payload.playerSyncedAtUtc
-    || payload.recommendationsGeneratedAtUtc
-    || overall;
-  const model = payload.modelGeneratedAtUtc || overall;
-  return `Scores checked ${formatGeneratedAt(scores)} · model ${formatGeneratedAt(model)}`;
-}
-
 function signed(value: number, digits = 2): string {
   return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
-}
-
-function ratingLabel(mode: ModeKey, value: number): string {
-  return `${mode === "singles" ? "S" : "D"}${value.toFixed(2)}`;
 }
 
 function pumbilityLabel(value: number): string {
@@ -73,29 +59,57 @@ function ProgressStat({
 }) {
   const progress = pumbilityProgress(mode, value);
   const atMaximum = progress.nextThreshold === null;
+  const roundedPercent = Math.round(progress.percent);
   const ariaMinimum = atMaximum ? 0 : progress.threshold;
-  const ariaMaximum = progress.nextThreshold ?? progress.threshold;
-  const ariaNow = atMaximum
-    ? progress.threshold
-    : Math.min(ariaMaximum, Math.max(ariaMinimum, value));
+  const ariaMaximum = progress.nextThreshold ?? Math.max(progress.threshold, value);
+  const ariaNow = Math.min(ariaMaximum, Math.max(ariaMinimum, value));
+  const emblemLevel = String(progress.rungIndex).padStart(2, "0");
   return (
-    <article className="pumbility-progress-stat">
-      <span>{mode === "overall" ? "Rank progress" : "Skill title progress"}</span>
-      <strong>{progress.label}</strong>
-      <small>
-        {progress.nextLabel
-          ? `${pumbilityLabel(progress.remaining)} Pumbility to ${progress.nextLabel}`
-          : `Highest ${mode === "overall" ? "rank" : "skill title"} reached`}
-      </small>
+    <article className="pumbility-progress-panel">
+      <div className="pumbility-progress-heading">
+        {mode === "overall" ? (
+          <img
+            alt=""
+            aria-hidden="true"
+            className="pumbility-rank-emblem"
+            height="88"
+            src={`/images/phoenix2-ranks/pumbility_${emblemLevel}.webp`}
+            width="88"
+          />
+        ) : null}
+        <div>
+          <span>{mode === "overall" ? "Rank progress" : "Skill title progress"}</span>
+          <strong>{progress.label}</strong>
+          <small>
+            {progress.nextLabel
+              ? `${pumbilityLabel(progress.remaining)} Pumbility to ${progress.nextLabel}`
+              : `Maximum ${mode === "overall" ? "rank" : "skill title"} reached`}
+          </small>
+        </div>
+        <b className="pumbility-progress-percent">{roundedPercent}%</b>
+      </div>
       <div
         aria-label={`${progress.label} progress`}
         aria-valuemax={ariaMaximum}
         aria-valuemin={ariaMinimum}
         aria-valuenow={ariaNow}
+        aria-valuetext={progress.nextLabel
+          ? `${roundedPercent}%, ${pumbilityLabel(progress.remaining)} Pumbility to ${progress.nextLabel}`
+          : `100%, maximum ${mode === "overall" ? "rank" : "skill title"} reached`}
         className="pumbility-progress"
         role="progressbar"
       >
         <b style={{ width: `${progress.percent}%` }} />
+      </div>
+      <div className="pumbility-progress-scale">
+        <span><small>Start</small><b>{pumbilityLabel(progress.threshold)}</b></span>
+        <span className="current"><small>Current</small><b>{pumbilityLabel(value)}</b></span>
+        <span>
+          <small>{progress.nextThreshold === null ? "End" : "Next"}</small>
+          <b>{progress.nextThreshold === null
+            ? "Maximum"
+            : pumbilityLabel(progress.nextThreshold)}</b>
+        </span>
       </div>
     </article>
   );
@@ -143,12 +157,20 @@ const PLATE_CRITERIA: Record<string, string> = {
   RG: "21+ misses",
 };
 
-function recommendationGoal(chart: RecommendationChart): string | null {
+interface RecommendationGoal {
+  criterion: string;
+  summary: string;
+}
+
+function recommendationGoal(chart: RecommendationChart): RecommendationGoal | null {
   if (!chart.projectedGrade || !chart.projectedPlateCode) return null;
   const score = GRADE_GOAL_SCORES[chart.projectedGrade];
   const plateGoal = PLATE_CRITERIA[chart.projectedPlateCode];
   if (score === undefined || !plateGoal) return null;
-  return `Goal: ${chart.projectedGrade} ${chart.projectedPlateCode} (${score.toLocaleString()}, ${plateGoal})`;
+  return {
+    criterion: plateGoal,
+    summary: `${chart.projectedGrade} ${chart.projectedPlateCode} · ${score.toLocaleString()}`,
+  };
 }
 
 function RecommendationCard({
@@ -159,6 +181,7 @@ function RecommendationCard({
   rank: number;
 }) {
   const bpm = formatBpm(chart.bpmMin, chart.bpmMax);
+  const goal = recommendationGoal(chart);
   return (
     <article className="recommendation-card">
       <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
@@ -168,9 +191,16 @@ function RecommendationCard({
       <div className="recommendation-copy">
         <div className="recommendation-title">
           <h3>{chart.songName}</h3>
-          <span className={`evidence evidence-${chart.evidenceStatus.toLowerCase()}`}>
-            {chart.evidenceStatus}
-          </span>
+          {hasLimitedData(chart.nContributors) ? (
+            <span
+              aria-label="Limited data"
+              className="limited-data-warning"
+              title={`Limited data: ${chart.nContributors} unique player observations`}
+            >
+              <b aria-hidden="true">!</b>
+              <span>Limited data</span>
+            </span>
+          ) : null}
         </div>
         <p>
           {chart.stepArtist || "Unknown step artist"}
@@ -180,12 +210,17 @@ function RecommendationCard({
         <div className="recommendation-tags">
           <span><b>{chart.type === "Single" ? "S" : "D"}{formatEstimatedDifficulty(chart.estimatedDifficulty)}</b> estimate</span>
           <span>{chart.played ? `Current ${chart.existingPumbility?.toFixed(2)} PB` : "Unplayed in Phoenix 2"}</span>
-          {recommendationGoal(chart) ? <span><b>{recommendationGoal(chart)}</b></span> : null}
         </div>
       </div>
       <div className="recommendation-value">
         <span>projected gain</span>
         <strong>{chart.projectedGain === null ? "-" : signed(chart.projectedGain)}</strong>
+        {goal ? (
+          <div className="recommendation-goal">
+            <b>{goal.summary}</b>
+            <small>{goal.criterion}</small>
+          </div>
+        ) : null}
       </div>
     </article>
   );
@@ -325,10 +360,7 @@ export default function RecommendationsPage() {
   };
 
   const mode = playerPayload?.player.modes[activeMode] || null;
-  const singlesMode = playerPayload?.player.modes.singles;
-  const doublesMode = playerPayload?.player.modes.doubles;
   const modePumbility = mode?.currentTop50Pumbility ?? 0;
-  const sourceRecommendationCounts = mode?.sourceRecommendationCounts;
   const sourceModeEligibility = mode?.sourceModeEligibility;
   const unavailableOverallModes = activeMode === "overall" && sourceModeEligibility
     ? (["singles", "doubles"] as ModeKey[]).filter(
@@ -385,24 +417,9 @@ export default function RecommendationsPage() {
     <main className="recommendations-page">
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
-      <header className="site-header">
-        <Link className="brand" href="/" aria-label="Pumbility Farmer home">
-          <span className="brand-mark">PF</span>
-          <span>Pumbility <b>Farmer</b></span>
-        </Link>
-        <nav className="page-nav" aria-label="Primary navigation">
-          <span>Recommendations</span>
-          <Link href="/tier-list">Tier List</Link>
-        </nav>
-      </header>
+      <SiteHeader active="recommendations" />
 
       <section className="recommendations-hero">
-        <p className="recommendations-intro">
-          Choose a consented player. Overall combines the best Single and Double opportunities,
-          using each mode&apos;s own skill rating, and measures them against one shared Phoenix 2
-          top-50 Pumbility total. Single and Double remain available as independent views.
-        </p>
-
         <div className="player-picker">
           <label htmlFor="player-select">Phoenix 2 username</label>
           <div className="player-combobox">
@@ -443,11 +460,14 @@ export default function RecommendationsPage() {
               </div>
             ) : null}
           </div>
-          <span>
-            {playersPayload
-              ? `${playersPayload.players.length.toLocaleString()} usernames · generated ${formatGeneratedAt(playersPayload.generatedAtUtc)}`
-              : "Only usernames shared with this community tool are listed."}
-          </span>
+          <div className="player-picker-meta">
+            <span>
+              {playersPayload
+                ? `${playersPayload.players.length.toLocaleString()} usernames · generated ${formatGeneratedAt(playersPayload.generatedAtUtc)}`
+                : "Only usernames shared with this community tool are listed."}
+            </span>
+            <ScoreSyncLink />
+          </div>
         </div>
         {error ? <div className="recommendation-notice error-notice">{error}</div> : null}
         {refreshWarning ? (
@@ -484,14 +504,7 @@ export default function RecommendationsPage() {
           <div className="recommendation-empty"><span className="spinner" /><h2>Calculating your route</h2></div>
         ) : playerPayload ? (
           <>
-            <div className="recommendation-player-heading">
-              <div>
-                <p>SELECTED PLAYER</p>
-                <h2>{playerPayload.player.displayName}</h2>
-                <p>
-                  {playerGenerationLabel(playerPayload)}
-                </p>
-              </div>
+            <div className="recommendation-mode-row">
               <div className="recommendation-mode-tabs" role="tablist" aria-label="Recommendation mode">
                 {RECOMMENDATION_MODES.map((modeKey, index) => (
                   <button
@@ -519,67 +532,7 @@ export default function RecommendationsPage() {
               role="tabpanel"
             >
               {mode ? (
-                <div className="recommendation-stats">
-                  {activeMode === "overall" ? (
-                    <article>
-                      <span>Scoring ratings</span>
-                      <strong>
-                        {singlesMode?.eligible && singlesMode.scoringRating !== undefined
-                          ? ratingLabel("singles", singlesMode.scoringRating)
-                          : "S—"}
-                        {" · "}
-                        {doublesMode?.eligible && doublesMode.scoringRating !== undefined
-                          ? ratingLabel("doubles", doublesMode.scoringRating)
-                          : "D—"}
-                      </strong>
-                      <small>Each chart keeps its mode-specific rating and projection</small>
-                    </article>
-                  ) : (
-                    <article>
-                      <span>Scoring rating</span>
-                      <strong>
-                        {mode.scoringRating === undefined
-                          ? "—"
-                          : ratingLabel(activeMode, mode.scoringRating)}
-                      </strong>
-                      <small>
-                        {mode.ratingSource === "phoenix1" ? "Phoenix 1" : "Phoenix 2"}{" "}
-                        {mode.ratingBaselineLabel ?? mode.baselineLabel ?? "top 20 scores"}
-                      </small>
-                    </article>
-                  )}
-                  <ProgressStat mode={activeMode} value={modePumbility} />
-                  {activeMode === "overall" ? (
-                    <article>
-                      <span>Recommendation pool</span>
-                      <strong>{mode.candidateCount ?? 0}</strong>
-                      <small>
-                        {sourceRecommendationCounts?.singles ?? 0} Single · {sourceRecommendationCounts?.doubles ?? 0} Double
-                      </small>
-                    </article>
-                  ) : (
-                    <article>
-                      <span>Eligible charts</span>
-                      <strong>{mode.candidateCount ?? 0}</strong>
-                      <small>
-                        {mode.candidateRange?.[1] === undefined
-                          ? "No rating-based chart ceiling"
-                          : `At or below ${mode.candidateRange[1].toFixed(2)}`}
-                      </small>
-                    </article>
-                  )}
-                  <article>
-                    <span>{activeMode === "overall" ? "Overall Pumbility" : "Current top 50"}</span>
-                    <strong>{pumbilityLabel(modePumbility)}</strong>
-                    <small>
-                      {activeMode === "overall"
-                        ? `${mode.top50ModeCounts?.singles ?? 0} Single · ${mode.top50ModeCounts?.doubles ?? 0} Double in the top 50`
-                        : mode.currentTop50CutoffPumbility === null || mode.currentTop50CutoffPumbility === undefined
-                          ? `${mode.currentTop50Count ?? mode.validScoreCount} of 50 Phoenix 2 charts`
-                          : `#50 cutoff ${mode.currentTop50CutoffPumbility.toFixed(2)}`}
-                    </small>
-                  </article>
-                </div>
+                <ProgressStat mode={activeMode} value={modePumbility} />
               ) : null}
 
               {unavailableOverallModes.map((modeKey) => (
@@ -608,21 +561,13 @@ export default function RecommendationsPage() {
               ) : (
                 <section className="top-recommendations" aria-labelledby="top-recommendations-title">
                   <div className="recommendation-section-heading">
-                    <div>
-                      <p>{mode.projectionAvailable === false ? "HIGHEST FARM EDGE" : "MAXIMUM PROJECTED VALUE"}</p>
-                      <h2 id="top-recommendations-title">
-                        {mode.projectionAvailable === false
-                          ? "Top 50 farmable charts"
-                          : activeMode === "overall"
-                            ? "Top 50 overall opportunities"
-                            : "Top 50 Pumbility opportunities"}
-                      </h2>
-                    </div>
-                    <p>{mode.projectionAvailable === false
-                      ? "Ranked by farm edge because a complete ranks 11–30 projection rating is not available."
-                      : activeMode === "overall"
-                        ? "The best 50 from each mode are combined, then reranked by deterministic projected gain to the shared Phoenix 2 S+D top 50."
-                        : "Expected Pumbility comes directly from the displayed median score and median plate. Its deterministic gain is measured against the player's Phoenix 2 top 50. Ties favor the easiest estimated difficulty."}</p>
+                    <h2 id="top-recommendations-title">
+                      {mode.projectionAvailable === false
+                        ? "Top 50 farmable charts"
+                        : activeMode === "overall"
+                          ? "Top 50 overall opportunities"
+                          : "Top 50 Pumbility opportunities"}
+                    </h2>
                   </div>
                   <div className="recommendation-list">
                     {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (
