@@ -25,9 +25,11 @@ import {
 } from "../lib/phoenix1-rerates.ts";
 import type { AnalysisPayload } from "../lib/types.ts";
 import {
+  LocalRecommendationsValidationError,
   recommendationPlayerList,
   recommendationsForPlayer,
   recommendationsForRating,
+  validateLocalRecommendationIndex,
 } from "../lib/local-recommendations.ts";
 
 
@@ -75,7 +77,11 @@ test("recommendation methodology separates top-20 display from ranks 11-30 proje
   assert.match(page, /ranks 11–30 Pumbility rating/);
   assert.match(page, /S with Fair Game/);
   assert.match(page, /visible skill rating and eligible-chart ceiling use top-20/);
+  assert.match(page, /projected plate is the weighted median/);
+  assert.match(page, /Expected Pumbility is then calculated once from the displayed projected score/);
+  assert.match(page, /existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2/);
   assert.match(page, /Skill title progress/);
+  assert.doesNotMatch(page, /every likely grade-plate outcome/);
   assert.doesNotMatch(page, /chart difficulty fields are averaged for the skill rating/);
   assert.doesNotMatch(page, /reaches 50 valid Phoenix 2 scores/);
 });
@@ -173,6 +179,22 @@ test("legacy local player responses carry a complete generation timestamp contra
   assert.equal(response?.modelGeneratedAtUtc, generatedAtUtc);
   assert.equal(response?.playerSyncedAtUtc, generatedAtUtc);
   assert.equal(response?.player.modes.overall, undefined);
+});
+
+test("local recommendations reject stale schemas before rendering", () => {
+  const payload = {
+    schemaVersion: 18,
+    generatedAtUtc: "2026-08-08T00:00:00Z",
+    method: {},
+    charts: [],
+    players: [],
+  };
+
+  assert.throws(
+    () => validateLocalRecommendationIndex(payload),
+    (error: unknown) => error instanceof LocalRecommendationsValidationError
+      && /Regenerate schema 19 recommendations/.test(error.message),
+  );
 });
 
 test("global analysis button sends the protected administrator secret", async () => {
@@ -589,12 +611,15 @@ test("manual recommendations include charts up to 0.5 above the scoring rating",
   const singles = response.player.modes.singles;
   const overall = response.player.modes.overall;
   assert.ok(overall);
+  assert.equal(singles.projectionAvailable, false);
   assert.deepEqual(singles.candidateRange, [null, 21]);
   assert.deepEqual(
     (singles.candidates ?? []).map((candidate) => candidate.chartId),
     ["level-16", "rating-edge", "upper-edge"],
   );
   assert.equal(singles.topRecommendations[0].chartId, "level-16");
+  assert.equal(singles.topRecommendations[0].expectedPumbility, null);
+  assert.equal(singles.topRecommendations[0].projectedGain, null);
   assert.equal(overall.sourceRecommendationCounts?.singles, 3);
   assert.equal(overall.sourceRecommendationCounts?.doubles, 0);
   assert.deepEqual(

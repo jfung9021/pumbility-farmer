@@ -6,6 +6,7 @@ from phoenix2_pumbility import (
     SKILL_RATING_REFERENCE_MULTIPLIER,
     PlateProjectionModel,
     _snapshot_observations,
+    _weighted_median_plate,
     grade_for_score,
     normalize_plate,
     phoenix2_pumbility,
@@ -71,6 +72,94 @@ class Phoenix2PumbilityTests(unittest.TestCase):
         self.assertEqual(phoenix2_pumbility("Single", 24, "SSS+", "PG"), 395.2)
         self.assertEqual(normalize_plate("ug"), "Ultimate Game")
         self.assertEqual(PLATE_CODES["Perfect Game"], "PG")
+
+    def test_formula_uses_mode_specific_rank_and_plate_values(self) -> None:
+        self.assertEqual(phoenix2_pumbility("Double", 24, "AA", "FG"), 343.0)
+        self.assertEqual(phoenix2_pumbility("Single", 15, "SSS+", "UG"), 318.57)
+        self.assertEqual(phoenix2_pumbility("Double", 18, "SSS+", "UG"), 333.52)
+        self.assertEqual(phoenix2_pumbility("Single", 15, "SSS+", "MG"), 316.26)
+        self.assertEqual(phoenix2_pumbility("Single", 16, "SSS+", "EG"), 325.51)
+        self.assertEqual(phoenix2_pumbility("Double", 17, "SSS+", "EG"), 325.08)
+        expected_double_penalties = {
+            "AA": 13,
+            "A+": 15,
+            "A": 20,
+            "B": 25,
+            "C": 30,
+            "D": 40,
+            "F": 50,
+        }
+        for grade, penalty in expected_double_penalties.items():
+            with self.subTest(grade=grade):
+                base = 375.0
+                expected = int(base * (750 - 5 * penalty) / 750 * 100) / 100
+                self.assertEqual(
+                    phoenix2_pumbility("Double", 24, grade, "RG"), expected
+                )
+
+    def test_formula_matches_the_official_top_fifty_screenshot(self) -> None:
+        cases = [
+            ("Single", 21, "SS+", "TG", 356.16),
+            ("Single", 21, "SS", "TG", 353.76),
+            ("Double", 21, "SSS", "MG", 351.56),
+            ("Double", 22, "S+", "TG", 351.36),
+            ("Single", 21, "S+", "TG", 351.36),
+            ("Double", 21, "SS+", "MG", 349.21),
+            ("Single", 20, "SS+", "FG", 348.27),
+            ("Single", 20, "SS", "MG", 346.86),
+            ("Single", 20, "SS", "FG", 345.92),
+            ("Double", 21, "SS", "RG", 345.45),
+            ("Double", 23, "AAA", "RG", 345.45),
+            ("Single", 19, "SSS", "MG", 344.08),
+            ("Double", 20, "SSS", "MG", 344.08),
+            ("Single", 19, "SSS", "TG", 343.62),
+            ("Double", 22, "AAA+", "RG", 343.20),
+            ("Double", 24, "AA", "FG", 343.00),
+            ("Single", 19, "SS+", "MG", 341.78),
+            ("Single", 20, "S", "TG", 341.69),
+            ("Single", 20, "S", "TG", 341.69),
+            ("Single", 19, "SS+", "TG", 341.32),
+            ("Single", 20, "S", "FG", 341.22),
+            ("Double", 23, "AA+", "FG", 341.04),
+            ("Single", 21, "AAA", "RG", 338.40),
+            ("Single", 20, "AAA+", "MG", 337.46),
+            ("Single", 20, "AAA+", "TG", 336.99),
+            ("Single", 20, "AAA+", "FG", 336.52),
+            ("Single", 20, "AAA+", "FG", 336.52),
+            ("Double", 18, "SSS+", "PG", 334.40),
+            ("Double", 18, "SSS+", "PG", 334.40),
+            ("Double", 18, "SSS+", "PG", 334.40),
+            ("Single", 18, "SS+", "MG", 334.35),
+            ("Double", 19, "SS+", "TG", 333.90),
+            ("Double", 18, "SSS+", "UG", 333.52),
+            ("Double", 18, "SSS+", "UG", 333.52),
+            ("Double", 18, "SSS+", "EG", 332.64),
+            ("Double", 18, "SSS+", "EG", 332.64),
+            ("Double", 20, "AAA+", "FG", 329.36),
+            ("Double", 18, "SSS", "MG", 329.12),
+            ("Single", 17, "SSS", "MG", 329.12),
+            ("Single", 16, "SSS+", "PG", 326.80),
+            ("Double", 18, "S+", "TG", 322.08),
+            ("Single", 16, "SSS", "SG", 322.07),
+            ("Double", 16, "SSS+", "PG", 319.20),
+            ("Single", 15, "SSS+", "UG", 318.57),
+            ("Single", 15, "SSS+", "UG", 318.57),
+            ("Single", 15, "SSS+", "UG", 318.57),
+            ("Double", 16, "SSS+", "EG", 317.52),
+            ("Single", 16, "SS", "TG", 316.91),
+            ("Single", 15, "SSS+", "MG", 316.26),
+            ("Single", 16, "S+", "TG", 314.76),
+        ]
+        calculated = []
+        for chart_type, level, grade, plate, expected in cases:
+            with self.subTest(
+                chart_type=chart_type, level=level, grade=grade, plate=plate
+            ):
+                value = phoenix2_pumbility(chart_type, level, grade, plate)
+                self.assertEqual(value, expected)
+                calculated.append(value)
+        self.assertEqual(len(cases), 50)
+        self.assertAlmostEqual(sum(calculated), 16_800.65)
 
     def test_skill_rating_inverts_the_continuous_s_fair_game_reference(self) -> None:
         self.assertAlmostEqual(SKILL_RATING_REFERENCE_MULTIPLIER, 0.968)
@@ -139,6 +228,22 @@ class Phoenix2PumbilityTests(unittest.TestCase):
             doubles.probabilities["Rough Game"],
         )
         self.assertAlmostEqual(sum(singles.probabilities.values()), 1.0)
+
+    def test_weighted_median_plate_uses_order_and_lower_exact_boundary(self) -> None:
+        exact_boundary = {
+            "Rough Game": 0.2,
+            "Fair Game": 0.3,
+            "Talented Game": 0.4,
+            "Marvelous Game": 0.1,
+        }
+        self.assertEqual(_weighted_median_plate(exact_boundary), "Fair Game")
+        self.assertEqual(
+            _weighted_median_plate({"Rough Game": 0.49, "Perfect Game": 0.51}),
+            "Perfect Game",
+        )
+        self.assertEqual(
+            _weighted_median_plate({"Marvelous Game": 1.0}), "Marvelous Game"
+        )
 
 
 if __name__ == "__main__":

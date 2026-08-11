@@ -172,6 +172,17 @@ def get_player_recommendations(
                         },
                         headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
                     )
+                if int(cached.get("schemaVersion") or 0) < int(
+                    payload.get("schemaVersion") or 0
+                ):
+                    return JSONResponse(
+                        status_code=404,
+                        content={
+                            "error": "This player's cached recommendations require regeneration.",
+                            "refreshRequired": True,
+                        },
+                        headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+                    )
                 return JSONResponse(
                     content=with_staleness(cached, payload),
                     headers={"Cache-Control": NO_STORE_CACHE_CONTROL},

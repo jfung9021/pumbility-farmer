@@ -629,6 +629,42 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual(removed_rating.status_code, 400)
         self.assertEqual(no_index.status_code, 404)
 
+    def test_cross_schema_player_cache_handles_forward_and_rollback(self) -> None:
+        blobs = MemoryBlobStore()
+        index = {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            "storageSchemaVersion": 3,
+            "generationKey": "current-generation",
+            "players": [{"playerKey": "public-key"}],
+        }
+        cached = {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION - 1,
+            "modelGeneration": "current-generation",
+            "player": {"playerKey": "public-key", "modes": {}},
+        }
+        blobs.put_json(recommendation_blob_path(), index)
+        blobs.put_json(recommendation_player_path("public-key"), cached)
+
+        with patch("api.recommendations.PrivateBlobStore", return_value=blobs):
+            response = API_CLIENT.get("/api/recommendations?playerKey=public-key")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(response.json()["refreshRequired"])
+
+        newer = {
+            **cached,
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION + 1,
+            "modelGeneration": "newer-generation",
+        }
+        blobs.put_json(recommendation_player_path("public-key"), newer)
+        with patch("api.recommendations.PrivateBlobStore", return_value=blobs):
+            rollback_response = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key"
+            )
+
+        self.assertEqual(rollback_response.status_code, 200)
+        self.assertTrue(rollback_response.json()["stale"])
+
     def test_mix_specific_cron_route_rejects_archived_phoenix1(self) -> None:
         with patch.dict("os.environ", {"CRON_SECRET": "cron-secret-value"}):
             response = API_CLIENT.get(
