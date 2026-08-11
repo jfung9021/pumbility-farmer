@@ -289,6 +289,20 @@ class CoordinatorTests(unittest.TestCase):
 
 
 class ApiRouteTests(unittest.TestCase):
+    def test_manual_analysis_refresh_requires_matching_admin_secret(self) -> None:
+        with patch.dict("os.environ", {"CRON_SECRET": "admin-secret"}):
+            missing = API_CLIENT.post("/api/analyze?mix=phoenix2")
+            wrong = API_CLIENT.post(
+                "/api/analyze?mix=phoenix2",
+                headers={"X-Analysis-Run-Secret": "wrong-secret"},
+            )
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong.status_code, 401)
+        self.assertEqual(
+            missing.json()["error"], "Unauthorized analysis refresh request."
+        )
+
     def test_operator_can_cancel_a_poisoned_job_and_release_its_lock(self) -> None:
         jobs = MemoryJobStore()
         job = new_job("poisoned-job", NOW)
@@ -928,6 +942,7 @@ class WorkerTests(unittest.TestCase):
                 snapshot={"mix": "Phoenix2", "players": [], "charts": [], "scores": []},
                 payload=latest_payload(NOW, "phoenix2"),
                 recommendations={
+                    "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
                     "storageSchemaVersion": 3,
                     "refreshSupported": True,
                     "generationKey": "current",
@@ -951,6 +966,9 @@ class WorkerTests(unittest.TestCase):
             blobs.get_json(
                 "analysis/private/recommendation-inputs/current/phoenix1/0000.json"
             )
+        )
+        self.assertEqual(
+            blobs.get_json(recommendation_blob_path())["generationKey"], "current"
         )
 
     def test_disabled_v3_rollout_builds_shadow_generation_without_repointing(self) -> None:

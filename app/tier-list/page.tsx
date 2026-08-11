@@ -224,6 +224,7 @@ export default function TierListPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
   const [job, setJob] = useState<AnalysisJobStatus | null>(null);
+  const [runSecret, setRunSecret] = useState("");
   const [nowMs, setNowMs] = useState(0);
   const [tabVisible, setTabVisible] = useState(true);
 
@@ -331,9 +332,17 @@ export default function TierListPage() {
       if (await loadLatest(true)) setMessage("Local combined analysis reloaded from disk.");
       return;
     }
+    const protectedSecret = runSecret.trim();
+    if (!protectedSecret) {
+      setMessage("Enter the administrator refresh key before starting a refresh.");
+      return;
+    }
     setMessage("Starting a Phoenix 2 refresh and combined analysis...");
     try {
-      const response = await fetch("/api/analyze?mix=phoenix2", { method: "POST" });
+      const response = await fetch("/api/analyze?mix=phoenix2", {
+        method: "POST",
+        headers: { "X-Analysis-Run-Secret": protectedSecret },
+      });
       const body = await readJsonResponse<AnalysisRefreshResponse>(response);
       if (body.outcome === "fresh") {
         setMessage("The current rankings are still fresh; no new job was started.");
@@ -432,6 +441,21 @@ export default function TierListPage() {
             <span>Tier List</span>
           </nav>
           <div className="run-area">
+            {!LOCAL_ANALYSIS ? (
+              <details className="run-key">
+                <summary>Access key</summary>
+                <label>
+                  Administrator refresh key
+                  <input
+                    aria-label="Administrator refresh key"
+                    autoComplete="off"
+                    onChange={(event) => setRunSecret(event.target.value)}
+                    type="password"
+                    value={runSecret}
+                  />
+                </label>
+              </details>
+            ) : null}
             <button aria-label={buttonLabel} className="run-button" disabled={runDisabled} onClick={runAnalysis} type="button">
               <span className={jobIsActive ? "spinner" : "run-icon"} aria-hidden="true">
                 {jobIsActive ? "" : "\u21bb"}

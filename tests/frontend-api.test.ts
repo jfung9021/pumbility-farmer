@@ -103,6 +103,8 @@ test("recommendation page renders cache before a deduplicated player refresh", a
   assert.match(page, /\/api\/recommendations\/refresh\?playerKey=/);
   assert.match(page, /\/api\/recommendations\/refresh\?jobId=/);
   assert.match(page, /Showing cached recommendations\. Refresh failed:/);
+  assert.match(page, /Showing cached recommendations\. Live score refresh is temporarily unavailable\./);
+  assert.match(page, /playersPayload\?\.refreshSupported === false/);
   assert.match(page, /payload\.playerSyncedAtUtc/);
   assert.match(page, /payload\.modelGeneratedAtUtc/);
   assert.match(page, /const deadline = Date\.now\(\) \+ 30_000/);
@@ -134,19 +136,20 @@ test("legacy local player responses carry a complete generation timestamp contra
 });
 
 test("global analysis button sends the protected administrator secret", async () => {
-  const dashboard = await readFile(
-    path.join(process.cwd(), "app", "rankings-dashboard.tsx"),
+  const tierList = await readFile(
+    path.join(process.cwd(), "app", "tier-list", "page.tsx"),
     "utf8",
   );
 
-  assert.match(dashboard, /"X-Analysis-Run-Secret": runSecret/);
-  assert.match(dashboard, /\/api\/analyze\?jobId=/);
+  assert.match(tierList, /Administrator refresh key/);
+  assert.match(tierList, /"X-Analysis-Run-Secret": protectedSecret/);
+  assert.match(tierList, /\/api\/analyze\?mix=phoenix2/);
+  assert.match(tierList, /\/api\/analyze\?mix=phoenix2&jobId=/);
 });
 
 test("estimated difficulties truncate to one decimal place everywhere", async () => {
   const pages = await Promise.all([
     readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
-    readFile(path.join(process.cwd(), "app", "rankings-dashboard.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
   ]);
 

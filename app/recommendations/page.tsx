@@ -374,6 +374,10 @@ export default function RecommendationsPage() {
           </div>
         ) : refreshingPlayer && playerPayload ? (
           <div className="recommendation-notice">Refreshing this player's Phoenix 2 scores…</div>
+        ) : hasSelection && playersPayload?.refreshSupported === false ? (
+          <div className="recommendation-notice">
+            Showing cached recommendations. Live score refresh is temporarily unavailable.
+          </div>
         ) : null}
         {playerPayload?.stale ? (
           <div className="recommendation-notice">
