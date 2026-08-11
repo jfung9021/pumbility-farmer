@@ -1140,7 +1140,7 @@ class PlayerRecommendationTests(unittest.TestCase):
 
         client.fetch_page_collection.assert_called_once_with(
             "api/v2/players/player/scores",
-            {"mix": "Phoenix2", "limit": 100, "recordedAfter": generated},
+            {"mix": "Phoenix2", "limit": 100},
         )
         self.assertEqual(response["modelGeneration"], "daily-generation")
         self.assertTrue(cached_player_is_fresh(response, index, now=now))

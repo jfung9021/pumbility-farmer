@@ -17,6 +17,7 @@ SNAPSHOT_SCHEMA_VERSION = 2
 DEFAULT_WORKERS = 6
 DEFAULT_CHECKPOINT_EVERY = 50
 EMPTY_RECHECK_AFTER = timedelta(days=1)
+INCREMENTAL_SCORE_LOOKBACK = timedelta(days=7)
 
 CHART_FIELDS = (
     "id",
@@ -73,6 +74,18 @@ def parse_utc(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def incremental_recorded_after(
+    value: object,
+    *,
+    lookback: timedelta = INCREMENTAL_SCORE_LOOKBACK,
+) -> str | None:
+    """Return an overlapping score watermark that tolerates delayed indexing."""
+    parsed = parse_utc(value)
+    if parsed is None:
+        return None
+    return isoformat_utc(parsed - max(lookback, timedelta(0)))
 
 
 def _finite_number(value: object) -> float | None:
@@ -481,7 +494,9 @@ def synchronize_mix_snapshot(
         params: dict[str, Any] = {"mix": mix_spec.api_value, "limit": 100}
         previous = current_player_meta.get(player_id)
         if previous is not None and scores_by_player.get(player_id):
-            recorded_after = str(previous.get("lastSyncedAtUtc") or "").strip()
+            recorded_after = incremental_recorded_after(
+                previous.get("lastSyncedAtUtc")
+            )
             if recorded_after:
                 params["recordedAfter"] = recorded_after
         rows = client.fetch_page_collection(f"api/v2/players/{player_id}/scores", params)

@@ -4,6 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from phoenix2_sync import (
+    INCREMENTAL_SCORE_LOOKBACK,
     MIX,
     SNAPSHOT_SCHEMA_VERSION,
     analyzer_input,
@@ -211,9 +212,50 @@ class Phoenix2SyncTests(unittest.TestCase):
         self.assertEqual(by_key[("known", "b")]["pumbility"], 610)
         self.assertNotIn(("revoked", "a"), by_key)
         paths = {path: params for path, params in client.calls}
-        self.assertEqual(paths["api/v2/players/known/scores"]["recordedAfter"], "2026-08-07T04:00:00Z")
+        self.assertEqual(
+            paths["api/v2/players/known/scores"]["recordedAfter"],
+            "2026-07-31T04:00:00Z",
+        )
+        self.assertEqual(INCREMENTAL_SCORE_LOOKBACK, timedelta(days=7))
         self.assertNotIn("recordedAfter", paths["api/v2/players/new/scores"])
         self.assertNotIn("api/v2/players/empty/scores", paths)
+
+    def test_incremental_overlap_recovers_a_late_backfilled_score(self) -> None:
+        late = score("known", "late", 610)
+        late["recordedAt"] = "2026-08-03T05:00:00Z"
+        current = {
+            "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
+            "players": [
+                {"playerId": "known", "lastSyncedAtUtc": "2026-08-07T04:00:00Z"}
+            ],
+            "charts": [chart("existing"), chart("late")],
+            "scores": [score("known", "existing", 600)],
+        }
+
+        class RecordedAfterClient(FakeClient):
+            def fetch_page_collection(self, path: str, params=None):
+                rows = super().fetch_page_collection(path, params)
+                if not path.endswith("/scores") or not params or not params.get("recordedAfter"):
+                    return rows
+                return [
+                    row
+                    for row in rows
+                    if row.get("recordedAt", "") > params["recordedAfter"]
+                ]
+
+        client = RecordedAfterClient(
+            ["known"],
+            [chart("existing"), chart("late")],
+            {"known": [late]},
+        )
+        snapshot, _ = synchronize_phoenix2_snapshot(
+            client, current, job_id="late-backfill", now=lambda: FIXED_NOW
+        )
+
+        self.assertEqual(
+            {row["chartId"] for row in snapshot["scores"]},
+            {"existing", "late"},
+        )
 
     def test_schema_one_snapshot_is_fully_refetched_for_grade_plate_metadata(self) -> None:
         old_score = score("known", "a", 600)

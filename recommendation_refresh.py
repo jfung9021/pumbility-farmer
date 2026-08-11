@@ -659,10 +659,10 @@ def refresh_player_recommendations(
         raise RuntimeError("The selected player's daily score state is unavailable.")
     live_state = store.get_json(recommendation_player_state_path(player_key))
     state = _merged_player_state(base_state, live_state)
+    # A selected-player refresh is deliberately complete. PIU Scores can expose
+    # a best-score row after its recordedAt timestamp has already passed our
+    # incremental watermark, so a narrow delta cannot repair an omitted row.
     params: dict[str, Any] = {"mix": "Phoenix2", "limit": 100}
-    recorded_after = str(state.get("lastSyncedAtUtc") or "").strip()
-    if recorded_after:
-        params["recordedAfter"] = recorded_after
     fetch_started = perf_counter()
     incoming = client.fetch_page_collection(
         f"api/v2/players/{player_id}/scores", params

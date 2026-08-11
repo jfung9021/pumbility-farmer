@@ -78,6 +78,7 @@ def get_analysis(
 def refresh_analysis(
     request: Request,
     mix: str = Query(default=DEFAULT_MIX_KEY),
+    full_sync: bool = Query(default=False, alias="fullSync"),
 ):
     secret = os.getenv("CRON_SECRET", "").strip()
     provided = request.headers.get("x-analysis-run-secret", "")
@@ -92,7 +93,11 @@ def refresh_analysis(
             content={"error": "Unauthorized analysis refresh request."},
         )
     try:
-        status, payload = start_or_reuse_analysis(mix=resolve_mix(mix))
+        status, payload = start_or_reuse_analysis(
+            mix=resolve_mix(mix),
+            force_refresh=full_sync,
+            full_sync=full_sync,
+        )
         return JSONResponse(status_code=status, content=payload)
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})

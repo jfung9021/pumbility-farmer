@@ -33,6 +33,7 @@ from analysis_runtime import (
 )
 from api.cron import cron_authorized
 from api_service import app as api_app
+from mix_registry import resolve_mix
 from phoenix2_sync import analyzer_input, synchronize_phoenix2_snapshot
 from piu_misgrade_analyzer import (
     AnalysisConfig,
@@ -801,6 +802,28 @@ class ApiRouteTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["outcome"], "started")
+
+    def test_admin_can_request_a_full_score_resynchronization(self) -> None:
+        job = new_job("analysis-full-sync", NOW, full_sync=True)
+        with (
+            patch.dict("os.environ", {"CRON_SECRET": "admin-secret"}),
+            patch(
+                "api.analyze.start_or_reuse_analysis",
+                return_value=(202, {"outcome": "started", "job": job}),
+            ) as start,
+        ):
+            response = API_CLIENT.post(
+                "/api/analyze?mix=phoenix2&fullSync=true",
+                headers={"X-Analysis-Run-Secret": "admin-secret"},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()["job"]["fullSync"])
+        start.assert_called_once_with(
+            mix=resolve_mix("phoenix2"),
+            force_refresh=True,
+            full_sync=True,
+        )
 
     def test_backend_exception_is_a_safe_json_error(self) -> None:
         with patch("api.analyze.PrivateBlobStore", side_effect=RuntimeError("private detail")):

@@ -213,7 +213,7 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 
 - `GET /api/analyze?mix=phoenix2`: load the latest successful `AnalysisPayload`.
 - `GET /api/analyze?mix=phoenix2&jobId=...`: load a matching 24-hour queue-job status.
-- `POST /api/analyze?mix=phoenix2`: protected administrator trigger; requires `X-Analysis-Run-Secret` matching `CRON_SECRET` and queues or follows a full Phoenix 2 refresh.
+- `POST /api/analyze?mix=phoenix2`: protected administrator trigger; requires `X-Analysis-Run-Secret` matching `CRON_SECRET` and queues or follows a Phoenix 2 refresh. Add `fullSync=true` to discard the incremental watermark and refetch every consented player's complete score history.
 - `POST /api/deploy?mix=phoenix2`: validate and acknowledge a legacy signed deployment event without starting analysis.
 - `GET /api/recommendations/players`: return consented usernames and mode eligibility without raw IDs; successful lists are cached for five minutes with stale revalidation.
 - `GET /api/recommendations?playerKey=...`: return the last cached recommendation for one player.
@@ -422,10 +422,10 @@ return raw player IDs or complete score histories.
 
 ## Synchronization behavior
 
-The daily global worker fetches the consented `/api/v2/players` list and the complete Phoenix 2 catalog. Six score workers share a 125 ms request-start limiter and any `Retry-After` backoff. Known players use `recordedAfter`, new players receive a full fetch, and previously empty players are rechecked only after 24 hours. Revoked players are removed immediately. It then fits and serializes the population models once; it no longer computes every player's full recommendation candidate list.
+The daily global worker fetches the consented `/api/v2/players` list and the complete Phoenix 2 catalog. Six score workers share a 125 ms request-start limiter and any `Retry-After` backoff. Known players use `recordedAfter` with a seven-day overlap so delayed or temporarily omitted score rows can be recovered, new players receive a full fetch, and previously empty players are rechecked only after 24 hours. Revoked players are removed immediately. It then fits and serializes the population models once; it no longer computes every player's full recommendation candidate list.
 
 Interactive player work is sent to the separate `player-recommendations` queue. Each job calls only
-`/api/v2/players/<id>/scores`, supplies `recordedAfter` when prior state exists, merges best scores,
+`/api/v2/players/<id>/scores`, fetches that player's complete best-score history so older omissions are repaired, merges best scores,
 and evaluates that player against the current frozen model. The API returns a result immediately
 when the same player and model were refreshed less than 60 seconds ago, so repeated opens and
 browser refreshes do not create duplicate upstream work. Upstream `Retry-After` delays are honored;
