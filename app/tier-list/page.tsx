@@ -93,7 +93,7 @@ function ChartCard({ chart }: { chart: ChartResult }) {
   const delta = chart.difficultyDelta;
   return (
     <article className="chart-card">
-      <div className="jacket" aria-hidden="true">
+      <div className="chart-art jacket" data-chart-type={chart.type} aria-hidden="true">
         {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
       </div>
       <div className="chart-copy">
@@ -131,7 +131,7 @@ function ChartCard({ chart }: { chart: ChartResult }) {
 function CompactChartCard({ chart }: { chart: ChartResult }) {
   return (
     <article className="compact-chart-card" title={`${chart.songName} (${chart.difficulty})`}>
-      <div className="compact-jacket" aria-hidden="true">
+      <div className="chart-art compact-jacket" data-chart-type={chart.type} aria-hidden="true">
         {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
       </div>
       <h3>{chart.songName}</h3>

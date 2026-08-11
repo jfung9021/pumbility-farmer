@@ -162,7 +162,7 @@ function RecommendationCard({
   return (
     <article className="recommendation-card">
       <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
-      <div className="recommendation-jacket" aria-hidden="true">
+      <div className="chart-art recommendation-jacket" data-chart-type={chart.type} aria-hidden="true">
         {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <b>{chart.difficulty}</b>}
       </div>
       <div className="recommendation-copy">

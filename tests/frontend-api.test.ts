@@ -236,6 +236,22 @@ test("tier list compact layout packs art and song names into group rows", async 
   assert.match(css, /\.compact-jacket \{[^}]*aspect-ratio: 1;/);
 });
 
+test("chart art uses mode-colored borders in every rendering layout", async () => {
+  const [tierList, recommendations, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(tierList, /className="chart-art jacket" data-chart-type=\{chart\.type\}/);
+  assert.match(tierList, /className="chart-art compact-jacket" data-chart-type=\{chart\.type\}/);
+  assert.match(recommendations, /className="chart-art recommendation-jacket" data-chart-type=\{chart\.type\}/);
+  assert.match(css, /--chart-single-border: #ff4a4a;/);
+  assert.match(css, /--chart-double-border: #39d96a;/);
+  assert.match(css, /\.chart-art\[data-chart-type="Single"\] \{ border: 2px solid var\(--chart-single-border\); \}/);
+  assert.match(css, /\.chart-art\[data-chart-type="Double"\] \{ border: 2px solid var\(--chart-double-border\); \}/);
+});
+
 test("recommendation cards express projected grade and plate as a concrete goal", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
