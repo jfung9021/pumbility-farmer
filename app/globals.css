@@ -5,6 +5,8 @@
   --line: rgba(255, 255, 255, 0.09);
   --acid: #c8ff2e;
   --acid-soft: #9dca24;
+  --chart-single-border: #ff4a4a;
+  --chart-double-border: #39d96a;
   --black: #090c0a;
   color-scheme: dark;
 }
@@ -477,6 +479,8 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 .jacket { align-items: center; background: linear-gradient(135deg, #2a3825, #111712); border: 1px solid var(--line); border-radius: 7px; display: flex; height: 58px; justify-content: center; overflow: hidden; width: 58px; }
 .jacket img { height: 100%; object-fit: cover; width: 100%; }
 .jacket span { color: var(--tone); font-size: 13px; font-weight: 900; }
+.chart-art[data-chart-type="Single"] { border: 2px solid var(--chart-single-border); }
+.chart-art[data-chart-type="Double"] { border: 2px solid var(--chart-double-border); }
 
 .chart-copy { min-width: 0; }
 .chart-heading { align-items: center; display: flex; gap: 8px; }
