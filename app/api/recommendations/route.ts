@@ -5,6 +5,7 @@ import {
   LocalRecommendationsNotFoundError,
   LocalRecommendationsValidationError,
   readLocalRecommendationIndex,
+  readLocalRecommendationPlayer,
   recommendationsForPlayer,
   recommendationsForRating,
 } from "../../../lib/local-recommendations";
@@ -36,7 +37,8 @@ export async function GET(request: NextRequest) {
         headers: { "Cache-Control": "no-store, max-age=0" },
       });
     }
-    const response = recommendationsForPlayer(payload, playerKey);
+    const player = await readLocalRecommendationPlayer(payload, playerKey);
+    const response = recommendationsForPlayer(payload, playerKey, player);
     if (!response) {
       return NextResponse.json(
         { error: "The selected recommendation player was not found." },

@@ -207,15 +207,16 @@ export interface RecommendationModeResult {
     | "similar-skill-all-q50-v5"
     | "similar-skill-pumbility-11-30-q50-v6";
   pumbilityPerLevel?: number | null;
-  currentTop50Pumbility?: number;
-  currentTop50CutoffPumbility?: number | null;
-  currentTop50Count?: number;
-  top50ModeCounts?: Record<ModeKey, number>;
+  currentTop20Pumbility?: number;
+  currentTop20CutoffPumbility?: number | null;
+  currentTop20Count?: number;
+  top20ModeCounts?: Record<ModeKey, number>;
   sourceModeEligibility?: Record<ModeKey, boolean>;
   sourceRecommendationCounts?: Record<ModeKey, number>;
   candidateRange?: [number | null, number];
   candidateCount?: number;
-  candidates?: RecommendationChart[];
+  filterCandidateCount?: number;
+  filterCandidates?: RecommendationChart[];
   topRecommendations: RecommendationChart[];
 }
 

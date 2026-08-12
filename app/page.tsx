@@ -43,7 +43,7 @@ export default function HomePage() {
           </div>
           <div className="home-how-to-copy">
             <ol>
-              <li>Log in to PIU Scores on its separate website.</li>
+              <li>Log in to PIU Scores and make your account public so your scores can pass through the API.</li>
               <li>Open the Phoenix score upload page and sync your latest scores.</li>
               <li>Return here to view recommendations based on the updated history.</li>
             </ol>

@@ -24,10 +24,14 @@ import {
 import { archiveForMix, MIXES, mixFromSearchParams } from "../lib/mixes.ts";
 import { pumbilityProgress } from "../lib/pumbility-progress.ts";
 import {
+  recommendationDifficultyOptions,
+  visibleRecommendations,
+} from "../lib/recommendation-filters.ts";
+import {
   applyPhoenix1Rerates,
   type Phoenix1ReratePayload,
 } from "../lib/phoenix1-rerates.ts";
-import type { AnalysisPayload } from "../lib/types.ts";
+import type { AnalysisPayload, RecommendationChartEstimate } from "../lib/types.ts";
 import {
   LocalRecommendationsValidationError,
   recommendationPlayerList,
@@ -80,6 +84,7 @@ test("homepage leads with feature cards and explains the external score sync", a
   assert.match(css, /\.feature-grid \{[^}]*gap: 18px;[^}]*margin-top: 0;/);
   assert.match(page, /Sync your scores before you start/);
   assert.match(page, /Log in to PIU Scores/);
+  assert.match(page, /make your account public so your scores can pass through the API/);
   assert.match(page, /<ScoreSyncLink>/);
   assert.match(syncLink, /https:\/\/piuscores\.arroweclip\.se\/UploadPhoenixScores/);
   assert.match(syncLink, /Upload scores in the external PIUScores Tool/);
@@ -106,7 +111,7 @@ test("recommendation methodology separates top-20 display from ranks 11-30 proje
   assert.match(page, /visible skill rating and eligible-chart ceiling use top-20/);
   assert.match(page, /projected plate is the weighted median/);
   assert.match(page, /Expected Pumbility is then calculated once from the displayed projected score/);
-  assert.match(page, /existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2/);
+  assert.match(page, /existing chart Pumbility, and current top 20 use the Pumbility supplied by Phoenix 2/);
   assert.match(page, /Skill title progress/);
   assert.doesNotMatch(page, /every likely grade-plate outcome/);
   assert.doesNotMatch(page, /chart difficulty fields are averaged for the skill rating/);
@@ -164,20 +169,22 @@ test("Pumbility progress uses the Phoenix 2 title and rank boundaries", () => {
   assert.equal(phoenix.nextThreshold, null);
 });
 
-test("recommendation page shows one top-50 list without projection evidence details", async () => {
+test("recommendation page shows one filterable top-20 list in every mode", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
   );
   const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
 
-  assert.match(page, /Top 50 farmable charts/);
-  assert.match(page, /Top 50 recommended charts/);
-  assert.match(page, /Top 50 Pumbility opportunities/);
-  assert.doesNotMatch(page, /Top 50 overall opportunities/);
+  assert.match(page, /<h2 id="top-recommendations-title">RECOMMENDED CHARTS<\/h2>/);
+  assert.match(page, /aria-label="Official difficulty"/);
+  assert.match(page, /recommendationDifficultyOptions/);
+  assert.match(page, /recommendationsForDifficulty\(activeMode, mode, effectiveDifficulty\)/);
+  assert.doesNotMatch(page, /Top 50|Top 20 Pumbility opportunities|Top 20 farmable charts/);
   assert.doesNotMatch(page, /FULL MATCHING SET|function CandidateRow|scoreProjectionEvidenceLabel/);
   assert.doesNotMatch(page, /chart\.projectedScore\.toLocaleString/);
   assert.doesNotMatch(css, /\.all-candidates|\.candidate-(?:row|list|copy|jacket|metric|search|heading)/);
+  assert.match(css, /\.recommendation-section-heading h2 \{[^}]*font-size: 10px;[^}]*font-weight: 800;[^}]*letter-spacing: 0\.08em;/);
 });
 
 test("recommendation page renders cache before a deduplicated player refresh", async () => {
@@ -222,7 +229,7 @@ test("legacy local player responses carry a complete generation timestamp contra
 
 test("local recommendations reject stale schemas before rendering", () => {
   const payload = {
-    schemaVersion: 18,
+    schemaVersion: 19,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: [],
@@ -232,19 +239,22 @@ test("local recommendations reject stale schemas before rendering", () => {
   assert.throws(
     () => validateLocalRecommendationIndex(payload),
     (error: unknown) => error instanceof LocalRecommendationsValidationError
-      && /Regenerate schema 19 recommendations/.test(error.message),
+      && /Regenerate schema 20 recommendations/.test(error.message),
   );
 });
 
 test("global refresh controls live only on the hidden Jonathan page", async () => {
-  const [tierList, controls, page] = await Promise.all([
+  const [tierList, refreshMeta, controls, page] = await Promise.all([
     readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "_components", "refresh-meta.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "jonathan", "JonathanControls.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "jonathan", "page.tsx"), "utf8"),
   ]);
 
   assert.doesNotMatch(tierList, /Administrator refresh key|Refresh Rankings|X-Analysis-Run-Secret|Last completed/);
-  assert.match(tierList, /Refresh age:/);
+  assert.match(tierList, /<RefreshMeta/);
+  assert.match(refreshMeta, /Refresh age:/);
+  assert.match(refreshMeta, /min-height|loadingLabel/);
   assert.match(controls, /X-Jonathan-Password/);
   assert.match(controls, /\/api\/jonathan\/refresh\?mode=\$\{mode\}/);
   assert.match(controls, /"incremental"/);
@@ -294,12 +304,14 @@ test("tier list uses compact segmented controls for grouping and layout", async 
   assert.doesNotMatch(page, /Grouped by truncated one-decimal estimate|easier to score|harder to score/);
   assert.doesNotMatch(page, /showUnrated|Include unrated|unrated-toggle/);
   assert.match(page, /className="search-field"[\s\S]*?className="level-field"/);
+  assert.match(page, /<span>Search songs or step artists<\/span>/);
+  assert.match(page, /placeholder="Sorceress Elise"/);
   assert.match(page, /<h2 id="unrated-compact">Unrated<\/h2>/);
   assert.match(css, /\.filter-bar \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(120px, 1fr\);/);
   assert.match(css, /\.tier-list-page \{ --tier-list-gap: 16px; \}/);
   assert.match(css, /\.results-controls \{[^}]*padding: var\(--tier-list-gap\) 2px;/);
   assert.match(css, /\.tiers \{[^}]*gap: var\(--tier-list-gap\);/);
-  assert.match(css, /\.tier-list-page \.hero h1 \{[^}]*font-size: clamp\(14px, 4\.8vw, 20px\);[^}]*white-space: nowrap;/);
+  assert.match(css, /\.page-title-hero h1 \{[^}]*font-size: clamp\(14px, 4\.8vw, 20px\);[^}]*white-space: nowrap;/);
 });
 
 test("tier list compact layout uses art-only buttons and a details dialog", async () => {
@@ -395,12 +407,12 @@ test("recommendation player picker leads directly into the mode tabs", async () 
   assert.doesNotMatch(page, /Only usernames shared with this community tool are listed/);
   assert.match(css, /\.player-picker-meta \.player-score-sync-link \{[^}]*background: transparent;[^}]*color: #7d867e;[^}]*text-decoration: underline;/);
   assert.match(css, /\.recommendations-page \{ --recommendations-stack-gap: 16px; \}/);
-  assert.match(css, /\.recommendations-hero \{[^}]*padding: var\(--recommendations-stack-gap\) 24px;/);
+  assert.match(css, /\.recommendations-hero \{[^}]*padding: 0 24px var\(--recommendations-stack-gap\);/);
   assert.match(css, /\.recommendation-mode-row \{[^}]*margin-bottom: var\(--recommendations-stack-gap\);/);
   assert.match(css, /\.top-recommendations \{[^}]*margin-top: var\(--recommendations-stack-gap\);/);
-  assert.match(css, /\.player-picker \{[^}]*grid-template-columns: minmax\(260px, 430px\) 1fr;[^}]*max-width: 850px;/);
+  assert.match(css, /\.player-picker \{[^}]*grid-template-columns: minmax\(260px, 430px\) 1fr;[^}]*width: 100%;/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendations-page \{ --recommendations-stack-gap: 14px; \}/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendations-hero \{[^}]*padding: var\(--recommendations-stack-gap\) 18px;/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendations-hero \{[^}]*padding: 0 12px var\(--recommendations-stack-gap\);/);
 });
 
 test("limited-data presentation uses the shared 20-player boundary", async () => {
@@ -676,19 +688,19 @@ test("recommendation player list exposes names and eligibility without mode payl
           overall: {
             eligible: true,
             validScoreCount: 30,
-            candidates: [],
+            filterCandidates: [],
             topRecommendations: [],
           },
           singles: {
             eligible: true,
             validScoreCount: 30,
-            candidates: [],
+            filterCandidates: [],
             topRecommendations: [],
           },
           doubles: {
             eligible: false,
             validScoreCount: 4,
-            candidates: [],
+            filterCandidates: [],
             topRecommendations: [],
           },
         },
@@ -745,8 +757,8 @@ test("manual recommendations include charts up to 0.5 above the scoring rating",
   assert.equal(singles.projectionAvailable, false);
   assert.deepEqual(singles.candidateRange, [null, 21]);
   assert.deepEqual(
-    (singles.candidates ?? []).map((candidate) => candidate.chartId),
-    ["level-16", "rating-edge", "upper-edge"],
+    (singles.filterCandidates ?? []).map((candidate) => candidate.chartId),
+    ["level-16", "level-15", "rating-edge", "upper-edge", "too-hard"],
   );
   assert.equal(singles.topRecommendations[0].chartId, "level-16");
   assert.equal(singles.topRecommendations[0].expectedPumbility, null);
@@ -765,11 +777,15 @@ test("manual recommendations include charts up to 0.5 above the scoring rating",
     players: [],
   }, 20.5);
   assert.deepEqual(
-    (configuredFloor.player.modes.singles.candidates ?? []).map((candidate) => candidate.chartId),
+    (configuredFloor.player.modes.singles.filterCandidates ?? []).map((candidate) => candidate.chartId),
+    ["level-17", "level-16"],
+  );
+  assert.deepEqual(
+    configuredFloor.player.modes.singles.topRecommendations.map((candidate) => candidate.chartId),
     ["level-17"],
   );
 
-  const fiftyOfFiftyFive = recommendationsForRating({
+  const twentyOfFiftyFive = recommendationsForRating({
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: Array.from({ length: 55 }, (_, index) =>
@@ -777,5 +793,87 @@ test("manual recommendations include charts up to 0.5 above the scoring rating",
     ),
     players: [],
   }, 20.5).player.modes.singles.topRecommendations;
-  assert.equal(fiftyOfFiftyFive.length, 50);
+  assert.equal(twentyOfFiftyFive.length, 20);
+});
+
+test("official difficulty filters use the full mode-specific chart pools", () => {
+  const chart = (
+    chartId: string,
+    type: "Single" | "Double",
+    level: number,
+  ): RecommendationChartEstimate => ({
+    mode: type === "Single" ? "Singles" : "Doubles",
+    songName: chartId,
+    difficulty: `${type === "Single" ? "S" : "D"}${level}`,
+    type,
+    level,
+    chartId,
+    imageUrl: null,
+    noteCount: null,
+    stepArtist: null,
+    estimatedDifficulty: level,
+    difficultyDelta: -0.5,
+    difficultyCi95Low: level,
+    difficultyCi95High: level,
+    nContributors: 20,
+    phoenix1Contributors: 10,
+    phoenix2Contributors: 10,
+    evidenceStatus: "Published",
+  });
+  const response = recommendationsForRating({
+    generatedAtUtc: "2026-08-08T00:00:00Z",
+    method: {},
+    charts: [
+      chart("single-10", "Single", 10),
+      chart("single-15", "Single", 15),
+      chart("single-16", "Single", 16),
+      chart("single-18", "Single", 18),
+      chart("single-26", "Single", 26),
+      chart("double-10", "Double", 10),
+      chart("double-15", "Double", 15),
+      chart("double-16", "Double", 16),
+      chart("double-23", "Double", 23),
+      ...Array.from({ length: 25 }, (_, index) =>
+        chart(`double-24-${String(index).padStart(2, "0")}`, "Double", 24)),
+      chart("double-26", "Double", 26),
+    ],
+    players: [],
+  }, 20);
+  const modes = response.player.modes;
+  const overall = modes.overall;
+  assert.ok(overall);
+
+  assert.deepEqual(
+    recommendationDifficultyOptions("singles", modes.singles.filterCandidates ?? []),
+    ["S16", "S18", "S26"],
+  );
+  assert.deepEqual(
+    recommendationDifficultyOptions("doubles", modes.doubles.filterCandidates ?? []),
+    ["D16", "D23", "D24", "D26"],
+  );
+  assert.deepEqual(
+    recommendationDifficultyOptions("overall", overall.filterCandidates ?? []),
+    ["S16", "S18", "S26", "D16", "D23", "D24", "D26"],
+  );
+  assert.deepEqual(visibleRecommendations("overall", overall, "S10"), []);
+  assert.equal(overall.topRecommendations.some((row) => row.level === 24), false);
+  const filtered = visibleRecommendations("overall", overall, "D24");
+  assert.equal(filtered.length, 25);
+  assert.equal(filtered.every((row) => row.type === "Double" && row.level === 24), true);
+  const gains = new Map([
+    ["double-24-00", 1],
+    ["double-24-01", 5],
+    ["double-24-02", 3],
+  ]);
+  const ranked = visibleRecommendations("overall", {
+    ...overall,
+    filterCandidates: (overall.filterCandidates ?? []).map((row) => ({
+      ...row,
+      projectedGain: gains.get(row.chartId) ?? null,
+    })),
+  }, "D24");
+  assert.deepEqual(
+    ranked.slice(0, 3).map((row) => row.chartId),
+    ["double-24-01", "double-24-02", "double-24-00"],
+  );
 });

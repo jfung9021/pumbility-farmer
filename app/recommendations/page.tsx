@@ -2,12 +2,18 @@
 
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
+import { RefreshMeta } from "../_components/refresh-meta";
 import { ScoreSyncLink } from "../_components/score-sync-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { hasLimitedData } from "../../lib/chart-evidence";
 import { formatEstimatedDifficulty } from "../../lib/format-difficulty";
 import { pumbilityProgress } from "../../lib/pumbility-progress";
+import {
+  ALL_DIFFICULTIES,
+  recommendationDifficultyOptions,
+  visibleRecommendations as recommendationsForDifficulty,
+} from "../../lib/recommendation-filters";
 import type {
   ModeKey,
   PlayerRecommendationsResponse,
@@ -24,6 +30,11 @@ const RECOMMENDATION_MODES: RecommendationModeKey[] = [
   "singles",
   "doubles",
 ];
+const INITIAL_DIFFICULTY_FILTERS: Record<RecommendationModeKey, string> = {
+  overall: ALL_DIFFICULTIES,
+  singles: ALL_DIFFICULTIES,
+  doubles: ALL_DIFFICULTIES,
+};
 
 
 function signed(value: number, digits = 2): string {
@@ -178,9 +189,19 @@ export default function RecommendationsPage() {
   const [playerQuery, setPlayerQuery] = useState("");
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
   const [activeMode, setActiveMode] = useState<RecommendationModeKey>("overall");
+  const [difficultyFilters, setDifficultyFilters] = useState<
+    Record<RecommendationModeKey, string>
+  >({ ...INITIAL_DIFFICULTY_FILTERS });
   const [loadingPlayers, setLoadingPlayers] = useState(true);
   const [loadingPlayer, setLoadingPlayer] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(0);
+
+  useEffect(() => {
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -287,6 +308,9 @@ export default function RecommendationsPage() {
   }, [playersPayload?.refreshSupported, selectedKey]);
 
   const selectPlayer = (playerKey: string, inputValue = "") => {
+    if (playerKey !== selectedKey) {
+      setDifficultyFilters({ ...INITIAL_DIFFICULTY_FILTERS });
+    }
     setSelectedKey(playerKey);
     setPlayerQuery(inputValue);
     setPlayerMenuOpen(false);
@@ -297,7 +321,7 @@ export default function RecommendationsPage() {
   };
 
   const mode = playerPayload?.player.modes[activeMode] || null;
-  const modePumbility = mode?.currentTop50Pumbility ?? 0;
+  const modePumbility = mode?.currentTop20Pumbility ?? 0;
   const sourceModeEligibility = mode?.sourceModeEligibility;
   const unavailableOverallModes = activeMode === "overall" && sourceModeEligibility
     ? (["singles", "doubles"] as ModeKey[]).filter(
@@ -333,6 +357,7 @@ export default function RecommendationsPage() {
     setPlayerQuery(value);
     setPlayerMenuOpen(true);
     if (!selectedKey) return;
+    setDifficultyFilters({ ...INITIAL_DIFFICULTY_FILTERS });
     setSelectedKey("");
     const url = new URL(window.location.href);
     url.searchParams.delete("player");
@@ -348,6 +373,37 @@ export default function RecommendationsPage() {
     );
   }, [playerQuery, playersPayload, selectedKey]);
 
+  const difficultyOptions = useMemo(
+    () => recommendationDifficultyOptions(
+      activeMode,
+      mode?.filterCandidates ?? [],
+    ),
+    [activeMode, mode?.filterCandidates],
+  );
+  const selectedDifficulty = difficultyFilters[activeMode];
+  const effectiveDifficulty = selectedDifficulty === ALL_DIFFICULTIES
+    || difficultyOptions.includes(selectedDifficulty)
+    ? selectedDifficulty
+    : ALL_DIFFICULTIES;
+  const visibleRecommendations = useMemo(
+    () => recommendationsForDifficulty(activeMode, mode, effectiveDifficulty),
+    [activeMode, effectiveDifficulty, mode],
+  );
+
+  useEffect(() => {
+    if (!playerPayload || !mode || selectedDifficulty === ALL_DIFFICULTIES) return;
+    if (difficultyOptions.includes(selectedDifficulty)) return;
+    setDifficultyFilters((current) => ({
+      ...current,
+      [activeMode]: ALL_DIFFICULTIES,
+    }));
+  }, [activeMode, difficultyOptions, mode, playerPayload, selectedDifficulty]);
+
+  const recommendationGeneratedAt = playerPayload?.recommendationsGeneratedAtUtc
+    || playerPayload?.generatedAtUtc
+    || playersPayload?.modelGeneratedAtUtc
+    || playersPayload?.generatedAtUtc;
+
   const hasSelection = Boolean(selectedKey);
 
   return (
@@ -355,6 +411,16 @@ export default function RecommendationsPage() {
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <SiteHeader active="recommendations" />
+
+      <section className="hero page-title-hero recommendations-title-hero">
+        <h1>Recommended Charts</h1>
+        <RefreshMeta
+          generatedAtUtc={recommendationGeneratedAt}
+          loading={loadingPlayers}
+          loadingLabel="Loading recommendations..."
+          nowMs={nowMs}
+        />
+      </section>
 
       <section className="recommendations-hero">
         <div className="player-picker">
@@ -472,18 +538,34 @@ export default function RecommendationsPage() {
               ) : (
                 <section className="top-recommendations" aria-labelledby="top-recommendations-title">
                   <div className="recommendation-section-heading">
-                    <h2 id="top-recommendations-title">
-                      {mode.projectionAvailable === false
-                        ? "Top 50 farmable charts"
-                        : activeMode === "overall"
-                          ? "Top 50 recommended charts"
-                          : "Top 50 Pumbility opportunities"}
-                    </h2>
+                    <h2 id="top-recommendations-title">RECOMMENDED CHARTS</h2>
+                    <label className="recommendation-difficulty-filter">
+                      <span className="visually-hidden">Official difficulty</span>
+                      <select
+                        aria-label="Official difficulty"
+                        onChange={(event) => setDifficultyFilters((current) => ({
+                          ...current,
+                          [activeMode]: event.target.value,
+                        }))}
+                        value={effectiveDifficulty}
+                      >
+                        <option value={ALL_DIFFICULTIES}>All difficulties</option>
+                        {difficultyOptions.map((difficulty) => (
+                          <option key={difficulty} value={difficulty}>{difficulty}</option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
                   <div className="recommendation-list">
-                    {mode.topRecommendations.length ? mode.topRecommendations.map((chart, index) => (
+                    {visibleRecommendations.length ? visibleRecommendations.map((chart, index) => (
                       <RecommendationCard chart={chart} key={chart.chartId} rank={index + 1} />
-                    )) : <p className="no-recommendations">No nearby chart is projected to improve the current top 50.</p>}
+                    )) : (
+                      <p className="no-recommendations">
+                        {effectiveDifficulty === ALL_DIFFICULTIES
+                          ? "No nearby chart is projected to improve the current top 20."
+                          : `No ${effectiveDifficulty} charts are available in the recommendation dataset.`}
+                      </p>
+                    )}
                   </div>
                 </section>
               )}
@@ -496,9 +578,9 @@ export default function RecommendationsPage() {
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
         <p>Projected scores use the ranks 11–30 Pumbility rating and the unweighted median (50th percentile) from all other players with a normalized result on the exact chart. The search tries plus or minus 0.2 through 0.5 rating in 0.1 steps seeking 20 peers, repeats those radii seeking 10, then repeats seeking five. Every peer within the narrowest successful radius is used; below five peers, the player-balanced population model is used.</p>
-        <p>The projected plate is the weighted median in Phoenix 2 order from Rough Game through Perfect Game. Expected Pumbility is then calculated once from the displayed projected score&apos;s grade, that median plate, and the chart&apos;s mode-specific formula. Projected gain is the deterministic top-50 change from that same displayed result.</p>
+        <p>The projected plate is the weighted median in Phoenix 2 order from Rough Game through Perfect Game. Expected Pumbility is then calculated once from the displayed projected score&apos;s grade, that median plate, and the chart&apos;s mode-specific formula. Projected gain is the deterministic top-20 change from that same displayed result.</p>
         <p>The visible skill rating and eligible-chart ceiling use top-20 average Pumbility. Both ratings are expressed as the continuous chart level where an S with Fair Game earns the selected window&apos;s average Pumbility. Phoenix 2 supplies a window once it is complete; otherwise a complete Phoenix 1 window is used, followed by partial Phoenix 2 only for the visible top-20 rating.</p>
-        <p>Played status, existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2 rather than recomputing historical results. Overall Pumbility is the best 50 values across both modes; Overall recommendations merge each mode&apos;s displayed top 50 and recalculate their deterministic gain against that shared pool. Projections are estimates, not guaranteed results.</p>
+        <p>Played status, existing chart Pumbility, and current top 20 use the Pumbility supplied by Phoenix 2 rather than recomputing historical results. Overall Pumbility is the best 20 values across both modes; Overall recommendations merge each mode&apos;s displayed top 20 and recalculate their deterministic gain against that shared pool. Official-difficulty filters show every matching level-16+ chart, ordered by projected Pumbility gain. Projections are estimates, not guaranteed results.</p>
       </footer>
     </main>
   );

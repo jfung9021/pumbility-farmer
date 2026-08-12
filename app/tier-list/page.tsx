@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { RefreshMeta } from "../_components/refresh-meta";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { hasLimitedData } from "../../lib/chart-evidence";
@@ -49,15 +50,6 @@ function chartGrade(chart: ChartResult): string {
   if (chart.estimatedDifficulty === null) return "-";
   const prefix = chart.type === "Single" ? "S" : "D";
   return `${prefix}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
-}
-
-function refreshAge(value: string, nowMs: number): string {
-  const timestamp = new Date(value).getTime();
-  if (Number.isNaN(timestamp)) return "unknown age";
-  const elapsed = Math.max(0, nowMs - timestamp);
-  if (elapsed < 60_000) return "just now";
-  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
-  return `${Math.floor(elapsed / 3_600_000)}h ago`;
 }
 
 function LimitedDataWarning({ chart, compact = false }: { chart: ChartResult; compact?: boolean }) {
@@ -395,12 +387,15 @@ export default function TierListPage() {
     <main className="tier-list-page">
       <SiteHeader active="tier-list" />
 
-      <section className="hero" id="top">
+      <section className="hero page-title-hero" id="top">
         <h1>Scoring Difficulty Tier List</h1>
-        <div className="refresh-meta" aria-live="polite">
-          {payload && nowMs ? <span>Refresh age: <b>{refreshAge(payload.generatedAtUtc, nowMs)}</b></span> : null}
-        </div>
-        {loading || message ? <p className="tier-load-message" aria-live="polite">{loading ? "Loading tier list..." : message}</p> : null}
+        <RefreshMeta
+          generatedAtUtc={payload?.generatedAtUtc}
+          loading={loading}
+          loadingLabel="Loading tier list..."
+          nowMs={nowMs}
+        />
+        {message ? <p className="tier-load-message" aria-live="polite">{message}</p> : null}
       </section>
 
       <section className="dashboard" aria-busy={loading} id="rankings-dashboard">
@@ -422,11 +417,11 @@ export default function TierListPage() {
 
         <div className="filter-bar">
           <label className="search-field">
-            <span aria-hidden="true">{"\u2315"}</span>
+            <span>Search songs or step artists</span>
             <input
               aria-label="Search songs or step artists"
               onChange={(event) => updateFilter({ query: event.target.value })}
-              placeholder="Search songs or step artists"
+              placeholder="Sorceress Elise"
               type="search"
               value={filter.query}
             />
