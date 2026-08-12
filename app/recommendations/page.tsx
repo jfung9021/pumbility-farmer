@@ -4,6 +4,7 @@ import { track } from "@vercel/analytics";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
 import { RefreshMeta } from "../_components/refresh-meta";
+import { ChartVideoLink } from "../_components/chart-video-link";
 import { ScoreSyncLink } from "../_components/score-sync-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
@@ -140,7 +141,15 @@ function RecommendationCard({
     : null;
   return (
     <article className="recommendation-card">
-      <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
+      <div className="recommendation-leading">
+        <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
+        <ChartVideoLink
+          chartId={chart.chartId}
+          difficulty={chart.difficulty}
+          songName={chart.songName}
+          variant="recommendation"
+        />
+      </div>
       <div className="chart-art recommendation-jacket" data-chart-type={chart.type} aria-hidden="true">
         {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <b>{chart.difficulty}</b>}
         <span className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>

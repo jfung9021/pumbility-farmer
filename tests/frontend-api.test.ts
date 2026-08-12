@@ -205,6 +205,88 @@ test("recommendation page shows one filterable top-20 list in every mode", async
   assert.match(css, /\.recommendation-section-heading h2 \{[^}]*font-size: 10px;[^}]*font-weight: 800;[^}]*letter-spacing: 0\.08em;/);
 });
 
+test("chart video links are accessible external links on every requested surface", async () => {
+  const [component, helper, recommendations, tierList] = await Promise.all([
+    readFile(
+      path.join(process.cwd(), "app", "_components", "chart-video-link.tsx"),
+      "utf8",
+    ),
+    readFile(path.join(process.cwd(), "lib", "chart-videos.ts"), "utf8"),
+    readFile(
+      path.join(process.cwd(), "app", "recommendations", "page.tsx"),
+      "utf8",
+    ),
+    readFile(
+      path.join(process.cwd(), "app", "tier-list", "page.tsx"),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(component, /const href = getChartVideoUrl\(chartId\)/);
+  assert.match(component, /if \(!href\) return null/);
+  assert.match(component, /`Watch \$\{songName\} \$\{difficulty\} chart on YouTube`/);
+  assert.match(component, /href=\{href\}/);
+  assert.match(component, /rel="noopener noreferrer"/);
+  assert.match(component, /target="_blank"/);
+  assert.match(component, /<svg aria-hidden="true" focusable="false"/);
+  assert.match(helper, /export function getChartVideoUrl\(chartId: string\): string \| null/);
+  assert.match(helper, /YOUTUBE_VIDEO_ID\.test\(videoId\)/);
+  assert.match(helper, /`https:\/\/www\.youtube\.com\/watch\?v=\$\{videoId\}`/);
+
+  assert.match(
+    recommendations,
+    /className="recommendation-leading"[\s\S]*<ChartVideoLink[\s\S]*chartId=\{chart\.chartId\}[\s\S]*difficulty=\{chart\.difficulty\}[\s\S]*songName=\{chart\.songName\}[\s\S]*variant="recommendation"/,
+  );
+  assert.match(
+    tierList,
+    /className="chart-art-rail"[\s\S]*<ChartVideoLink[\s\S]*chartId=\{chart\.chartId\}[\s\S]*variant="tier"/,
+  );
+  assert.match(
+    tierList,
+    /className="chart-dialog-art-rail"[\s\S]*<ChartVideoLink[\s\S]*chartId=\{chart\.chartId\}[\s\S]*variant="dialog"/,
+  );
+});
+
+test("NEVSISTER catalog has the complete validated chart inventory", async () => {
+  const rawCatalog = await readFile(
+    path.join(process.cwd(), "lib", "data", "nevsister-chart-videos.json"),
+    "utf8",
+  );
+  const catalog = JSON.parse(rawCatalog) as {
+    schemaVersion: number;
+    channelId: string;
+    charts: Record<string, string>;
+  };
+  const catalogIds = Object.keys(catalog.charts).sort();
+
+  assert.equal(catalog.schemaVersion, 1);
+  assert.equal(catalog.channelId, "UCicVRsgv4iIhZGZcbx7xUkw");
+  assert.equal(catalogIds.length, 2572);
+  assert.equal(new Set(catalogIds).size, catalogIds.length);
+  for (const [chartId, videoId] of Object.entries(catalog.charts)) {
+    assert.match(chartId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    assert.match(videoId, /^[A-Za-z0-9_-]{11}$/);
+  }
+});
+
+test("chart video controls use existing card tracks and out-of-flow positioning", async () => {
+  const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
+  const mobileStyles = css.slice(css.indexOf("@media (max-width: 560px)"));
+
+  assert.match(css, /\.recommendation-card \{[^}]*grid-template-columns: 34px 62px minmax\(0, 1fr\) max-content;[^}]*padding: 15px 18px;/);
+  assert.match(css, /\.recommendation-leading \{[^}]*height: 62px;[^}]*position: relative;[^}]*width: 34px;/);
+  assert.match(css, /\.chart-card \{[^}]*grid-template-columns: 58px minmax\(0, 1fr\) 104px;[^}]*min-height: 86px;/);
+  assert.match(css, /\.chart-art-rail \{[^}]*height: 58px;[^}]*position: relative;[^}]*width: 58px;/);
+  assert.match(css, /\.chart-video-link \{[^}]*position: absolute;/);
+
+  assert.match(mobileStyles, /\.recommendation-card \{[^}]*grid-template-columns: 22px 48px minmax\(0, 1fr\) max-content;[^}]*padding: 14px 10px;/);
+  assert.match(mobileStyles, /\.recommendation-leading \{[^}]*height: 48px;[^}]*width: 22px;/);
+  assert.match(mobileStyles, /\.chart-card \{[^}]*grid-template-columns: 48px minmax\(0, 1fr\);[^}]*padding: 12px 11px;/);
+  assert.match(mobileStyles, /\.chart-art-rail \{[^}]*height: 48px;[^}]*width: 48px;/);
+  assert.match(mobileStyles, /\.chart-dialog-art-rail \{[^}]*height: 102px;[^}]*width: 62px;/);
+  assert.match(mobileStyles, /\.chart-video-link-dialog \{[^}]*height: 36px;[^}]*top: 64px;/);
+});
+
 test("recommendation page renders cache before a deduplicated player refresh", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
