@@ -321,7 +321,7 @@ export default function RecommendationsPage() {
   };
 
   const mode = playerPayload?.player.modes[activeMode] || null;
-  const modePumbility = mode?.currentTop20Pumbility ?? 0;
+  const modePumbility = mode?.currentTop50Pumbility ?? 0;
   const sourceModeEligibility = mode?.sourceModeEligibility;
   const unavailableOverallModes = activeMode === "overall" && sourceModeEligibility
     ? (["singles", "doubles"] as ModeKey[]).filter(
@@ -562,7 +562,7 @@ export default function RecommendationsPage() {
                     )) : (
                       <p className="no-recommendations">
                         {effectiveDifficulty === ALL_DIFFICULTIES
-                          ? "No nearby chart is projected to improve the current top 20."
+                          ? "No nearby chart is projected to improve the current top 50."
                           : `No ${effectiveDifficulty} charts are available in the recommendation dataset.`}
                       </p>
                     )}
@@ -578,9 +578,9 @@ export default function RecommendationsPage() {
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
         <p>Projected scores use the ranks 11–30 Pumbility rating and the unweighted median (50th percentile) from all other players with a normalized result on the exact chart. The search tries plus or minus 0.2 through 0.5 rating in 0.1 steps seeking 20 peers, repeats those radii seeking 10, then repeats seeking five. Every peer within the narrowest successful radius is used; below five peers, the player-balanced population model is used.</p>
-        <p>The projected plate is the weighted median in Phoenix 2 order from Rough Game through Perfect Game. Expected Pumbility is then calculated once from the displayed projected score&apos;s grade, that median plate, and the chart&apos;s mode-specific formula. Projected gain is the deterministic top-20 change from that same displayed result.</p>
+        <p>The projected plate is the weighted median in Phoenix 2 order from Rough Game through Perfect Game. Expected Pumbility is then calculated once from the displayed projected score&apos;s grade, that median plate, and the chart&apos;s mode-specific formula. Projected gain is the deterministic top-50 change from that same displayed result.</p>
         <p>The visible skill rating and eligible-chart ceiling use top-20 average Pumbility. Both ratings are expressed as the continuous chart level where an S with Fair Game earns the selected window&apos;s average Pumbility. Phoenix 2 supplies a window once it is complete; otherwise a complete Phoenix 1 window is used, followed by partial Phoenix 2 only for the visible top-20 rating.</p>
-        <p>Played status, existing chart Pumbility, and current top 20 use the Pumbility supplied by Phoenix 2 rather than recomputing historical results. Overall Pumbility is the best 20 values across both modes; Overall recommendations merge each mode&apos;s displayed top 20 and recalculate their deterministic gain against that shared pool. Official-difficulty filters show every matching level-16+ chart, ordered by projected Pumbility gain. Projections are estimates, not guaranteed results.</p>
+        <p>Played status, existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2 rather than recomputing historical results. Overall Pumbility is the best 50 values across both modes; Overall recommendations merge each mode&apos;s displayed top 20 and recalculate their deterministic gain against that shared top-50 pool. Official-difficulty filters show every matching level-16+ chart, ordered by projected Pumbility gain. Projections are estimates, not guaranteed results.</p>
       </footer>
     </main>
   );

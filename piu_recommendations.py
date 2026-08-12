@@ -52,7 +52,7 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 20
+RECOMMENDATION_SCHEMA_VERSION = 21
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 2
@@ -64,7 +64,7 @@ PHOENIX2_RATING_SCORE_THRESHOLD = RECOMMENDATION_RATING_SCORE_COUNT
 PROJECTION_RATING_START_RANK = BASELINE_START_RANK
 PROJECTION_RATING_END_RANK = BASELINE_END_RANK
 PROJECTION_RATING_SCORE_THRESHOLD = PROJECTION_RATING_END_RANK
-TOP_PUMBILITY_COUNT = 20
+TOP_PUMBILITY_COUNT = 50
 TOP_RECOMMENDATION_COUNT = 20
 MAX_RAW_SCORE = 1_000_000
 SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v2"
@@ -1216,17 +1216,17 @@ def _top_total(values: Sequence[float]) -> float:
     return float(sum(sorted((value for value in values if value > 0), reverse=True)[:TOP_PUMBILITY_COUNT]))
 
 
-def _top20_marginal_gain(
+def _top50_marginal_gain(
     candidate_pumbility: float,
     *,
     existing_pumbility: float | None,
-    existing_in_top20: bool,
+    existing_in_top50: bool,
     current_score_count: int,
     cutoff: float | None,
 ) -> float:
-    """Return the exact top-20 total change for one candidate outcome."""
+    """Return the exact top-50 total change for one candidate outcome."""
     retained = max(existing_pumbility or 0.0, candidate_pumbility)
-    if existing_in_top20:
+    if existing_in_top50:
         return max(0.0, retained - float(existing_pumbility or 0.0))
     if current_score_count < TOP_PUMBILITY_COUNT:
         return retained
@@ -2115,7 +2115,7 @@ def _build_player_recommendation_phoenix2_only(
                 row.get("projectedScore") is not None for row in candidates
             ),
             "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
-            "currentTop20Pumbility": round(current_total, 3),
+            "currentTop50Pumbility": round(current_total, 3),
             "candidateRange": [
                 None,
                 round(scoring_rating + RECOMMENDATION_RADIUS, 3),
@@ -2188,19 +2188,19 @@ def build_player_recommendation(
         str(row["chartId"]): float(row["pumbility"])
         for row in overall_scores.to_dict(orient="records")
     }
-    overall_top20_chart_ids = set(
+    overall_top50_chart_ids = set(
         overall_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str)
     )
-    overall_top20_cutoff = (
+    overall_top50_cutoff = (
         float(overall_scores.iloc[TOP_PUMBILITY_COUNT - 1]["pumbility"])
         if len(overall_scores) >= TOP_PUMBILITY_COUNT
         else None
     )
-    overall_top20_mode_counts = {"singles": 0, "doubles": 0}
+    overall_top50_mode_counts = {"singles": 0, "doubles": 0}
     for chart_id in overall_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str):
         chart_type = chart_type_by_id.get(chart_id)
         if chart_type in MODE_TYPES:
-            overall_top20_mode_counts[_mode_key(chart_type)] += 1
+            overall_top50_mode_counts[_mode_key(chart_type)] += 1
 
     def public_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
         return {
@@ -2237,10 +2237,10 @@ def build_player_recommendation(
             str(row["chartId"]): float(row["pumbility"])
             for row in mode_scores.to_dict(orient="records")
         }
-        top20_chart_ids = set(
+        top50_chart_ids = set(
             mode_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str)
         )
-        top20_cutoff = (
+        top50_cutoff = (
             float(mode_scores.iloc[TOP_PUMBILITY_COUNT - 1]["pumbility"])
             if len(mode_scores) >= TOP_PUMBILITY_COUNT
             else None
@@ -2263,11 +2263,11 @@ def build_player_recommendation(
                 ),
                 "projectionAvailable": False,
                 "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
-                "currentTop20Pumbility": round(current_total, 3),
-                "currentTop20CutoffPumbility": (
-                    round(top20_cutoff, 3) if top20_cutoff is not None else None
+                "currentTop50Pumbility": round(current_total, 3),
+                "currentTop50CutoffPumbility": (
+                    round(top50_cutoff, 3) if top50_cutoff is not None else None
                 ),
-                "currentTop20Count": min(
+                "currentTop50Count": min(
                     int(phoenix2_score_count), TOP_PUMBILITY_COUNT
                 ),
                 **({"filterCandidates": []} if include_candidates else {}),
@@ -2355,20 +2355,20 @@ def build_player_recommendation(
                     projected_grade,
                     projected_plate,
                 )
-                gain = _top20_marginal_gain(
+                gain = _top50_marginal_gain(
                     expected,
                     existing_pumbility=existing,
-                    existing_in_top20=chart_id in top20_chart_ids,
+                    existing_in_top50=chart_id in top50_chart_ids,
                     current_score_count=len(mode_scores),
-                    cutoff=top20_cutoff,
+                    cutoff=top50_cutoff,
                 )
                 overall_existing = overall_existing_by_chart.get(chart_id)
-                overall_gain = _top20_marginal_gain(
+                overall_gain = _top50_marginal_gain(
                     expected,
                     existing_pumbility=overall_existing,
-                    existing_in_top20=chart_id in overall_top20_chart_ids,
+                    existing_in_top50=chart_id in overall_top50_chart_ids,
                     current_score_count=len(overall_scores),
-                    cutoff=overall_top20_cutoff,
+                    cutoff=overall_top50_cutoff,
                 )
             filter_candidates.append(
                 {
@@ -2470,11 +2470,11 @@ def build_player_recommendation(
             "pumbilityPerLevel": (
                 round(float(slope), 6) if slope is not None else None
             ),
-            "currentTop20Pumbility": round(current_total, 3),
-            "currentTop20CutoffPumbility": (
-                round(top20_cutoff, 3) if top20_cutoff is not None else None
+            "currentTop50Pumbility": round(current_total, 3),
+            "currentTop50CutoffPumbility": (
+                round(top50_cutoff, 3) if top50_cutoff is not None else None
             ),
-            "currentTop20Count": min(
+            "currentTop50Count": min(
                 int(phoenix2_score_count), TOP_PUMBILITY_COUNT
             ),
             "candidateRange": [
@@ -2559,14 +2559,14 @@ def build_player_recommendation(
         "requiredScoreCount": 1,
         "projectionAvailable": overall_projection_available,
         "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
-        "currentTop20Pumbility": round(overall_current_total, 3),
-        "currentTop20CutoffPumbility": (
-            round(overall_top20_cutoff, 3)
-            if overall_top20_cutoff is not None
+        "currentTop50Pumbility": round(overall_current_total, 3),
+        "currentTop50CutoffPumbility": (
+            round(overall_top50_cutoff, 3)
+            if overall_top50_cutoff is not None
             else None
         ),
-        "currentTop20Count": min(len(overall_scores), TOP_PUMBILITY_COUNT),
-        "top20ModeCounts": overall_top20_mode_counts,
+        "currentTop50Count": min(len(overall_scores), TOP_PUMBILITY_COUNT),
+        "top50ModeCounts": overall_top50_mode_counts,
         "sourceModeEligibility": source_mode_eligibility,
         "sourceRecommendationCounts": source_recommendation_counts,
         "candidateCount": len(overall_candidates),
@@ -2749,19 +2749,19 @@ def build_recommendation_index(
             "candidateUpperRadius": RECOMMENDATION_RADIUS,
             "candidateLowerBound": None,
             "topPumbilityCount": TOP_PUMBILITY_COUNT,
-            "overallPumbility": "the highest 20 Phoenix 2 Pumbility values from the player's combined Single and Double scores",
-            "overallRecommendations": "merge the displayed top 20 Single and top 20 Double recommendations, recalculate every projected gain against the shared Phoenix 2 S+D top 20, then retain the best 20; official-difficulty filters rank the full level-16+ recommendation catalog",
+            "overallPumbility": "the highest 50 Phoenix 2 Pumbility values from the player's combined Single and Double scores",
+            "overallRecommendations": "merge the displayed top 20 Single and top 20 Double recommendations, recalculate every projected gain against the shared Phoenix 2 S+D top 50, then retain the best 20; official-difficulty filters rank the full level-16+ recommendation catalog",
             "actualPumbilitySource": "upstream",
             "projection": "median projected raw score converted with the mode-specific Phoenix 2 projection formula and the weighted-median plate",
             "plateProjection": "weighted median of the ordered RG-to-PG hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
             "plateProjectionStatistic": "weighted-median",
             "pumbilityProjectionStatistic": "median-score-median-plate",
             "phoenix1PlatePriorCap": plate_model.phoenix1_cap,
-            "projectedGain": "deterministic change from the median-score and median-plate projected Pumbility to the active Phoenix 2 top-20 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; the projection replaces the current chart PB and the number-20 chart only when it improves the retained top 20",
+            "projectedGain": "deterministic change from the median-score and median-plate projected Pumbility to the active Phoenix 2 top-50 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; the projection replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
             "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
-            "manualRanking": "farm edge up to 0.5 estimated-difficulty points above the requested scoring rating; official-difficulty filters use all ranked level-16+ charts and no personal top-20 gain is inferred",
+            "manualRanking": "farm edge up to 0.5 estimated-difficulty points above the requested scoring rating; official-difficulty filters use all ranked level-16+ charts and no personal top-50 gain is inferred",
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
-            "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 20, and projected gain",
+            "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
             "scoreProjection": "using each player's S+FG-equivalent ranks 11-30 Pumbility rating, take the unweighted median raw score from all other players with a normalized result on the exact chart; search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back to the player-balanced population response surface below five peers",
             "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,

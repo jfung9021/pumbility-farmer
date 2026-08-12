@@ -32,7 +32,7 @@ const FORBIDDEN_KEYS = new Set([
 ]);
 const DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL = 16;
 const RECOMMENDATION_UPPER_RADIUS = 0.5;
-const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 20;
+const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 21;
 
 export type LocalRecommendationIndex = {
   schemaVersion?: number;
@@ -328,10 +328,10 @@ function manualOverallMode(
     manual: true,
     validScoreCount: 0,
     projectionAvailable: false,
-    currentTop20Pumbility: 0,
-    currentTop20CutoffPumbility: null,
-    currentTop20Count: 0,
-    top20ModeCounts: { singles: 0, doubles: 0 },
+    currentTop50Pumbility: 0,
+    currentTop50CutoffPumbility: null,
+    currentTop50Count: 0,
+    top50ModeCounts: { singles: 0, doubles: 0 },
     sourceModeEligibility: { singles: true, doubles: true },
     sourceRecommendationCounts: {
       singles: singles.topRecommendations.length,
