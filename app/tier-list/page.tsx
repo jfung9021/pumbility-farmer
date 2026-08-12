@@ -19,7 +19,6 @@ import type {
 type FilterState = {
   query: string;
   level: string;
-  showUnrated: boolean;
 };
 
 type GroupingView = "tiers" | "estimated";
@@ -28,7 +27,6 @@ type LayoutView = "detailed" | "compact";
 const initialFilter: FilterState = {
   query: "",
   level: "All",
-  showUnrated: false,
 };
 
 const groupTone = ["lime", "green", "mint", "slate", "orange", "rose", "red"];
@@ -359,7 +357,6 @@ export default function TierListPage() {
   const filteredCharts = useMemo(() => {
     const query = filter.query.trim().toLocaleLowerCase();
     return modeCharts.filter((chart) => {
-      if (!filter.showUnrated && chart.difficultyDelta === null) return false;
       if (filter.level !== "All" && chart.level !== Number(filter.level)) return false;
       return !query || `${chart.songName} ${chart.stepArtist || ""}`.toLocaleLowerCase().includes(query);
     });
@@ -395,7 +392,7 @@ export default function TierListPage() {
   const closeChartDialog = useCallback(() => setSelectedChart(null), []);
 
   return (
-    <main>
+    <main className="tier-list-page">
       <SiteHeader active="tier-list" />
 
       <section className="hero" id="top">
@@ -434,19 +431,13 @@ export default function TierListPage() {
               value={filter.query}
             />
           </label>
-          <div className="filter-options-row">
-            <label>
-              <span>Official level</span>
-              <select value={filter.level} onChange={(event) => updateFilter({ level: event.target.value })}>
-                <option>All</option>
-                {levels.map((level) => <option key={level} value={level}>{activeMode === "singles" ? "S" : "D"}{level}</option>)}
-              </select>
-            </label>
-            <label className="unrated-toggle">
-              <input checked={filter.showUnrated} onChange={(event) => updateFilter({ showUnrated: event.target.checked })} type="checkbox" />
-              <span aria-hidden="true" /> Include unrated
-            </label>
-          </div>
+          <label className="level-field">
+            <span>Official level</span>
+            <select value={filter.level} onChange={(event) => updateFilter({ level: event.target.value })}>
+              <option>All</option>
+              {levels.map((level) => <option key={level} value={level}>{activeMode === "singles" ? "S" : "D"}{level}</option>)}
+            </select>
+          </label>
         </div>
 
         <div className="results-controls">
@@ -457,7 +448,7 @@ export default function TierListPage() {
                 className={groupingView === "estimated" ? "active" : ""}
                 onClick={() => setGroupingView("estimated")}
                 type="button"
-              >Estimated Difficulty</button>
+              ><span>Estimated<br />Difficulty</span></button>
               <button
                 aria-pressed={groupingView === "tiers"}
                 className={groupingView === "tiers" ? "active" : ""}
@@ -510,19 +501,17 @@ export default function TierListPage() {
               <header><div><p>Current filters</p><h2>No estimated charts</h2></div><span>0 charts</span></header>
             </section>
           ) : null}
-          {filter.showUnrated ? (
-            layoutView === "compact" ? (
-              <section className="tier tier-compact unrated-section" aria-labelledby="unrated-compact">
-                <div className="compact-tier-label"><h2 id="unrated-compact">Unrated</h2></div>
-                <CompactChartGrid charts={unratedCharts} onSelect={setSelectedChart} />
-              </section>
-            ) : (
-              <section className="unrated-section">
-                <header><div><p>No estimate</p><h2>Unrated</h2></div><span>{unratedCharts.length} charts</span></header>
-                {unratedCharts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
-              </section>
-            )
-          ) : null}
+          {layoutView === "compact" ? (
+            <section className="tier tier-compact unrated-section" aria-labelledby="unrated-compact">
+              <div className="compact-tier-label"><h2 id="unrated-compact">Unrated</h2></div>
+              <CompactChartGrid charts={unratedCharts} onSelect={setSelectedChart} />
+            </section>
+          ) : (
+            <section className="unrated-section">
+              <header><div><p>No estimate</p><h2>Unrated</h2></div><span>{unratedCharts.length} charts</span></header>
+              {unratedCharts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
+            </section>
+          )}
         </div>
       </section>
       {selectedChart ? <ChartDetailDialog chart={selectedChart} onClose={closeChartDialog} /> : null}
