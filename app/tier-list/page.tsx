@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RefreshMeta } from "../_components/refresh-meta";
+import { ChartVideoLink } from "../_components/chart-video-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { hasLimitedData } from "../../lib/chart-evidence";
@@ -107,8 +108,16 @@ function ChartDetails({ chart, headingId }: { chart: ChartResult; headingId?: st
 function ChartCard({ chart }: { chart: ChartResult }) {
   return (
     <article className="chart-card">
-      <div className="chart-art jacket" data-chart-type={chart.type} aria-hidden="true">
-        {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
+      <div className="chart-art-rail">
+        <div className="chart-art jacket" data-chart-type={chart.type} aria-hidden="true">
+          {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
+        </div>
+        <ChartVideoLink
+          chartId={chart.chartId}
+          difficulty={chart.difficulty}
+          songName={chart.songName}
+          variant="tier"
+        />
       </div>
       <ChartDetails chart={chart} />
     </article>
@@ -210,8 +219,16 @@ function ChartDetailDialog({ chart, onClose }: { chart: ChartResult; onClose: ()
           <span aria-hidden="true">&times;</span>
         </button>
         <div className="chart-dialog-body">
-          <div className="chart-art jacket chart-dialog-jacket" data-chart-type={chart.type} aria-hidden="true">
-            {chart.imageUrl ? <img src={chart.imageUrl} alt="" /> : <span>{chart.difficulty}</span>}
+          <div className="chart-dialog-art-rail">
+            <div className="chart-art jacket chart-dialog-jacket" data-chart-type={chart.type} aria-hidden="true">
+              {chart.imageUrl ? <img src={chart.imageUrl} alt="" /> : <span>{chart.difficulty}</span>}
+            </div>
+            <ChartVideoLink
+              chartId={chart.chartId}
+              difficulty={chart.difficulty}
+              songName={chart.songName}
+              variant="dialog"
+            />
           </div>
           <ChartDetails chart={chart} headingId="chart-detail-dialog-title" />
         </div>
