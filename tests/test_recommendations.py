@@ -27,6 +27,7 @@ from piu_recommendations import (
     RECOMMENDATION_SCHEMA_VERSION,
     SCORE_PROJECTION_MODEL_NAME,
     SCORE_RESPONSE_MODEL_NAME,
+    TOP_PUMBILITY_COUNT,
     TOP_RECOMMENDATION_COUNT,
     ScoreProjectionResult,
     ScoreResponseModel,
@@ -38,7 +39,7 @@ from piu_recommendations import (
     _projected_gain_sort_key,
     _rating_lookup,
     _recommendation_chart_rows,
-    _top50_marginal_gain,
+    _top20_marginal_gain,
     build_combined_tier_payload,
     build_manual_recommendation_mode,
     build_player_recommendation,
@@ -928,53 +929,53 @@ class PlayerRecommendationTests(unittest.TestCase):
             ["largest-gain", "easier", "harder"],
         )
 
-    def test_projected_gain_replaces_number_fifty_only_when_it_improves_top50(self) -> None:
+    def test_projected_gain_replaces_number_twenty_only_when_it_improves_top20(self) -> None:
         common = {
-            "current_score_count": 50,
+            "current_score_count": 20,
             "cutoff": 300.0,
         }
         self.assertEqual(
-            _top50_marginal_gain(
+            _top20_marginal_gain(
                 349.0,
                 existing_pumbility=None,
-                existing_in_top50=False,
+                existing_in_top20=False,
                 **common,
             ),
             49.0,
         )
         self.assertEqual(
-            _top50_marginal_gain(
+            _top20_marginal_gain(
                 299.0,
                 existing_pumbility=None,
-                existing_in_top50=False,
+                existing_in_top20=False,
                 **common,
             ),
             0.0,
         )
         self.assertEqual(
-            _top50_marginal_gain(
+            _top20_marginal_gain(
                 349.0,
                 existing_pumbility=330.0,
-                existing_in_top50=True,
+                existing_in_top20=True,
                 **common,
             ),
             19.0,
         )
         self.assertEqual(
-            _top50_marginal_gain(
+            _top20_marginal_gain(
                 349.0,
                 existing_pumbility=290.0,
-                existing_in_top50=False,
+                existing_in_top20=False,
                 **common,
             ),
             49.0,
         )
         self.assertEqual(
-            _top50_marginal_gain(
+            _top20_marginal_gain(
                 349.0,
                 existing_pumbility=None,
-                existing_in_top50=False,
-                current_score_count=49,
+                existing_in_top20=False,
+                current_score_count=19,
                 cutoff=None,
             ),
             349.0,
@@ -1095,7 +1096,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual([len(shards[number]["players"]) for number in shards], [2, 1])
         self.assertIn("modes", shards[0]["players"][0])
 
-    def test_player_only_refresh_uses_daily_model_and_publishes_top_fifty_only(self) -> None:
+    def test_player_only_refresh_publishes_full_filter_pool_and_top_twenty(self) -> None:
         generated = "2026-08-09T06:00:00Z"
         index, model, score_model_bytes, phoenix1_shards, phoenix2_shards = (
             build_recommendation_model_artifacts(
@@ -1148,8 +1149,17 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertFalse(cached_player_is_fresh(incompatible, index, now=now))
         self.assertTrue(with_staleness(incompatible, index)["stale"])
         for mode in response["player"]["modes"].values():
-            self.assertNotIn("candidates", mode)
-            self.assertLessEqual(len(mode["topRecommendations"]), 50)
+            self.assertIn("filterCandidates", mode)
+            self.assertGreaterEqual(
+                len(mode["filterCandidates"]), len(mode["topRecommendations"])
+            )
+            self.assertLessEqual(len(mode["topRecommendations"]), 20)
+            self.assertTrue(
+                all(
+                    not any(str(key).startswith("_") for key in row)
+                    for row in mode["filterCandidates"]
+                )
+            )
         self.assertEqual(
             store.get_json(recommendation_player_path(player_key)), response
         )
@@ -1285,7 +1295,7 @@ class PlayerRecommendationTests(unittest.TestCase):
             direct_score_model,
             phoenix1_snapshot=phoenix1,
             plate_model=PlateProjectionModel(phoenix1, phoenix2),
-            include_candidates=False,
+            include_candidates=True,
         )
 
         self.assertEqual(
@@ -1385,21 +1395,24 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(result["ratingBaselineLabel"], "top 20 scores")
         self.assertEqual(result["baselinePumbility"], 344.85)
         self.assertEqual(result["scoringRating"], 20.5)
-        ids = {row["chartId"] for row in result["candidates"]}
+        ids = {row["chartId"] for row in result["filterCandidates"]}
         self.assertIn("chart-00", ids)
         self.assertIn("chart-30", ids)
         self.assertIn("chart-31", ids)
         self.assertIn("chart-32", ids)
         self.assertEqual(
-            next(row for row in result["candidates"] if row["chartId"] == "chart-32")[
+            next(row for row in result["filterCandidates"] if row["chartId"] == "chart-32")[
                 "level"
             ],
             16,
         )
-        self.assertNotIn("chart-33", ids)
-        self.assertNotIn("chart-34", ids)
+        self.assertIn("chart-33", ids)
+        self.assertIn("chart-34", ids)
+        displayed_ids = {row["chartId"] for row in result["topRecommendations"]}
+        self.assertNotIn("chart-33", displayed_ids)
+        self.assertNotIn("chart-34", displayed_ids)
         self.assertEqual(result["candidateRange"], [None, 21.0])
-        easy = next(row for row in result["candidates"] if row["chartId"] == "chart-30")
+        easy = next(row for row in result["filterCandidates"] if row["chartId"] == "chart-30")
         self.assertEqual(easy["estimatedDifficulty"], 20.0)
         self.assertEqual(easy["difficultyDelta"], -0.5)
         self.assertEqual((easy["bpmMin"], easy["bpmMax"]), (90, 180))
@@ -1415,18 +1428,22 @@ class PlayerRecommendationTests(unittest.TestCase):
                 easy["projectedPlate"],
             ),
         )
-        self.assertEqual(easy["projectedGain"], easy["expectedPumbility"])
-        self.assertIsNone(result["currentTop50CutoffPumbility"])
+        self.assertEqual(
+            easy["projectedGain"],
+            round(max(0.0, float(easy["expectedPumbility"]) - 344.85), 3),
+        )
+        self.assertEqual(result["currentTop20CutoffPumbility"], 344.85)
         far_easier = next(
-            row for row in result["candidates"] if row["chartId"] == "chart-32"
+            row for row in result["filterCandidates"] if row["chartId"] == "chart-32"
         )
         self.assertEqual(far_easier["projectedScore"], 970_000)
         self.assertEqual(far_easier["scoreProjectionSource"], "population-crossfit")
         self.assertEqual(far_easier["scoreProjectionSupportCount"], 75)
         self.assertEqual(far_easier["scoreProjectionConfidence"], "medium")
         self.assertEqual(result["scoreProjectionModel"], SCORE_PROJECTION_MODEL_NAME)
-        self.assertEqual(TOP_RECOMMENDATION_COUNT, 50)
-        self.assertLessEqual(len(result["topRecommendations"]), 50)
+        self.assertEqual(TOP_PUMBILITY_COUNT, 20)
+        self.assertEqual(TOP_RECOMMENDATION_COUNT, 20)
+        self.assertLessEqual(len(result["topRecommendations"]), 20)
 
     def test_current_pumbility_uses_the_authoritative_phoenix2_value(self) -> None:
         authoritative = 123.456
@@ -1441,15 +1458,15 @@ class PlayerRecommendationTests(unittest.TestCase):
         )["modes"]["singles"]
 
         historical = next(
-            row for row in mode["candidates"] if row["chartId"] == "chart-29"
+            row for row in mode["filterCandidates"] if row["chartId"] == "chart-29"
         )
         self.assertEqual(historical["existingPumbility"], authoritative)
         self.assertAlmostEqual(
-            mode["currentTop50Pumbility"],
-            sum(float(row["pumbility"]) for row in scores),
+            mode["currentTop20Pumbility"],
+            sum(sorted((float(row["pumbility"]) for row in scores), reverse=True)[:20]),
         )
 
-    def test_overall_uses_shared_single_and_double_top_fifty(self) -> None:
+    def test_overall_uses_shared_single_and_double_top_twenty(self) -> None:
         double_charts = []
         double_scores = []
         double_combined = []
@@ -1497,10 +1514,10 @@ class PlayerRecommendationTests(unittest.TestCase):
         )["modes"]
         overall = modes["overall"]
 
-        expected_total = sum(500.0 - index for index in range(30)) + 20 * 344.85
-        self.assertAlmostEqual(overall["currentTop50Pumbility"], expected_total)
-        self.assertEqual(overall["currentTop50Count"], 50)
-        self.assertEqual(overall["top50ModeCounts"], {"singles": 20, "doubles": 30})
+        expected_total = sum(500.0 - index for index in range(20))
+        self.assertAlmostEqual(overall["currentTop20Pumbility"], expected_total)
+        self.assertEqual(overall["currentTop20Count"], 20)
+        self.assertEqual(overall["top20ModeCounts"], {"singles": 0, "doubles": 20})
         self.assertEqual(
             overall["sourceRecommendationCounts"],
             {
@@ -1508,16 +1525,16 @@ class PlayerRecommendationTests(unittest.TestCase):
                 "doubles": len(modes["doubles"]["topRecommendations"]),
             },
         )
-        source_ids = {
+        filter_source_ids = {
             row["chartId"]
             for mode_key in ("singles", "doubles")
-            for row in modes[mode_key]["topRecommendations"]
+            for row in modes[mode_key]["filterCandidates"]
         }
         self.assertEqual(
-            {row["chartId"] for row in overall["candidates"]},
-            source_ids,
+            {row["chartId"] for row in overall["filterCandidates"]},
+            filter_source_ids,
         )
-        self.assertLessEqual(len(overall["topRecommendations"]), 50)
+        self.assertLessEqual(len(overall["topRecommendations"]), 20)
         self.assertTrue(
             {row["type"] for row in overall["topRecommendations"]}
             .issubset({"Single", "Double"})
@@ -1528,14 +1545,14 @@ class PlayerRecommendationTests(unittest.TestCase):
             if row["chartId"] == "chart-30"
         )
         overall_row = next(
-            row for row in overall["candidates"] if row["chartId"] == "chart-30"
+            row for row in overall["filterCandidates"] if row["chartId"] == "chart-30"
         )
-        self.assertLess(overall_row["projectedGain"], single_mode_row["projectedGain"])
+        self.assertLessEqual(overall_row["projectedGain"], single_mode_row["projectedGain"])
         self.assertTrue(
             all(
                 not any(str(key).startswith("_") for key in row)
                 for mode in modes.values()
-                for row in mode.get("candidates", [])
+                for row in mode.get("filterCandidates", [])
             )
         )
 
@@ -1556,8 +1573,8 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertEqual(overall["sourceRecommendationCounts"]["doubles"], 0)
         self.assertEqual(
-            overall["currentTop50Pumbility"],
-            modes["singles"]["currentTop50Pumbility"],
+            overall["currentTop20Pumbility"],
+            modes["singles"]["currentTop20Pumbility"],
         )
         self.assertEqual(
             [row["chartId"] for row in overall["topRecommendations"]],
@@ -1586,7 +1603,7 @@ class PlayerRecommendationTests(unittest.TestCase):
             round(skill_rating_for_pumbility("Single", 372.425), 3),
         )
         self.assertEqual(mode["projectionRating"], 20.5)
-        self.assertIn("chart-33", {row["chartId"] for row in mode["candidates"]})
+        self.assertIn("chart-33", {row["chartId"] for row in mode["filterCandidates"]})
         unplayed_call = next(
             call
             for call in model.predict.call_args_list
@@ -1632,8 +1649,8 @@ class PlayerRecommendationTests(unittest.TestCase):
 
         self.assertEqual(original["scoringRating"], changed["scoringRating"])
         self.assertEqual(
-            [row["projectedScore"] for row in original["candidates"]],
-            [row["projectedScore"] for row in changed["candidates"]],
+            [row["projectedScore"] for row in original["filterCandidates"]],
+            [row["projectedScore"] for row in changed["filterCandidates"]],
         )
         self.assertEqual(original["projectionRating"], changed["projectionRating"])
         for legacy_field in ("baselineScore", "scorePointsPerDifficulty"):
@@ -1649,7 +1666,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         )["modes"]["singles"]
 
         played = next(
-            row for row in mode["candidates"] if row["chartId"] == "chart-00"
+            row for row in mode["filterCandidates"] if row["chartId"] == "chart-00"
         )
         existing_score = next(
             row["score"]
@@ -1671,7 +1688,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertIsNone(mode["baselinePumbility"])
         self.assertIsNone(mode["projectionRating"])
 
-    def test_level_fifteen_scores_inform_rating_but_are_not_candidates(self) -> None:
+    def test_level_fifteen_scores_inform_rating_and_remain_filterable(self) -> None:
         low_score = {
             **self.snapshot["scores"][0],
             "chartId": "chart-34",
@@ -1684,8 +1701,11 @@ class PlayerRecommendationTests(unittest.TestCase):
 
         self.assertTrue(mode["eligible"])
         self.assertEqual(mode["scoringRating"], 15.0)
+        self.assertIn(
+            "chart-34", {row["chartId"] for row in mode["filterCandidates"]}
+        )
         self.assertNotIn(
-            "chart-34", {row["chartId"] for row in mode["candidates"]}
+            "chart-34", {row["chartId"] for row in mode["topRecommendations"]}
         )
 
     def test_public_player_key_is_stable_and_does_not_contain_id(self) -> None:
@@ -1785,7 +1805,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(below_mode["ratingBaselineRanks"], [1, 20])
         self.assertEqual(below_mode["ratingBaselineLabel"], "top 20 scores")
         p1_only_chart = next(
-            row for row in below_mode["candidates"] if row["chartId"] == "source-chart-59"
+            row for row in below_mode["filterCandidates"] if row["chartId"] == "source-chart-59"
         )
         self.assertFalse(p1_only_chart["played"])
 
@@ -1942,9 +1962,9 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertTrue(mode["eligible"])
         self.assertEqual(mode["ratingSource"], "phoenix1")
         self.assertFalse(mode["projectionAvailable"])
-        self.assertEqual(mode["currentTop50Pumbility"], 0.0)
-        self.assertTrue(all(not row["played"] for row in mode["candidates"]))
-        self.assertTrue(all(row["projectedGain"] is None for row in mode["candidates"]))
+        self.assertEqual(mode["currentTop20Pumbility"], 0.0)
+        self.assertTrue(all(not row["played"] for row in mode["filterCandidates"]))
+        self.assertTrue(all(row["projectedGain"] is None for row in mode["filterCandidates"]))
 
     def test_phoenix1_rating_without_phoenix2_history_uses_population_projection(self) -> None:
         snapshot, combined, prepared_phoenix1 = self._rating_source_fixture()
@@ -1965,10 +1985,10 @@ class PlayerRecommendationTests(unittest.TestCase):
 
         self.assertEqual(mode["ratingSource"], "phoenix1")
         self.assertTrue(mode["projectionAvailable"])
-        self.assertEqual(mode["currentTop50Pumbility"], 0.0)
-        self.assertTrue(all(not row["played"] for row in mode["candidates"]))
-        self.assertTrue(all(row["projectedScore"] == 970_000 for row in mode["candidates"]))
-        self.assertTrue(all(float(row["projectedGain"]) > 0 for row in mode["candidates"]))
+        self.assertEqual(mode["currentTop20Pumbility"], 0.0)
+        self.assertTrue(all(not row["played"] for row in mode["filterCandidates"]))
+        self.assertTrue(all(row["projectedScore"] == 970_000 for row in mode["filterCandidates"]))
+        self.assertTrue(all(float(row["projectedGain"]) > 0 for row in mode["filterCandidates"]))
 
 
 class CombinedTierPayloadTests(unittest.TestCase):
@@ -2051,7 +2071,7 @@ class CombinedTierPayloadTests(unittest.TestCase):
 
 
 class RecommendationChartBoundaryTests(unittest.TestCase):
-    def test_recommendation_chart_payload_includes_sixteen_and_excludes_fifteen(
+    def test_recommendation_chart_payload_keeps_all_official_levels(
         self,
     ) -> None:
         rows = _recommendation_chart_rows(
@@ -2061,9 +2081,9 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual([row["chartId"] for row in rows], ["sixteen"])
+        self.assertEqual([row["chartId"] for row in rows], ["sixteen", "fifteen"])
 
-    def test_manual_recommendations_include_sixteen_and_exclude_fifteen(self) -> None:
+    def test_manual_recommendations_keep_all_charts_for_filters(self) -> None:
         mode = build_manual_recommendation_mode(
             [
                 {
@@ -2107,14 +2127,18 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [row["chartId"] for row in mode["candidates"]],
+            [row["chartId"] for row in mode["filterCandidates"]],
+            ["fifteen", "rating-edge", "sixteen", "above-rating", "above-upper-bound"],
+        )
+        self.assertEqual(
+            [row["chartId"] for row in mode["topRecommendations"]],
             ["rating-edge", "sixteen", "above-rating"],
         )
         self.assertEqual(mode["candidateRange"], [None, 16.5])
         self.assertTrue(
-            all(row["expectedPumbility"] is None for row in mode["candidates"])
+            all(row["expectedPumbility"] is None for row in mode["filterCandidates"])
         )
-        self.assertTrue(all(row["projectedGain"] is None for row in mode["candidates"]))
+        self.assertTrue(all(row["projectedGain"] is None for row in mode["filterCandidates"]))
 
 
 @unittest.skipIf(get_recommendation_players is None, "FastAPI is not installed")

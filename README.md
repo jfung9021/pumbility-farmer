@@ -263,7 +263,7 @@ The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as 
 - `analysis/recommendations/models/<generation>.npz` — compressed, non-pickle population score surfaces and chart-indexed all-score peer cohorts.
 - `analysis/private/recommendation-inputs/<generation>/{phoenix1,phoenix2}/*.json` — private ten-player input shards used by player-only refreshes.
 - `analysis/private/recommendation-player-state/<playerKey>.json` — newest incrementally merged Phoenix 2 state for one player.
-- `analysis/recommendations/players/<playerKey>.json` — cached public-safe top-50 result for one player; full candidate arrays are not stored.
+- `analysis/recommendations/players/<playerKey>.json` — cached public-safe top-20 result and full filterable chart pool for one player; private IDs and raw scores are not stored.
 - `analysis/phoenix2/staging/<job>.json` — resumable 50-player checkpoints.
 - `analysis/phoenix2/runs/*.json` — the latest ten immutable Phoenix 2 aggregate runs.
 
@@ -292,28 +292,29 @@ Pumbility ranks 11-30. Phoenix 2 supplies that window at 30 valid scores; otherw
 Phoenix 1 ranks 11-30 window is used. A mode without either complete 30-score source still receives
 top-20-based farm-edge recommendations, but it does not receive personal projected scores. When
 training or projecting an already-played target chart, that chart is removed from the projection
-window and rank 31 is promoted when available. Played status, existing Pumbility, current top-50
+window and rank 31 is promoted when available. Played status, existing Pumbility, current top-20
 totals, and projected gain always use Phoenix 2.
 
 The recommendation page opens on **Overall**, followed by **Single** and **Double**. Overall keeps
-the mode-specific rating and projection for every chart, merges the displayed top 50 from each
+the mode-specific rating and projection for every chart, merges the displayed top 20 from each
 eligible mode, recalculates each candidate's gain against one shared Single-and-Double Phoenix 2
-pool, and displays the best 50 merged opportunities. Overall Pumbility is the sum of the highest 50
+pool, and displays the best 20 merged opportunities. Overall Pumbility is the sum of the highest 20
 Phoenix 2 Pumbility values in the union of the player's Single and Double scores; it is not the sum
 of both mode totals. If only one mode can be rated, Overall still uses that mode's recommendations
 and explains which source is unavailable, while every existing Phoenix 2 score in either mode still
 participates in the Overall total.
 
-The current top-50 total also drives the progress indicator. Single and Double use their separate
+The current top-20 total also drives the progress indicator. Single and Double use their separate
 Phoenix 2 skill-title ladders (Beginner, Intermediate, Advanced, Expert, and the mode-specific
 Master title at 19,000). Overall uses the Phoenix 2 Pumbility rank ladder from Unranked through the five
 divisions of Bronze, Silver, Gold, Platinum, Diamond, Red Beryl, and Alexandrite, followed by
 Phoenix at 20,000. Phoenix 1 may supply an existing rating or projection fallback, but never a
 current Pumbility total or progress value.
 
-Suggested-chart eligibility has no lower estimated-difficulty bound and extends through 0.5 points
-above the player's scoring rating. Charts beyond that upper bound are excluded before projected-gain
-ranking.
+The unfiltered suggested-chart list has no lower estimated-difficulty bound and extends through 0.5
+points above the player's scoring rating. Official-difficulty filters instead use every rankable level-16+
+chart in the authoritative catalog, show every exact-level match, and order those matches by projected
+Pumbility gain from highest to lowest.
 
 Projected raw scores target the unweighted median (50th percentile) among all other players with a
 similar ranks 11-30 projection rating and a normalized result on the exact chart. Phoenix 1 and Phoenix 2 observations are joined with Phoenix 2
@@ -331,16 +332,16 @@ Phoenix 2 wins for an overlapping player/chart observation. The projected plate 
 median in the ordered Rough Game-to-Perfect Game ladder, with an exact 50% tie selecting the lower
 plate. Expected Pumbility is calculated once from the displayed projected score's grade, that median
 plate, and the chart mode's screenshot-validated Phoenix 2 projection formula. Projected gain is the
-deterministic change from that same Pumbility value against the active Phoenix 2 top-50 pool,
-including replacement of the number-50 chart. Single and Double use their independent mode pool;
-Overall uses the shared S+D pool. Existing chart Pumbility and all current top-50 totals remain the
+deterministic change from that same Pumbility value against the active Phoenix 2 top-20 pool,
+including replacement of the number-20 chart. Single and Double use their independent mode pool;
+Overall uses the shared S+D pool. Existing chart Pumbility and all current top-20 totals remain the
 authoritative values supplied by Phoenix 2; Phoenix 1 Pumbility totals never enter that pool.
 
 The population models and frozen per-player inputs are rebuilt once in the daily background run.
 Opening or selecting a player on `/recommendations` first renders any cached result, then requests
 only that player's scores newer than the last successful player sync. The lightweight worker loads
-the frozen model and the selected player's small input shard, recalculates at most 50 published
-recommendations per mode, and replaces the page automatically. If the upstream request or worker
+the frozen model and the selected player's small input shard, recalculates the complete filterable
+chart pool plus the displayed top 20, and replaces the page automatically. If the upstream request or worker
 fails, the previous cached result remains visible with a warning. This keeps the interactive path
 independent of the hundreds of player score endpoints and the population-wide model fitting.
 Interactive refreshes have a rolling 60-second deduplication window, a 30-second browser and
