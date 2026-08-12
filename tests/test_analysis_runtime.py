@@ -14,6 +14,7 @@ from analysis_runtime import (
     CURRENT_SNAPSHOT_PATH,
     FAILED_RETRY_DELAY,
     LATEST_BLOB_PATH,
+    PrivateBlobStore,
     RUNS_PREFIX,
     STAGING_PREFIX,
     MemoryBlobStore,
@@ -61,6 +62,22 @@ NOW = datetime(2026, 8, 7, 6, 30, tzinfo=timezone.utc)
 API_CLIENT = TestClient(api_app)
 
 
+class RecordingBlobClient:
+    delete_calls: list[list[str]] = []
+
+    def __init__(self, *, token: str) -> None:
+        self.token = token
+
+    def __enter__(self) -> "RecordingBlobClient":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def delete(self, pathnames: list[str]) -> None:
+        self.delete_calls.append(pathnames)
+
+
 def latest_payload(generated: datetime, mix: str = "phoenix2") -> dict:
     mix_value = "Phoenix" if mix == "phoenix1" else "Phoenix2"
     mix_label = "Phoenix 1" if mix == "phoenix1" else "Phoenix 2"
@@ -75,6 +92,24 @@ def latest_payload(generated: datetime, mix: str = "phoenix2") -> dict:
         "relativeGroups": [],
         "effectBands": [],
     }
+
+
+class PrivateBlobStoreTests(unittest.TestCase):
+    def test_delete_batches_large_retention_sets(self) -> None:
+        paths = [f"analysis/stale/{index:04d}.json" for index in range(205)]
+        RecordingBlobClient.delete_calls = []
+
+        with patch("vercel.blob.BlobClient", RecordingBlobClient):
+            PrivateBlobStore(token="test-token").delete(paths)
+
+        self.assertEqual(
+            [len(batch) for batch in RecordingBlobClient.delete_calls],
+            [100, 100, 5],
+        )
+        self.assertEqual(
+            [path for batch in RecordingBlobClient.delete_calls for path in batch],
+            paths,
+        )
 
 
 class CoordinatorTests(unittest.TestCase):

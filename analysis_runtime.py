@@ -84,6 +84,7 @@ STAGING_MAX_AGE = timedelta(hours=24)
 RUN_RETENTION = 10
 RECOMMENDATION_GENERATION_MIN_RETENTION = 2
 RECOMMENDATION_GENERATION_MAX_AGE = timedelta(hours=48)
+BLOB_DELETE_BATCH_SIZE = 100
 
 
 def parse_utc(value: object) -> datetime | None:
@@ -182,8 +183,12 @@ class PrivateBlobStore:
     def delete(self, pathnames: str | Sequence[str]) -> None:
         from vercel.blob import BlobClient
 
+        normalized = [pathnames] if isinstance(pathnames, str) else list(pathnames)
+        if not normalized:
+            return
         with BlobClient(token=self.token) as client:
-            client.delete(pathnames)
+            for start in range(0, len(normalized), BLOB_DELETE_BATCH_SIZE):
+                client.delete(normalized[start : start + BLOB_DELETE_BATCH_SIZE])
 
     def list(self, prefix: str) -> list[BlobObject]:
         from vercel.blob import BlobClient
