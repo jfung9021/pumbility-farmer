@@ -353,6 +353,7 @@ dependencies = [
     { name = "pandas" },
     { name = "requests" },
     { name = "vercel" },
+    { name = "vercel-workers" },
 ]
 
 [package.metadata]
@@ -363,6 +364,7 @@ requires-dist = [
     { name = "pandas", specifier = "==2.3.3" },
     { name = "requests", specifier = "==2.32.4" },
     { name = "vercel", specifier = "==0.8.1" },
+    { name = "vercel-workers", specifier = "==0.0.25" },
 ]
 
 [[package]]
@@ -654,6 +656,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/09/49/eab05096cc854c32931efe92ca2f11030a2513d52e746f889d11cb204028/vercel_sandbox-0.3.0.tar.gz", hash = "sha256:1ea84f069c375557e42546bdc2f8baf3c5e2fe8eb5d194d9ebcb89dbb178f473", size = 57812, upload-time = "2026-08-01T01:04:54.923Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/94/a026f0b8625a2c99ecdf84ea071be1a2235c039351892ea8dd32cfa940d9/vercel_sandbox-0.3.0-py3-none-any.whl", hash = "sha256:4201bff4644918a149b98fda21879b86e982afba83b07786f60a6bdeba7f5650", size = 68776, upload-time = "2026-08-01T01:04:53.907Z" },
+]
+
+[[package]]
+name = "vercel-workers"
+version = "0.0.25"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "vercel" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/30/df/04d37021ad7ca53b7599c313e411d91623c7a005c741f491d1eefb7a9f0c/vercel_workers-0.0.25.tar.gz", hash = "sha256:212ded01400b524be51d251df49f801caf115ad7d48cca7eb168cbeceda3def3", size = 64149, upload-time = "2026-06-20T19:26:27.177Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/85/5a/2ae6debc94fcfd7ce06b0e4ac5505be29ca04e76d6c99af35d4372dd7eda/vercel_workers-0.0.25-py3-none-any.whl", hash = "sha256:6901228a90e83e292e6a176161e66e6a7c43d9f4fd9e13d6bd87092ad09ffd8b", size = 61680, upload-time = "2026-06-20T19:26:25.971Z" },
 ]
 
 [[package]]
