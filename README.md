@@ -292,19 +292,19 @@ Pumbility ranks 11-30. Phoenix 2 supplies that window at 30 valid scores; otherw
 Phoenix 1 ranks 11-30 window is used. A mode without either complete 30-score source still receives
 top-20-based farm-edge recommendations, but it does not receive personal projected scores. When
 training or projecting an already-played target chart, that chart is removed from the projection
-window and rank 31 is promoted when available. Played status, existing Pumbility, current top-20
+window and rank 31 is promoted when available. Played status, existing Pumbility, current top-50
 totals, and projected gain always use Phoenix 2.
 
 The recommendation page opens on **Overall**, followed by **Single** and **Double**. Overall keeps
 the mode-specific rating and projection for every chart, merges the displayed top 20 from each
 eligible mode, recalculates each candidate's gain against one shared Single-and-Double Phoenix 2
-pool, and displays the best 20 merged opportunities. Overall Pumbility is the sum of the highest 20
+pool, and displays the best 20 merged opportunities. Overall Pumbility is the sum of the highest 50
 Phoenix 2 Pumbility values in the union of the player's Single and Double scores; it is not the sum
 of both mode totals. If only one mode can be rated, Overall still uses that mode's recommendations
 and explains which source is unavailable, while every existing Phoenix 2 score in either mode still
 participates in the Overall total.
 
-The current top-20 total also drives the progress indicator. Single and Double use their separate
+The current top-50 total also drives the progress indicator. Single and Double use their separate
 Phoenix 2 skill-title ladders (Beginner, Intermediate, Advanced, Expert, and the mode-specific
 Master title at 19,000). Overall uses the Phoenix 2 Pumbility rank ladder from Unranked through the five
 divisions of Bronze, Silver, Gold, Platinum, Diamond, Red Beryl, and Alexandrite, followed by
@@ -332,9 +332,9 @@ Phoenix 2 wins for an overlapping player/chart observation. The projected plate 
 median in the ordered Rough Game-to-Perfect Game ladder, with an exact 50% tie selecting the lower
 plate. Expected Pumbility is calculated once from the displayed projected score's grade, that median
 plate, and the chart mode's screenshot-validated Phoenix 2 projection formula. Projected gain is the
-deterministic change from that same Pumbility value against the active Phoenix 2 top-20 pool,
-including replacement of the number-20 chart. Single and Double use their independent mode pool;
-Overall uses the shared S+D pool. Existing chart Pumbility and all current top-20 totals remain the
+deterministic change from that same Pumbility value against the active Phoenix 2 top-50 pool,
+including replacement of the number-50 chart. Single and Double use their independent mode pool;
+Overall uses the shared S+D pool. Existing chart Pumbility and all current top-50 totals remain the
 authoritative values supplied by Phoenix 2; Phoenix 1 Pumbility totals never enter that pool.
 
 The population models and frozen per-player inputs are rebuilt once in the daily background run.

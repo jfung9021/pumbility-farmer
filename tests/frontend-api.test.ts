@@ -92,7 +92,7 @@ test("homepage leads with feature cards and explains the external score sync", a
   assert.match(syncLink, /target="_blank"/);
 });
 
-test("recommendation methodology separates top-20 display from ranks 11-30 projection", async () => {
+test("recommendation methodology separates top-50 Pumbility from top-20 display and ranks 11-30 projection", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
@@ -111,7 +111,8 @@ test("recommendation methodology separates top-20 display from ranks 11-30 proje
   assert.match(page, /visible skill rating and eligible-chart ceiling use top-20/);
   assert.match(page, /projected plate is the weighted median/);
   assert.match(page, /Expected Pumbility is then calculated once from the displayed projected score/);
-  assert.match(page, /existing chart Pumbility, and current top 20 use the Pumbility supplied by Phoenix 2/);
+  assert.match(page, /existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2/);
+  assert.match(page, /Overall Pumbility is the best 50 values across both modes/);
   assert.match(page, /Skill title progress/);
   assert.doesNotMatch(page, /every likely grade-plate outcome/);
   assert.doesNotMatch(page, /chart difficulty fields are averaged for the skill rating/);
@@ -229,7 +230,7 @@ test("legacy local player responses carry a complete generation timestamp contra
 
 test("local recommendations reject stale schemas before rendering", () => {
   const payload = {
-    schemaVersion: 19,
+    schemaVersion: 20,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: [],
@@ -239,7 +240,7 @@ test("local recommendations reject stale schemas before rendering", () => {
   assert.throws(
     () => validateLocalRecommendationIndex(payload),
     (error: unknown) => error instanceof LocalRecommendationsValidationError
-      && /Regenerate schema 20 recommendations/.test(error.message),
+      && /Regenerate schema 21 recommendations/.test(error.message),
   );
 });
 
