@@ -114,10 +114,13 @@ test("recommendation methodology separates top-20 display from ranks 11-30 proje
 });
 
 test("recommendation modes put Overall first and select it by default", async () => {
-  const page = await readFile(
-    path.join(process.cwd(), "app", "recommendations", "page.tsx"),
-    "utf8",
-  );
+  const [page, css] = await Promise.all([
+    readFile(
+      path.join(process.cwd(), "app", "recommendations", "page.tsx"),
+      "utf8",
+    ),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
 
   assert.match(
     page,
@@ -128,6 +131,14 @@ test("recommendation modes put Overall first and select it by default", async ()
   assert.match(page, /role="progressbar"/);
   assert.match(page, /pumbility-progress-scale/);
   assert.match(page, /pumbility-rank-emblem/);
+  assert.match(page, /pumbility-progress-heading[\s\S]*pumbility-progress-percent[\s\S]*className="pumbility-progress"[\s\S]*pumbility-progress-scale/);
+  assert.match(page, /mode === "overall" \? "" : " no-emblem"/);
+  assert.match(css, /\.pumbility-progress-heading \{[^}]*grid-template-columns: auto minmax\(0, 1fr\) auto;[^}]*min-height: 88px;/);
+  assert.match(css, /\.pumbility-progress-heading\.no-emblem \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.pumbility-progress-heading \{[^}]*min-height: 66px;/);
+  assert.match(css, /\.pumbility-progress-percent \{[^}]*margin-top: 16px;/);
+  assert.match(css, /\.pumbility-progress \{[^}]*margin-top: 6px;/);
+  assert.doesNotMatch(css, /\.pumbility-progress-percent\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/);
   assert.match(page, /Math\.round\(progress\.percent\)/);
   assert.match(page, /cached recommendation predates the Overall model/);
 });
@@ -161,7 +172,9 @@ test("recommendation page shows one top-50 list without projection evidence deta
   const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
 
   assert.match(page, /Top 50 farmable charts/);
+  assert.match(page, /Top 50 recommended charts/);
   assert.match(page, /Top 50 Pumbility opportunities/);
+  assert.doesNotMatch(page, /Top 50 overall opportunities/);
   assert.doesNotMatch(page, /FULL MATCHING SET|function CandidateRow|scoreProjectionEvidenceLabel/);
   assert.doesNotMatch(page, /chart\.projectedScore\.toLocaleString/);
   assert.doesNotMatch(css, /\.all-candidates|\.candidate-(?:row|list|copy|jacket|metric|search|heading)/);
@@ -176,10 +189,8 @@ test("recommendation page renders cache before a deduplicated player refresh", a
   assert.match(page, /await loadCached\(\);\s*await refresh\(\);/);
   assert.match(page, /\/api\/recommendations\/refresh\?playerKey=/);
   assert.match(page, /\/api\/recommendations\/refresh\?jobId=/);
-  assert.match(page, /Showing cached recommendations\. Refresh failed:/);
-  assert.match(page, /Showing cached recommendations\. Live score refresh is temporarily unavailable\./);
+  assert.doesNotMatch(page, /Showing cached recommendations|Refreshing this player's Phoenix 2 scores|Showing the cached model/);
   assert.match(page, /playersPayload\?\.refreshSupported === false/);
-  assert.match(page, /playerPayload\.modelGeneratedAtUtc/);
   assert.match(page, /const deadline = Date\.now\(\) \+ 30_000/);
   assert.doesNotMatch(page, /Legacy snapshot generated/);
   assert.doesNotMatch(page, /Unknown generation time/);
@@ -269,17 +280,26 @@ test("tier list uses compact segmented controls for grouping and layout", async 
   assert.match(page, /useState<GroupingView>\("estimated"\)/);
   assert.match(page, /Scoring Difficulty Tier List/);
   assert.doesNotMatch(page, /Combined scoring tier list|Scoring-based Tier List/);
-  assert.match(page, /Estimated Difficulty/);
+  assert.match(page, /<span>Estimated<br \/>Difficulty<\/span>/);
   assert.match(page, /Tier Bands/);
   assert.match(page, /aria-label="Difficulty grouping" className="view-switcher" role="group"/);
   assert.match(page, /aria-label="Chart layout" className="view-switcher" role="group"/);
   assert.match(page, /aria-pressed=\{groupingView === "estimated"\}/);
   assert.match(css, /\.results-switchers \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
   assert.match(css, /font-size: clamp\(6px, 2vw, 8px\)/);
+  assert.match(css, /\.view-switcher button \{[^}]*line-height: 1\.15;[^}]*min-height: 42px;[^}]*white-space: normal;/);
   assert.match(css, /max-width: calc\(100vw - 24px\)/);
   assert.match(page, /truncateEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
   assert.match(page, /\.sort\(\(\[left\], \[right\]\) => left - right\)/);
   assert.doesNotMatch(page, /Grouped by truncated one-decimal estimate|easier to score|harder to score/);
+  assert.doesNotMatch(page, /showUnrated|Include unrated|unrated-toggle/);
+  assert.match(page, /className="search-field"[\s\S]*?className="level-field"/);
+  assert.match(page, /<h2 id="unrated-compact">Unrated<\/h2>/);
+  assert.match(css, /\.filter-bar \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(120px, 1fr\);/);
+  assert.match(css, /\.tier-list-page \{ --tier-list-gap: 16px; \}/);
+  assert.match(css, /\.results-controls \{[^}]*padding: var\(--tier-list-gap\) 2px;/);
+  assert.match(css, /\.tiers \{[^}]*gap: var\(--tier-list-gap\);/);
+  assert.match(css, /\.tier-list-page \.hero h1 \{[^}]*font-size: clamp\(14px, 4\.8vw, 20px\);[^}]*white-space: nowrap;/);
 });
 
 test("tier list compact layout uses art-only buttons and a details dialog", async () => {
@@ -315,36 +335,29 @@ test("chart art uses mode-colored borders in every rendering layout", async () =
   assert.match(tierList, /className="chart-art jacket" data-chart-type=\{chart\.type\}/);
   assert.match(tierList, /className="chart-art compact-jacket" data-chart-type=\{chart\.type\}/);
   assert.match(recommendations, /className="chart-art recommendation-jacket" data-chart-type=\{chart\.type\}/);
+  assert.match(recommendations, /chart-difficulty-badge chart-difficulty-\$\{chart\.type\.toLowerCase\(\)\}[\s\S]*\{chart\.level\}/);
   assert.match(css, /--chart-single-border: #ff4a4a;/);
   assert.match(css, /--chart-double-border: #39d96a;/);
   assert.match(css, /\.chart-art\[data-chart-type="Single"\] \{ border: 1px solid var\(--chart-single-border\); \}/);
   assert.match(css, /\.chart-art\[data-chart-type="Double"\] \{ border: 1px solid var\(--chart-double-border\); \}/);
 });
 
-test("recommendation cards express projected grade and plate as a concrete goal", async () => {
-  const page = await readFile(
-    path.join(process.cwd(), "app", "recommendations", "page.tsx"),
-    "utf8",
-  );
+test("recommendation cards show a compact grade and plate goal", async () => {
+  const [page, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
 
-  assert.match(page, /PG: "all Perfects"/);
-  assert.match(page, /UG: "Perfects and Greats only"/);
-  assert.match(page, /EG: "Perfects, Greats, and Goods only"/);
-  assert.match(page, /SG: "0 misses"/);
-  assert.match(page, /MG: "1–5 misses"/);
-  assert.match(page, /TG: "6–10 misses"/);
-  assert.match(page, /FG: "11–20 misses"/);
-  assert.match(page, /RG: "21\+ misses"/);
-  assert.match(page, /summary: `\$\{chart\.projectedGrade\} \$\{chart\.projectedPlateCode\} · \$\{score\.toLocaleString\(\)\}`/);
+  assert.match(page, /`Goal: \$\{chart\.projectedGrade\} \$\{chart\.projectedPlateCode\}`/);
   assert.match(page, /className="recommendation-goal"/);
-  assert.match(page, /<b>\{goal\.summary\}<\/b>/);
-  assert.match(page, /<small>\{goal\.criterion\}<\/small>/);
-  assert.doesNotMatch(page, /Goal:/);
-  assert.match(page, /"S\+": 975_000/);
-  assert.doesNotMatch(page, /most likely|plateSourceLabel/);
+  assert.match(page, /<b>\{goal\}<\/b>/);
+  assert.doesNotMatch(page, /GRADE_GOAL_SCORES|PLATE_CRITERIA|misses|goal\.criterion|goal\.summary/);
+  assert.match(css, /\.recommendation-value \{[^}]*border-left: 1px solid var\(--line\);[^}]*padding-left: 18px;/);
+  assert.doesNotMatch(css, /\.recommendation-goal \{[^}]*border-top/);
+  assert.match(css, /\.recommendation-goal \{[^}]*margin-top: 1px;/);
 });
 
-test("mobile recommendation cards keep gain on the right and place BPM between stepmaker and official difficulty", async () => {
+test("mobile recommendation cards keep gain on the right and show estimated difficulty", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
@@ -354,11 +367,40 @@ test("mobile recommendation cards keep gain on the right and place BPM between s
   assert.match(page, /chart\.stepArtist \|\| "Unknown step artist"/);
   assert.match(page, /formatBpm\(chart\.bpmMin, chart\.bpmMax\)/);
   assert.match(page, /bpm \? <> · \{bpm\}<\/> : null/);
-  assert.match(page, /chart\.difficulty\} official<\/b>/);
+  assert.match(page, /const estimate = `\$\{chart\.type === "Single" \? "S" : "D"\}\$\{formatEstimatedDifficulty\(chart\.estimatedDifficulty\)\}`/);
+  assert.match(page, /<b> · \{estimate\} estimate<\/b>/);
+  assert.doesNotMatch(page, /official<\/b>/);
   assert.doesNotMatch(page, /formula expected/);
-  assert.match(css, /grid-template-columns: 22px 48px minmax\(0, 1fr\) 118px/);
-  assert.match(css, /\.recommendation-value \{[^}]*grid-column: 4;[^}]*grid-row: 1;/);
-  assert.match(css, /\.recommendation-goal small/);
+  assert.match(css, /grid-template-columns: 34px 62px minmax\(0, 1fr\) max-content/);
+  assert.match(css, /grid-template-columns: 22px 48px minmax\(0, 1fr\) max-content/);
+  assert.match(css, /\.recommendation-card \{[^}]*align-items: start;/);
+  assert.doesNotMatch(css, /\.recommendation-card \{[^}]*min-height:/);
+  assert.match(css, /\.recommendation-value \{[^}]*align-self: start;[^}]*height: 62px;[^}]*justify-content: flex-start;/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendation-value \{[^}]*align-self: start;[^}]*height: 48px;[^}]*justify-content: flex-start;/);
+  assert.match(css, /\.recommendation-jacket \.chart-difficulty-badge \{[^}]*height: 20px;/);
+  assert.match(css, /\.recommendation-copy \{[^}]*height: 62px;/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendation-copy \{[^}]*height: 48px;/);
+  assert.match(css, /\.recommendation-copy > p \{[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/);
+  assert.match(css, /\.recommendation-tags \{[^}]*flex-wrap: nowrap;[^}]*margin-top: auto;/);
+});
+
+test("recommendation player picker leads directly into the mode tabs", async () => {
+  const [page, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(page, /<ScoreSyncLink className="player-score-sync-link" \/>/);
+  assert.doesNotMatch(page, /playersPayload\.players\.length\.toLocaleString\(\).*usernames/);
+  assert.doesNotMatch(page, /Only usernames shared with this community tool are listed/);
+  assert.match(css, /\.player-picker-meta \.player-score-sync-link \{[^}]*background: transparent;[^}]*color: #7d867e;[^}]*text-decoration: underline;/);
+  assert.match(css, /\.recommendations-page \{ --recommendations-stack-gap: 16px; \}/);
+  assert.match(css, /\.recommendations-hero \{[^}]*padding: var\(--recommendations-stack-gap\) 24px;/);
+  assert.match(css, /\.recommendation-mode-row \{[^}]*margin-bottom: var\(--recommendations-stack-gap\);/);
+  assert.match(css, /\.top-recommendations \{[^}]*margin-top: var\(--recommendations-stack-gap\);/);
+  assert.match(css, /\.player-picker \{[^}]*grid-template-columns: minmax\(260px, 430px\) 1fr;[^}]*max-width: 850px;/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendations-page \{ --recommendations-stack-gap: 14px; \}/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendations-hero \{[^}]*padding: var\(--recommendations-stack-gap\) 18px;/);
 });
 
 test("limited-data presentation uses the shared 20-player boundary", async () => {

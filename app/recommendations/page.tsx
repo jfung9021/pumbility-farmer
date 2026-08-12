@@ -26,19 +26,6 @@ const RECOMMENDATION_MODES: RecommendationModeKey[] = [
 ];
 
 
-function formatGeneratedAt(value: string | undefined): string {
-  if (!value) return "generation time unavailable";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "generation time unavailable";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
-}
-
 function signed(value: number, digits = 2): string {
   return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
 }
@@ -66,7 +53,7 @@ function ProgressStat({
   const emblemLevel = String(progress.rungIndex).padStart(2, "0");
   return (
     <article className="pumbility-progress-panel">
-      <div className="pumbility-progress-heading">
+      <div className={`pumbility-progress-heading${mode === "overall" ? "" : " no-emblem"}`}>
         {mode === "overall" ? (
           <img
             alt=""
@@ -127,52 +114,6 @@ function formatBpm(minimum: number | null | undefined, maximum: number | null | 
   return low === high ? `${format(low)} BPM` : `${format(low)}–${format(high)} BPM`;
 }
 
-const GRADE_GOAL_SCORES: Record<string, number> = {
-  "SSS+": 995_000,
-  SSS: 990_000,
-  "SS+": 985_000,
-  SS: 980_000,
-  "S+": 975_000,
-  S: 970_000,
-  "AAA+": 960_000,
-  AAA: 950_000,
-  "AA+": 940_000,
-  AA: 920_000,
-  "A+": 900_000,
-  A: 800_000,
-  B: 700_000,
-  C: 600_000,
-  D: 500_000,
-  F: 0,
-};
-
-const PLATE_CRITERIA: Record<string, string> = {
-  PG: "all Perfects",
-  UG: "Perfects and Greats only",
-  EG: "Perfects, Greats, and Goods only",
-  SG: "0 misses",
-  MG: "1–5 misses",
-  TG: "6–10 misses",
-  FG: "11–20 misses",
-  RG: "21+ misses",
-};
-
-interface RecommendationGoal {
-  criterion: string;
-  summary: string;
-}
-
-function recommendationGoal(chart: RecommendationChart): RecommendationGoal | null {
-  if (!chart.projectedGrade || !chart.projectedPlateCode) return null;
-  const score = GRADE_GOAL_SCORES[chart.projectedGrade];
-  const plateGoal = PLATE_CRITERIA[chart.projectedPlateCode];
-  if (score === undefined || !plateGoal) return null;
-  return {
-    criterion: plateGoal,
-    summary: `${chart.projectedGrade} ${chart.projectedPlateCode} · ${score.toLocaleString()}`,
-  };
-}
-
 function RecommendationCard({
   chart,
   rank,
@@ -181,12 +122,18 @@ function RecommendationCard({
   rank: number;
 }) {
   const bpm = formatBpm(chart.bpmMin, chart.bpmMax);
-  const goal = recommendationGoal(chart);
+  const estimate = `${chart.type === "Single" ? "S" : "D"}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
+  const goal = chart.projectedGrade && chart.projectedPlateCode
+    ? `Goal: ${chart.projectedGrade} ${chart.projectedPlateCode}`
+    : null;
   return (
     <article className="recommendation-card">
       <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
       <div className="chart-art recommendation-jacket" data-chart-type={chart.type} aria-hidden="true">
         {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <b>{chart.difficulty}</b>}
+        <span className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>
+          {chart.level}
+        </span>
       </div>
       <div className="recommendation-copy">
         <div className="recommendation-title">
@@ -205,10 +152,9 @@ function RecommendationCard({
         <p>
           {chart.stepArtist || "Unknown step artist"}
           {bpm ? <> · {bpm}</> : null}
-          <b> · {chart.difficulty} official</b>
+          <b> · {estimate} estimate</b>
         </p>
         <div className="recommendation-tags">
-          <span><b>{chart.type === "Single" ? "S" : "D"}{formatEstimatedDifficulty(chart.estimatedDifficulty)}</b> estimate</span>
           <span>{chart.played ? `Current ${chart.existingPumbility?.toFixed(2)} PB` : "Unplayed in Phoenix 2"}</span>
         </div>
       </div>
@@ -217,8 +163,7 @@ function RecommendationCard({
         <strong>{chart.projectedGain === null ? "-" : signed(chart.projectedGain)}</strong>
         {goal ? (
           <div className="recommendation-goal">
-            <b>{goal.summary}</b>
-            <small>{goal.criterion}</small>
+            <b>{goal}</b>
           </div>
         ) : null}
       </div>
@@ -235,8 +180,6 @@ export default function RecommendationsPage() {
   const [activeMode, setActiveMode] = useState<RecommendationModeKey>("overall");
   const [loadingPlayers, setLoadingPlayers] = useState(true);
   const [loadingPlayer, setLoadingPlayer] = useState(false);
-  const [refreshingPlayer, setRefreshingPlayer] = useState(false);
-  const [refreshWarning, setRefreshWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -266,14 +209,11 @@ export default function RecommendationsPage() {
   useEffect(() => {
     if (!selectedKey) {
       setPlayerPayload(null);
-      setRefreshWarning(null);
       return;
     }
     const controller = new AbortController();
     setPlayerPayload(null);
     setLoadingPlayer(true);
-    setRefreshingPlayer(false);
-    setRefreshWarning(null);
     setError(null);
     let cachedLoaded = false;
 
@@ -312,7 +252,6 @@ export default function RecommendationsPage() {
 
     const refresh = async () => {
       if (playersPayload?.refreshSupported === false) return;
-      setRefreshingPlayer(true);
       const response = await fetch(
         `/api/recommendations/refresh?playerKey=${encodeURIComponent(selectedKey)}`,
         { method: "POST", cache: "no-store", signal: controller.signal },
@@ -337,12 +276,10 @@ export default function RecommendationsPage() {
         const message = caught instanceof Error
           ? caught.message
           : "Could not refresh recommendations.";
-        if (cachedLoaded) setRefreshWarning(message);
-        else setError(message);
+        if (!cachedLoaded) setError(message);
       } finally {
         if (!controller.signal.aborted) {
           setLoadingPlayer(false);
-          setRefreshingPlayer(false);
         }
       }
     })();
@@ -461,36 +398,10 @@ export default function RecommendationsPage() {
             ) : null}
           </div>
           <div className="player-picker-meta">
-            <span>
-              {playersPayload
-                ? `${playersPayload.players.length.toLocaleString()} usernames · generated ${formatGeneratedAt(playersPayload.generatedAtUtc)}`
-                : "Only usernames shared with this community tool are listed."}
-            </span>
-            <ScoreSyncLink />
+            <ScoreSyncLink className="player-score-sync-link" />
           </div>
         </div>
         {error ? <div className="recommendation-notice error-notice">{error}</div> : null}
-        {refreshWarning ? (
-          <div className="recommendation-notice error-notice">
-            Showing cached recommendations. Refresh failed: {refreshWarning}
-          </div>
-        ) : refreshingPlayer && playerPayload ? (
-          <div className="recommendation-notice">Refreshing this player's Phoenix 2 scores…</div>
-        ) : hasSelection && playersPayload?.refreshSupported === false ? (
-          <div className="recommendation-notice">
-            Showing cached recommendations. Live score refresh is temporarily unavailable.
-          </div>
-        ) : null}
-        {playerPayload?.stale ? (
-          <div className="recommendation-notice">
-            Showing the cached model from {formatGeneratedAt(
-              playerPayload.modelGeneratedAtUtc || playerPayload.generatedAtUtc,
-            )}.
-            {playerPayload.currentModelGeneratedAtUtc
-              ? ` The current model is ${formatGeneratedAt(playerPayload.currentModelGeneratedAtUtc)}.`
-              : ""}
-          </div>
-        ) : null}
       </section>
 
       <section className="recommendations-workspace" aria-busy={loadingPlayer}>
@@ -565,7 +476,7 @@ export default function RecommendationsPage() {
                       {mode.projectionAvailable === false
                         ? "Top 50 farmable charts"
                         : activeMode === "overall"
-                          ? "Top 50 overall opportunities"
+                          ? "Top 50 recommended charts"
                           : "Top 50 Pumbility opportunities"}
                     </h2>
                   </div>
