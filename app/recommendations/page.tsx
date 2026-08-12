@@ -1,5 +1,6 @@
 "use client";
 
+import { track } from "@vercel/analytics";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
 import { RefreshMeta } from "../_components/refresh-meta";
@@ -308,6 +309,7 @@ export default function RecommendationsPage() {
   }, [playersPayload?.refreshSupported, selectedKey]);
 
   const selectPlayer = (playerKey: string, inputValue = "") => {
+    track("recommendation_player_selected", { playerName: inputValue });
     if (playerKey !== selectedKey) {
       setDifficultyFilters({ ...INITIAL_DIFFICULTY_FILTERS });
     }

@@ -149,6 +149,23 @@ test("recommendation modes put Overall first and select it by default", async ()
   assert.match(page, /cached recommendation predates the Overall model/);
 });
 
+test("recommendation player clicks are tracked by display name", async () => {
+  const page = await readFile(
+    path.join(process.cwd(), "app", "recommendations", "page.tsx"),
+    "utf8",
+  );
+
+  assert.match(page, /import \{ track \} from "@vercel\/analytics";/);
+  assert.match(
+    page,
+    /track\("recommendation_player_selected", \{ playerName: inputValue \}\)/,
+  );
+  assert.match(
+    page,
+    /onClick=\{\(\) => selectPlayer\(player\.playerKey, player\.displayName\)\}/,
+  );
+});
+
 test("Pumbility progress uses the Phoenix 2 title and rank boundaries", () => {
   const singleExpert = pumbilityProgress("singles", 17_500);
   assert.equal(singleExpert.label, "Single Expert Lv. 1");
