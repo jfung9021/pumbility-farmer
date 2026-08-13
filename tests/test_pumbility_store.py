@@ -174,7 +174,10 @@ class ReadCanaryTests(unittest.TestCase):
         candidate.get_json.return_value = candidate_value
         store = CanaryJsonStore(authoritative, candidate, domain="analysis")
 
-        self.assertIs(store.get_json("private-key"), candidate_value)
+        with self.assertLogs("pumbility.rollout", level="WARNING") as captured:
+            self.assertIs(store.get_json("private-key"), candidate_value)
+        self.assertIn("outcome=candidate-served", captured.output[0])
+        self.assertNotIn("private-key", captured.output[0])
 
         candidate.get_json.return_value = {"value": 2}
         authoritative_value = {"value": 1}
