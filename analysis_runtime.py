@@ -21,34 +21,72 @@ from phoenix2_sync import (
     utc_now,
 )
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
-from piu_misgrade_analyzer import (
-    AnalysisConfig,
-    ApiError,
-    PiuScoresClient,
+from pumbility_contract import (
     SCRIPT_VERSION,
-    analyze_snapshot,
-    build_web_payload,
-    load_snapshot,
-)
-from piu_recommendations import (
-    build_combined_chart_results,
-    build_combined_tier_payload,
     combined_tier_blob_path,
     phoenix1_snapshot_path,
     recommendation_blob_path,
     recommendation_generation_key,
-    recommendation_shard_prefix,
-)
-from recommendation_refresh import (
-    build_recommendation_model_artifacts,
     player_refresh_enabled,
-    publish_recommendation_model_artifacts,
     recommendation_index_path,
     recommendation_model_path,
     recommendation_phoenix1_shard_path,
     recommendation_phoenix2_shard_path,
+    recommendation_shard_prefix,
     recommendation_score_model_path,
 )
+
+
+def PiuScoresClient(*args: Any, **kwargs: Any) -> Any:  # noqa: N802 - compatibility API
+    from piu_misgrade_analyzer import PiuScoresClient as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def analyze_snapshot(*args: Any, **kwargs: Any) -> Any:
+    from piu_misgrade_analyzer import analyze_snapshot as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def build_web_payload(*args: Any, **kwargs: Any) -> Any:
+    from piu_misgrade_analyzer import build_web_payload as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def load_snapshot(*args: Any, **kwargs: Any) -> Any:
+    from piu_misgrade_analyzer import load_snapshot as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def build_combined_chart_results(*args: Any, **kwargs: Any) -> Any:
+    from piu_recommendations import build_combined_chart_results as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def build_combined_tier_payload(*args: Any, **kwargs: Any) -> Any:
+    from piu_recommendations import build_combined_tier_payload as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def build_recommendation_model_artifacts(*args: Any, **kwargs: Any) -> Any:
+    from recommendation_refresh import (
+        build_recommendation_model_artifacts as implementation,
+    )
+
+    return implementation(*args, **kwargs)
+
+
+def publish_recommendation_model_artifacts(*args: Any, **kwargs: Any) -> Any:
+    from recommendation_refresh import (
+        publish_recommendation_model_artifacts as implementation,
+    )
+
+    return implementation(*args, **kwargs)
 
 
 LEGACY_LATEST_BLOB_PATH = "analysis/latest.json"
@@ -854,6 +892,8 @@ _SECRET_PATTERN = re.compile(r"(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}", re.
 
 
 def safe_error(exc: BaseException) -> str:
+    from piu_misgrade_analyzer import ApiError
+
     if isinstance(exc, (ApiError, FileNotFoundError, ValueError)):
         message = str(exc).strip() or "The analysis could not be completed."
         return _SECRET_PATTERN.sub("[credential redacted]", message)[:500]
@@ -925,6 +965,8 @@ def _resume_typed_analysis_checkpoint(
     checkpoint_path: str,
     lease_heartbeat: Any | None,
 ) -> dict[str, Any]:
+    from piu_misgrade_analyzer import AnalysisConfig
+
     if (
         int(checkpoint.get("schemaVersion") or 0) != TYPED_CHECKPOINT_SCHEMA_VERSION
         or str(checkpoint.get("jobId") or "") != job_id
@@ -1075,6 +1117,8 @@ def execute_analysis_job(
     now: Callable[[], datetime] = utc_now,
 ) -> dict[str, Any]:
     """Run one idempotent, checkpointed refresh in a queue worker."""
+    from piu_misgrade_analyzer import AnalysisConfig, ApiError
+
     blob_store = blobs or PrivateBlobStore()
     job_store = jobs or RuntimeJobStore()
     existing = job_store.get(job_id)

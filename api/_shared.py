@@ -5,10 +5,11 @@ from typing import Any
 from analysis_runtime import PrivateBlobStore, RuntimeJobStore, request_refresh
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 from worker.celery import QUEUE_NAME
-from worker.tasks import refresh_analysis
 
 
 def enqueue_analysis(job_id: str) -> None:
+    from worker.tasks import refresh_analysis
+
     refresh_analysis.apply_async(
         args=[job_id],
         task_id=job_id,

@@ -13,8 +13,7 @@ from fastapi.responses import JSONResponse
 from analysis_runtime import PrivateBlobStore, RuntimeJobStore, update_job
 from api.cron import cron_authorized
 from phoenix2_sync import isoformat_utc, parse_utc, utc_now
-from piu_recommendations import recommendation_blob_path, recommendation_shard_path
-from recommendation_refresh import (
+from pumbility_contract import (
     PLAYER_REFRESH_FRESHNESS,
     cached_player_is_fresh,
     find_player_metadata,
@@ -26,10 +25,11 @@ from recommendation_refresh import (
     recommendation_phoenix2_shard_path,
     recommendation_player_path,
     recommendation_score_model_path,
+    recommendation_blob_path,
+    recommendation_shard_path,
     with_staleness,
 )
 from worker.celery import PLAYER_QUEUE_NAME
-from worker.tasks import refresh_player_recommendations
 
 
 router = APIRouter()
@@ -89,6 +89,8 @@ def _read_player(store: PrivateBlobStore, payload: dict, player_key: str) -> dic
 
 
 def _enqueue_player_refresh(job_id: str) -> None:
+    from worker.tasks import refresh_player_recommendations
+
     refresh_player_recommendations.apply_async(
         args=[job_id],
         task_id=job_id,

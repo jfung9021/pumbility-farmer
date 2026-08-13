@@ -13,11 +13,21 @@ from analysis_runtime import (
     safe_error,
     update_job,
 )
-from piu_misgrade_analyzer import ApiError, PiuScoresClient
-from piu_recommendations import recommendation_blob_path
+from pumbility_contract import recommendation_blob_path
 from phoenix2_sync import isoformat_utc, parse_utc, utc_now
-from recommendation_refresh import refresh_player_recommendations as refresh_one_player
 from worker.celery import PLAYER_QUEUE_NAME, QUEUE_NAME, app
+
+
+def PiuScoresClient(*args: Any, **kwargs: Any) -> Any:  # noqa: N802 - test seam
+    from piu_misgrade_analyzer import PiuScoresClient as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def refresh_one_player(*args: Any, **kwargs: Any) -> Any:
+    from recommendation_refresh import refresh_player_recommendations as implementation
+
+    return implementation(*args, **kwargs)
 
 
 @app.task(queue=QUEUE_NAME, name="worker.tasks.refresh_analysis")
@@ -30,6 +40,8 @@ def refresh_analysis(job_id: str) -> dict[str, Any]:
     name="worker.tasks.refresh_player_recommendations",
 )
 def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
+    from piu_misgrade_analyzer import ApiError
+
     jobs = RuntimeJobStore()
     job = jobs.get(job_id)
     if job is None:

@@ -96,15 +96,105 @@ after the scheduled cycle in the same supervised low-traffic window.
 
 ## Read canaries and cutover controls
 
+Immediately before enabling each read-canary group, run the read-only pre-canary gate through the
+injected production environment:
+
+```powershell
+vercel env run -e production -- `
+  .\.venv\Scripts\python.exe .\scripts\verify_pumbility_pre_canary.py
+```
+
+The gate does not edit deployment configuration or persisted data. It accepts either the documented
+Vercel-authoritative, fail-open shadow flag set with canonical shadow writes in their accepted state,
+or the stricter Vercel-only rollback state with canonical writes off. Both require an empty
+read-canary allowlist, cutover-only Blob controls disabled, and selected-player refresh frozen. The
+reconciler must report the same Vercel-authoritative backend that the flag check observed. The gate
+then runs the focused checksum, schema-migration, exact-comparison, fallback, and
+privacy contracts and performs the existing exact production reconciliation. A passing aggregate-safe
+summary is required before the canary flag is changed; a prior run is not evidence for a later group.
+
 `PUMBILITY_SUPABASE_READ_CANARY` is a comma-separated, fail-closed allowlist. The only accepted
 domains are `analysis`, `tier-list`, `recommendation-players`, `recommendation-player`, and
 `job-status`. Unknown values fail application startup. The owner-approved accelerated sequence is
 three 15-minute windows: `analysis,tier-list`, then
-`recommendation-players,recommendation-player`, then `job-status`, with at least 30 successful
-probes per domain. Each domain must have zero candidate errors, fallback reads, or unexplained
+`recommendation-players,recommendation-player`, then `job-status`, for 45 minutes total. Score p99
+only with at least 100 successful probes per domain; the focused probe defaults to 3 unscored
+warmups plus 100 scored requests spread across each 15-minute window. Each domain must have zero
+HTTP errors, candidate errors, fallback reads, cache hits, or unexplained
 mismatches; endpoint p95 may be no more than 10% above the
 Vercel baseline and p99 no more than 20% above it. The canary reads both stores and serves Supabase
 only when the values compare exactly; otherwise it serves Vercel and emits aggregate-safe telemetry.
+
+Use `scripts/probe_pumbility_read_domains.ps1` for the immediately adjacent Vercel baseline and
+each canary window. Omit `-ExpectCanaryTelemetry` for the baseline and require it for a canary run,
+so the two evidence types cannot silently claim the same expected event count. The probe requests
+compressed responses, uses a unique query nonce plus no-cache
+headers, and records TTFB, download, JSON parsing, and end-to-end timing separately. It writes a
+sanitized JSONL sample file and JSON summary under ignored `.local-data/pumbility-latency-probes/`;
+neither file contains request paths, query values, response bodies, player keys, job IDs, or curl
+error text. `-SkipP99` is only for non-gating smoke runs.
+
+```powershell
+& .\scripts\probe_pumbility_read_domains.ps1 `
+  -Domains analysis,tier-list `
+  -Samples 100 `
+  -WarmupSamples 3 `
+  -WindowMinutes 15 `
+  -ExpectCanaryTelemetry
+```
+
+The HTTP probe cannot complete the telemetry gate by itself. Before accepting a window, reconcile
+server logs to each summary's `expectedCandidateReadEvents`: normally one event per request, but a
+selected-player request reads both its index and player artifact and therefore expects two. Group 2
+also includes the one retained player-discovery request in the recommendation-player-list count.
+Every expected event must exist and be `candidate-served`, with zero candidate errors, fallbacks, or
+mismatches. A canary summary intentionally reports `telemetry.countGateComplete=false` until this
+separate server-log evidence is attached; a baseline summary marks that gate not applicable.
+For the `job-status` group, pass `-JobId` for a current job created by the supervised rollout
+window. The probe rejects that domain without an explicit job ID because Vercel job records expire
+after 24 hours; the supplied value is used only in the request and is never written to probe evidence.
+
+### Controlled preview region and connection comparison
+
+Region or connection-strategy experiments must use two already-created preview deployments. This
+repository tool does not create deployments or edit `vercel.json`, environment variables, rollout
+flags, or database state. For a region comparison, build both previews from the same commit and
+configuration, varying only the function region. For a connection-strategy comparison, keep the
+region and every other input fixed and vary only the reviewed connection implementation. Do not
+combine both variables in one comparison.
+
+Run identical probes against the two explicit preview origins. The known production alias is
+rejected, HTTPS is mandatory outside loopback tests, and URLs containing credentials, paths,
+queries, or fragments are rejected. Labels are the only deployment identity retained in the
+aggregate report; use generic region/variant labels, never deployment identifiers:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\compare_pumbility_preview_regions.py `
+  --first-url "https://<first-preview-origin>" `
+  --first-label "iad1" `
+  --second-url "https://<second-preview-origin>" `
+  --second-label "cle1" `
+  --domain analysis `
+  --domain tier-list `
+  --samples 100 `
+  --warmup-samples 3 `
+  --window-minutes 15
+```
+
+The runner invokes the tracked probe with exactly the same domains, scored samples, warmups,
+window, p99 mode, and telemetry expectation for both previews. It hashes decoded HTTP response
+bodies and requires exact pairwise identity across discovery, warmup, and scored responses. Raw
+digests remain only in ignored local evidence; the comparison report exposes counts, parity,
+latency by supplied label, and no URL, hostname, digest, body, subprocess error, or secret. Run the
+previews against a stable data boundary because sequential requests that legitimately observe a
+publication change will fail exact parity and must be repeated.
+
+A faster API result is not sufficient evidence to move production. The runner always records the
+adoption decision as pending. Before selecting a region or connection strategy, separately prove
+worker execution, private Blob behavior, cron delivery, queue publish/consume behavior, cold starts,
+connection capacity, failure handling, and rollback from that deployment topology. Preview
+protection requiring a credential is intentionally unsupported; do not pass bypass tokens to this
+tool.
 
 The final switch is one configuration set:
 

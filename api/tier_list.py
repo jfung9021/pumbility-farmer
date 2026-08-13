@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from analysis_runtime import PrivateBlobStore
-from piu_recommendations import combined_tier_blob_path
+from pumbility_contract import combined_tier_blob_path
 
 
 router = APIRouter()

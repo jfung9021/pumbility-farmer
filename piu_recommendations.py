@@ -20,6 +20,16 @@ from typing import Any, Callable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from pumbility_contract import (
+    RECOMMENDATION_SCHEMA_VERSION,
+    combined_tier_blob_path,
+    phoenix1_snapshot_path,
+    recommendation_blob_path,
+    recommendation_generation_key,
+    recommendation_shard_path,
+    recommendation_shard_prefix,
+)
+
 from phoenix1_score_overrides import (
     convert_phoenix1_pumbility,
     convert_phoenix1_score,
@@ -52,7 +62,6 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 21
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 2
@@ -537,31 +546,6 @@ class ScoreResponseModel:
 def _score_response_fold(player_id: object) -> int:
     digest = hashlib.sha256(str(player_id).encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big") % SCORE_RESPONSE_FOLDS
-
-
-def recommendation_blob_path() -> str:
-    return "analysis/recommendations/latest.json"
-
-
-def recommendation_generation_key(job_id: object) -> str:
-    return hashlib.sha256(str(job_id).encode("utf-8")).hexdigest()[:20]
-
-
-def recommendation_shard_prefix(generation_key: object | None = None) -> str:
-    base = "analysis/recommendations/generations/"
-    return base if generation_key is None else f"{base}{generation_key}/shards/"
-
-
-def recommendation_shard_path(generation_key: object, shard: int) -> str:
-    return f"{recommendation_shard_prefix(generation_key)}{int(shard):04d}.json"
-
-
-def combined_tier_blob_path() -> str:
-    return "analysis/combined/latest.json"
-
-
-def phoenix1_snapshot_path() -> str:
-    return "analysis/private/phoenix1.json"
 
 
 def public_player_key(player_id: object) -> str:

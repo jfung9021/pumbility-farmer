@@ -21,6 +21,8 @@ from pumbility_store import (
     SupabasePrimaryJsonStore,
     _ContinuousLeaseHeartbeat,
     _canonical_json_bytes,
+    _read_phase_started,
+    _record_read_phase,
     configured_backend,
     configured_read_canaries,
     drain_blob_mirror_outbox,
@@ -166,6 +168,57 @@ class ShadowStoreTests(unittest.TestCase):
 
 
 class ReadCanaryTests(unittest.TestCase):
+    def test_json_rollout_telemetry_has_fixed_private_safe_phase_schema(self) -> None:
+        private_path = "analysis/private/player-secret.json"
+        private_value = {"playerId": "private-player", "value": 1}
+
+        class InstrumentedCandidate:
+            def get_json(self, _: str) -> dict[str, object]:
+                for phase in ("connect", "schema", "fetch", "decode", "integrity"):
+                    started = _read_phase_started()
+                    _record_read_phase(phase, started)
+                return dict(private_value)
+
+        authoritative = Mock()
+        authoritative.get_json.return_value = dict(private_value)
+        store = CanaryJsonStore(
+            authoritative, InstrumentedCandidate(), domain="analysis"
+        )
+
+        with self.assertLogs("pumbility.rollout", level="WARNING") as captured:
+            self.assertEqual(store.get_json(private_path), private_value)
+
+        event = captured.output[0]
+        for field in (
+            "authoritative_ms",
+            "candidate_ms",
+            "comparison_ms",
+            "overall_ms",
+            "authoritative_connect_ms",
+            "authoritative_schema_ms",
+            "authoritative_fetch_ms",
+            "authoritative_decode_ms",
+            "authoritative_integrity_ms",
+            "candidate_connect_ms",
+            "candidate_schema_ms",
+            "candidate_fetch_ms",
+            "candidate_decode_ms",
+            "candidate_integrity_ms",
+        ):
+            self.assertRegex(event, rf"\b{field}=(?:none|\d+\.\d{{3}})\b")
+        for field in (
+            "candidate_connect_ms",
+            "candidate_schema_ms",
+            "candidate_fetch_ms",
+            "candidate_decode_ms",
+            "candidate_integrity_ms",
+        ):
+            self.assertNotIn(f"{field}=none", event)
+        self.assertIn("authoritative_error=none", event)
+        self.assertIn("candidate_error=none", event)
+        self.assertNotIn(private_path, event)
+        self.assertNotIn("private-player", event)
+
     def test_json_reads_authority_and_candidate_concurrently(self) -> None:
         authoritative = Mock()
         candidate = Mock()
@@ -205,13 +258,18 @@ class ReadCanaryTests(unittest.TestCase):
         authoritative = Mock()
         candidate = Mock()
         authoritative.get_json.return_value = {"source": "vercel"}
-        candidate.get_json.side_effect = RuntimeError("private candidate unavailable")
+        private_error = (
+            "private candidate unavailable at "
+            "postgresql://runtime:secret@private-db.example/player-private"
+        )
+        candidate.get_json.side_effect = RuntimeError(private_error)
         store = CanaryJsonStore(authoritative, candidate, domain="tier-list")
 
         with self.assertLogs("pumbility.rollout", level="WARNING") as captured:
             self.assertEqual(store.get_json("private-key"), {"source": "vercel"})
         self.assertIn("candidate_error=RuntimeError:other:none", captured.output[0])
-        self.assertNotIn("private candidate", captured.output[0])
+        self.assertNotIn(private_error, captured.output[0])
+        self.assertNotIn("private-db.example", captured.output[0])
         store.put_json("private-key", {"value": 1})
         authoritative.put_json.assert_called_once_with("private-key", {"value": 1})
         candidate.put_json.assert_not_called()
@@ -226,6 +284,71 @@ class ReadCanaryTests(unittest.TestCase):
         store = CanaryJsonStore(authoritative, candidate, domain="analysis")
 
         self.assertIs(store.get_json("private-key"), authoritative_value)
+
+    def test_json_exact_evidence_mismatch_and_non_mapping_authority_fall_back(self) -> None:
+        class ExactCandidate:
+            def _get_json_with_evidence(self, _: str):
+                from pumbility_store import _ExactJsonRead
+
+                value = {"value": 2}
+                return _ExactJsonRead(value, _canonical_json_bytes(value))
+
+            def get_json(self, _: str) -> dict[str, int]:  # pragma: no cover
+                raise AssertionError("The canary should use exact read evidence.")
+
+        authoritative = Mock()
+        store = CanaryJsonStore(authoritative, ExactCandidate(), domain="analysis")
+
+        authoritative_value = {"value": 1}
+        authoritative.get_json.return_value = authoritative_value
+        self.assertIs(store.get_json("private-key"), authoritative_value)
+
+        non_mapping_authority = b"not-json"
+        authoritative.get_json.return_value = non_mapping_authority
+        self.assertIs(store.get_json("private-key"), non_mapping_authority)
+
+    def test_json_exact_evidence_preserves_numeric_normalization_semantics(self) -> None:
+        from pumbility_store import _ExactJsonRead
+
+        candidate_value = {"value": 100000000000000000000}
+
+        class ExactCandidate:
+            def _get_json_with_evidence(self, _: str):
+                return _ExactJsonRead(
+                    candidate_value, _canonical_json_bytes(candidate_value)
+                )
+
+            def get_json(self, _: str) -> dict[str, int]:  # pragma: no cover
+                raise AssertionError("The canary should use exact read evidence.")
+
+        authoritative = Mock()
+        authority_value = {"value": 1e20}
+        authoritative.get_json.return_value = authority_value
+
+        result = CanaryJsonStore(
+            authoritative, ExactCandidate(), domain="analysis"
+        ).get_json("private-key")
+
+        self.assertIs(result, authority_value)
+        self.assertNotEqual(
+            _canonical_json_bytes(authority_value),
+            _canonical_json_bytes(candidate_value),
+        )
+
+    def test_bytes_reads_do_not_use_json_evidence_path(self) -> None:
+        class BytesCandidate:
+            def _get_json_with_evidence(self, _: str):  # pragma: no cover
+                raise AssertionError("Binary reads must not use JSON evidence.")
+
+            def get_bytes(self, _: str) -> bytes:
+                return candidate_value
+
+        authoritative = Mock()
+        authoritative.get_bytes.return_value = b"binary-value"
+        candidate_value = bytes(bytearray(b"binary-value"))
+        store = CanaryJsonStore(authoritative, BytesCandidate(), domain="analysis")
+
+        self.assertIs(store.get_bytes("private-key"), candidate_value)
 
     def test_job_candidate_is_served_only_after_exact_equality(self) -> None:
         authoritative = Mock()
@@ -352,6 +475,218 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         connection.cursor.return_value = cursor
         return connection, cursor
 
+    @staticmethod
+    def _read_connection(row: tuple[object, ...]):
+        cursor = Mock()
+        cursor.__enter__ = Mock(return_value=cursor)
+        cursor.__exit__ = Mock(return_value=False)
+        cursor.fetchone.return_value = row
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.cursor.return_value = cursor
+        return connection, cursor
+
+    def test_canary_records_supabase_artifact_read_phases(self) -> None:
+        payload = {"value": 1}
+        body = _canonical_json_bytes(payload)
+        connection, cursor = self._database_mocks()
+        cursor.fetchone.side_effect = [
+            (
+                EXPECTED_PUMBILITY_MIGRATION,
+                True,
+                payload,
+                hashlib.sha256(body).hexdigest(),
+                len(body),
+            ),
+        ]
+        fake_psycopg = SimpleNamespace(connect=Mock(return_value=connection))
+        authoritative = Mock()
+        authoritative.get_json.return_value = dict(payload)
+        candidate = PumbilityArtifactStore(
+            database_url="postgresql://localhost/local"
+        )
+
+        with (
+            patch.dict(sys.modules, {"psycopg": fake_psycopg}),
+            self.assertLogs("pumbility.rollout", level="WARNING") as captured,
+        ):
+            result = CanaryJsonStore(
+                authoritative, candidate, domain="analysis"
+            ).get_json("analysis/public.json")
+
+        self.assertEqual(result, payload)
+        event = captured.output[0]
+        for field in (
+            "candidate_connect_ms",
+            "candidate_schema_ms",
+            "candidate_fetch_ms",
+            "candidate_decode_ms",
+            "candidate_integrity_ms",
+        ):
+            self.assertRegex(event, rf"\b{field}=\d+\.\d{{3}}\b")
+        fake_psycopg.connect.assert_called_once_with(
+            "postgresql://localhost/local", prepare_threshold=None
+        )
+
+    def test_hot_json_read_combines_schema_and_artifact_fetch(self) -> None:
+        payload = {"value": 1}
+        body = _canonical_json_bytes(payload)
+        connection, cursor = self._read_connection(
+            (
+                EXPECTED_PUMBILITY_MIGRATION,
+                True,
+                payload,
+                hashlib.sha256(body).hexdigest(),
+                len(body),
+            )
+        )
+
+        with patch("pumbility_store._connect", return_value=connection):
+            result = PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).get_json("analysis/public.json")
+
+        self.assertEqual(result, payload)
+        cursor.execute.assert_called_once()
+        query = cursor.execute.call_args.args[0]
+        self.assertIn("pumbility.schema_metadata", query)
+        self.assertIn("pumbility.artifacts", query)
+
+    def test_missing_json_still_fails_closed_on_missing_schema(self) -> None:
+        missing_connection, missing_cursor = self._read_connection(
+            (EXPECTED_PUMBILITY_MIGRATION, False, None, None, None)
+        )
+        invalid_connection, invalid_cursor = self._read_connection(
+            (None, False, None, None, None)
+        )
+        store = PumbilityArtifactStore(database_url="postgresql://localhost/local")
+
+        with patch("pumbility_store._connect", return_value=missing_connection):
+            self.assertIsNone(store.get_json("analysis/missing.json"))
+        missing_cursor.execute.assert_called_once()
+
+        with (
+            patch("pumbility_store._connect", return_value=invalid_connection),
+            self.assertRaisesRegex(RuntimeError, "schema is not"),
+        ):
+            store.get_json("analysis/missing.json")
+        invalid_cursor.execute.assert_called_once()
+
+    def test_missing_binary_still_fails_closed_on_missing_schema(self) -> None:
+        missing_connection, missing_cursor = self._read_connection(
+            (EXPECTED_PUMBILITY_MIGRATION, False, None, None, None)
+        )
+        invalid_connection, invalid_cursor = self._read_connection(
+            (None, False, None, None, None)
+        )
+        store = PumbilityArtifactStore(database_url="postgresql://localhost/local")
+
+        with patch("pumbility_store._connect", return_value=missing_connection):
+            self.assertIsNone(store.get_bytes("models/missing.npz"))
+        missing_cursor.execute.assert_called_once()
+
+        with (
+            patch("pumbility_store._connect", return_value=invalid_connection),
+            self.assertRaisesRegex(RuntimeError, "schema is not"),
+        ):
+            store.get_bytes("models/missing.npz")
+        invalid_cursor.execute.assert_called_once()
+
+    def test_canary_reuses_checksum_validated_candidate_bytes(self) -> None:
+        authority = {"authority": True, "value": 1}
+        candidate_payload = {"value": 1, "authority": True}
+        body = _canonical_json_bytes(candidate_payload)
+        connection, _ = self._read_connection(
+            (
+                EXPECTED_PUMBILITY_MIGRATION,
+                True,
+                candidate_payload,
+                hashlib.sha256(body).hexdigest(),
+                len(body),
+            )
+        )
+        authoritative_store = Mock()
+        authoritative_store.get_json.return_value = authority
+        candidate_store = PumbilityArtifactStore(
+            database_url="postgresql://localhost/local"
+        )
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            patch(
+                "pumbility_store._canonical_json_bytes",
+                wraps=_canonical_json_bytes,
+            ) as canonicalize,
+        ):
+            result = CanaryJsonStore(
+                authoritative_store, candidate_store, domain="analysis"
+            ).get_json("analysis/public.json")
+
+        self.assertEqual(result, candidate_payload)
+        self.assertEqual(canonicalize.call_count, 2)
+
+    def test_missing_exact_candidate_requires_no_json_serialization(self) -> None:
+        connection, _ = self._read_connection(
+            (EXPECTED_PUMBILITY_MIGRATION, False, None, None, None)
+        )
+        authoritative_store = Mock()
+        authoritative_store.get_json.return_value = None
+        candidate_store = PumbilityArtifactStore(
+            database_url="postgresql://localhost/local"
+        )
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            patch(
+                "pumbility_store._canonical_json_bytes",
+                wraps=_canonical_json_bytes,
+            ) as canonicalize,
+            self.assertLogs("pumbility.rollout", level="WARNING") as captured,
+        ):
+            self.assertIsNone(
+                CanaryJsonStore(
+                    authoritative_store, candidate_store, domain="analysis"
+                ).get_json("analysis/missing.json")
+            )
+
+        canonicalize.assert_not_called()
+        self.assertIn("outcome=candidate-served", captured.output[0])
+
+    def test_corrupt_exact_candidate_preserves_authority_fallback(self) -> None:
+        candidate_payload = {"value": 1}
+        body = _canonical_json_bytes(candidate_payload)
+        connection, _ = self._read_connection(
+            (
+                EXPECTED_PUMBILITY_MIGRATION,
+                True,
+                candidate_payload,
+                "0" * 64,
+                len(body),
+            )
+        )
+        authority_value = {"source": "vercel"}
+        authoritative_store = Mock()
+        authoritative_store.get_json.return_value = authority_value
+        candidate_store = PumbilityArtifactStore(
+            database_url="postgresql://localhost/local"
+        )
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            self.assertLogs("pumbility.rollout", level="WARNING") as captured,
+        ):
+            result = CanaryJsonStore(
+                authoritative_store, candidate_store, domain="analysis"
+            ).get_json("analysis/public.json")
+
+        self.assertIs(result, authority_value)
+        self.assertIn("outcome=candidate-error-fallback", captured.output[0])
+        self.assertIn(
+            "candidate_error=PumbilityArtifactIntegrityError:other:none",
+            captured.output[0],
+        )
+
     def test_json_digest_uses_database_normalized_numeric_value(self) -> None:
         incoming = {"value": 1e20}
         normalized = {"value": 100000000000000000000}
@@ -452,7 +787,11 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
             cursor = Mock()
             cursor.__enter__ = Mock(return_value=cursor)
             cursor.__exit__ = Mock(return_value=False)
-            cursor.fetchone.side_effect = [(EXPECTED_PUMBILITY_MIGRATION,), fetched]
+            cursor.fetchone.return_value = (
+                (EXPECTED_PUMBILITY_MIGRATION, True, *fetched)
+                if fetched is not None
+                else (EXPECTED_PUMBILITY_MIGRATION,)
+            )
             cursor.fetchall.return_value = rows or []
             connection = Mock()
             connection.__enter__ = Mock(return_value=connection)
@@ -554,6 +893,55 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         self.assertEqual(persisted_output.database_input, database_input)
         self.assertEqual(persisted_output.payload, payload)
         self.assertEqual(persist_analysis.call_args.kwargs["job_id"], "job-uuid")
+
+
+class PumbilityJobReadTests(unittest.TestCase):
+    @staticmethod
+    def _connection(row: tuple[object, ...]):
+        cursor = Mock()
+        cursor.__enter__ = Mock(return_value=cursor)
+        cursor.__exit__ = Mock(return_value=False)
+        cursor.fetchone.return_value = row
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.cursor.return_value = cursor
+        return connection, cursor
+
+    def test_hot_job_read_combines_schema_and_payload_fetch(self) -> None:
+        payload = {"id": "job-id", "status": "completed"}
+        connection, cursor = self._connection(
+            (EXPECTED_PUMBILITY_MIGRATION, True, payload)
+        )
+
+        with patch("pumbility_store._connect", return_value=connection):
+            result = PumbilityJobStore(
+                database_url="postgresql://localhost/local"
+            ).get("job-id")
+
+        self.assertEqual(result, payload)
+        cursor.execute.assert_called_once()
+        query = cursor.execute.call_args.args[0]
+        self.assertIn("pumbility.schema_metadata", query)
+        self.assertIn("pumbility.jobs", query)
+
+    def test_missing_job_still_fails_closed_on_missing_schema(self) -> None:
+        missing_connection, missing_cursor = self._connection(
+            (EXPECTED_PUMBILITY_MIGRATION, False, None)
+        )
+        invalid_connection, invalid_cursor = self._connection((None, False, None))
+        store = PumbilityJobStore(database_url="postgresql://localhost/local")
+
+        with patch("pumbility_store._connect", return_value=missing_connection):
+            self.assertIsNone(store.get("missing-job"))
+        missing_cursor.execute.assert_called_once()
+
+        with (
+            patch("pumbility_store._connect", return_value=invalid_connection),
+            self.assertRaisesRegex(RuntimeError, "schema is not"),
+        ):
+            store.get("missing-job")
+        invalid_cursor.execute.assert_called_once()
 
 
 class PumbilityJobHeartbeatTests(unittest.TestCase):
