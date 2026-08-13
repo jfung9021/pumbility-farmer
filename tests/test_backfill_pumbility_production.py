@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from scripts.backfill_pumbility_production import (
     EXPECTED_PROJECT_REF,
     _assert_database_target,
+    _copy_cached_players,
     _read_stable_boundary,
     validate_production_database_url,
 )
@@ -110,6 +112,28 @@ class ProductionBoundaryTests(unittest.TestCase):
         self.assertEqual(pointers, stable_pointers)
         self.assertEqual(phoenix1["mix"], "Phoenix")
         self.assertEqual(phoenix2["value"], 3)
+
+    def test_cached_player_copy_deletes_target_only_revoked_objects(self) -> None:
+        source = Mock()
+        target = Mock()
+        allowed = "analysis/recommendations/players/allowed.json"
+        revoked = "analysis/recommendations/players/revoked.json"
+        source.list.side_effect = lambda prefix: (
+            [SimpleNamespace(pathname=allowed)]
+            if prefix == "analysis/recommendations/players/"
+            else []
+        )
+        source.get_json.return_value = {"player": {}}
+        target.list.side_effect = lambda prefix: (
+            [SimpleNamespace(pathname=allowed), SimpleNamespace(pathname=revoked)]
+            if prefix == "analysis/recommendations/players/"
+            else []
+        )
+
+        self.assertEqual(_copy_cached_players(source, target), 1)
+
+        target.delete.assert_called_once_with([revoked])
+        target.put_json.assert_called_once_with(allowed, {"player": {}})
 
 
 if __name__ == "__main__":

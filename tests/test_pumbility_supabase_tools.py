@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from scripts.backfill_pumbility_supabase import _digest, _timestamp
-from scripts.reconcile_pumbility_supabase import _key_hmac, reconcile
+from scripts.reconcile_pumbility_supabase import _key_hmac, _typed_score_payload, reconcile
 
 
 class BackfillToolTests(unittest.TestCase):
@@ -14,6 +14,23 @@ class BackfillToolTests(unittest.TestCase):
         self.assertEqual(_timestamp("2026-08-13T00:00:00Z"), "2026-08-13T00:00:00+00:00")
         self.assertIsNone(_timestamp("not-a-time"))
         self.assertIsNone(_timestamp(None))
+
+    def test_typed_score_columns_reconstruct_the_source_contract(self) -> None:
+        self.assertEqual(
+            _typed_score_payload(
+                ("player", "chart", 12.34, 999999, "SSS+", "Perfect Game", "raw-time", False)
+            ),
+            {
+                "playerId": "player",
+                "chartId": "chart",
+                "pumbility": 12.34,
+                "score": 999999,
+                "letterGrade": "SSS+",
+                "plate": "Perfect Game",
+                "recordedAt": "raw-time",
+                "isBroken": False,
+            },
+        )
 
 
 class ReconciliationTests(unittest.TestCase):

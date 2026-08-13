@@ -9,6 +9,7 @@ lock, and leaves the existing Vercel backend authoritative.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -28,8 +29,12 @@ from pumbility_store import (  # noqa: E402
     _assert_schema,
 )
 from scripts.backfill_pumbility_supabase import (  # noqa: E402
+    _canonical_bytes,
+    _copy_rows,
+    _digest,
     _import_mix,
     _import_reference_rows,
+    _timestamp,
 )
 from scripts.capture_pumbility_migration_baseline import (  # noqa: E402
     COMBINED_TIER_POINTER,
@@ -62,6 +67,7 @@ CONFIRMATION = (
 LOCK_NAME = "pumbility:production-backfill"
 MAX_BOUNDARY_ATTEMPTS = 3
 MAX_CACHED_PLAYER_OBJECTS = 10_000
+FROZEN_SCORE_BATCH_SIZE = 5_000
 GENERATION_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 
 
@@ -218,6 +224,11 @@ def _copy_cached_players(source: Any, target: PumbilityArtifactStore) -> int:
         objects: Sequence[Any] = source.list(prefix)
         if len(objects) > MAX_CACHED_PLAYER_OBJECTS:
             raise RuntimeError("The cached-player object count is outside the safe bound.")
+        source_paths = {str(item.pathname) for item in objects}
+        target_paths = {str(item.pathname) for item in target.list(prefix)}
+        stale_paths = sorted(target_paths - source_paths)
+        if stale_paths:
+            target.delete(stale_paths)
         for item in objects:
             pathname = str(item.pathname)
             payload = _required_production_json(source, pathname, "cached player artifact")
@@ -258,6 +269,158 @@ def _copy_active_artifacts(
         "binaryArtifacts": 1,
         "cachedPlayerArtifacts": _copy_cached_players(source, target),
     }
+
+
+def _import_frozen_phoenix1(
+    connection: Any,
+    manifest: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+) -> dict[str, int]:
+    """Import the large frozen score set in restartable bounded transactions."""
+    manifest_hash = hashlib.sha256(_canonical_bytes(manifest)).hexdigest()
+    expected = (
+        len(snapshot["players"]),
+        len(snapshot["charts"]),
+        len(snapshot["scores"]),
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select
+              (select count(*) from pumbility.player_consents pc where pc.mix_id=m.id and pc.valid_to is null),
+              (select count(*) from pumbility.charts c where c.mix_id=m.id and c.is_active),
+              (select count(*) from pumbility.score_revisions sr where sr.mix_id=m.id and sr.valid_to is null)
+            from pumbility.mixes m where m.mix_key='phoenix1'
+            """
+        )
+        current = tuple(int(value) for value in cursor.fetchone())
+    connection.commit()
+    if current[0:2] == (0, 0) and current[2] == 0:
+        metadata_only = dict(snapshot)
+        metadata_only["scores"] = []
+        with connection.transaction():
+            _import_mix(connection, "phoenix1", manifest, metadata_only)
+    elif current[0:2] != expected[0:2] or current[2] > expected[2]:
+        raise RuntimeError("The frozen Phoenix 1 resume boundary is inconsistent.")
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select ds.id, m.id, r.id
+            from pumbility.data_sources ds
+            join pumbility.mixes m on m.data_source_id=ds.id and m.mix_key='phoenix1'
+            join pumbility.sync_runs r on r.mix_id=m.id and r.content_hash=%s
+            where ds.source_key='piu-scores'
+            order by r.created_at desc limit 1
+            """,
+            (manifest_hash,),
+        )
+        identifiers = cursor.fetchone()
+    connection.commit()
+    if identifiers is None:
+        raise RuntimeError("The frozen Phoenix 1 import run is unavailable for resume.")
+    source_id, mix_id, sync_run_id = identifiers
+
+    scores = snapshot["scores"]
+    for start in range(0, len(scores), FROZEN_SCORE_BATCH_SIZE):
+        batch = scores[start : start + FROZEN_SCORE_BATCH_SIZE]
+        with connection.transaction():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    create temporary table pumbility_import_score_batch (
+                        upstream_player_id text not null,
+                        upstream_chart_id text not null,
+                        pumbility double precision not null,
+                        score double precision,
+                        letter_grade text,
+                        plate text,
+                        recorded_at_raw text not null,
+                        recorded_at text,
+                        is_broken boolean not null,
+                        row_hash text not null,
+                        primary key (upstream_player_id, upstream_chart_id)
+                    ) on commit drop
+                    """
+                )
+                _copy_rows(
+                    cursor,
+                    "copy pumbility_import_score_batch from stdin",
+                    (
+                        (
+                            row["playerId"],
+                            row["chartId"],
+                            row["pumbility"],
+                            row.get("score"),
+                            row.get("letterGrade"),
+                            row.get("plate"),
+                            str(row.get("recordedAt") or ""),
+                            _timestamp(row.get("recordedAt")),
+                            bool(row.get("isBroken", False)),
+                            _digest(row),
+                        )
+                        for row in batch
+                    ),
+                )
+                cursor.execute(
+                    """
+                    update pumbility.score_revisions sr set valid_to=now()
+                    from pumbility_import_score_batch t
+                    join pumbility.players p on p.data_source_id=%s and p.upstream_player_id=t.upstream_player_id
+                    join pumbility.charts c on c.mix_id=%s and c.upstream_chart_id=t.upstream_chart_id
+                    where sr.mix_id=%s and sr.player_id=p.id and sr.chart_id=c.id
+                      and sr.valid_to is null and sr.row_hash<>t.row_hash
+                    """,
+                    (source_id, mix_id, mix_id),
+                )
+                cursor.execute(
+                    """
+                    insert into pumbility.score_revisions (
+                        mix_id, player_id, chart_id, pumbility, score, letter_grade, plate,
+                        recorded_at_raw, recorded_at, is_broken, payload, row_hash,
+                        valid_from, source_sync_run_id
+                    )
+                    select %s, p.id, c.id, t.pumbility, t.score, t.letter_grade, t.plate,
+                           t.recorded_at_raw, nullif(t.recorded_at,'')::timestamptz,
+                           t.is_broken, '{}'::jsonb, t.row_hash, now(), %s
+                    from pumbility_import_score_batch t
+                    join pumbility.players p on p.data_source_id=%s and p.upstream_player_id=t.upstream_player_id
+                    join pumbility.charts c on c.mix_id=%s and c.upstream_chart_id=t.upstream_chart_id
+                    where not exists (
+                        select 1 from pumbility.score_revisions current
+                        where current.mix_id=%s and current.player_id=p.id
+                          and current.chart_id=c.id and current.valid_to is null
+                    )
+                    """,
+                    (mix_id, sync_run_id, source_id, mix_id, mix_id),
+                )
+        if start == 0 or start + len(batch) == len(scores) or start % 100_000 == 0:
+            print(
+                json.dumps(
+                    {
+                        "status": "importing",
+                        "mix": "phoenix1",
+                        "scoresProcessed": start + len(batch),
+                        "scoresTotal": len(scores),
+                    },
+                    sort_keys=True,
+                )
+            )
+
+    with connection.transaction():
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select count(*) from pumbility.score_revisions where mix_id=%s and valid_to is null",
+                (mix_id,),
+            )
+            score_count = int(cursor.fetchone()[0])
+            if score_count != expected[2]:
+                raise RuntimeError("The frozen Phoenix 1 score count is incomplete after resume.")
+            cursor.execute(
+                "update pumbility.sync_runs set score_count=%s, updated_at=now() where id=%s",
+                (score_count, sync_run_id),
+            )
+    return {"players": expected[0], "charts": expected[1], "scores": score_count}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -313,16 +476,23 @@ def main(argv: list[str] | None = None) -> int:
             _claim_lock(cursor)
         connection.commit()
         try:
-            for mix_key, snapshot in (("phoenix1", phoenix1), ("phoenix2", phoenix2)):
-                with connection.transaction():
-                    results[mix_key] = _import_mix(
-                        connection, mix_key, _snapshot_manifest(snapshot), snapshot
-                    )
+            results["phoenix1"] = _import_frozen_phoenix1(
+                connection, _snapshot_manifest(phoenix1), phoenix1
+            )
+            print(json.dumps({"status": "stage-completed", "stage": "phoenix1"}, sort_keys=True))
+            with connection.transaction():
+                results["phoenix2"] = _import_mix(
+                    connection, "phoenix2", _snapshot_manifest(phoenix2), phoenix2
+                )
+            print(json.dumps({"status": "stage-completed", "stage": "phoenix2"}, sort_keys=True))
             with connection.transaction():
                 _, reference_counts = _import_reference_rows(connection)
+            print(json.dumps({"status": "stage-completed", "stage": "references"}, sort_keys=True))
             target = PumbilityArtifactStore(database_url=database_url)
             artifact_counts = _copy_active_artifacts(source, target, pointers)
+            print(json.dumps({"status": "stage-completed", "stage": "artifacts"}, sort_keys=True))
             _assert_boundary_unchanged(source, pointers, phoenix2)
+            print(json.dumps({"status": "stage-completed", "stage": "boundary"}, sort_keys=True))
         finally:
             with connection.cursor() as cursor:
                 _release_lock(cursor)

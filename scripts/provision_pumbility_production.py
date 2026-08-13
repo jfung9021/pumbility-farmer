@@ -7,6 +7,7 @@ credentials and API keys stay in process memory and subprocess stdin.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import secrets
@@ -16,11 +17,24 @@ from pathlib import Path
 from typing import Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 SCHEMA_REPO = PROJECT_ROOT.parent / "bite-open-card-draw"
 PROJECT_REF = "gsiyqhkcgegjrvqcqioc"
 VERCEL_PROJECT_ID = "prj_MY8d8OpbxoiZGfiqtNwAyFiNgyB7"
 ROLE_NAME = "pumbility_runtime_login"
 SESSION_HOST = "aws-1-us-east-2.pooler.supabase.com"
+OPERATOR_PHASE = "startup"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reconcile-only",
+        action="store_true",
+        help="Reconcile an already completed backfill before installing flags-off secrets.",
+    )
+    return parser
 
 
 def _executable(name: str) -> str:
@@ -86,6 +100,8 @@ def _provision_login(password: str) -> None:
 
 
 def _service_role_key() -> str:
+    global OPERATOR_PHASE
+    OPERATOR_PHASE = "load-storage-key-command"
     output = _run(
         (
             _executable("npx"),
@@ -100,7 +116,9 @@ def _service_role_key() -> str:
         ),
         cwd=SCHEMA_REPO,
     )
+    OPERATOR_PHASE = "load-storage-key-parse"
     rows = json.loads(output)
+    OPERATOR_PHASE = "load-storage-key-select"
     matches = [row for row in rows if row.get("name") == "service_role"]
     if len(matches) != 1 or not str(matches[0].get("api_key") or ""):
         raise RuntimeError("The approved project's server-only Storage key was unavailable.")
@@ -122,11 +140,14 @@ def _install_vercel_value(name: str, value: str) -> None:
             "--yes",
         ),
         cwd=PROJECT_ROOT,
-        stdin=value,
+        stdin=f"{value}\n",
     )
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    global OPERATOR_PHASE
+    args = build_parser().parse_args(argv)
+    OPERATOR_PHASE = "verify-links"
     _verify_links()
     if not os.getenv("BLOB_READ_WRITE_TOKEN", "").strip():
         raise RuntimeError(
@@ -142,7 +163,9 @@ def main() -> int:
         "postgres?sslmode=require"
     )
     try:
+        OPERATOR_PHASE = "provision-login"
         _provision_login(password)
+        OPERATOR_PHASE = "load-storage-key"
         service_key = _service_role_key()
         os.environ["PUMBILITY_PRODUCTION_DATABASE_URL"] = session_url
         os.environ["PUMBILITY_SUPABASE_URL"] = f"https://{PROJECT_REF}.supabase.co"
@@ -152,12 +175,24 @@ def main() -> int:
             f"BACKFILL {PROJECT_REF} 20260813010000"
         )
 
-        from scripts.backfill_pumbility_production import main as backfill
+        if not args.reconcile_only:
+            OPERATOR_PHASE = "load-backfill-module"
+            from scripts.backfill_pumbility_production import main as backfill
 
-        if backfill(["--expected-project-ref", PROJECT_REF]) != 0:
-            raise RuntimeError("The production backfill plan did not pass.")
-        if backfill(["--expected-project-ref", PROJECT_REF, "--apply"]) != 0:
-            raise RuntimeError("The production backfill did not pass.")
+            OPERATOR_PHASE = "plan-backfill"
+            if backfill(["--expected-project-ref", PROJECT_REF]) != 0:
+                raise RuntimeError("The production backfill plan did not pass.")
+            OPERATOR_PHASE = "apply-backfill"
+            if backfill(["--expected-project-ref", PROJECT_REF, "--apply"]) != 0:
+                raise RuntimeError("The production backfill did not pass.")
+
+        os.environ["PUMBILITY_DATABASE_URL"] = runtime_url
+        os.environ["PUMBILITY_DATA_BACKEND"] = "vercel"
+        OPERATOR_PHASE = "reconcile-backfill"
+        from scripts.reconcile_pumbility_production import main as reconcile_production
+
+        if reconcile_production() != 0:
+            raise RuntimeError("The production reconciliation did not pass.")
 
         values = {
             "PUMBILITY_DATABASE_URL": runtime_url,
@@ -168,6 +203,7 @@ def main() -> int:
             "PUMBILITY_SHADOW_STRICT": "false",
             "PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED": "false",
         }
+        OPERATOR_PHASE = "install-vercel-environment"
         for name, value in values.items():
             _install_vercel_value(name, value)
     finally:
@@ -178,6 +214,8 @@ def main() -> int:
             "PUMBILITY_PRODUCTION_DATABASE_URL",
             "PUMBILITY_SUPABASE_SERVICE_ROLE_KEY",
             "PUMBILITY_PRODUCTION_CONFIRMATION",
+            "PUMBILITY_DATABASE_URL",
+            "PUMBILITY_DATA_BACKEND",
         ):
             os.environ.pop(name, None)
 
@@ -201,7 +239,8 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception:
         print(
-            "Pumbility production provisioning failed safely; private details were suppressed.",
+            "Pumbility production provisioning failed safely during "
+            f"{OPERATOR_PHASE}; private details were suppressed.",
             file=sys.stderr,
         )
         raise SystemExit(2) from None

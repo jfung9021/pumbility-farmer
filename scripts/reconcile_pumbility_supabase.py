@@ -29,6 +29,20 @@ ALLOWED_REASONS = frozenset(
 )
 
 
+def _typed_score_payload(row: Any) -> dict[str, Any]:
+    """Recreate the exact source row from typed relational columns."""
+    return {
+        "playerId": str(row[0]),
+        "chartId": str(row[1]),
+        "pumbility": row[2],
+        "score": row[3],
+        "letterGrade": row[4],
+        "plate": row[5],
+        "recordedAt": str(row[6] or ""),
+        "isBroken": bool(row[7]),
+    }
+
+
 def _canonical(value: Any) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True
@@ -115,7 +129,9 @@ def _database_snapshot(connection: Any, mix_key: str) -> dict[str, Any]:
         charts = [dict(row[0]) for row in cursor.fetchall()]
         cursor.execute(
             """
-            select sr.payload
+            select p.upstream_player_id, c.upstream_chart_id, sr.pumbility,
+                   sr.score, sr.letter_grade, sr.plate, sr.recorded_at_raw,
+                   sr.is_broken
             from pumbility.score_revisions sr
             join pumbility.mixes m on m.id = sr.mix_id
             join pumbility.players p on p.id = sr.player_id
@@ -125,7 +141,7 @@ def _database_snapshot(connection: Any, mix_key: str) -> dict[str, Any]:
             """,
             (mix_key,),
         )
-        scores = [dict(row[0]) for row in cursor.fetchall()]
+        scores = [_typed_score_payload(row) for row in cursor.fetchall()]
     return sanitize_snapshot(
         {
             "mix": resolve_mix(mix_key).api_value,

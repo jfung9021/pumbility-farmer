@@ -86,6 +86,15 @@ def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _json_metadata(value: object, *, pathname: str) -> tuple[str, int]:
+    if isinstance(value, str):
+        value = json.loads(value)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Pumbility artifact {pathname!r} is not a JSON object.")
+    body = _canonical_json_bytes(value)
+    return hashlib.sha256(body).hexdigest(), len(body)
+
+
 def _assert_schema(cursor: Any) -> None:
     cursor.execute(
         "select value from pumbility.schema_metadata where key = 'migration_version'"
@@ -115,6 +124,15 @@ def _parse_timestamp(value: object) -> datetime | None:
 class StoredObject:
     pathname: str
     uploaded_at: datetime | None = None
+
+
+class PumbilityArtifactIntegrityError(ValueError):
+    """Report checksum dimensions without exposing an artifact key or digest."""
+
+    def __init__(self, *, digest_matches: bool, byte_size_matches: bool) -> None:
+        self.digest_matches = digest_matches
+        self.byte_size_matches = byte_size_matches
+        super().__init__("A Pumbility JSON artifact failed checksum validation.")
 
 
 class _ContinuousLeaseHeartbeat:
@@ -212,6 +230,43 @@ class PumbilityArtifactStore:
             headers["Content-Type"] = content_type
         return headers
 
+    @staticmethod
+    def _put_json_row(cursor: Any, pathname: str, payload: Mapping[str, Any]) -> None:
+        from psycopg.types.json import Jsonb
+
+        digest, byte_size = _json_metadata(payload, pathname=pathname)
+        cursor.execute(
+            """
+            insert into pumbility.artifacts (
+                object_key, media_type, payload_json, storage_bucket,
+                storage_object_path, sha256, byte_size, validated_at, updated_at
+            ) values (%s, 'application/json', %s, null, null, %s, %s, now(), now())
+            on conflict (object_key) do update set
+                media_type = excluded.media_type,
+                payload_json = excluded.payload_json,
+                storage_bucket = null,
+                storage_object_path = null,
+                sha256 = excluded.sha256,
+                byte_size = excluded.byte_size,
+                validated_at = excluded.validated_at,
+                updated_at = excluded.updated_at
+            returning payload_json
+            """,
+            (pathname, Jsonb(dict(payload)), digest, byte_size),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError(f"Pumbility artifact {pathname!r} was not returned after its write.")
+        normalized_digest, normalized_size = _json_metadata(row[0], pathname=pathname)
+        cursor.execute(
+            """
+            update pumbility.artifacts
+            set sha256 = %s, byte_size = %s, validated_at = now(), updated_at = now()
+            where object_key = %s
+            """,
+            (normalized_digest, normalized_size, pathname),
+        )
+
     def get_json(self, pathname: str) -> dict[str, Any] | None:
         snapshot_match = CURRENT_SNAPSHOT_RE.fullmatch(pathname)
         snapshot_mix = snapshot_match.group(1) if snapshot_match else None
@@ -240,15 +295,16 @@ class PumbilityArtifactStore:
             raise ValueError(f"Pumbility artifact {pathname!r} is not a JSON object.")
         result = dict(value)
         body = _canonical_json_bytes(result)
-        if hashlib.sha256(body).hexdigest() != str(row[1]) or len(body) != int(row[2]):
-            raise ValueError(f"Pumbility artifact {pathname!r} failed checksum validation.")
+        digest_matches = hashlib.sha256(body).hexdigest() == str(row[1])
+        byte_size_matches = len(body) == int(row[2])
+        if not digest_matches or not byte_size_matches:
+            raise PumbilityArtifactIntegrityError(
+                digest_matches=digest_matches,
+                byte_size_matches=byte_size_matches,
+            )
         return result
 
     def put_json(self, pathname: str, payload: Mapping[str, Any]) -> None:
-        from psycopg.types.json import Jsonb
-
-        body = _canonical_json_bytes(payload)
-        digest = hashlib.sha256(body).hexdigest()
         snapshot_match = CURRENT_SNAPSHOT_RE.fullmatch(pathname)
         canonical_mix = (
             snapshot_match.group(1)
@@ -284,55 +340,14 @@ class PumbilityArtifactStore:
             return
         with _connect(self.database_url) as connection, connection.cursor() as cursor:
             _assert_schema(cursor)
-            cursor.execute(
-                """
-                insert into pumbility.artifacts (
-                    object_key, media_type, payload_json, storage_bucket,
-                    storage_object_path, sha256, byte_size, validated_at, updated_at
-                ) values (%s, 'application/json', %s, null, null, %s, %s, now(), now())
-                on conflict (object_key) do update set
-                    media_type = excluded.media_type,
-                    payload_json = excluded.payload_json,
-                    storage_bucket = null,
-                    storage_object_path = null,
-                    sha256 = excluded.sha256,
-                    byte_size = excluded.byte_size,
-                    validated_at = excluded.validated_at,
-                    updated_at = excluded.updated_at
-                """,
-                (pathname, Jsonb(dict(payload)), digest, len(body)),
-            )
+            self._put_json_row(cursor, pathname, payload)
 
     def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:
         """Atomically replace a set of compatibility publication pointers."""
-        from psycopg.types.json import Jsonb
-
-        prepared = []
-        for pathname, payload in payloads.items():
-            body = _canonical_json_bytes(payload)
-            prepared.append(
-                (pathname, Jsonb(dict(payload)), hashlib.sha256(body).hexdigest(), len(body))
-            )
         with _connect(self.database_url) as connection, connection.cursor() as cursor:
             _assert_schema(cursor)
-            cursor.executemany(
-                """
-                insert into pumbility.artifacts (
-                    object_key, media_type, payload_json, storage_bucket,
-                    storage_object_path, sha256, byte_size, validated_at, updated_at
-                ) values (%s, 'application/json', %s, null, null, %s, %s, now(), now())
-                on conflict (object_key) do update set
-                    media_type = excluded.media_type,
-                    payload_json = excluded.payload_json,
-                    storage_bucket = null,
-                    storage_object_path = null,
-                    sha256 = excluded.sha256,
-                    byte_size = excluded.byte_size,
-                    validated_at = excluded.validated_at,
-                    updated_at = excluded.updated_at
-                """,
-                prepared,
-            )
+            for pathname, payload in payloads.items():
+                self._put_json_row(cursor, pathname, payload)
 
     def get_bytes(self, pathname: str) -> bytes | None:
         with _connect(self.database_url) as connection, connection.cursor() as cursor:

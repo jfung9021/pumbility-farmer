@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import threading
@@ -11,10 +12,12 @@ from pumbility_store import (
     CURRENT_SNAPSHOT_RE,
     EXPECTED_PUMBILITY_MIGRATION,
     JOB_LEASE_SECONDS,
+    PumbilityArtifactStore,
     PumbilityJobStore,
     ShadowJobStore,
     ShadowJsonStore,
     _ContinuousLeaseHeartbeat,
+    _canonical_json_bytes,
     configured_backend,
     require_loopback_database_url,
     select_job_store,
@@ -150,6 +153,72 @@ class ContinuousLeaseHeartbeatTests(unittest.TestCase):
         self.assertTrue(called.wait(1.0))
         with self.assertRaisesRegex(RuntimeError, "heartbeat failed"):
             handle.stop()
+
+
+class PumbilityArtifactStoreTests(unittest.TestCase):
+    @staticmethod
+    def _database_mocks(*normalized_payloads: dict[str, object]):
+        cursor = Mock()
+        cursor.__enter__ = Mock(return_value=cursor)
+        cursor.__exit__ = Mock(return_value=False)
+        cursor.fetchone.side_effect = [
+            (EXPECTED_PUMBILITY_MIGRATION,),
+            *((payload,) for payload in normalized_payloads),
+        ]
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.cursor.return_value = cursor
+        return connection, cursor
+
+    def test_json_digest_uses_database_normalized_numeric_value(self) -> None:
+        incoming = {"value": 1e20}
+        normalized = {"value": 100000000000000000000}
+        self.assertNotEqual(_canonical_json_bytes(incoming), _canonical_json_bytes(normalized))
+        connection, cursor = self._database_mocks(normalized)
+        fake_json_module = SimpleNamespace(Jsonb=lambda payload: payload)
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            patch.dict(sys.modules, {"psycopg.types.json": fake_json_module}),
+        ):
+            PumbilityArtifactStore(database_url="postgresql://localhost/local").put_json(
+                "analysis/model.json", incoming
+            )
+
+        self.assertIn("returning payload_json", cursor.execute.call_args_list[1].args[0])
+        metadata_call = cursor.execute.call_args_list[2]
+        normalized_body = _canonical_json_bytes(normalized)
+        self.assertEqual(
+            metadata_call.args[1],
+            (hashlib.sha256(normalized_body).hexdigest(), len(normalized_body), "analysis/model.json"),
+        )
+
+    def test_json_bundle_normalizes_each_entry_in_one_connection(self) -> None:
+        normalized = ({"value": 100000000000000000000}, {"value": 2})
+        connection, cursor = self._database_mocks(*normalized)
+        fake_json_module = SimpleNamespace(Jsonb=lambda payload: payload)
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            patch.dict(sys.modules, {"psycopg.types.json": fake_json_module}),
+        ):
+            PumbilityArtifactStore(database_url="postgresql://localhost/local").put_json_bundle(
+                {"analysis/one.json": {"value": 1e20}, "analysis/two.json": {"value": 2}}
+            )
+
+        self.assertEqual(connection.__enter__.call_count, 1)
+        metadata_calls = [
+            call for call in cursor.execute.call_args_list if "update pumbility.artifacts" in call.args[0]
+        ]
+        self.assertEqual(len(metadata_calls), 2)
+        for call, pathname, payload in zip(
+            metadata_calls, ("analysis/one.json", "analysis/two.json"), normalized
+        ):
+            body = _canonical_json_bytes(payload)
+            self.assertEqual(
+                call.args[1], (hashlib.sha256(body).hexdigest(), len(body), pathname)
+            )
 
 
 class PumbilityJobHeartbeatTests(unittest.TestCase):
