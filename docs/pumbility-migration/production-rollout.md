@@ -98,9 +98,11 @@ after the scheduled cycle in the same supervised low-traffic window.
 
 `PUMBILITY_SUPABASE_READ_CANARY` is a comma-separated, fail-closed allowlist. The only accepted
 domains are `analysis`, `tier-list`, `recommendation-players`, `recommendation-player`, and
-`job-status`. Unknown values fail application startup. Run them in that order, one at a time, for
-15 minutes and at least 30 successful probes per domain. Each domain must have zero candidate
-errors, fallback reads, or unexplained mismatches; endpoint p95 may be no more than 10% above the
+`job-status`. Unknown values fail application startup. The owner-approved accelerated sequence is
+three 15-minute windows: `analysis,tier-list`, then
+`recommendation-players,recommendation-player`, then `job-status`, with at least 30 successful
+probes per domain. Each domain must have zero candidate errors, fallback reads, or unexplained
+mismatches; endpoint p95 may be no more than 10% above the
 Vercel baseline and p99 no more than 20% above it. The canary reads both stores and serves Supabase
 only when the values compare exactly; otherwise it serves Vercel and emits aggregate-safe telemetry.
 
@@ -126,8 +128,8 @@ vercel env run -e production -- `
 
 Set the process-only `PUMBILITY_BLOB_OUTBOX_CONFIRMATION` value to
 `DRAIN PUMBILITY BLOB OUTBOX`. Keep the Blob mirror and read fallback enabled for 14 days. After
-cutover, actively watch errors, mismatches, fallback use, latency, job health, and capacity for two
-hours. Any gate failure uses this rollback set immediately:
+cutover, perform the owner-approved 45-minute active watch of errors, mismatches, fallback use,
+latency, job health, and capacity. Any gate failure uses this rollback set immediately:
 
 ```text
 PUMBILITY_DATA_BACKEND=vercel
@@ -137,13 +139,12 @@ PUMBILITY_BLOB_READ_FALLBACK_ENABLED=false
 PUMBILITY_SUPABASE_READ_CANARY=
 ```
 
-Current safe stage on 2026-08-14 JST: the merged production deployment is running
-`PUMBILITY_DATA_BACKEND=shadow` in fail-open mode, with `PUMBILITY_SHADOW_STRICT=false` and
-`PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED=false`. Vercel remains authoritative for every read
-and publication. `PUM-S6-PRODUCTION-REGRESSION-01` records the production/API/browser/local
-regression evidence completed while reads remained Vercel-authoritative and before any Supabase-read
-or canonical-write flag. The next genuine shadow write must come from the scheduled `0 6 * * *` UTC
-Phoenix 2 job; do not substitute a local worker or claim a shadow cycle before the production
-scheduler and its post-run reconciliation have evidence. Supabase reads, strict shadowing, and
-canonical snapshot writes remain gated behind that scheduled cycle, the immediate full sync,
-all-player parity, operations checks, and explicit approval above.
+Current safe stage on 2026-08-14 JST: the genuine production cron, immediate full sync, canonical
+typed shadow generation, exact reconciliation, privacy, regression, capacity, and rollback gates
+passed. The production deployment is running `PUMBILITY_DATA_BACKEND=shadow` in fail-open mode,
+with `PUMBILITY_SHADOW_STRICT=false` and canonical Supabase shadow writes enabled. Vercel remains
+authoritative for every read and publication; Blob mirror/read fallback are disabled and the read
+canary allowlist is absent. Canary group 1 produced 60/60 exact candidate reads with no HTTP error,
+mismatch, candidate error, or fallback, but exceeded both endpoint latency limits. It was rolled
+back immediately. Do not run groups 2/3 or enable Supabase authority until a focused candidate-read
+latency change meets the existing p95/p99 gate. See `REMOTE_HANDOFF_2026-08-14.md` for exact evidence.

@@ -6,6 +6,36 @@ This is a sanitized continuation record for a new Codex Remote chat. It contains
 no database passwords, API keys, raw player identifiers, private digests, or
 private artifact paths.
 
+## Current live handoff (supersedes the historical pause sections below)
+
+- Rollout code is at `4fa8e9a` after PR #67, `Parallelize Pumbility canary reads`.
+- Production deployment `dpl_5sSxQezmjvXopWzHwEJJF3m6XC3M` is READY and aliased to the real
+  `https://pumbility-farmer.vercel.app` site.
+- Vercel remains authoritative for every read and publication. Production is `shadow`, strict
+  shadowing is false, canonical Supabase shadow writes are enabled, Blob mirror/read fallback are
+  disabled, and `PUMBILITY_SUPABASE_READ_CANARY` is absent.
+- Selected-player recommendation refresh remains intentionally frozen with
+  `PLAYER_RECOMMENDATION_REFRESH_ENABLED=false` to keep the accepted artifact boundary stable.
+- A genuine production cron job, an immediate supervised full sync, canonical typed shadow
+  generation, exact reconciliation, privacy, regression, capacity, and rollback gates have passed.
+- Latest exact reconciliation: Phoenix 1 `582301`, Phoenix 2 `15238`, zero unexplained differences,
+  173 JSON artifacts, one binary artifact, 56 cached-player artifacts, privacy scan passed.
+- The dedicated runtime credential was rotated after a stale credential was detected. The new
+  credential was installed in Vercel only after the exact reconciliation above passed.
+- Canary group 1 (`analysis,tier-list`) then produced 60/60 exact `candidate-served` comparisons and
+  zero HTTP errors, mismatches, candidate errors, or fallbacks. It nevertheless failed the latency
+  gate: analysis p95/p99 was `3098.320/5695.727 ms` versus `2531.782/2570.183 ms` baseline, and
+  tier-list p95/p99 was `2584.942/14273.838 ms` versus `1967.591/1985.784 ms` baseline.
+- Because the permitted increases are 10% at p95 and 20% at p99, the read canary was removed and
+  groups 2/3 plus Supabase authority were not attempted. A post-rollback smoke test returned valid
+  JSON and HTTP 200 for analysis, tier-list, and recommendation-player-list routes.
+
+The current proven blocker is Supabase candidate-read latency under production canary load, not
+correctness or parity. Do not re-enable any read canary until a focused change has direct evidence
+that it can meet the existing p95/p99 gate. After such a fix is ready, the shortest remaining live
+test path is three 15-minute grouped canaries followed by the owner-approved 45-minute active
+post-cutover watch. Allow additional time for deployment and rollback checks.
+
 ## Resume instruction
 
 Open this exact workspace in Codex Remote:
@@ -25,7 +55,7 @@ The schema-owner repository is the sibling checkout:
 
 `C:\Users\jfung\Downloads\bite-open-card-draw`
 
-## Safety state at pause
+## Historical safety state at first pause
 
 - There is no active production operator command or active subagent.
 - Production remains Vercel-backed and user-facing behavior has not been cut
@@ -111,7 +141,7 @@ The schema-owner repository is the sibling checkout:
   to that local snapshot as production parity evidence. Use the stable live
   Vercel boundary/pinned T0 evidence.
 
-## Current proven blocker
+## Historical blocker (resolved before the current live handoff)
 
 The guarded production operator passes these stages:
 
@@ -136,7 +166,7 @@ artifact therefore fails its own checksum even though the JSON was inserted.
 This is not a relational-data failure and has not affected users because Vercel
 is still authoritative.
 
-## Next implementation step
+## Historical next implementation step (completed)
 
 Apply one focused integrity repair in `pumbility_store.py`:
 
