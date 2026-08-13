@@ -609,7 +609,14 @@ class PumbilityArtifactStore:
             if job_row is None:
                 raise RuntimeError("The typed runtime job row is unavailable.")
             database_input = _read_database_input(connection, mix_key)
-            runtime_source_hash = _sha256(sanitize_snapshot(snapshot, mix=mix_key))
+            runtime_snapshot = sanitize_snapshot(snapshot, mix=mix_key)
+            # Relational reconstruction intentionally has no capture timestamp.
+            # Compare the immutable entity content while retaining every other
+            # canonical snapshot field in the source identity.
+            runtime_snapshot["generatedAtUtc"] = str(
+                database_input.snapshot.get("generatedAtUtc") or ""
+            )
+            runtime_source_hash = _sha256(runtime_snapshot)
             database_source_hash = _sha256(database_input.snapshot)
             if runtime_source_hash != database_source_hash:
                 raise RuntimeError(
