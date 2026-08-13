@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -15,9 +16,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from analysis_runtime import VercelPrivateBlobStore  # noqa: E402
 from phoenix2_sync import sanitize_snapshot  # noqa: E402
 from pumbility_store import (  # noqa: E402
+    CANONICAL_SNAPSHOT_WRITE_ENV,
     PumbilityArtifactIntegrityError,
     PumbilityArtifactStore,
+    SHADOW_STRICT_ENV,
     _assert_schema,
+    _enabled,
 )
 from scripts.backfill_pumbility_production import (  # noqa: E402
     EXPECTED_PROJECT_REF,
@@ -183,9 +187,20 @@ def _verify_artifacts(
     }
 
 
+def _assert_reconciliation_state(environment: Mapping[str, str]) -> str:
+    backend = str(environment.get("PUMBILITY_DATA_BACKEND", "vercel")).strip().casefold()
+    backend = backend or "vercel"
+    if backend not in {"vercel", "shadow"}:
+        raise RuntimeError("Production reconciliation requires Vercel-authoritative reads.")
+    if _enabled(environment.get(SHADOW_STRICT_ENV)):
+        raise RuntimeError("Production reconciliation requires fail-open shadow mode.")
+    if _enabled(environment.get(CANONICAL_SNAPSHOT_WRITE_ENV)):
+        raise RuntimeError("Production reconciliation requires canonical snapshot writes off.")
+    return backend
+
+
 def main() -> int:
-    if os.getenv("PUMBILITY_DATA_BACKEND", "vercel").casefold() != "vercel":
-        raise RuntimeError("Production reconciliation requires Vercel to remain authoritative.")
+    backend = _assert_reconciliation_state(os.environ)
     runtime_url = os.getenv("PUMBILITY_DATABASE_URL", "").strip()
     private_key = os.getenv("BLOB_READ_WRITE_TOKEN", "").encode("utf-8")
     if not runtime_url or len(private_key) < 32:
@@ -244,7 +259,7 @@ def main() -> int:
                     for mix, result in results.items()
                 },
                 "artifacts": artifact_counts,
-                "productionBackend": "vercel",
+                "productionBackend": backend,
             },
             sort_keys=True,
         )

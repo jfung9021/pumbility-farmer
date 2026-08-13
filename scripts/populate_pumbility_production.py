@@ -90,8 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _assert_flags_off(environment: Mapping[str, str]) -> None:
     backend = str(environment.get("PUMBILITY_DATA_BACKEND", "vercel")).strip().casefold()
-    if (backend or "vercel") != "vercel":
-        raise RuntimeError("Hosted population requires Vercel to remain authoritative.")
+    if (backend or "vercel") not in {"vercel", "shadow"}:
+        raise RuntimeError("Hosted population requires Vercel-authoritative reads.")
     if _enabled(environment.get(SHADOW_STRICT_ENV)):
         raise RuntimeError("Hosted population requires strict shadow mode to remain disabled.")
     if _enabled(environment.get(CANONICAL_SNAPSHOT_WRITE_ENV)):

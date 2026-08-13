@@ -41,7 +41,7 @@ def get_analysis(
                 )
             return RedirectResponse(url=mix_spec.archive_url or "/", status_code=307)
         if job_id and job_id.strip():
-            job = RuntimeJobStore().get(job_id.strip())
+            job = RuntimeJobStore(canary_domain="job-status").get(job_id.strip())
             if job is None:
                 return JSONResponse(
                     status_code=404,
@@ -53,7 +53,9 @@ def get_analysis(
                     content={"error": f"Analysis job not found for {mix_spec.label}."},
                 )
             return job
-        payload = read_latest_payload(PrivateBlobStore(), mix_spec)
+        payload = read_latest_payload(
+            PrivateBlobStore(canary_domain="analysis"), mix_spec
+        )
         if payload is None:
             return JSONResponse(
                 status_code=404,

@@ -168,16 +168,18 @@ scripts enforce this pattern.
    explicitly set to `vercel` and canonical writes disabled.
 2. Run the typed hosted analysis/model population path and prove exact or
    approved-tolerance parity with the frozen behavior contract.
-3. Run at least the planned shadow cycles against changing production data,
-   recording evidence for ingestion, analysis, recommendations, jobs, leases,
+3. Run the owner-approved single genuine scheduled shadow cycle, then an immediate supervised full
+   sync, against changing production data, recording evidence for ingestion, analysis, recommendations, jobs, leases,
    privacy, cache behavior, and publication atomicity.
 4. Execute the exhaustive API/browser/local regression checklist. Existing
    routes, payloads, timeouts, caching, filters, refresh behavior, privacy, and
    statistical output semantics must remain unchanged.
-5. Canary reads only after shadow acceptance; keep immediate Vercel rollback.
+5. Canary reads only after shadow acceptance, one domain for 15 minutes and at least 30 probes;
+   keep automatic per-read fallback and immediate Vercel rollback.
 6. Enable Supabase authoritative reads/writes only after every required
    checklist item has evidence.
-7. Keep the old Blob path available through the stabilization/rollback window.
+7. Actively monitor for two hours after cutover and keep the old Blob path available for the
+   14-day stabilization/rollback window.
 8. Set up and document the final local test environment for the owner, including
    the correct application URL. The FastAPI root at `http://localhost:3001/`
    returning `{"detail":"Not Found"}` is expected because no `/` route exists;

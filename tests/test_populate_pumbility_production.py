@@ -21,8 +21,9 @@ class HostedPopulationSafetyTests(unittest.TestCase):
         self.assertEqual(args.bootstrap_samples, 500)
         self.assertTrue(build_parser().parse_args(["--apply"]).apply)
 
-    def test_requires_vercel_authority_and_write_flags_off(self) -> None:
+    def test_requires_vercel_authoritative_reads_and_write_flags_off(self) -> None:
         _assert_flags_off({"PUMBILITY_DATA_BACKEND": "vercel"})
+        _assert_flags_off({"PUMBILITY_DATA_BACKEND": "shadow"})
         _assert_flags_off({"PUMBILITY_DATA_BACKEND": ""})
         for environment in (
             {"PUMBILITY_DATA_BACKEND": "supabase"},

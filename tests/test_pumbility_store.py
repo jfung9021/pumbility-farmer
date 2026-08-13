@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from pumbility_store import (
+    CanaryJobStore,
+    CanaryJsonStore,
     CURRENT_SNAPSHOT_RE,
     EXPECTED_PUMBILITY_MIGRATION,
     JOB_LEASE_SECONDS,
@@ -16,12 +18,16 @@ from pumbility_store import (
     PumbilityJobStore,
     ShadowJobStore,
     ShadowJsonStore,
+    SupabasePrimaryJsonStore,
     _ContinuousLeaseHeartbeat,
     _canonical_json_bytes,
     configured_backend,
+    configured_read_canaries,
+    drain_blob_mirror_outbox,
     require_loopback_database_url,
     select_job_store,
     select_json_store,
+    validate_rollout_configuration,
 )
 
 
@@ -32,6 +38,39 @@ class BackendConfigurationTests(unittest.TestCase):
     def test_rejects_unknown_backend(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "must be one of"):
             configured_backend({"PUMBILITY_DATA_BACKEND": "other"})
+
+    def test_read_canary_allowlist_rejects_unknown_domains(self) -> None:
+        self.assertEqual(
+            configured_read_canaries(
+                {"PUMBILITY_SUPABASE_READ_CANARY": "analysis, tier-list"}
+            ),
+            frozenset({"analysis", "tier-list"}),
+        )
+        with self.assertRaisesRegex(RuntimeError, "unsupported domains"):
+            configured_read_canaries(
+                {"PUMBILITY_SUPABASE_READ_CANARY": "analysis,typo"}
+            )
+
+    def test_supabase_authority_requires_all_rollback_controls(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "requires enabled rollback controls"):
+            validate_rollout_configuration({"PUMBILITY_DATA_BACKEND": "supabase"})
+        validate_rollout_configuration(
+            {
+                "PUMBILITY_DATA_BACKEND": "supabase",
+                "PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED": "true",
+                "PUMBILITY_BLOB_MIRROR_ENABLED": "true",
+                "PUMBILITY_BLOB_READ_FALLBACK_ENABLED": "true",
+            }
+        )
+
+    def test_pre_cutover_modes_reject_cutover_only_blob_flags(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "valid only"):
+            validate_rollout_configuration(
+                {
+                    "PUMBILITY_DATA_BACKEND": "shadow",
+                    "PUMBILITY_BLOB_READ_FALLBACK_ENABLED": "true",
+                }
+            )
 
     def test_local_target_guard_accepts_only_loopback(self) -> None:
         for hostname in ("127.0.0.1", "localhost", "[::1]"):
@@ -124,6 +163,108 @@ class ShadowStoreTests(unittest.TestCase):
 
         shadow.heartbeat.assert_called_once_with("job-1")
         self.assertNotIn("heartbeat", [call[0] for call in primary.method_calls])
+
+
+class ReadCanaryTests(unittest.TestCase):
+    def test_json_candidate_is_served_only_after_exact_equality(self) -> None:
+        authoritative = Mock()
+        candidate = Mock()
+        authoritative.get_json.return_value = {"value": 1}
+        candidate_value = {"value": 1}
+        candidate.get_json.return_value = candidate_value
+        store = CanaryJsonStore(authoritative, candidate, domain="analysis")
+
+        self.assertIs(store.get_json("private-key"), candidate_value)
+
+        candidate.get_json.return_value = {"value": 2}
+        authoritative_value = {"value": 1}
+        authoritative.get_json.return_value = authoritative_value
+        self.assertIs(store.get_json("private-key"), authoritative_value)
+
+    def test_json_candidate_failure_falls_back_without_changing_writes(self) -> None:
+        authoritative = Mock()
+        candidate = Mock()
+        authoritative.get_json.return_value = {"source": "vercel"}
+        candidate.get_json.side_effect = RuntimeError("candidate unavailable")
+        store = CanaryJsonStore(authoritative, candidate, domain="tier-list")
+
+        self.assertEqual(store.get_json("private-key"), {"source": "vercel"})
+        store.put_json("private-key", {"value": 1})
+        authoritative.put_json.assert_called_once_with("private-key", {"value": 1})
+        candidate.put_json.assert_not_called()
+
+    def test_comparison_failure_is_also_fail_open(self) -> None:
+        authoritative = Mock()
+        candidate = Mock()
+        authoritative_value = {"value": object()}
+        authoritative.get_json.return_value = authoritative_value
+        candidate.get_json.return_value = {"value": object()}
+
+        store = CanaryJsonStore(authoritative, candidate, domain="analysis")
+
+        self.assertIs(store.get_json("private-key"), authoritative_value)
+
+    def test_job_candidate_is_served_only_after_exact_equality(self) -> None:
+        authoritative = Mock()
+        candidate = Mock()
+        candidate_value = {"id": "private-id", "status": "completed"}
+        authoritative.get.return_value = dict(candidate_value)
+        candidate.get.return_value = candidate_value
+
+        store = CanaryJobStore(authoritative, candidate, domain="job-status")
+
+        self.assertIs(store.get("private-id"), candidate_value)
+
+
+class SupabasePrimaryStoreTests(unittest.TestCase):
+    def test_missing_or_failed_primary_read_uses_enabled_legacy_fallback(self) -> None:
+        primary = Mock()
+        legacy = Mock()
+        legacy.get_json.return_value = {"source": "vercel"}
+        store = SupabasePrimaryJsonStore(
+            primary, legacy, mirror_enabled=False, fallback_enabled=True
+        )
+
+        primary.get_json.return_value = None
+        self.assertEqual(store.get_json("private-key"), {"source": "vercel"})
+        primary.get_json.side_effect = RuntimeError("primary unavailable")
+        self.assertEqual(store.get_json("private-key"), {"source": "vercel"})
+
+    def test_write_mirror_is_independently_gated_and_fail_open(self) -> None:
+        primary = Mock()
+        legacy = Mock()
+        legacy.put_json.side_effect = RuntimeError("mirror unavailable")
+        primary.retry_blob_mirror_event.side_effect = RuntimeError("retry unavailable")
+        store = SupabasePrimaryJsonStore(
+            primary, legacy, mirror_enabled=True, fallback_enabled=False
+        )
+
+        store.put_json("private-key", {"value": 1})
+
+        primary.put_json.assert_called_once_with("private-key", {"value": 1})
+        legacy.put_json.assert_called_once_with("private-key", {"value": 1})
+        primary.enqueue_blob_mirror_event.assert_called_once_with(
+            "put_json", "private-key", content_type=None
+        )
+        primary.retry_blob_mirror_event.assert_called_once()
+
+    def test_outbox_replay_reads_payload_by_reference_and_completes(self) -> None:
+        primary = Mock()
+        legacy = Mock()
+        primary.claim_blob_mirror_events.return_value = [
+            (
+                "event-1",
+                {"operation": "put_json", "objectKeys": ["private-key"]},
+            )
+        ]
+        primary.get_json.return_value = {"private": "payload"}
+
+        self.assertEqual(drain_blob_mirror_outbox(primary, legacy), (1, 0))
+
+        legacy.put_json.assert_called_once_with(
+            "private-key", {"private": "payload"}
+        )
+        primary.complete_blob_mirror_event.assert_called_once_with("event-1")
 
 
 class ContinuousLeaseHeartbeatTests(unittest.TestCase):
