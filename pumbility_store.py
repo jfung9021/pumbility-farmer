@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,9 +30,21 @@ SERVICE_KEY_ENV = "PUMBILITY_SUPABASE_SERVICE_ROLE_KEY"
 STORAGE_BUCKET_ENV = "PUMBILITY_STORAGE_BUCKET"
 SHADOW_STRICT_ENV = "PUMBILITY_SHADOW_STRICT"
 CANONICAL_SNAPSHOT_WRITE_ENV = "PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED"
+READ_CANARY_ENV = "PUMBILITY_SUPABASE_READ_CANARY"
+BLOB_MIRROR_ENV = "PUMBILITY_BLOB_MIRROR_ENABLED"
+BLOB_READ_FALLBACK_ENV = "PUMBILITY_BLOB_READ_FALLBACK_ENABLED"
 DEFAULT_BUCKET = "pumbility-artifacts"
 EXPECTED_PUMBILITY_MIGRATION = "20260813010000"
 VALID_BACKENDS = frozenset({"vercel", "shadow", "supabase"})
+VALID_READ_CANARIES = frozenset(
+    {
+        "analysis",
+        "tier-list",
+        "recommendation-players",
+        "recommendation-player",
+        "job-status",
+    }
+)
 CURRENT_SNAPSHOT_RE = re.compile(r"^analysis/private/(phoenix1|phoenix2)-current\.json$")
 FROZEN_PHOENIX1_SNAPSHOT_KEY = "analysis/private/phoenix1.json"
 JOB_LEASE_SECONDS = 800
@@ -50,6 +64,101 @@ def configured_backend(
         choices = ", ".join(sorted(VALID_BACKENDS))
         raise RuntimeError(f"{BACKEND_ENV} must be one of: {choices}.")
     return backend
+
+
+def configured_read_canaries(
+    environment: Mapping[str, str] | None = None,
+) -> frozenset[str]:
+    """Parse the route-domain allowlist and reject configuration typos."""
+    env = environment if environment is not None else os.environ
+    configured = {
+        item.strip().casefold()
+        for item in str(env.get(READ_CANARY_ENV, "")).split(",")
+        if item.strip()
+    }
+    unknown = configured - VALID_READ_CANARIES
+    if unknown:
+        choices = ", ".join(sorted(VALID_READ_CANARIES))
+        raise RuntimeError(
+            f"{READ_CANARY_ENV} contains unsupported domains; expected only: {choices}."
+        )
+    return frozenset(configured)
+
+
+def validate_rollout_configuration(
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    """Fail application startup on unsafe or internally inconsistent flag sets."""
+    env = environment if environment is not None else os.environ
+    backend = configured_backend(env)
+    canaries = configured_read_canaries(env)
+    canonical_writes = _enabled(env.get(CANONICAL_SNAPSHOT_WRITE_ENV))
+    blob_mirror = _enabled(env.get(BLOB_MIRROR_ENV))
+    blob_fallback = _enabled(env.get(BLOB_READ_FALLBACK_ENV))
+
+    if backend == "supabase":
+        if canaries:
+            raise RuntimeError(
+                f"{READ_CANARY_ENV} must be empty when {BACKEND_ENV}=supabase."
+            )
+        required = [
+            name
+            for name, enabled in (
+                (CANONICAL_SNAPSHOT_WRITE_ENV, canonical_writes),
+                (BLOB_MIRROR_ENV, blob_mirror),
+                (BLOB_READ_FALLBACK_ENV, blob_fallback),
+            )
+            if not enabled
+        ]
+        if required:
+            raise RuntimeError(
+                "Supabase authority requires enabled rollback controls: "
+                + ", ".join(required)
+                + "."
+            )
+    elif blob_mirror or blob_fallback:
+        raise RuntimeError(
+            f"{BLOB_MIRROR_ENV} and {BLOB_READ_FALLBACK_ENV} are valid only when "
+            f"{BACKEND_ENV}=supabase."
+        )
+    if backend == "vercel" and canonical_writes:
+        raise RuntimeError(
+            f"{CANONICAL_SNAPSHOT_WRITE_ENV} cannot be enabled while Vercel-only mode is active."
+        )
+
+
+def _read_canary_enabled(domain: str | None, configured: frozenset[str]) -> bool:
+    if domain is None:
+        return False
+    normalized = domain.strip().casefold()
+    if normalized not in VALID_READ_CANARIES:
+        raise RuntimeError(f"Unsupported Pumbility read-canary domain: {domain!r}.")
+    return normalized in configured
+
+
+def _safe_rollout_event(
+    *,
+    operation: str,
+    domain: str,
+    outcome: str,
+    authoritative_ms: float,
+    candidate_ms: float | None = None,
+) -> None:
+    """Emit aggregate-safe evidence without artifact keys, digests, or private IDs."""
+    logging.getLogger("pumbility.rollout").info(
+        "pumbility_store operation=%s domain=%s outcome=%s authoritative_ms=%.3f candidate_ms=%s",
+        operation,
+        domain,
+        outcome,
+        authoritative_ms,
+        "none" if candidate_ms is None else f"{candidate_ms:.3f}",
+    )
+
+
+def _equivalent(left: object, right: object) -> bool:
+    if isinstance(left, Mapping) and isinstance(right, Mapping):
+        return _canonical_json_bytes(left) == _canonical_json_bytes(right)
+    return left == right
 
 
 def require_loopback_database_url(database_url: str) -> None:
@@ -453,6 +562,100 @@ class PumbilityArtifactStore:
             rows = cursor.fetchall()
         return [StoredObject(str(row[0]), _parse_timestamp(row[1])) for row in rows]
 
+    def enqueue_blob_mirror_event(
+        self,
+        operation: str,
+        pathnames: str | Sequence[str],
+        *,
+        content_type: str | None = None,
+    ) -> str:
+        """Persist a reference-only mirror intent; artifact contents stay at rest."""
+        from psycopg.types.json import Jsonb
+
+        object_keys = [pathnames] if isinstance(pathnames, str) else list(pathnames)
+        if not object_keys:
+            raise ValueError("A Blob mirror event requires at least one object reference.")
+        event_key = f"blob-mirror:{uuid.uuid4().hex}"
+        payload: dict[str, Any] = {
+            "operation": operation,
+            "objectKeys": [str(value) for value in object_keys],
+        }
+        if content_type:
+            payload["contentType"] = content_type
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute(
+                """
+                insert into pumbility.outbox_events (
+                    event_key, aggregate_type, aggregate_key, event_type, payload
+                ) values (%s, 'artifact', 'vercel-rollback-mirror', 'blob_mirror', %s)
+                """,
+                (event_key, Jsonb(payload)),
+            )
+        return event_key
+
+    def complete_blob_mirror_event(self, event_key: str) -> None:
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute(
+                """
+                update pumbility.outbox_events
+                set completed_at = now(), claimed_at = null, safe_error = null
+                where event_key = %s and completed_at is null
+                """,
+                (event_key,),
+            )
+
+    def retry_blob_mirror_event(self, event_key: str) -> None:
+        from psycopg.types.json import Jsonb
+
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute(
+                """
+                update pumbility.outbox_events
+                set claimed_at = null,
+                    available_at = now() + interval '1 minute',
+                    safe_error = %s
+                where event_key = %s and completed_at is null
+                """,
+                (Jsonb({"message": "The Vercel rollback mirror attempt failed."}), event_key),
+            )
+
+    def claim_blob_mirror_events(self, *, limit: int = 25) -> list[tuple[str, dict[str, Any]]]:
+        """Lease pending mirror intents for idempotent operator replay."""
+        bounded_limit = max(1, min(int(limit), 100))
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute(
+                """
+                with pending as (
+                    select id
+                    from pumbility.outbox_events
+                    where event_type = 'blob_mirror'
+                      and completed_at is null
+                      and available_at <= now()
+                      and (claimed_at is null or claimed_at < now() - interval '15 minutes')
+                    order by created_at
+                    for update skip locked
+                    limit %s
+                )
+                update pumbility.outbox_events event
+                set claimed_at = now(), attempt = event.attempt + 1
+                from pending
+                where event.id = pending.id
+                returning event.event_key, event.payload
+                """,
+                (bounded_limit,),
+            )
+            rows = cursor.fetchall()
+        result: list[tuple[str, dict[str, Any]]] = []
+        for event_key, raw_payload in rows:
+            value = raw_payload if not isinstance(raw_payload, str) else json.loads(raw_payload)
+            if isinstance(value, Mapping):
+                result.append((str(event_key), dict(value)))
+        return result
+
 
 class PumbilityJobStore:
     """Compatibility adapter for current job payloads and active/latest pointers."""
@@ -809,25 +1012,413 @@ class ShadowJobStore:
                 raise
 
 
-def select_json_store(legacy_factory: Callable[[], Any]) -> Any:
+class CanaryJsonStore:
+    """Dual-read one public domain and serve the candidate only after equality."""
+
+    def __init__(self, authoritative: Any, candidate: Any, *, domain: str) -> None:
+        self.authoritative = authoritative
+        self.candidate = candidate
+        self.domain = domain
+
+    def _read(self, method: str, *args: Any) -> Any:
+        started = time.perf_counter()
+        authoritative = getattr(self.authoritative, method)(*args)
+        authoritative_ms = (time.perf_counter() - started) * 1000
+        candidate_started = time.perf_counter()
+        try:
+            candidate = getattr(self.candidate, method)(*args)
+        except Exception:
+            candidate_ms = (time.perf_counter() - candidate_started) * 1000
+            _safe_rollout_event(
+                operation=method,
+                domain=self.domain,
+                outcome="candidate-error-fallback",
+                authoritative_ms=authoritative_ms,
+                candidate_ms=candidate_ms,
+            )
+            return authoritative
+        candidate_ms = (time.perf_counter() - candidate_started) * 1000
+        try:
+            matches = _equivalent(authoritative, candidate)
+        except Exception:
+            _safe_rollout_event(
+                operation=method,
+                domain=self.domain,
+                outcome="comparison-error-fallback",
+                authoritative_ms=authoritative_ms,
+                candidate_ms=candidate_ms,
+            )
+            return authoritative
+        if not matches:
+            _safe_rollout_event(
+                operation=method,
+                domain=self.domain,
+                outcome="mismatch-fallback",
+                authoritative_ms=authoritative_ms,
+                candidate_ms=candidate_ms,
+            )
+            return authoritative
+        _safe_rollout_event(
+            operation=method,
+            domain=self.domain,
+            outcome="candidate-served",
+            authoritative_ms=authoritative_ms,
+            candidate_ms=candidate_ms,
+        )
+        return candidate
+
+    def get_json(self, pathname: str) -> dict[str, Any] | None:
+        return self._read("get_json", pathname)
+
+    def get_bytes(self, pathname: str) -> bytes | None:
+        return self._read("get_bytes", pathname)
+
+    def put_json(self, pathname: str, payload: Mapping[str, Any]) -> None:
+        self.authoritative.put_json(pathname, payload)
+
+    def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:
+        writer = getattr(self.authoritative, "put_json_bundle", None)
+        if writer is not None:
+            writer(payloads)
+            return
+        for pathname, payload in payloads.items():
+            self.authoritative.put_json(pathname, payload)
+
+    def put_bytes(self, pathname: str, payload: bytes, *, content_type: str) -> None:
+        self.authoritative.put_bytes(pathname, payload, content_type=content_type)
+
+    def delete(self, pathnames: str | Sequence[str]) -> None:
+        self.authoritative.delete(pathnames)
+
+    def list(self, prefix: str) -> list[Any]:
+        return self.authoritative.list(prefix)
+
+
+class CanaryJobStore:
+    """Dual-read job payloads while leaving all mutations on the authority."""
+
+    def __init__(self, authoritative: Any, candidate: Any, *, domain: str) -> None:
+        self.authoritative = authoritative
+        self.candidate = candidate
+        self.domain = domain
+
+    def get(self, job_id: str) -> dict[str, Any] | None:
+        started = time.perf_counter()
+        authoritative = self.authoritative.get(job_id)
+        authoritative_ms = (time.perf_counter() - started) * 1000
+        candidate_started = time.perf_counter()
+        try:
+            candidate = self.candidate.get(job_id)
+        except Exception:
+            candidate_ms = (time.perf_counter() - candidate_started) * 1000
+            _safe_rollout_event(
+                operation="get-job",
+                domain=self.domain,
+                outcome="candidate-error-fallback",
+                authoritative_ms=authoritative_ms,
+                candidate_ms=candidate_ms,
+            )
+            return authoritative
+        candidate_ms = (time.perf_counter() - candidate_started) * 1000
+        try:
+            matches = _equivalent(authoritative, candidate)
+        except Exception:
+            _safe_rollout_event(
+                operation="get-job",
+                domain=self.domain,
+                outcome="comparison-error-fallback",
+                authoritative_ms=authoritative_ms,
+                candidate_ms=candidate_ms,
+            )
+            return authoritative
+        if not matches:
+            _safe_rollout_event(
+                operation="get-job",
+                domain=self.domain,
+                outcome="mismatch-fallback",
+                authoritative_ms=authoritative_ms,
+                candidate_ms=candidate_ms,
+            )
+            return authoritative
+        _safe_rollout_event(
+            operation="get-job",
+            domain=self.domain,
+            outcome="candidate-served",
+            authoritative_ms=authoritative_ms,
+            candidate_ms=candidate_ms,
+        )
+        return candidate
+
+    def save(self, job: Mapping[str, Any]) -> dict[str, Any]:
+        return self.authoritative.save(job)
+
+    def start_lease_heartbeat(self, job_id: str) -> Any:
+        return self.authoritative.start_lease_heartbeat(job_id)
+
+    def active_job_id(self) -> str | None:
+        return self.authoritative.active_job_id()
+
+    def set_active_job_id(self, job_id: str | None) -> None:
+        self.authoritative.set_active_job_id(job_id)
+
+    def latest_job_id(self, mix: Any = "phoenix2") -> str | None:
+        return self.authoritative.latest_job_id(mix)
+
+    def set_latest_job_id(self, job_id: str, mix: Any = "phoenix2") -> None:
+        self.authoritative.set_latest_job_id(job_id, mix)
+
+
+class SupabasePrimaryJsonStore:
+    """Supabase-primary store with independently gated Vercel mirror and fallback."""
+
+    def __init__(
+        self,
+        primary: Any,
+        legacy: Any,
+        *,
+        mirror_enabled: bool,
+        fallback_enabled: bool,
+    ) -> None:
+        self.primary = primary
+        self.legacy = legacy
+        self.mirror_enabled = mirror_enabled
+        self.fallback_enabled = fallback_enabled
+
+    def _read(self, method: str, *args: Any) -> Any:
+        started = time.perf_counter()
+        try:
+            value = getattr(self.primary, method)(*args)
+            if value is not None or not self.fallback_enabled:
+                return value
+            outcome = "primary-missing-fallback"
+        except Exception:
+            if not self.fallback_enabled:
+                raise
+            outcome = "primary-error-fallback"
+        primary_ms = (time.perf_counter() - started) * 1000
+        fallback_started = time.perf_counter()
+        value = getattr(self.legacy, method)(*args)
+        fallback_ms = (time.perf_counter() - fallback_started) * 1000
+        _safe_rollout_event(
+            operation=method,
+            domain="supabase-primary",
+            outcome=outcome,
+            authoritative_ms=primary_ms,
+            candidate_ms=fallback_ms,
+        )
+        return value
+
+    def _mirror(
+        self,
+        method: str,
+        *args: Any,
+        event_paths: str | Sequence[str],
+        event_content_type: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if not self.mirror_enabled:
+            return
+        event_key = self.primary.enqueue_blob_mirror_event(
+            method, event_paths, content_type=event_content_type
+        )
+        started = time.perf_counter()
+        try:
+            getattr(self.legacy, method)(*args, **kwargs)
+        except Exception:
+            try:
+                self.primary.retry_blob_mirror_event(event_key)
+            except Exception:
+                _safe_rollout_event(
+                    operation=method,
+                    domain="vercel-mirror",
+                    outcome="outbox-retry-error",
+                    authoritative_ms=0.0,
+                    candidate_ms=(time.perf_counter() - started) * 1000,
+                )
+            _safe_rollout_event(
+                operation=method,
+                domain="vercel-mirror",
+                outcome="mirror-error",
+                authoritative_ms=0.0,
+                candidate_ms=(time.perf_counter() - started) * 1000,
+            )
+            return
+        try:
+            self.primary.complete_blob_mirror_event(event_key)
+        except Exception:
+            _safe_rollout_event(
+                operation=method,
+                domain="vercel-mirror",
+                outcome="outbox-completion-error",
+                authoritative_ms=0.0,
+                candidate_ms=(time.perf_counter() - started) * 1000,
+            )
+            return
+        _safe_rollout_event(
+            operation=method,
+            domain="vercel-mirror",
+            outcome="mirror-complete",
+            authoritative_ms=0.0,
+            candidate_ms=(time.perf_counter() - started) * 1000,
+        )
+
+    def get_json(self, pathname: str) -> dict[str, Any] | None:
+        return self._read("get_json", pathname)
+
+    def get_bytes(self, pathname: str) -> bytes | None:
+        return self._read("get_bytes", pathname)
+
+    def put_json(self, pathname: str, payload: Mapping[str, Any]) -> None:
+        self.primary.put_json(pathname, payload)
+        self._mirror("put_json", pathname, payload, event_paths=pathname)
+
+    def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:
+        self.primary.put_json_bundle(payloads)
+        legacy_bundle = getattr(self.legacy, "put_json_bundle", None)
+        if legacy_bundle is not None:
+            self._mirror(
+                "put_json_bundle", payloads, event_paths=list(payloads.keys())
+            )
+            return
+        for pathname, payload in payloads.items():
+            self._mirror("put_json", pathname, payload, event_paths=pathname)
+
+    def put_bytes(self, pathname: str, payload: bytes, *, content_type: str) -> None:
+        self.primary.put_bytes(pathname, payload, content_type=content_type)
+        self._mirror(
+            "put_bytes",
+            pathname,
+            payload,
+            event_content_type=content_type,
+            content_type=content_type,
+            event_paths=pathname,
+        )
+
+    def delete(self, pathnames: str | Sequence[str]) -> None:
+        self.primary.delete(pathnames)
+        self._mirror("delete", pathnames, event_paths=pathnames)
+
+    def list(self, prefix: str) -> list[Any]:
+        return self._read("list", prefix)
+
+
+def drain_blob_mirror_outbox(
+    primary: PumbilityArtifactStore, legacy: Any, *, limit: int = 25
+) -> tuple[int, int]:
+    """Replay reference-only mirror events. Returns ``(completed, failed)``."""
+    completed = 0
+    failed = 0
+    for event_key, payload in primary.claim_blob_mirror_events(limit=limit):
+        operation = str(payload.get("operation") or "")
+        raw_keys = payload.get("objectKeys")
+        object_keys = (
+            [str(value) for value in raw_keys]
+            if isinstance(raw_keys, list) and all(isinstance(value, str) for value in raw_keys)
+            else []
+        )
+        try:
+            if not object_keys:
+                raise ValueError("The Blob mirror event has no object references.")
+            if operation == "put_json":
+                for pathname in object_keys:
+                    value = primary.get_json(pathname)
+                    if value is None:
+                        raise RuntimeError("A mirrored JSON artifact is unavailable.")
+                    legacy.put_json(pathname, value)
+            elif operation == "put_json_bundle":
+                values: dict[str, Mapping[str, Any]] = {}
+                for pathname in object_keys:
+                    value = primary.get_json(pathname)
+                    if value is None:
+                        raise RuntimeError("A mirrored JSON artifact bundle is incomplete.")
+                    values[pathname] = value
+                bundle_writer = getattr(legacy, "put_json_bundle", None)
+                if bundle_writer is not None:
+                    bundle_writer(values)
+                else:
+                    for pathname, value in values.items():
+                        legacy.put_json(pathname, value)
+            elif operation == "put_bytes":
+                content_type = str(payload.get("contentType") or "application/octet-stream")
+                for pathname in object_keys:
+                    value = primary.get_bytes(pathname)
+                    if value is None:
+                        raise RuntimeError("A mirrored binary artifact is unavailable.")
+                    legacy.put_bytes(pathname, value, content_type=content_type)
+            elif operation == "delete":
+                legacy.delete(object_keys)
+            else:
+                raise ValueError("The Blob mirror event operation is unsupported.")
+            primary.complete_blob_mirror_event(event_key)
+            completed += 1
+        except Exception:
+            primary.retry_blob_mirror_event(event_key)
+            failed += 1
+    return completed, failed
+
+
+def select_json_store(
+    legacy_factory: Callable[[], Any], *, canary_domain: str | None = None
+) -> Any:
     backend = configured_backend()
+    canaries = configured_read_canaries()
+    canary_enabled = _read_canary_enabled(canary_domain, canaries)
     if backend == "vercel":
-        return legacy_factory()
+        legacy = legacy_factory()
+        if not canary_enabled:
+            return legacy
+        return CanaryJsonStore(legacy, PumbilityArtifactStore(), domain=str(canary_domain))
     supabase = PumbilityArtifactStore()
     if backend == "supabase":
-        return supabase
+        if canaries:
+            raise RuntimeError(
+                f"{READ_CANARY_ENV} must be empty when {BACKEND_ENV}=supabase."
+            )
+        mirror_enabled = _enabled(os.getenv(BLOB_MIRROR_ENV))
+        fallback_enabled = _enabled(os.getenv(BLOB_READ_FALLBACK_ENV))
+        if not mirror_enabled and not fallback_enabled:
+            return supabase
+        return SupabasePrimaryJsonStore(
+            supabase,
+            legacy_factory(),
+            mirror_enabled=mirror_enabled,
+            fallback_enabled=fallback_enabled,
+        )
+    legacy = legacy_factory()
+    primary = (
+        CanaryJsonStore(legacy, supabase, domain=str(canary_domain))
+        if canary_enabled
+        else legacy
+    )
     return ShadowJsonStore(
-        legacy_factory(), supabase, strict=_enabled(os.getenv(SHADOW_STRICT_ENV))
+        primary, supabase, strict=_enabled(os.getenv(SHADOW_STRICT_ENV))
     )
 
 
-def select_job_store(legacy_factory: Callable[[], Any]) -> Any:
+def select_job_store(
+    legacy_factory: Callable[[], Any], *, canary_domain: str | None = None
+) -> Any:
     backend = configured_backend()
+    canaries = configured_read_canaries()
+    canary_enabled = _read_canary_enabled(canary_domain, canaries)
     if backend == "vercel":
-        return legacy_factory()
+        legacy = legacy_factory()
+        if not canary_enabled:
+            return legacy
+        return CanaryJobStore(legacy, PumbilityJobStore(), domain=str(canary_domain))
     supabase = PumbilityJobStore()
     if backend == "supabase":
+        if canaries:
+            raise RuntimeError(
+                f"{READ_CANARY_ENV} must be empty when {BACKEND_ENV}=supabase."
+            )
         return supabase
+    legacy = legacy_factory()
+    primary = (
+        CanaryJobStore(legacy, supabase, domain=str(canary_domain))
+        if canary_enabled
+        else legacy
+    )
     return ShadowJobStore(
-        legacy_factory(), supabase, strict=_enabled(os.getenv(SHADOW_STRICT_ENV))
+        primary, supabase, strict=_enabled(os.getenv(SHADOW_STRICT_ENV))
     )

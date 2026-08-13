@@ -219,10 +219,14 @@ class PrivateBlobStore:
     this migration transparent to every current route, worker, and test seam.
     """
 
-    def __new__(cls, token: str | None = None) -> JsonBlobStore:
+    def __new__(
+        cls, token: str | None = None, *, canary_domain: str | None = None
+    ) -> JsonBlobStore:
         from pumbility_store import select_json_store
 
-        return select_json_store(lambda: VercelPrivateBlobStore(token=token))
+        return select_json_store(
+            lambda: VercelPrivateBlobStore(token=token), canary_domain=canary_domain
+        )
 
 
 class MemoryBlobStore:
@@ -359,10 +363,10 @@ class VercelRuntimeJobStore:
 class RuntimeJobStore:
     """Select Vercel Runtime Cache, Supabase, or legacy-primary shadow jobs."""
 
-    def __new__(cls) -> JobStore:
+    def __new__(cls, *, canary_domain: str | None = None) -> JobStore:
         from pumbility_store import select_job_store
 
-        return select_job_store(VercelRuntimeJobStore)
+        return select_job_store(VercelRuntimeJobStore, canary_domain=canary_domain)
 
 
 class MemoryJobStore:

@@ -80,13 +80,62 @@ The copied source NPZ remains the stored artifact. No publication pointer or rol
 2. Deploy the adapter with `PUMBILITY_DATA_BACKEND=vercel`, canonical snapshot writes disabled,
    strict shadow disabled, and selected-player refresh behavior unchanged.
 3. Enable fail-open `shadow` writes only after database credentials and private Storage probes pass.
-4. Complete two daily shadow generations and one full-sync parity run, including all-player analysis,
+4. Complete one genuine scheduled shadow generation and one full-sync parity run, including all-player analysis,
    recommendations, API contracts, privacy, concurrency, and performance checks.
-5. Canary Supabase reads while writes continue to mirror. Any mismatch returns reads to Vercel.
+5. Canary Supabase reads one domain at a time while writes continue to mirror. Any mismatch or
+   candidate error serves the Vercel value automatically.
 6. Set `PUMBILITY_DATA_BACKEND=supabase` only after every acceptance item has evidence and approval.
 
 At every stage, the immediate rollback is a server-side backend flag change to `vercel`. Do not drop
 the schema or delete hosted data during the acceptance window.
+
+The owner approved one scheduled production cycle as the changing-data shadow gate on 2026-08-14
+JST; no multi-day soak is required. This variance does not waive reconciliation, full-sync,
+all-player parity, privacy, regression, capacity, or rollback evidence. Run the full sync immediately
+after the scheduled cycle in the same supervised low-traffic window.
+
+## Read canaries and cutover controls
+
+`PUMBILITY_SUPABASE_READ_CANARY` is a comma-separated, fail-closed allowlist. The only accepted
+domains are `analysis`, `tier-list`, `recommendation-players`, `recommendation-player`, and
+`job-status`. Unknown values fail application startup. Run them in that order, one at a time, for
+15 minutes and at least 30 successful probes per domain. Each domain must have zero candidate
+errors, fallback reads, or unexplained mismatches; endpoint p95 may be no more than 10% above the
+Vercel baseline and p99 no more than 20% above it. The canary reads both stores and serves Supabase
+only when the values compare exactly; otherwise it serves Vercel and emits aggregate-safe telemetry.
+
+The final switch is one configuration set:
+
+```text
+PUMBILITY_DATA_BACKEND=supabase
+PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED=true
+PUMBILITY_BLOB_MIRROR_ENABLED=true
+PUMBILITY_BLOB_READ_FALLBACK_ENABLED=true
+PUMBILITY_SUPABASE_READ_CANARY=
+```
+
+Application startup rejects a partial Supabase-authority flag set. Supabase-primary mutations create
+reference-only `blob_mirror` outbox events and synchronously mirror to Vercel. If delivery fails, use
+the secured environment injection and explicit confirmation to replay the idempotent event; the
+command prints counts only, never artifact references or contents:
+
+```powershell
+vercel env run -e production -- `
+  .\.venv\Scripts\python.exe .\scripts\drain_pumbility_blob_outbox.py --apply
+```
+
+Set the process-only `PUMBILITY_BLOB_OUTBOX_CONFIRMATION` value to
+`DRAIN PUMBILITY BLOB OUTBOX`. Keep the Blob mirror and read fallback enabled for 14 days. After
+cutover, actively watch errors, mismatches, fallback use, latency, job health, and capacity for two
+hours. Any gate failure uses this rollback set immediately:
+
+```text
+PUMBILITY_DATA_BACKEND=vercel
+PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED=false
+PUMBILITY_BLOB_MIRROR_ENABLED=false
+PUMBILITY_BLOB_READ_FALLBACK_ENABLED=false
+PUMBILITY_SUPABASE_READ_CANARY=
+```
 
 Current safe stage on 2026-08-14 JST: the merged production deployment is running
 `PUMBILITY_DATA_BACKEND=shadow` in fail-open mode, with `PUMBILITY_SHADOW_STRICT=false` and
@@ -96,5 +145,5 @@ regression evidence completed while reads remained Vercel-authoritative and befo
 or canonical-write flag. The next genuine shadow write must come from the scheduled `0 6 * * *` UTC
 Phoenix 2 job; do not substitute a local worker or claim a shadow cycle before the production
 scheduler and its post-run reconciliation have evidence. Supabase reads, strict shadowing, and
-canonical snapshot writes remain gated behind the two daily cycles, full sync, all-player parity,
-operations checks, and explicit approval above.
+canonical snapshot writes remain gated behind that scheduled cycle, the immediate full sync,
+all-player parity, operations checks, and explicit approval above.

@@ -38,8 +38,10 @@ NO_STORE_CACHE_CONTROL = "no-store"
 PLAYER_JOB_STALE_AFTER = timedelta(seconds=30)
 
 
-def _read_index() -> dict | None:
-    return PrivateBlobStore().get_json(recommendation_blob_path())
+def _read_index(*, canary_domain: str | None = None) -> dict | None:
+    return PrivateBlobStore(canary_domain=canary_domain).get_json(
+        recommendation_blob_path()
+    )
 
 
 def _player_eligibility(player: Mapping) -> dict[str, bool]:
@@ -97,7 +99,7 @@ def _enqueue_player_refresh(job_id: str) -> None:
 @router.get("/api/recommendations/players")
 def get_recommendation_players():
     try:
-        payload = _read_index()
+        payload = _read_index(canary_domain="recommendation-players")
         if payload is None:
             return JSONResponse(
                 status_code=404,
@@ -151,13 +153,13 @@ def get_player_recommendations(
             content={"error": "A playerKey is required."},
         )
     try:
-        payload = _read_index()
+        payload = _read_index(canary_domain="recommendation-player")
         if payload is None:
             return JSONResponse(
                 status_code=404,
                 content={"error": "Recommendations have not been generated yet."},
             )
-        store = PrivateBlobStore()
+        store = PrivateBlobStore(canary_domain="recommendation-player")
         if int(payload.get("storageSchemaVersion") or 0) >= 3:
             if find_player_metadata(payload, normalized_key) is None:
                 player = None
@@ -347,7 +349,7 @@ def get_player_recommendation_refresh(
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
     try:
-        jobs = RuntimeJobStore()
+        jobs = RuntimeJobStore(canary_domain="job-status")
         job = jobs.get(normalized_id)
         if job is None or job.get("kind") != "player-recommendation-refresh":
             return JSONResponse(

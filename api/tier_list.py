@@ -17,7 +17,9 @@ router = APIRouter()
 @router.get("/api/tier-list")
 def get_combined_tier_list():
     try:
-        payload = PrivateBlobStore().get_json(combined_tier_blob_path())
+        payload = PrivateBlobStore(canary_domain="tier-list").get_json(
+            combined_tier_blob_path()
+        )
         if payload is None:
             return JSONResponse(
                 status_code=404,

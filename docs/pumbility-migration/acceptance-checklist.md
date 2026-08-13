@@ -167,7 +167,7 @@ Every item requires an owner, UTC date, result, evidence reference, and approved
 - [ ] Stale-generation behavior matches. Evidence:
 - [ ] Failed refresh preserves the previous cache. Evidence:
 - [ ] Rollback marks newer player results stale exactly as before. Evidence:
-- [ ] All-player parity, not sampling, passes for two daily runs and one full sync. Evidence:
+- [ ] All-player parity, not sampling, passes for the owner-approved single scheduled run and one full sync. Evidence:
 
 ## Phase 5/6: API and frontend regression
 
