@@ -23,6 +23,7 @@ from recommendation_refresh import (  # noqa: E402
     find_player_metadata,
     refresh_player_recommendations,
 )
+from scripts.reconcile_pumbility_supabase import _typed_score_payload  # noqa: E402
 
 
 class LocalDatabaseScoreClient:
@@ -45,7 +46,9 @@ class LocalDatabaseScoreClient:
                 _assert_schema(cursor)
                 cursor.execute(
                     """
-                    select sr.payload
+                    select p.upstream_player_id, c.upstream_chart_id, sr.pumbility,
+                           sr.score, sr.letter_grade, sr.plate, sr.recorded_at_raw,
+                           sr.is_broken
                     from pumbility.score_revisions sr
                     join pumbility.players p on p.id = sr.player_id
                     join pumbility.mixes m on m.id = sr.mix_id
@@ -57,7 +60,7 @@ class LocalDatabaseScoreClient:
                     """,
                     (self.player_id,),
                 )
-                return [dict(row[0]) for row in cursor.fetchall()]
+                return [_typed_score_payload(row) for row in cursor.fetchall()]
 
 
 def build_parser() -> argparse.ArgumentParser:

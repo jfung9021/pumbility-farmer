@@ -486,7 +486,6 @@ def _import_mix(connection: Any, mix_key: str, manifest: Mapping[str, Any], snap
                 recorded_at text,
                 is_broken boolean not null,
                 row_hash text not null,
-                payload text not null,
                 primary key (upstream_player_id, upstream_chart_id)
             ) on commit drop
             """
@@ -544,7 +543,6 @@ def _import_mix(connection: Any, mix_key: str, manifest: Mapping[str, Any], snap
                     _timestamp(row.get("recordedAt")),
                     bool(row.get("isBroken", False)),
                     _digest(row),
-                    json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True),
                 )
                 for row in snapshot["scores"]
             ),
@@ -736,7 +734,7 @@ def _import_mix(connection: Any, mix_key: str, manifest: Mapping[str, Any], snap
             )
             select %s, p.id, c.id, t.pumbility, t.score, t.letter_grade, t.plate,
                    t.recorded_at_raw, nullif(t.recorded_at, '')::timestamptz,
-                   t.is_broken, t.payload::jsonb, t.row_hash, now(), %s
+                   t.is_broken, '{}'::jsonb, t.row_hash, now(), %s
             from pumbility_import_scores t
             join pumbility.players p on p.data_source_id = %s
               and p.upstream_player_id = t.upstream_player_id
