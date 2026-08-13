@@ -2,6 +2,7 @@ celery==5.6.3
 fastapi==0.117.1
 numpy==2.3.5
 pandas==2.3.3
+psycopg[binary]>=3.2,<4
 requests==2.32.4
 vercel==0.8.1
 vercel-workers==0.0.25

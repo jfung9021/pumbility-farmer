@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "captureStatus": "pending-production-capture",
+  "boundary": {
+    "id": "pending-production-t0",
+    "capturedAtUtc": null,
+    "source": "production",
+    "productionReady": false
+  },
+  "code": {
+    "gitCommit": null,
+    "sourceFileHashesSha256": null,
+    "trackedSourceFiles": 0
+  },
+  "datasets": {},
+  "publicArtifacts": {},
+  "derivedArtifacts": {},
+  "contractCoverage": {
+    "productionApiRoutes": 14,
+    "standaloneLocalRouteHandlers": 6,
+    "browserRoutes": 4,
+    "productionCaptureImplemented": true
+  },
+  "privacy": {
+    "scanResult": "passed",
+    "containsRawPlayerIdentifiers": false,
+    "containsUsernames": false,
+    "containsRawScoreRows": false,
+    "containsPerPlayerDigests": false,
+    "privateDigestAlgorithm": "HMAC-SHA256",
+    "publicDigestAlgorithm": "SHA-256",
+    "hmacKeyStored": false
+  },
+  "gate": {
+    "productionT0Captured": false,
+    "generationConsistencyVerified": false,
+    "readyForSchemaImplementation": false,
+    "blockingReason": "The generation-consistent reader is implemented and in-memory tested, but no authorized production T0 capture has been run or reviewed."
+  }
+}

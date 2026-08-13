@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "captureStatus": "local-development-only",
+  "boundary": {
+    "id": "candidate-explained",
+    "capturedAtUtc": "2026-08-14T00:00:00Z",
+    "source": "candidate",
+    "productionReady": false
+  },
+  "code": {
+    "gitCommit": null,
+    "sourceFileHashesSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "trackedSourceFiles": 11
+  },
+  "datasets": {
+    "phoenix2Snapshot": {
+      "counts": {
+        "bestScoreRecords": 101,
+        "chartRecords": 20,
+        "playerRecords": 10
+      },
+      "logicalHashes": {
+        "bestScoreRecordsHmacSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalogSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "mix": "Phoenix2",
+      "snapshotSchemaVersion": 2
+    }
+  },
+  "publicArtifacts": {
+    "frozenPhoenix1Archive": {
+      "fileSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  },
+  "derivedArtifacts": {
+    "combinedTier": {
+      "semanticSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  },
+  "contractCoverage": {
+    "browserRoutes": 4,
+    "productionApiRoutes": 14,
+    "standaloneLocalRouteHandlers": 6
+  },
+  "privacy": {
+    "scanResult": "passed",
+    "containsRawPlayerIdentifiers": false,
+    "containsUsernames": false,
+    "containsRawScoreRows": false
+  },
+  "gate": {
+    "productionT0Captured": false,
+    "generationConsistencyVerified": false,
+    "readyForSchemaImplementation": false
+  }
+}

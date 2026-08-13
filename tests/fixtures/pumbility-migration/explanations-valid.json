@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "sourceBoundary": "source-baseline",
+  "candidateBoundary": "candidate-explained",
+  "changes": [
+    {
+      "path": "datasets.phoenix2Snapshot.counts.bestScoreRecords",
+      "reason": "post-t0-score-addition",
+      "evidence": "authorized-sync-evidence"
+    }
+  ]
+}
