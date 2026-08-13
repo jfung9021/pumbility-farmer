@@ -7,7 +7,7 @@ import json
 import os
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
@@ -44,6 +44,10 @@ from recommendation_refresh import (
     player_refresh_enabled,
     publish_recommendation_model_artifacts,
     recommendation_index_path,
+    recommendation_model_path,
+    recommendation_phoenix1_shard_path,
+    recommendation_phoenix2_shard_path,
+    recommendation_score_model_path,
 )
 
 
@@ -70,6 +74,13 @@ def staging_prefix(mix: str | MixSpec = DEFAULT_MIX_KEY) -> str:
     return f"analysis/{spec.slug}/staging/"
 
 
+def typed_checkpoint_path(
+    job_id: str, mix: str | MixSpec = DEFAULT_MIX_KEY
+) -> str:
+    spec = resolve_mix(mix)
+    return f"analysis/private/runtime-checkpoints/{spec.slug}/{job_id}.json"
+
+
 # Backward-compatible constants refer to the default Phoenix 2 dataset.
 LATEST_BLOB_PATH = latest_blob_path()
 CURRENT_SNAPSHOT_PATH = current_snapshot_path()
@@ -81,6 +92,7 @@ FRESHNESS = timedelta(0)
 FAILED_RETRY_DELAY = timedelta(minutes=5)
 ACTIVE_JOB_STALE_AFTER = timedelta(minutes=5)
 STAGING_MAX_AGE = timedelta(hours=24)
+TYPED_CHECKPOINT_SCHEMA_VERSION = 1
 RUN_RETENTION = 10
 RECOMMENDATION_GENERATION_MIN_RETENTION = 2
 RECOMMENDATION_GENERATION_MAX_AGE = timedelta(hours=48)
@@ -848,6 +860,169 @@ def safe_error(exc: BaseException) -> str:
     return "The analysis failed unexpectedly. Please retry after the cooldown."
 
 
+def _checkpoint_records(value: Any, *, field: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not all(isinstance(row, Mapping) for row in value):
+        raise ValueError(f"The typed analysis checkpoint has an invalid {field} field.")
+    return [dict(row) for row in value]
+
+
+def _load_checkpoint_model_artifacts(
+    blobs: JsonBlobStore, metadata: Mapping[str, Any] | None
+) -> tuple[
+    dict[str, Any] | None,
+    tuple[
+        dict[str, Any],
+        dict[str, Any],
+        bytes,
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]
+    | None,
+]:
+    if metadata is None:
+        return None, None
+    generation = str(metadata.get("generationKey") or "").strip()
+    phoenix1_count = int(metadata.get("phoenix1ShardCount") or 0)
+    phoenix2_count = int(metadata.get("phoenix2ShardCount") or 0)
+    if not generation or phoenix1_count < 0 or phoenix2_count < 0:
+        raise ValueError("The typed analysis checkpoint has invalid model metadata.")
+    index = blobs.get_json(recommendation_index_path(generation))
+    model = blobs.get_json(recommendation_model_path(generation))
+    score_model = blobs.get_bytes(recommendation_score_model_path(generation))
+    phoenix1_shards = [
+        blobs.get_json(recommendation_phoenix1_shard_path(generation, shard))
+        for shard in range(phoenix1_count)
+    ]
+    phoenix2_shards = [
+        blobs.get_json(recommendation_phoenix2_shard_path(generation, shard))
+        for shard in range(phoenix2_count)
+    ]
+    if (
+        index is None
+        or model is None
+        or score_model is None
+        or any(value is None for value in phoenix1_shards)
+        or any(value is None for value in phoenix2_shards)
+    ):
+        raise RuntimeError("A typed analysis checkpoint model artifact is unavailable.")
+    return dict(index), (
+        dict(index),
+        dict(model),
+        score_model,
+        [dict(value) for value in phoenix1_shards if value is not None],
+        [dict(value) for value in phoenix2_shards if value is not None],
+    )
+
+
+def _resume_typed_analysis_checkpoint(
+    checkpoint: Mapping[str, Any],
+    *,
+    blob_store: JsonBlobStore,
+    job_store: JobStore,
+    job_id: str,
+    mix_spec: MixSpec,
+    staging_path: str,
+    checkpoint_path: str,
+    lease_heartbeat: Any | None,
+) -> dict[str, Any]:
+    if (
+        int(checkpoint.get("schemaVersion") or 0) != TYPED_CHECKPOINT_SCHEMA_VERSION
+        or str(checkpoint.get("jobId") or "") != job_id
+        or resolve_mix(checkpoint.get("mix")).key != mix_spec.key
+    ):
+        raise ValueError("The typed analysis checkpoint identity is invalid.")
+    raw_snapshot = checkpoint.get("snapshot")
+    raw_config = checkpoint.get("config")
+    raw_payload = checkpoint.get("payload")
+    raw_combined_tier = checkpoint.get("combinedTier")
+    raw_model = checkpoint.get("model")
+    if (
+        not isinstance(raw_snapshot, Mapping)
+        or not isinstance(raw_config, Mapping)
+        or not isinstance(raw_payload, Mapping)
+        or (raw_combined_tier is not None and not isinstance(raw_combined_tier, Mapping))
+        or (raw_model is not None and not isinstance(raw_model, Mapping))
+    ):
+        raise ValueError("The typed analysis checkpoint payload is invalid.")
+    snapshot = sanitize_snapshot(raw_snapshot, mix=mix_spec)
+    config = AnalysisConfig(**dict(raw_config))
+    if resolve_mix(config.mix).key != mix_spec.key:
+        raise ValueError("The typed analysis checkpoint configuration is invalid.")
+    payload = dict(raw_payload)
+    if parse_utc(payload.get("generatedAtUtc")) is None:
+        raise ValueError("The typed analysis checkpoint timestamp is invalid.")
+    recommendation_payload, model_artifacts = _load_checkpoint_model_artifacts(
+        blob_store, dict(raw_model) if raw_model is not None else None
+    )
+    typed_publisher = getattr(blob_store, "persist_typed_generation", None)
+    if not callable(typed_publisher):
+        raise RuntimeError("Typed Pumbility persistence is not available.")
+    update_job(
+        job_store,
+        job_id,
+        status="running",
+        stage="publishing",
+        progress={
+            "current": 1,
+            "total": 1,
+            "percent": 100,
+            "message": "Resuming typed persistence from the private checkpoint.",
+        },
+    )
+    if not bool(checkpoint.get("reanalyzeOnly")):
+        blob_store.put_json(current_snapshot_path(mix_spec), snapshot)
+    _pulse_job_lease(lease_heartbeat)
+    typed_publisher(
+        job_external_key=job_id,
+        mix_key=mix_spec.key,
+        snapshot=snapshot,
+        config=config,
+        payload=payload,
+        baselines=_checkpoint_records(checkpoint.get("baselines"), field="baselines"),
+        contributions=_checkpoint_records(
+            checkpoint.get("contributions"), field="contributions"
+        ),
+        chart_results=_checkpoint_records(
+            checkpoint.get("chartResults"), field="chartResults"
+        ),
+        model_artifacts=model_artifacts,
+    )
+    _pulse_job_lease(lease_heartbeat)
+    publish_success(
+        blob_store,
+        job_id=job_id,
+        snapshot=snapshot,
+        payload=payload,
+        recommendations=recommendation_payload,
+        combined_tier=(
+            dict(raw_combined_tier) if raw_combined_tier is not None else None
+        ),
+        publish_snapshot=False,
+        mix=mix_spec,
+    )
+    blob_store.delete([staging_path, checkpoint_path])
+    _pulse_job_lease(lease_heartbeat)
+    _stop_job_lease(lease_heartbeat)
+    completed = update_job(
+        job_store,
+        job_id,
+        status="completed",
+        stage="publishing",
+        generatedAtUtc=payload.get("generatedAtUtc"),
+        retryAllowedAtUtc=None,
+        error=None,
+        progress={
+            "current": 1,
+            "total": 1,
+            "percent": 100,
+            "message": "Rankings refreshed successfully.",
+        },
+    )
+    if job_store.active_job_id() == job_id:
+        job_store.set_active_job_id(None)
+    return completed
+
+
 def _snapshot_from_raw_dir(
     raw_dir: Path,
     timestamp: datetime,
@@ -956,6 +1131,10 @@ def execute_analysis_job(
         },
     )
     staging_path = f"{staging_prefix(mix_spec)}{job_id}.json"
+    checkpoint_path = typed_checkpoint_path(job_id, mix_spec)
+    typed_persistence_enabled = bool(
+        getattr(blob_store, "typed_persistence_enabled", False)
+    )
     lease_heartbeat: Any | None = None
 
     try:
@@ -964,6 +1143,19 @@ def execute_analysis_job(
         cleanup_abandoned_staging(
             blob_store, now=now(), keep_path=staging_path, mix=mix_spec
         )
+        if typed_persistence_enabled:
+            typed_checkpoint = blob_store.get_json(checkpoint_path)
+            if typed_checkpoint is not None:
+                return _resume_typed_analysis_checkpoint(
+                    typed_checkpoint,
+                    blob_store=blob_store,
+                    job_store=job_store,
+                    job_id=job_id,
+                    mix_spec=mix_spec,
+                    staging_path=staging_path,
+                    checkpoint_path=checkpoint_path,
+                    lease_heartbeat=lease_heartbeat,
+                )
         current = blob_store.get_json(current_snapshot_path(mix_spec))
         reanalyze_only = bool(existing.get("reanalyzeOnly"))
         resume = None if reanalyze_only else blob_store.get_json(staging_path)
@@ -1074,9 +1266,6 @@ def execute_analysis_job(
         )
         _pulse_job_lease(lease_heartbeat)
         payload = build_web_payload(chart_results, summary)
-        typed_persistence_enabled = bool(
-            getattr(blob_store, "typed_persistence_enabled", False)
-        )
         if typed_persistence_enabled:
             from scripts.analyze_pumbility_supabase import _frame_records
 
@@ -1156,6 +1345,35 @@ def execute_analysis_job(
             )
             _pulse_job_lease(lease_heartbeat)
 
+        if typed_persistence_enabled:
+            model_checkpoint = None
+            if recommendation_model_artifacts is not None:
+                recommendation_index = recommendation_model_artifacts[0]
+                model_checkpoint = {
+                    "generationKey": recommendation_index.get("generationKey"),
+                    "phoenix1ShardCount": len(recommendation_model_artifacts[3]),
+                    "phoenix2ShardCount": len(recommendation_model_artifacts[4]),
+                }
+            blob_store.put_json(
+                checkpoint_path,
+                {
+                    "schemaVersion": TYPED_CHECKPOINT_SCHEMA_VERSION,
+                    "jobId": job_id,
+                    "mix": mix_spec.key,
+                    "createdAtUtc": isoformat_utc(now()),
+                    "reanalyzeOnly": reanalyze_only,
+                    "snapshot": sanitize_snapshot(snapshot, mix=mix_spec),
+                    "config": asdict(config),
+                    "payload": payload,
+                    "baselines": typed_baselines,
+                    "contributions": typed_contributions,
+                    "chartResults": typed_chart_results,
+                    "combinedTier": combined_tier_payload,
+                    "model": model_checkpoint,
+                },
+            )
+            _pulse_job_lease(lease_heartbeat)
+
         update_job(
             job_store,
             job_id,
@@ -1202,7 +1420,7 @@ def execute_analysis_job(
             publish_snapshot=publish_snapshot and not typed_persistence_enabled,
             mix=mix_spec,
         )
-        blob_store.delete(staging_path)
+        blob_store.delete([staging_path, checkpoint_path])
         _pulse_job_lease(lease_heartbeat)
         _stop_job_lease(lease_heartbeat)
         lease_heartbeat = None
