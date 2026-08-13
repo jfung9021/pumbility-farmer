@@ -30,6 +30,7 @@ from analysis_runtime import (
     read_latest_payload,
     request_refresh,
     runs_prefix,
+    typed_checkpoint_path,
     update_job,
 )
 from api.cron import cron_authorized
@@ -1332,6 +1333,55 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
         self.assertIsNotNone(blobs.get_json(CURRENT_SNAPSHOT_PATH))
         self.assertIsNotNone(blobs.get_json(f"{STAGING_PREFIX}{job['id']}.json"))
+        self.assertIsNotNone(blobs.get_json(typed_checkpoint_path(job["id"])))
+
+    def test_typed_persistence_retry_resumes_the_private_checkpoint(self) -> None:
+        class ResumableTypedStore(MemoryBlobStore):
+            typed_persistence_enabled = True
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.persist_attempts = 0
+
+            def persist_typed_generation(self, **_kwargs):
+                self.persist_attempts += 1
+                if self.persist_attempts == 1:
+                    raise RuntimeError("typed persistence unavailable")
+                return "analysis-run", None
+
+        blobs = ResumableTypedStore()
+        jobs = MemoryJobStore()
+        job = new_job("typed-analysis-resume", NOW)
+        jobs.save(job)
+        jobs.set_latest_job_id(job["id"])
+        jobs.set_active_job_id(job["id"])
+
+        first = execute_analysis_job(
+            job["id"],
+            blobs=blobs,
+            jobs=jobs,
+            client=WorkerClient(),
+            now=lambda: NOW,
+        )
+        self.assertEqual(first["status"], "failed")
+        self.assertIsNotNone(blobs.get_json(typed_checkpoint_path(job["id"])))
+
+        with patch(
+            "analysis_runtime.analyze_snapshot",
+            side_effect=AssertionError("analysis must not repeat"),
+        ):
+            second = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+            )
+
+        self.assertEqual(second["status"], "completed")
+        self.assertEqual(blobs.persist_attempts, 2)
+        self.assertIsNone(blobs.get_json(typed_checkpoint_path(job["id"])))
+        self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
 
     def test_supabase_capable_store_heartbeats_through_every_heavy_phase(self) -> None:
         class HeartbeatHandle:
