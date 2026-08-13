@@ -326,6 +326,60 @@ class Phoenix2SyncTests(unittest.TestCase):
         self.assertEqual(fetched, ["api/v2/players/p3/scores"])
         self.assertEqual(len(snapshot["scores"]), 3)
 
+    def test_player_delta_checkpoint_resumes_without_a_whole_snapshot(self) -> None:
+        checkpoints: list[dict] = []
+        player_checkpoints: list[dict] = []
+        first = FakeClient(
+            ["p1", "p2", "p3"],
+            [chart("a")],
+            {
+                "p1": [score("p1", "a", 501)],
+                "p2": [score("p2", "a", 502)],
+                "p3": RuntimeError("stop"),
+            },
+        )
+        with self.assertRaises(RuntimeError):
+            synchronize_phoenix2_snapshot(
+                first,
+                None,
+                job_id="delta-job",
+                workers=1,
+                checkpoint_every=1,
+                checkpoint=checkpoints.append,
+                checkpoint_players=player_checkpoints.extend,
+                now=lambda: FIXED_NOW,
+            )
+        root = {
+            key: value
+            for key, value in checkpoints[-1].items()
+            if key != "snapshot"
+        }
+        resume = {
+            **root,
+            "storageSchemaVersion": 2,
+            "checkpointKind": "player-delta",
+            "playerCheckpoints": player_checkpoints,
+        }
+        second = FakeClient(
+            ["p1", "p2", "p3"],
+            [chart("a")],
+            {"p3": [score("p3", "a", 503)]},
+        )
+
+        snapshot, _ = synchronize_phoenix2_snapshot(
+            second,
+            None,
+            job_id="delta-job",
+            resume_staging=resume,
+            workers=1,
+            checkpoint_every=1,
+            now=lambda: FIXED_NOW,
+        )
+
+        fetched = [path for path, _ in second.calls if path.endswith("/scores")]
+        self.assertEqual(fetched, ["api/v2/players/p3/scores"])
+        self.assertEqual(len(snapshot["scores"]), 3)
+
     def test_invalid_increment_never_replaces_valid_best(self) -> None:
         existing = [score("p", "a", 600)]
         broken = score("p", "a", 900)

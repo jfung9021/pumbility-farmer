@@ -364,6 +364,104 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
                 call.args[1], (hashlib.sha256(body).hexdigest(), len(body), pathname)
             )
 
+    def test_supabase_staging_root_omits_the_whole_snapshot(self) -> None:
+        normalized = {
+            "schemaVersion": 1,
+            "jobId": "job",
+            "mix": "Phoenix2",
+            "completedPlayerIds": ["private-player"],
+            "storageSchemaVersion": 2,
+            "checkpointKind": "player-delta",
+            "snapshotSchemaVersion": 2,
+        }
+        connection, cursor = self._database_mocks(normalized)
+        fake_json_module = SimpleNamespace(Jsonb=lambda payload: payload)
+        payload = {
+            "schemaVersion": 1,
+            "jobId": "job",
+            "mix": "Phoenix2",
+            "completedPlayerIds": ["private-player"],
+            "snapshot": {"schemaVersion": 2, "players": [], "charts": [], "scores": []},
+        }
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            patch.dict(sys.modules, {"psycopg.types.json": fake_json_module}),
+        ):
+            PumbilityArtifactStore(database_url="postgresql://localhost/local").put_json(
+                "analysis/phoenix2/staging/job.json", payload
+            )
+
+        inserted = cursor.execute.call_args_list[1].args[1][1]
+        self.assertNotIn("snapshot", inserted)
+        self.assertEqual(inserted["storageSchemaVersion"], 2)
+
+    def test_supabase_staging_read_reassembles_checksum_gated_player_deltas(self) -> None:
+        root = {
+            "schemaVersion": 1,
+            "jobId": "job",
+            "mix": "Phoenix2",
+            "completedPlayerIds": ["private-player"],
+            "storageSchemaVersion": 2,
+            "checkpointKind": "player-delta",
+        }
+        child = {
+            "schemaVersion": 1,
+            "player": {"playerId": "private-player"},
+            "scores": [],
+        }
+
+        def connection_with(*, fetched: object = None, rows: list[tuple] | None = None):
+            cursor = Mock()
+            cursor.__enter__ = Mock(return_value=cursor)
+            cursor.__exit__ = Mock(return_value=False)
+            cursor.fetchone.side_effect = [(EXPECTED_PUMBILITY_MIGRATION,), fetched]
+            cursor.fetchall.return_value = rows or []
+            connection = Mock()
+            connection.__enter__ = Mock(return_value=connection)
+            connection.__exit__ = Mock(return_value=False)
+            connection.cursor.return_value = cursor
+            return connection
+
+        root_body = _canonical_json_bytes(root)
+        child_body = _canonical_json_bytes(child)
+        root_connection = connection_with(
+            fetched=(root, hashlib.sha256(root_body).hexdigest(), len(root_body))
+        )
+        child_connection = connection_with(
+            rows=[(child, hashlib.sha256(child_body).hexdigest(), len(child_body))]
+        )
+        with patch(
+            "pumbility_store._connect",
+            side_effect=[root_connection, child_connection],
+        ):
+            result = PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).get_json("analysis/phoenix2/staging/job.json")
+
+        self.assertEqual(result["playerCheckpoints"], [child])
+        self.assertNotIn("snapshot", result)
+
+        with (
+            patch(
+                "pumbility_store._connect",
+                side_effect=[
+                    connection_with(
+                        fetched=(
+                            root,
+                            hashlib.sha256(root_body).hexdigest(),
+                            len(root_body),
+                        )
+                    ),
+                    connection_with(rows=[]),
+                ],
+            ),
+            self.assertRaisesRegex(RuntimeError, "checkpoint set is incomplete"),
+        ):
+            PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).get_json("analysis/phoenix2/staging/job.json")
+
 
 class PumbilityJobHeartbeatTests(unittest.TestCase):
     def test_heartbeat_renews_owned_lease_and_payload_timestamp(self) -> None:

@@ -1026,6 +1026,13 @@ def execute_analysis_job(
             sync_kwargs: dict[str, Any] = {}
             if mix_spec.key != DEFAULT_MIX_KEY:
                 sync_kwargs["mix"] = mix_spec
+            player_checkpoint_writer = getattr(
+                blob_store, "put_sync_checkpoint_players", None
+            )
+            if callable(player_checkpoint_writer):
+                sync_kwargs["checkpoint_players"] = lambda value: player_checkpoint_writer(
+                    staging_path, value
+                )
             snapshot, _ = synchronize(
                 effective_client,
                 None if existing.get("fullSync") else current,

@@ -210,7 +210,7 @@ Every item requires an owner, UTC date, result, evidence reference, and approved
 - [ ] Baseline p50/p95/p99 endpoint and job timings are recorded. Evidence:
 - [ ] New endpoint/global/player latency meets the approved no-regression threshold. Evidence:
 - [ ] Connection, CPU, IO, WAL, disk, and Storage volume stay within budget. Evidence:
-- [ ] No repeated whole-snapshot checkpoint serialization remains. Evidence:
+- [x] No repeated whole-snapshot checkpoint serialization remains. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S8-DELTA-CHECKPOINT-01`; Supabase stores a compact root and checksum-gated batched player deltas, resumes only after exact completed-set validation, and leaves the Vercel checkpoint contract unchanged.
 - [ ] Daily work does not precompute every player's candidate pool. Evidence:
 - [ ] Model binary loads once per generation per warm worker. Evidence:
 - [ ] Freshness, failed-generation, mismatch, and pool-exhaustion alerts work. Evidence:
