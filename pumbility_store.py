@@ -46,6 +46,9 @@ VALID_READ_CANARIES = frozenset(
     }
 )
 CURRENT_SNAPSHOT_RE = re.compile(r"^analysis/private/(phoenix1|phoenix2)-current\.json$")
+STAGING_SNAPSHOT_RE = re.compile(
+    r"^analysis/(?:phoenix1|phoenix2)/staging/[^/]+\.json$"
+)
 FROZEN_PHOENIX1_SNAPSHOT_KEY = "analysis/private/phoenix1.json"
 JOB_LEASE_SECONDS = 800
 JOB_HEARTBEAT_INTERVAL_SECONDS = 60.0
@@ -161,6 +164,21 @@ def _equivalent(left: object, right: object) -> bool:
     if isinstance(left, Mapping) and isinstance(right, Mapping):
         return _canonical_json_bytes(left) == _canonical_json_bytes(right)
     return left == right
+
+
+def _checkpoint_player_path(pathname: str, player_id: str) -> str:
+    digest = hashlib.sha256(player_id.encode("utf-8")).hexdigest()
+    return f"{pathname}.players/{digest}.json"
+
+
+def _compact_staging_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    compact = {key: value for key, value in payload.items() if key != "snapshot"}
+    compact["storageSchemaVersion"] = 2
+    compact["checkpointKind"] = "player-delta"
+    snapshot = payload.get("snapshot")
+    if isinstance(snapshot, Mapping):
+        compact["snapshotSchemaVersion"] = int(snapshot.get("schemaVersion") or 0)
+    return compact
 
 
 def require_loopback_database_url(database_url: str) -> None:
@@ -413,6 +431,65 @@ class PumbilityArtifactStore:
                 digest_matches=digest_matches,
                 byte_size_matches=byte_size_matches,
             )
+        if STAGING_SNAPSHOT_RE.fullmatch(pathname) and int(
+            result.get("storageSchemaVersion") or 0
+        ) >= 2:
+            prefix = f"{pathname}.players/"
+            with _connect(self.database_url) as connection, connection.cursor() as cursor:
+                _assert_schema(cursor)
+                cursor.execute(
+                    """
+                    select payload_json, sha256, byte_size
+                    from pumbility.artifacts
+                    where object_key like %s escape '\\' and payload_json is not null
+                    order by object_key
+                    """,
+                    (
+                        prefix.replace("\\", "\\\\")
+                        .replace("%", "\\%")
+                        .replace("_", "\\_")
+                        + "%",
+                    ),
+                )
+                checkpoint_rows = cursor.fetchall()
+            player_checkpoints_by_id: dict[str, dict[str, Any]] = {}
+            for raw_payload, raw_digest, raw_size in checkpoint_rows:
+                checkpoint = (
+                    json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
+                )
+                if not isinstance(checkpoint, Mapping):
+                    raise ValueError("A Pumbility player checkpoint is not a JSON object.")
+                checkpoint_value = dict(checkpoint)
+                checkpoint_body = _canonical_json_bytes(checkpoint_value)
+                digest_matches = hashlib.sha256(checkpoint_body).hexdigest() == str(
+                    raw_digest
+                )
+                byte_size_matches = len(checkpoint_body) == int(raw_size)
+                if not digest_matches or not byte_size_matches:
+                    raise PumbilityArtifactIntegrityError(
+                        digest_matches=digest_matches,
+                        byte_size_matches=byte_size_matches,
+                    )
+                player = checkpoint_value.get("player")
+                player_id = (
+                    str(player.get("playerId") or "").strip()
+                    if isinstance(player, Mapping)
+                    else ""
+                )
+                if not player_id or player_id in player_checkpoints_by_id:
+                    raise RuntimeError("The Pumbility player checkpoint set is invalid.")
+                player_checkpoints_by_id[player_id] = checkpoint_value
+            completed_ids = {
+                str(value)
+                for value in result.get("completedPlayerIds", [])
+                if str(value)
+            }
+            if not completed_ids.issubset(player_checkpoints_by_id):
+                raise RuntimeError("The Pumbility player checkpoint set is incomplete.")
+            result["playerCheckpoints"] = [
+                player_checkpoints_by_id[player_id]
+                for player_id in sorted(completed_ids)
+            ]
         return result
 
     def put_json(self, pathname: str, payload: Mapping[str, Any]) -> None:
@@ -449,9 +526,40 @@ class PumbilityArtifactStore:
                         _assert_schema(cursor)
                     _import_mix(connection, mix_key, manifest, payload)
             return
+        stored_payload = (
+            _compact_staging_payload(payload)
+            if STAGING_SNAPSHOT_RE.fullmatch(pathname)
+            else payload
+        )
         with _connect(self.database_url) as connection, connection.cursor() as cursor:
             _assert_schema(cursor)
-            self._put_json_row(cursor, pathname, payload)
+            self._put_json_row(cursor, pathname, stored_payload)
+
+    def put_sync_checkpoint_players(
+        self,
+        pathname: str,
+        player_checkpoints: Sequence[Mapping[str, Any]],
+    ) -> None:
+        if not STAGING_SNAPSHOT_RE.fullmatch(pathname):
+            raise ValueError("A player checkpoint requires a supported staging pathname.")
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            for player_checkpoint in player_checkpoints:
+                player = player_checkpoint.get("player")
+                player_id = (
+                    str(player.get("playerId") or "").strip()
+                    if isinstance(player, Mapping)
+                    else ""
+                )
+                if not player_id:
+                    raise ValueError(
+                        "A player checkpoint requires a private player identifier."
+                    )
+                self._put_json_row(
+                    cursor,
+                    _checkpoint_player_path(pathname, player_id),
+                    player_checkpoint,
+                )
 
     def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:
         """Atomically replace a set of compatibility publication pointers."""
@@ -526,6 +634,13 @@ class PumbilityArtifactStore:
         targets = [pathnames] if isinstance(pathnames, str) else list(pathnames)
         if not targets:
             return
+        checkpoint_children: list[str] = []
+        for pathname in targets:
+            if STAGING_SNAPSHOT_RE.fullmatch(pathname):
+                checkpoint_children.extend(
+                    item.pathname for item in self.list(f"{pathname}.players/")
+                )
+        targets = list(dict.fromkeys([*targets, *checkpoint_children]))
         with _connect(self.database_url) as connection, connection.cursor() as cursor:
             _assert_schema(cursor)
             cursor.execute(
@@ -940,6 +1055,18 @@ class ShadowJsonStore:
         self.primary.put_json(pathname, payload)
         self._mirror("put_json", pathname, payload)
 
+    def put_sync_checkpoint_players(
+        self, pathname: str, player_checkpoints: Sequence[Mapping[str, Any]]
+    ) -> None:
+        writer = getattr(self.shadow, "put_sync_checkpoint_players", None)
+        if writer is None:
+            return
+        try:
+            writer(pathname, player_checkpoints)
+        except Exception:
+            if self.strict:
+                raise
+
     def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:
         # Preserve the exact legacy store's sequential behavior while the
         # Supabase mirror receives one atomic transaction.
@@ -1273,6 +1400,11 @@ class SupabasePrimaryJsonStore:
     def put_json(self, pathname: str, payload: Mapping[str, Any]) -> None:
         self.primary.put_json(pathname, payload)
         self._mirror("put_json", pathname, payload, event_paths=pathname)
+
+    def put_sync_checkpoint_players(
+        self, pathname: str, player_checkpoints: Sequence[Mapping[str, Any]]
+    ) -> None:
+        self.primary.put_sync_checkpoint_players(pathname, player_checkpoints)
 
     def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:
         self.primary.put_json_bundle(payloads)

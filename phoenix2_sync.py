@@ -44,6 +44,7 @@ SCORE_FIELDS = (
 
 ProgressCallback = Callable[[int, int, str], None]
 CheckpointCallback = Callable[[dict[str, Any]], None]
+PlayerCheckpointCallback = Callable[[list[dict[str, Any]]], None]
 
 
 class CollectionClient(Protocol):
@@ -307,6 +308,7 @@ def synchronize_mix_snapshot(
     empty_recheck_after: timedelta = EMPTY_RECHECK_AFTER,
     progress: ProgressCallback | None = None,
     checkpoint: CheckpointCallback | None = None,
+    checkpoint_players: PlayerCheckpointCallback | None = None,
     now: Callable[[], datetime] = utc_now,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Fetch consent and charts, then incrementally synchronize player scores."""
@@ -374,6 +376,10 @@ def synchronize_mix_snapshot(
         )
     resume_snapshot = resume.get("snapshot")
     try:
+        resume_storage_schema = int(resume.get("storageSchemaVersion") or 0)
+    except (TypeError, ValueError):
+        resume_storage_schema = 0
+    try:
         resume_schema = int(
             resume_snapshot.get("schemaVersion")
             if isinstance(resume_snapshot, Mapping)
@@ -381,14 +387,21 @@ def synchronize_mix_snapshot(
         )
     except (TypeError, ValueError):
         resume_schema = 1
-    can_resume = (
+    full_resume = (
         resume.get("jobId") == job_id
         and resume_mix.key == mix_spec.key
         and isinstance(resume_snapshot, Mapping)
         and resume_schema >= SNAPSHOT_SCHEMA_VERSION
     )
+    delta_resume = (
+        resume.get("jobId") == job_id
+        and resume_mix.key == mix_spec.key
+        and resume_storage_schema >= 2
+        and isinstance(resume.get("playerCheckpoints"), list)
+    )
+    can_resume = full_resume or delta_resume
     working = sanitize_snapshot(
-        resume.get("snapshot") if can_resume else current,
+        resume.get("snapshot") if full_resume else current,
         mix=mix_spec,
     )
     consented_set = set(consented_ids)
@@ -407,6 +420,36 @@ def synchronize_mix_snapshot(
         for row in working["players"]
         if row["playerId"] in consented_set
     }
+    if delta_resume:
+        for raw_checkpoint in resume.get("playerCheckpoints", []):
+            if not isinstance(raw_checkpoint, Mapping):
+                continue
+            raw_player = raw_checkpoint.get("player")
+            if not isinstance(raw_player, Mapping):
+                continue
+            player_id = str(raw_player.get("playerId") or "")
+            if player_id not in consented_set:
+                continue
+            raw_scores = raw_checkpoint.get("scores")
+            scores_by_player[player_id] = [
+                row
+                for row in merge_best_scores(
+                    [],
+                    raw_scores if isinstance(raw_scores, list) else [],
+                    player_id=player_id,
+                )
+                if row["chartId"] in valid_chart_ids
+            ]
+            working_player_meta[player_id] = {
+                "playerId": player_id,
+                "username": consented_profiles.get(
+                    player_id, str(raw_player.get("username") or "").strip()
+                ),
+                "lastSyncedAtUtc": str(raw_player.get("lastSyncedAtUtc") or ""),
+                "lastScoreRecordedAtUtc": _last_score_recorded_at(
+                    scores_by_player[player_id]
+                ),
+            }
     completed = (
         {
             str(player_id)
@@ -453,7 +496,12 @@ def synchronize_mix_snapshot(
             "scores": all_scores,
         }
 
+    pending_player_checkpoints: list[dict[str, Any]] = []
+
     def save_checkpoint() -> dict[str, Any]:
+        if checkpoint_players is not None and pending_player_checkpoints:
+            checkpoint_players(list(pending_player_checkpoints))
+            pending_player_checkpoints.clear()
         payload = _staging_payload(
             job_id=job_id,
             created_at=created_at,
@@ -468,6 +516,30 @@ def synchronize_mix_snapshot(
             checkpoint(payload)
         return payload
 
+    def save_player_checkpoint(player_id: str) -> None:
+        if checkpoint_players is None:
+            return
+        metadata = working_player_meta.get(player_id) or current_player_meta.get(player_id) or {}
+        rows = merge_best_scores([], scores_by_player.get(player_id, []), player_id=player_id)
+        pending_player_checkpoints.append(
+            {
+                "schemaVersion": 1,
+                "player": {
+                    "playerId": player_id,
+                    "username": consented_profiles.get(
+                        player_id, str(metadata.get("username") or "").strip()
+                    ),
+                    "lastSyncedAtUtc": str(metadata.get("lastSyncedAtUtc") or ""),
+                    "lastScoreRecordedAtUtc": _last_score_recorded_at(rows),
+                },
+                "scores": rows,
+            }
+        )
+
+    if full_resume and checkpoint_players is not None:
+        for player_id in sorted(completed):
+            save_player_checkpoint(player_id)
+
     completed_since_checkpoint = 0
     for player_id in consented_ids:
         if player_id in completed:
@@ -479,6 +551,7 @@ def synchronize_mix_snapshot(
         if last_synced is not None and run_started - last_synced < empty_recheck_after:
             working_player_meta[player_id] = dict(previous)
             completed.add(player_id)
+            save_player_checkpoint(player_id)
             completed_since_checkpoint += 1
             if progress:
                 progress(
@@ -521,6 +594,7 @@ def synchronize_mix_snapshot(
                 "lastScoreRecordedAtUtc": _last_score_recorded_at(scores_by_player[player_id]),
             }
             completed.add(player_id)
+            save_player_checkpoint(player_id)
             completed_since_checkpoint += 1
             if progress:
                 progress(
