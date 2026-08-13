@@ -471,7 +471,9 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
             "charts": [],
             "scores": [],
         }
-        database_input = SimpleNamespace(snapshot=dict(snapshot))
+        database_input = SimpleNamespace(
+            snapshot={**snapshot, "generatedAtUtc": ""}
+        )
         connection = Mock()
         connection.__enter__ = Mock(return_value=connection)
         connection.__exit__ = Mock(return_value=False)
