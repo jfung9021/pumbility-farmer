@@ -1272,6 +1272,127 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNone(blobs.get_json(f"{STAGING_PREFIX}{job['id']}.json"))
         self.assertIsNone(jobs.active_job_id())
 
+    def test_supabase_capable_store_heartbeats_through_every_heavy_phase(self) -> None:
+        class HeartbeatHandle:
+            def __init__(self) -> None:
+                self.active = True
+                self.pulses = 0
+                self.stops = 0
+
+            def pulse(self) -> None:
+                self.assert_active()
+                self.pulses += 1
+
+            def stop(self) -> None:
+                self.assert_active()
+                self.active = False
+                self.stops += 1
+
+            def assert_active(self) -> None:
+                if not self.active:
+                    raise AssertionError("heartbeat stopped before work completed")
+
+        class HeartbeatJobs(MemoryJobStore):
+            def __init__(self) -> None:
+                super().__init__()
+                self.handle = HeartbeatHandle()
+
+            def start_lease_heartbeat(self, job_id: str) -> HeartbeatHandle:
+                self.started_for = job_id
+                return self.handle
+
+        jobs = HeartbeatJobs()
+        blobs = MemoryBlobStore()
+        job = new_job("lease-covered-analysis", NOW)
+        jobs.save(job)
+        jobs.set_active_job_id(job["id"])
+        blobs.put_json(
+            "analysis/private/phoenix1.json",
+            {"mix": "Phoenix", "players": [], "charts": [], "scores": []},
+        )
+        client = WorkerClient()
+        original_fetch = client.fetch_page_collection
+
+        def observed_fetch(*args, **kwargs):
+            jobs.handle.assert_active()
+            return original_fetch(*args, **kwargs)
+
+        client.fetch_page_collection = observed_fetch  # type: ignore[method-assign]
+        original_analyze = analyze_snapshot
+        original_publish = publish_success
+
+        def observed_analyze(*args, **kwargs):
+            jobs.handle.assert_active()
+            return original_analyze(*args, **kwargs)
+
+        def observed_combined(*_args, **_kwargs):
+            jobs.handle.assert_active()
+            return [], {}, {}
+
+        def observed_model(*_args, **_kwargs):
+            jobs.handle.assert_active()
+            return ({}, {}, b"", [], [])
+
+        def observed_model_publish(*_args, **_kwargs):
+            jobs.handle.assert_active()
+
+        def observed_publish(*args, **kwargs):
+            jobs.handle.assert_active()
+            return original_publish(*args, **kwargs)
+
+        with (
+            patch("analysis_runtime.analyze_snapshot", side_effect=observed_analyze),
+            patch("analysis_runtime.build_combined_chart_results", side_effect=observed_combined),
+            patch("analysis_runtime.build_combined_tier_payload", return_value={}),
+            patch("analysis_runtime.build_recommendation_model_artifacts", side_effect=observed_model),
+            patch("analysis_runtime.publish_recommendation_model_artifacts", side_effect=observed_model_publish),
+            patch("analysis_runtime.publish_success", side_effect=observed_publish),
+        ):
+            result = execute_analysis_job(
+                job["id"], blobs=blobs, jobs=jobs, client=client, now=lambda: NOW
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(jobs.started_for, job["id"])
+        self.assertGreaterEqual(jobs.handle.pulses, 6)
+        self.assertEqual(jobs.handle.stops, 1)
+        self.assertFalse(jobs.handle.active)
+
+    def test_lost_heartbeat_fails_before_publication(self) -> None:
+        class FailingHeartbeat:
+            def __init__(self) -> None:
+                self.pulses = 0
+
+            def pulse(self) -> None:
+                self.pulses += 1
+                if self.pulses == 3:
+                    raise RuntimeError("lease lost")
+
+            def stop(self) -> None:
+                return None
+
+        class HeartbeatJobs(MemoryJobStore):
+            def __init__(self) -> None:
+                super().__init__()
+                self.handle = FailingHeartbeat()
+
+            def start_lease_heartbeat(self, _job_id: str) -> FailingHeartbeat:
+                return self.handle
+
+        blobs = MemoryBlobStore()
+        jobs = HeartbeatJobs()
+        job = new_job("lost-lease-analysis", NOW)
+        jobs.save(job)
+        jobs.set_active_job_id(job["id"])
+        with patch("analysis_runtime.publish_success") as publish:
+            result = execute_analysis_job(
+                job["id"], blobs=blobs, jobs=jobs, client=WorkerClient(), now=lambda: NOW
+            )
+
+        self.assertEqual(result["status"], "failed")
+        publish.assert_not_called()
+        self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
+
     def test_deployment_job_reuses_snapshot_without_upstream_sync(self) -> None:
         blobs = MemoryBlobStore()
         stored_snapshot = {

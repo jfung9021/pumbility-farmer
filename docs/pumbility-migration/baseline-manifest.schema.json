@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pumbility-farmer.invalid/schemas/migration-baseline-v1.json",
+  "title": "Pumbility migration baseline manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "captureStatus",
+    "boundary",
+    "code",
+    "datasets",
+    "publicArtifacts",
+    "derivedArtifacts",
+    "contractCoverage",
+    "privacy",
+    "gate"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "captureStatus": {
+      "enum": [
+        "pending-production-capture",
+        "local-development-only",
+        "production-t0",
+        "candidate"
+      ]
+    },
+    "boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "capturedAtUtc", "source", "productionReady"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "capturedAtUtc": { "type": ["string", "null"], "format": "date-time" },
+        "source": { "enum": ["local", "production", "candidate"] },
+        "productionReady": { "type": "boolean" }
+      }
+    },
+    "code": {
+      "type": "object",
+      "required": ["gitCommit", "sourceFileHashesSha256", "trackedSourceFiles"],
+      "properties": {
+        "gitCommit": { "type": ["string", "null"] },
+        "sourceFileHashesSha256": { "$ref": "#/$defs/nullableDigest" },
+        "trackedSourceFiles": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "datasets": { "type": "object" },
+    "publicArtifacts": { "type": "object" },
+    "derivedArtifacts": { "type": "object" },
+    "contractCoverage": {
+      "type": "object",
+      "required": ["productionApiRoutes", "standaloneLocalRouteHandlers", "browserRoutes"],
+      "properties": {
+        "productionApiRoutes": { "const": 14 },
+        "standaloneLocalRouteHandlers": { "const": 6 },
+        "browserRoutes": { "const": 4 },
+        "productionCaptureImplemented": { "type": "boolean" }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "scanResult",
+        "containsRawPlayerIdentifiers",
+        "containsUsernames",
+        "containsRawScoreRows"
+      ],
+      "properties": {
+        "scanResult": { "const": "passed" },
+        "containsRawPlayerIdentifiers": { "const": false },
+        "containsUsernames": { "const": false },
+        "containsRawScoreRows": { "const": false },
+        "containsPerPlayerDigests": { "const": false },
+        "privateDigestAlgorithm": { "const": "HMAC-SHA256" },
+        "publicDigestAlgorithm": { "const": "SHA-256" },
+        "hmacKeyStored": { "const": false }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "required": [
+        "productionT0Captured",
+        "generationConsistencyVerified",
+        "readyForSchemaImplementation"
+      ],
+      "properties": {
+        "productionT0Captured": { "type": "boolean" },
+        "generationConsistencyVerified": { "type": "boolean" },
+        "readyForSchemaImplementation": { "type": "boolean" },
+        "blockingReason": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "nullableDigest": {
+      "anyOf": [
+        { "$ref": "#/$defs/digest" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "captureStatus": { "const": "production-t0" } } },
+      "then": {
+        "properties": {
+          "boundary": { "properties": { "productionReady": { "const": true } } },
+          "gate": {
+            "properties": {
+              "productionT0Captured": { "const": true },
+              "generationConsistencyVerified": { "const": true },
+              "readyForSchemaImplementation": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -114,7 +114,7 @@ class JsonBlobStore(Protocol):
     def list(self, prefix: str) -> list[BlobObject]: ...
 
 
-class PrivateBlobStore:
+class VercelPrivateBlobStore:
     """Minimal private-only Vercel Blob adapter."""
 
     def __init__(self, token: str | None = None) -> None:
@@ -210,6 +210,21 @@ class PrivateBlobStore:
         return sorted(objects, key=lambda item: item.pathname)
 
 
+class PrivateBlobStore:
+    """Select the configured private persistence backend.
+
+    ``PUMBILITY_DATA_BACKEND`` defaults to ``vercel``.  ``shadow`` keeps all
+    reads on Vercel and mirrors writes to Supabase; ``supabase`` selects the
+    new store directly.  Keeping selection at the existing constructor makes
+    this migration transparent to every current route, worker, and test seam.
+    """
+
+    def __new__(cls, token: str | None = None) -> JsonBlobStore:
+        from pumbility_store import select_json_store
+
+        return select_json_store(lambda: VercelPrivateBlobStore(token=token))
+
+
 class MemoryBlobStore:
     """Thread-safe test/local adapter with the same private JSON semantics."""
 
@@ -270,7 +285,23 @@ class JobStore(Protocol):
     ) -> None: ...
 
 
-class RuntimeJobStore:
+def _start_job_lease_heartbeat(store: JobStore, job_id: str) -> Any | None:
+    """Start an optional backend lease heartbeat without affecting legacy stores."""
+    factory = getattr(store, "start_lease_heartbeat", None)
+    return factory(job_id) if callable(factory) else None
+
+
+def _pulse_job_lease(heartbeat: Any | None) -> None:
+    if heartbeat is not None:
+        heartbeat.pulse()
+
+
+def _stop_job_lease(heartbeat: Any | None) -> None:
+    if heartbeat is not None:
+        heartbeat.stop()
+
+
+class VercelRuntimeJobStore:
     JOB_KEY = "job:{}"
     ACTIVE_KEY = "active-job"
     LATEST_KEY = "latest-job:{}"
@@ -323,6 +354,15 @@ class RuntimeJobStore:
             job_id,
             self._options(f"Latest {spec.label} analysis job"),
         )
+
+
+class RuntimeJobStore:
+    """Select Vercel Runtime Cache, Supabase, or legacy-primary shadow jobs."""
+
+    def __new__(cls) -> JobStore:
+        from pumbility_store import select_job_store
+
+        return select_job_store(VercelRuntimeJobStore)
 
 
 class MemoryJobStore:
@@ -665,6 +705,7 @@ def publish_success(
     if mix_spec.archived:
         raise ValueError(f"{mix_spec.label} is archived and cannot be published.")
     blobs.put_json(_run_path(payload, job_id, mix_spec), payload)
+    publication_pointers: dict[str, Mapping[str, Any]] = {}
     if publish_snapshot:
         blobs.put_json(
             current_snapshot_path(mix_spec),
@@ -685,7 +726,7 @@ def publish_success(
                         recommendation_index_path(previous_generation),
                         previous_recommendations,
                     )
-            blobs.put_json(recommendation_blob_path(), recommendations)
+            publication_pointers[recommendation_blob_path()] = recommendations
         if (
             storage_schema == 2
             and generation_key
@@ -712,8 +753,14 @@ def publish_success(
                 if legacy_paths:
                     blobs.delete(legacy_paths)
     if combined_tier is not None:
-        blobs.put_json(combined_tier_blob_path(), combined_tier)
-    blobs.put_json(latest_blob_path(mix_spec), payload)
+        publication_pointers[combined_tier_blob_path()] = combined_tier
+    publication_pointers[latest_blob_path(mix_spec)] = payload
+    bundle_writer = getattr(blobs, "put_json_bundle", None)
+    if callable(bundle_writer):
+        bundle_writer(publication_pointers)
+    else:
+        for pathname, pointer_payload in publication_pointers.items():
+            blobs.put_json(pathname, pointer_payload)
     runs = sorted(
         blobs.list(runs_prefix(mix_spec)), key=lambda item: item.pathname, reverse=True
     )
@@ -905,8 +952,11 @@ def execute_analysis_job(
         },
     )
     staging_path = f"{staging_prefix(mix_spec)}{job_id}.json"
+    lease_heartbeat: Any | None = None
 
     try:
+        lease_heartbeat = _start_job_lease_heartbeat(job_store, job_id)
+        _pulse_job_lease(lease_heartbeat)
         cleanup_abandoned_staging(
             blob_store, now=now(), keep_path=staging_path, mix=mix_spec
         )
@@ -985,6 +1035,7 @@ def execute_analysis_job(
                 **sync_kwargs,
             )
 
+        _pulse_job_lease(lease_heartbeat)
         config = AnalysisConfig(
             mix=mix_spec.key,
             bootstrap_samples=int(os.getenv("ANALYSIS_BOOTSTRAP_SAMPLES", "500"))
@@ -1008,6 +1059,7 @@ def execute_analysis_job(
             },
         )
         chart_results, _, summary, _ = analyze_snapshot(players, charts, scores, config)
+        _pulse_job_lease(lease_heartbeat)
         payload = build_web_payload(chart_results, summary)
         del chart_results, players, charts, scores
         gc.collect()
@@ -1062,6 +1114,7 @@ def execute_analysis_job(
                 index_path=recommendation_blob_path(),
                 publish_index=False,
             )
+            _pulse_job_lease(lease_heartbeat)
 
         update_job(
             job_store,
@@ -1075,6 +1128,7 @@ def execute_analysis_job(
                 "message": "Publishing the private snapshot and refreshed rankings.",
             },
         )
+        _pulse_job_lease(lease_heartbeat)
         publish_success(
             blob_store,
             job_id=job_id,
@@ -1086,6 +1140,9 @@ def execute_analysis_job(
             mix=mix_spec,
         )
         blob_store.delete(staging_path)
+        _pulse_job_lease(lease_heartbeat)
+        _stop_job_lease(lease_heartbeat)
+        lease_heartbeat = None
         completed = update_job(
             job_store,
             job_id,
@@ -1105,6 +1162,12 @@ def execute_analysis_job(
             job_store.set_active_job_id(None)
         return completed
     except Exception as exc:
+        if lease_heartbeat is not None:
+            try:
+                _stop_job_lease(lease_heartbeat)
+            except Exception as heartbeat_error:
+                exc = heartbeat_error
+            lease_heartbeat = None
         failed_at = now()
         message = safe_error(exc)
         try:
