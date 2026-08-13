@@ -87,3 +87,14 @@ The copied source NPZ remains the stored artifact. No publication pointer or rol
 
 At every stage, the immediate rollback is a server-side backend flag change to `vercel`. Do not drop
 the schema or delete hosted data during the acceptance window.
+
+Current safe stage on 2026-08-14 JST: the merged production deployment is running
+`PUMBILITY_DATA_BACKEND=shadow` in fail-open mode, with `PUMBILITY_SHADOW_STRICT=false` and
+`PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED=false`. Vercel remains authoritative for every read
+and publication. `PUM-S6-PRODUCTION-REGRESSION-01` records the production/API/browser/local
+regression evidence completed while reads remained Vercel-authoritative and before any Supabase-read
+or canonical-write flag. The next genuine shadow write must come from the scheduled `0 6 * * *` UTC
+Phoenix 2 job; do not substitute a local worker or claim a shadow cycle before the production
+scheduler and its post-run reconciliation have evidence. Supabase reads, strict shadowing, and
+canonical snapshot writes remain gated behind the two daily cycles, full sync, all-player parity,
+operations checks, and explicit approval above.

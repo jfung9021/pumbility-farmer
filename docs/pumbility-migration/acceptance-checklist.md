@@ -172,21 +172,21 @@ Every item requires an owner, UTC date, result, evidence reference, and approved
 ## Phase 5/6: API and frontend regression
 
 - [ ] Every production route, method, parameter/default, auth rule, status, header, and body shape matches. Evidence:
-- [ ] Phoenix 1 redirect/archive behavior matches. Evidence:
-- [ ] Phoenix 2 remains the default. Evidence:
-- [ ] Deployment webhook remains a signed no-op. Evidence:
-- [ ] Jonathan incremental/full behavior matches. Evidence:
-- [ ] Production player list retains the actual 30-second cache header. Evidence:
-- [ ] Standalone-local player list retains its five-minute cache header. Evidence:
-- [ ] Local manual-rating recommendations remain available. Evidence:
-- [ ] Local refresh remains unavailable with current 404/503 behavior. Evidence:
-- [ ] Public responses expose no internal IDs or raw scores. Evidence:
-- [ ] Landing, tier, recommendation, and operator pages function unchanged. Evidence:
-- [ ] Tier defaults/grouping/layout/filtering/dialog behavior matches. Evidence:
-- [ ] Recommendation cached-first, Overall-first, filters, progress, and limited-data behavior match. Evidence:
-- [ ] Demo behavior matches. Evidence:
-- [ ] Mobile and accessibility evidence has no material regression. Evidence:
-- [x] Existing Python suite passes. Evidence: Codex, 2026-08-13 UTC, `.venv\\Scripts\\python.exe -m unittest discover -s tests -q`: 200/200 passed in 5.238s after executable database integration repairs.
+- [x] Phoenix 1 redirect/archive behavior matches. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; live production returned the frozen archive 307 and archived-job 410 contracts.
+- [x] Phoenix 2 remains the default. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; live default and explicit Phoenix 2 analysis reads returned the expected public aggregate shape.
+- [x] Deployment webhook remains a signed no-op. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; the Python route suite covers the valid signed no-op and archived rejection, and the live unsigned boundary returned 401 without queuing work.
+- [x] Jonathan incremental/full behavior matches. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; the Python route suite covers both forced incremental and full-sync coordination, while the live route retained password auth and `no-store`.
+- [x] Production player list retains the actual 30-second cache header. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; live production returned 200 and the client-visible `public, must-revalidate, max-age=30` policy for 838 players.
+- [x] Standalone-local player list retains its five-minute cache header. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; the active standalone-local server returned `public, max-age=300, s-maxage=300, stale-while-revalidate=3600`.
+- [x] Local manual-rating recommendations remain available. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; a rating-20 Overall request returned 200 with the expected local recommendation shape and `no-store, max-age=0`.
+- [x] Local refresh remains unavailable with current 404/503 behavior. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; standalone-local GET/POST refresh probes returned 404/503 with `no-store`.
+- [x] Public responses expose no internal IDs or raw scores. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; recursive live production and local shape scans found no `playerId`, user ID, or raw-score fields. UUID-shaped values occurred only in public catalog `chartId` fields.
+- [x] Landing, tier, recommendation, and operator pages function unchanged. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; direct production browser checks covered all four routes, the consent/privacy copy, external sync link, hidden operator boundary, and operator password form.
+- [x] Tier defaults/grouping/layout/filtering/dialog behavior matches. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; production defaulted to Singles/estimated/compact, rendered 1,269 Singles and 1,303 Doubles charts, and passed search, official-level, grouping, layout, limited-data, and accessible-dialog interactions.
+- [x] Recommendation cached-first, Overall-first, filters, progress, and limited-data behavior match. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; a cached production player opened on Overall with 20 ranked cards, progress, projected-gain controls, limited-data labels, difficulty filtering, and working Overall/Single/Double tabs.
+- [x] Demo behavior matches. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; `/tier-list?demo=1` used the fixed ten-chart demo payload while retaining Singles and the filter controls.
+- [x] Mobile and accessibility evidence has no material regression. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S6-PRODUCTION-REGRESSION-01`; 390px device emulation found no horizontal overflow or clipped controls on populated tier and recommendation pages, with tab, dialog, listbox, combobox, region, and limited-data semantics exposed to the accessibility tree.
+- [x] Existing Python suite passes. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `.venv\\Scripts\\python.exe -m unittest discover -s tests -q`: 227/227 passed after the hosted reconciliation and typed-population additions.
 - [x] Existing frontend suite passes. Evidence: Codex, 2026-08-13 UTC, `npm run test:frontend`: 45/45 passed.
 - [x] Phoenix 1 archive verification passes. Evidence: Codex, 2026-08-13 UTC, `.venv\\Scripts\\python.exe scripts/verify_phoenix1_archive.py`: 2,470 charts, 2,464 measured, expected SHA-256 verified.
 - [x] TypeScript typecheck passes. Evidence: Codex, 2026-08-13 UTC, `npm run typecheck` passed.
