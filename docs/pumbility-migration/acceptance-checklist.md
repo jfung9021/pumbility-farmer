@@ -217,12 +217,12 @@ Every item requires an owner, UTC date, result, evidence reference, and approved
 
 ## Phase 6/7/8: canary, cutover, rollback, stabilization
 
-- [ ] Endpoint canaries are independently controllable. Evidence:
+- [x] Endpoint canaries are independently controllable. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S7-ROLLOUT-CONTROLS-01`; five fail-closed route-domain allowlist values are deployed flags-off, and candidate mismatch/error automatically serves Vercel without logging private keys.
 - [ ] Canary period records zero unexplained mismatches. Evidence:
 - [ ] Active jobs are drained before final switch. Evidence:
 - [ ] Final source boundary is recorded and reconciled. Evidence:
 - [ ] PostgreSQL becomes authoritative only after the gate passes. Evidence:
-- [ ] Blob outbox mirror and read fallback remain available. Evidence:
+- [x] Blob outbox mirror and read fallback remain available. Evidence: Codex, 2026-08-13 UTC / 2026-08-14 JST, `PUM-S7-ROLLOUT-CONTROLS-01`; Supabase-primary startup requires both controls, mirror intents persist reference-only payloads with retry replay, and missing/error reads fall back to Vercel. Both production flags remain off before cutover.
 - [ ] One scheduled production cycle succeeds. Evidence:
 - [ ] One full operator sync succeeds. Evidence:
 - [ ] Representative eligible/ineligible player refreshes succeed. Evidence:

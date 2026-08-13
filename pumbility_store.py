@@ -145,7 +145,9 @@ def _safe_rollout_event(
     candidate_ms: float | None = None,
 ) -> None:
     """Emit aggregate-safe evidence without artifact keys, digests, or private IDs."""
-    logging.getLogger("pumbility.rollout").info(
+    # Vercel's default Python logging threshold is WARNING. Canary evidence
+    # must survive that default without globally changing application logging.
+    logging.getLogger("pumbility.rollout").warning(
         "pumbility_store operation=%s domain=%s outcome=%s authoritative_ms=%.3f candidate_ms=%s",
         operation,
         domain,
