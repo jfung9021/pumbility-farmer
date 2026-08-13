@@ -166,6 +166,23 @@ class ShadowStoreTests(unittest.TestCase):
 
 
 class ReadCanaryTests(unittest.TestCase):
+    def test_json_reads_authority_and_candidate_concurrently(self) -> None:
+        authoritative = Mock()
+        candidate = Mock()
+        rendezvous = threading.Barrier(2)
+
+        def read(value: dict[str, int]) -> dict[str, int]:
+            rendezvous.wait(timeout=1)
+            return value
+
+        authoritative.get_json.side_effect = lambda _: read({"value": 1})
+        candidate_value = {"value": 1}
+        candidate.get_json.side_effect = lambda _: read(candidate_value)
+
+        store = CanaryJsonStore(authoritative, candidate, domain="analysis")
+
+        self.assertIs(store.get_json("private-key"), candidate_value)
+
     def test_json_candidate_is_served_only_after_exact_equality(self) -> None:
         authoritative = Mock()
         candidate = Mock()
@@ -188,10 +205,13 @@ class ReadCanaryTests(unittest.TestCase):
         authoritative = Mock()
         candidate = Mock()
         authoritative.get_json.return_value = {"source": "vercel"}
-        candidate.get_json.side_effect = RuntimeError("candidate unavailable")
+        candidate.get_json.side_effect = RuntimeError("private candidate unavailable")
         store = CanaryJsonStore(authoritative, candidate, domain="tier-list")
 
-        self.assertEqual(store.get_json("private-key"), {"source": "vercel"})
+        with self.assertLogs("pumbility.rollout", level="WARNING") as captured:
+            self.assertEqual(store.get_json("private-key"), {"source": "vercel"})
+        self.assertIn("candidate_error=RuntimeError:other:none", captured.output[0])
+        self.assertNotIn("private candidate", captured.output[0])
         store.put_json("private-key", {"value": 1})
         authoritative.put_json.assert_called_once_with("private-key", {"value": 1})
         candidate.put_json.assert_not_called()
@@ -213,6 +233,23 @@ class ReadCanaryTests(unittest.TestCase):
         candidate_value = {"id": "private-id", "status": "completed"}
         authoritative.get.return_value = dict(candidate_value)
         candidate.get.return_value = candidate_value
+
+        store = CanaryJobStore(authoritative, candidate, domain="job-status")
+
+        self.assertIs(store.get("private-id"), candidate_value)
+
+    def test_job_reads_authority_and_candidate_concurrently(self) -> None:
+        authoritative = Mock()
+        candidate = Mock()
+        rendezvous = threading.Barrier(2)
+
+        def read(value: dict[str, str]) -> dict[str, str]:
+            rendezvous.wait(timeout=1)
+            return value
+
+        authoritative.get.side_effect = lambda _: read({"status": "completed"})
+        candidate_value = {"status": "completed"}
+        candidate.get.side_effect = lambda _: read(candidate_value)
 
         store = CanaryJobStore(authoritative, candidate, domain="job-status")
 
