@@ -618,9 +618,12 @@ footer b { color: #929b93; }
 .recommendation-difficulty-filter { flex: 0 0 auto; }
 .recommendation-difficulty-filter select { background: #0b0f0c; border: 1px solid var(--line); border-radius: 7px; color: #aeb7af; font-size: 10px; font-weight: 800; min-height: 34px; outline: none; padding: 0 30px 0 10px; text-transform: uppercase; }
 .recommendation-difficulty-filter select:focus { border-color: rgba(200, 255, 46, 0.5); }
-.recommendation-list { background: rgba(13, 18, 14, 0.86); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.recommendation-card { align-items: start; border-bottom: 1px solid rgba(255, 255, 255, 0.055); display: grid; gap: 15px; grid-template-columns: 34px 62px minmax(0, 1fr) max-content; padding: 15px 18px; }
-.recommendation-card:last-child { border-bottom: 0; }
+.recommendation-list { background: rgba(13, 18, 14, 0.86); border: 1px solid var(--line); border-radius: 12px; overflow: visible; }
+.recommendation-card { align-items: start; border-bottom: 1px solid rgba(255, 255, 255, 0.055); display: grid; gap: 15px; grid-template-columns: 34px 62px minmax(0, 1fr) max-content; padding: 15px 18px; position: relative; }
+.recommendation-card:first-child { border-radius: 11px 11px 0 0; }
+.recommendation-card:last-child { border-bottom: 0; border-radius: 0 0 11px 11px; }
+.recommendation-card:only-child { border-radius: 11px; }
+.recommendation-card:focus-within { z-index: 2; }
 .recommendation-card:hover { background: rgba(255, 255, 255, 0.018); }
 .recommendation-leading { height: 62px; position: relative; width: 34px; }
 .recommendation-rank { color: #596259; font-size: 11px; font-weight: 900; }
@@ -644,6 +647,15 @@ footer b { color: #929b93; }
 .recommendation-value { align-self: start; border-left: 1px solid var(--line); display: flex; flex-direction: column; height: 62px; justify-content: flex-start; padding-left: 18px; }
 .recommendation-value span { color: #687169; font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; }
 .recommendation-value strong { color: var(--acid); font-size: 23px; letter-spacing: -0.05em; margin: 3px 0 0; }
+.recommendation-pumbility-control { position: relative; }
+.recommendation-pumbility-trigger, .recommendation-pumbility-unavailable { align-items: flex-start; background: transparent; border: 0; color: inherit; display: flex; flex-direction: column; font: inherit; margin: -3px -5px 0; padding: 3px 5px 2px; text-align: left; }
+.recommendation-pumbility-trigger { border-radius: 5px; cursor: pointer; }
+.recommendation-pumbility-trigger:hover { background: rgba(200, 255, 46, 0.07); }
+.recommendation-pumbility-trigger:hover span { color: #8d978e; }
+.recommendation-pumbility-trigger:focus-visible { outline: 2px solid white; outline-offset: 2px; }
+.recommendation-pumbility-popup { background: #111812; border: 1px solid rgba(200, 255, 46, 0.34); border-radius: 8px; bottom: calc(100% + 8px); box-shadow: 0 14px 36px rgba(0, 0, 0, 0.48); padding: 9px 11px 10px; position: absolute; right: -4px; white-space: nowrap; width: max-content; z-index: 10; }
+.recommendation-pumbility-popup span { display: block; font-size: 7px; }
+.recommendation-pumbility-popup strong { display: block; font-size: 16px; letter-spacing: -0.025em; margin-top: 3px; }
 .recommendation-goal { display: flex; flex-direction: column; margin-top: 1px; }
 .recommendation-goal b { color: #c6cec7; font-size: 9px; line-height: 1.35; }
 .no-recommendations { color: #687168; font-size: 11px; margin: 0; padding: 26px; text-align: center; }
@@ -704,6 +716,8 @@ footer b { color: #929b93; }
   .recommendation-tags { gap: 6px 12px; line-height: 1.2; }
   .recommendation-value { align-self: start; border-left: 1px solid var(--line); grid-column: 4; grid-row: 1; height: 48px; justify-content: flex-start; min-width: 0; padding-left: 10px; }
   .recommendation-value strong { font-size: 18px; }
+  .recommendation-pumbility-popup { max-width: calc(100vw - 32px); right: -2px; }
+  .recommendation-pumbility-popup strong { font-size: 15px; }
   .recommendation-goal b { overflow-wrap: anywhere; }
   .recommendation-jacket .chart-difficulty-badge { bottom: 3px; font-size: 8px; height: 20px; right: 3px; width: 20px; }
   .run-key summary { font-size: 10px; }

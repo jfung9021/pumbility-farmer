@@ -469,6 +469,27 @@ test("recommendation cards show a compact grade and plate goal", async () => {
   assert.match(css, /\.recommendation-goal \{[^}]*margin-top: 1px;/);
 });
 
+test("projected gain opens an accessible total Pumbility popup", async () => {
+  const [page, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(
+    page,
+    /<button[\s\S]*aria-controls=\{pumbilityPopupId\}[\s\S]*aria-expanded=\{pumbilityOpen\}[\s\S]*className="recommendation-pumbility-trigger"[\s\S]*<span>projected gain<\/span>[\s\S]*<strong>\{projectedGain\}<\/strong>[\s\S]*<\/button>/,
+  );
+  assert.match(page, /<span>Total projected Pumbility<\/span>/);
+  assert.match(page, /pumbilityLabel\(chart\.expectedPumbility\)/);
+  assert.match(page, /document\.addEventListener\("pointerdown", closeOnOutsideClick\)/);
+  assert.match(page, /event\.key === "Escape"/);
+  assert.match(css, /\.recommendation-pumbility-popup \{[^}]*bottom: calc\(100% \+ 8px\);[^}]*position: absolute;[^}]*right: -4px;/);
+  assert.match(css, /\.recommendation-pumbility-popup \{[^}]*width: max-content;/);
+  assert.doesNotMatch(css, /\.recommendation-pumbility-popup::after/);
+  assert.doesNotMatch(css, /\.recommendation-pumbility-popup \{[^}]*min-width:/);
+  assert.match(css, /\.recommendation-list \{[^}]*overflow: visible;/);
+});
+
 test("mobile recommendation cards keep gain on the right and show estimated difficulty", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
