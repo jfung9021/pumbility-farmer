@@ -15,6 +15,7 @@ import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
@@ -146,18 +147,48 @@ def _safe_rollout_event(
     outcome: str,
     authoritative_ms: float,
     candidate_ms: float | None = None,
+    candidate_error: Exception | None = None,
 ) -> None:
     """Emit aggregate-safe evidence without artifact keys, digests, or private IDs."""
     # Vercel's default Python logging threshold is WARNING. Canary evidence
     # must survive that default without globally changing application logging.
     logging.getLogger("pumbility.rollout").warning(
-        "pumbility_store operation=%s domain=%s outcome=%s authoritative_ms=%.3f candidate_ms=%s",
+        "pumbility_store operation=%s domain=%s outcome=%s authoritative_ms=%.3f "
+        "candidate_ms=%s candidate_error=%s",
         operation,
         domain,
         outcome,
         authoritative_ms,
         "none" if candidate_ms is None else f"{candidate_ms:.3f}",
+        _safe_error_code(candidate_error),
     )
+
+
+def _safe_error_code(error: Exception | None) -> str:
+    """Classify rollout failures without logging messages, URLs, keys, or IDs."""
+    if error is None:
+        return "none"
+    normalized = str(error).casefold()
+    category = next(
+        (
+            label
+            for label, markers in (
+                ("authentication", ("authentication failed", "password failed")),
+                ("routing", ("tenant or user not found", "user not found")),
+                ("capacity", ("max client", "too many connection")),
+                ("timeout", ("timeout", "timed out")),
+                ("dns", ("name resolution", "getaddrinfo")),
+                ("refused", ("connection refused",)),
+                ("closed", ("server closed", "connection closed")),
+                ("tls", ("ssl", "tls")),
+            )
+            if any(marker in normalized for marker in markers)
+        ),
+        "other",
+    )
+    sqlstate = str(getattr(error, "sqlstate", None) or "none")
+    error_type = re.sub(r"[^A-Za-z0-9_]", "", type(error).__name__) or "Exception"
+    return f"{error_type}:{category}:{sqlstate}"
 
 
 def _equivalent(left: object, right: object) -> bool:
@@ -1245,6 +1276,16 @@ class ShadowJobStore:
                 raise
 
 
+def _timed_read(
+    reader: Callable[..., Any], *args: Any
+) -> tuple[Any, Exception | None, float]:
+    started = time.perf_counter()
+    try:
+        return reader(*args), None, (time.perf_counter() - started) * 1000
+    except Exception as error:
+        return None, error, (time.perf_counter() - started) * 1000
+
+
 class CanaryJsonStore:
     """Dual-read one public domain and serve the candidate only after equality."""
 
@@ -1254,23 +1295,30 @@ class CanaryJsonStore:
         self.domain = domain
 
     def _read(self, method: str, *args: Any) -> Any:
-        started = time.perf_counter()
-        authoritative = getattr(self.authoritative, method)(*args)
-        authoritative_ms = (time.perf_counter() - started) * 1000
-        candidate_started = time.perf_counter()
-        try:
-            candidate = getattr(self.candidate, method)(*args)
-        except Exception:
-            candidate_ms = (time.perf_counter() - candidate_started) * 1000
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            authoritative_future = executor.submit(
+                _timed_read, getattr(self.authoritative, method), *args
+            )
+            candidate_future = executor.submit(
+                _timed_read, getattr(self.candidate, method), *args
+            )
+            authoritative, authoritative_error, authoritative_ms = (
+                authoritative_future.result()
+            )
+            candidate, candidate_error, candidate_ms = candidate_future.result()
+
+        if authoritative_error is not None:
+            raise authoritative_error
+        if candidate_error is not None:
             _safe_rollout_event(
                 operation=method,
                 domain=self.domain,
                 outcome="candidate-error-fallback",
                 authoritative_ms=authoritative_ms,
                 candidate_ms=candidate_ms,
+                candidate_error=candidate_error,
             )
             return authoritative
-        candidate_ms = (time.perf_counter() - candidate_started) * 1000
         try:
             matches = _equivalent(authoritative, candidate)
         except Exception:
@@ -1336,23 +1384,28 @@ class CanaryJobStore:
         self.domain = domain
 
     def get(self, job_id: str) -> dict[str, Any] | None:
-        started = time.perf_counter()
-        authoritative = self.authoritative.get(job_id)
-        authoritative_ms = (time.perf_counter() - started) * 1000
-        candidate_started = time.perf_counter()
-        try:
-            candidate = self.candidate.get(job_id)
-        except Exception:
-            candidate_ms = (time.perf_counter() - candidate_started) * 1000
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            authoritative_future = executor.submit(
+                _timed_read, self.authoritative.get, job_id
+            )
+            candidate_future = executor.submit(_timed_read, self.candidate.get, job_id)
+            authoritative, authoritative_error, authoritative_ms = (
+                authoritative_future.result()
+            )
+            candidate, candidate_error, candidate_ms = candidate_future.result()
+
+        if authoritative_error is not None:
+            raise authoritative_error
+        if candidate_error is not None:
             _safe_rollout_event(
                 operation="get-job",
                 domain=self.domain,
                 outcome="candidate-error-fallback",
                 authoritative_ms=authoritative_ms,
                 candidate_ms=candidate_ms,
+                candidate_error=candidate_error,
             )
             return authoritative
-        candidate_ms = (time.perf_counter() - candidate_started) * 1000
         try:
             matches = _equivalent(authoritative, candidate)
         except Exception:
