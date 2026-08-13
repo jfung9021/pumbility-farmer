@@ -1272,6 +1272,67 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNone(blobs.get_json(f"{STAGING_PREFIX}{job['id']}.json"))
         self.assertIsNone(jobs.active_job_id())
 
+    def test_typed_persistence_completes_before_public_pointer_promotion(self) -> None:
+        class TypedMemoryStore(MemoryBlobStore):
+            typed_persistence_enabled = True
+
+            def persist_typed_generation(self, **kwargs):
+                self.typed_kwargs = kwargs
+                self.latest_before_typed = self.get_json(LATEST_BLOB_PATH)
+                self.snapshot_before_typed = self.get_json(CURRENT_SNAPSHOT_PATH)
+                return "analysis-run", None
+
+        blobs = TypedMemoryStore()
+        jobs = MemoryJobStore()
+        job = new_job("typed-analysis", NOW)
+        jobs.save(job)
+        jobs.set_latest_job_id(job["id"])
+        jobs.set_active_job_id(job["id"])
+
+        result = execute_analysis_job(
+            job["id"],
+            blobs=blobs,
+            jobs=jobs,
+            client=WorkerClient(),
+            now=lambda: NOW,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNone(blobs.latest_before_typed)
+        self.assertIsNotNone(blobs.snapshot_before_typed)
+        self.assertEqual(blobs.typed_kwargs["mix_key"], "phoenix2")
+        self.assertEqual(blobs.typed_kwargs["job_external_key"], job["id"])
+        self.assertEqual(len(blobs.typed_kwargs["baselines"]), 1)
+        self.assertGreater(len(blobs.typed_kwargs["chart_results"]), 0)
+        self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
+
+    def test_typed_persistence_failure_leaves_public_pointer_unchanged(self) -> None:
+        class FailingTypedStore(MemoryBlobStore):
+            typed_persistence_enabled = True
+
+            def persist_typed_generation(self, **_kwargs):
+                raise RuntimeError("typed persistence unavailable")
+
+        blobs = FailingTypedStore()
+        jobs = MemoryJobStore()
+        job = new_job("typed-analysis-failure", NOW)
+        jobs.save(job)
+        jobs.set_latest_job_id(job["id"])
+        jobs.set_active_job_id(job["id"])
+
+        result = execute_analysis_job(
+            job["id"],
+            blobs=blobs,
+            jobs=jobs,
+            client=WorkerClient(),
+            now=lambda: NOW,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
+        self.assertIsNotNone(blobs.get_json(CURRENT_SNAPSHOT_PATH))
+        self.assertIsNotNone(blobs.get_json(f"{STAGING_PREFIX}{job['id']}.json"))
+
     def test_supabase_capable_store_heartbeats_through_every_heavy_phase(self) -> None:
         class HeartbeatHandle:
             def __init__(self) -> None:

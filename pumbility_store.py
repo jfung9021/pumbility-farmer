@@ -561,6 +561,92 @@ class PumbilityArtifactStore:
                     player_checkpoint,
                 )
 
+    @property
+    def typed_persistence_enabled(self) -> bool:
+        return True
+
+    def persist_typed_generation(
+        self,
+        *,
+        job_external_key: str,
+        mix_key: str,
+        snapshot: Mapping[str, Any],
+        config: Any,
+        payload: Mapping[str, Any],
+        baselines: Sequence[Mapping[str, Any]],
+        contributions: Sequence[Mapping[str, Any]],
+        chart_results: Sequence[Mapping[str, Any]],
+        model_artifacts: tuple[
+            dict[str, Any],
+            dict[str, Any],
+            bytes,
+            list[dict[str, Any]],
+            list[dict[str, Any]],
+        ]
+        | None = None,
+    ) -> tuple[Any, Any | None]:
+        """Persist the already-computed runtime generation before pointer publication."""
+        from scripts.analyze_pumbility_supabase import (
+            AnalysisOutput,
+            _persist_analysis,
+            _read_database_input,
+            _sha256,
+        )
+        from scripts.populate_pumbility_production import _persist_model_generation
+        from phoenix2_sync import sanitize_snapshot
+
+        generated_at = _parse_timestamp(payload.get("generatedAtUtc"))
+        if generated_at is None:
+            raise ValueError("Typed runtime persistence requires a generation timestamp.")
+        with _connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                _assert_schema(cursor)
+                cursor.execute(
+                    "select id from pumbility.jobs where external_key = %s",
+                    (job_external_key,),
+                )
+                job_row = cursor.fetchone()
+            if job_row is None:
+                raise RuntimeError("The typed runtime job row is unavailable.")
+            database_input = _read_database_input(connection, mix_key)
+            runtime_source_hash = _sha256(sanitize_snapshot(snapshot, mix=mix_key))
+            database_source_hash = _sha256(database_input.snapshot)
+            if runtime_source_hash != database_source_hash:
+                raise RuntimeError(
+                    "The canonical snapshot changed before typed runtime persistence."
+                )
+            output = AnalysisOutput(
+                database_input=database_input,
+                config=config,
+                started_at=generated_at,
+                payload=dict(payload),
+                baselines=[dict(row) for row in baselines],
+                contributions=[dict(row) for row in contributions],
+                chart_results=[dict(row) for row in chart_results],
+                source_hash=database_source_hash,
+                output_hash=_sha256(payload),
+            )
+            analysis_run_id = _persist_analysis(
+                connection,
+                output,
+                run_key_prefix="runtime-analysis",
+                job_id=job_row[0],
+            )
+        model_generation_id = None
+        if model_artifacts is not None:
+            with _connect(self.database_url) as connection:
+                inputs = {
+                    mix: _read_database_input(connection, mix)
+                    for mix in ("phoenix1", "phoenix2")
+                }
+                model_generation_id = _persist_model_generation(
+                    connection,
+                    analysis_run_id=analysis_run_id,
+                    inputs=inputs,
+                    artifacts=model_artifacts,
+                )
+        return analysis_run_id, model_generation_id
+
     def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:
         """Atomically replace a set of compatibility publication pointers."""
         with _connect(self.database_url) as connection, connection.cursor() as cursor:
@@ -1067,6 +1153,17 @@ class ShadowJsonStore:
             if self.strict:
                 raise
 
+    @property
+    def typed_persistence_enabled(self) -> bool:
+        return _enabled(os.getenv(CANONICAL_SNAPSHOT_WRITE_ENV))
+
+    def persist_typed_generation(self, **kwargs: Any) -> tuple[Any, Any | None]:
+        if not self.typed_persistence_enabled:
+            raise RuntimeError(
+                f"{CANONICAL_SNAPSHOT_WRITE_ENV} must be enabled before typed persistence."
+            )
+        return self.shadow.persist_typed_generation(**kwargs)
+
     def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:
         # Preserve the exact legacy store's sequential behavior while the
         # Supabase mirror receives one atomic transaction.
@@ -1405,6 +1502,13 @@ class SupabasePrimaryJsonStore:
         self, pathname: str, player_checkpoints: Sequence[Mapping[str, Any]]
     ) -> None:
         self.primary.put_sync_checkpoint_players(pathname, player_checkpoints)
+
+    @property
+    def typed_persistence_enabled(self) -> bool:
+        return True
+
+    def persist_typed_generation(self, **kwargs: Any) -> tuple[Any, Any | None]:
+        return self.primary.persist_typed_generation(**kwargs)
 
     def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:
         self.primary.put_json_bundle(payloads)

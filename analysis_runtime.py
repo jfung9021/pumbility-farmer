@@ -1069,13 +1069,35 @@ def execute_analysis_job(
                 "message": f"Analyzing {eligible_player_count:,} eligible players in separate modes.",
             },
         )
-        chart_results, _, summary, _ = analyze_snapshot(players, charts, scores, config)
+        chart_results, baseline_frame, summary, contribution_frame = analyze_snapshot(
+            players, charts, scores, config
+        )
         _pulse_job_lease(lease_heartbeat)
         payload = build_web_payload(chart_results, summary)
-        del chart_results, players, charts, scores
+        typed_persistence_enabled = bool(
+            getattr(blob_store, "typed_persistence_enabled", False)
+        )
+        if typed_persistence_enabled:
+            from scripts.analyze_pumbility_supabase import _frame_records
+
+            typed_baselines = _frame_records(baseline_frame)
+            typed_contributions = _frame_records(contribution_frame)
+            typed_chart_results = _frame_records(chart_results)
+        else:
+            typed_baselines = []
+            typed_contributions = []
+            typed_chart_results = []
+        del chart_results, baseline_frame, contribution_frame, players, charts, scores
         gc.collect()
         recommendation_payload: dict[str, Any] | None = None
         combined_tier_payload: dict[str, Any] | None = None
+        recommendation_model_artifacts: tuple[
+            dict[str, Any],
+            dict[str, Any],
+            bytes,
+            list[dict[str, Any]],
+            list[dict[str, Any]],
+        ] | None = None
         frozen_phoenix1 = blob_store.get_json(phoenix1_snapshot_path())
         if frozen_phoenix1 is not None:
             update_job(
@@ -1115,6 +1137,13 @@ def execute_analysis_job(
                 phoenix2_slopes=combined_slopes,
                 generation_key=recommendation_generation,
             )
+            recommendation_model_artifacts = (
+                recommendation_payload,
+                recommendation_model,
+                recommendation_score_model,
+                recommendation_phoenix1_shards,
+                recommendation_phoenix2_shards,
+            )
             publish_recommendation_model_artifacts(
                 blob_store,
                 index=recommendation_payload,
@@ -1140,6 +1169,29 @@ def execute_analysis_job(
             },
         )
         _pulse_job_lease(lease_heartbeat)
+        publish_snapshot = not reanalyze_only
+        if typed_persistence_enabled:
+            typed_publisher = getattr(blob_store, "persist_typed_generation", None)
+            if not callable(typed_publisher):
+                raise RuntimeError("Typed Pumbility persistence is not available.")
+            if publish_snapshot:
+                blob_store.put_json(
+                    current_snapshot_path(mix_spec),
+                    sanitize_snapshot(snapshot, mix=mix_spec),
+                )
+            _pulse_job_lease(lease_heartbeat)
+            typed_publisher(
+                job_external_key=job_id,
+                mix_key=mix_spec.key,
+                snapshot=snapshot,
+                config=config,
+                payload=payload,
+                baselines=typed_baselines,
+                contributions=typed_contributions,
+                chart_results=typed_chart_results,
+                model_artifacts=recommendation_model_artifacts,
+            )
+            _pulse_job_lease(lease_heartbeat)
         publish_success(
             blob_store,
             job_id=job_id,
@@ -1147,7 +1199,7 @@ def execute_analysis_job(
             payload=payload,
             recommendations=recommendation_payload,
             combined_tier=combined_tier_payload,
-            publish_snapshot=not reanalyze_only,
+            publish_snapshot=publish_snapshot and not typed_persistence_enabled,
             mix=mix_spec,
         )
         blob_store.delete(staging_path)

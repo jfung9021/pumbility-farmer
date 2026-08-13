@@ -239,6 +239,7 @@ def _persist_analysis(
     output: AnalysisOutput,
     *,
     run_key_prefix: str = "local-analysis",
+    job_id: Any | None = None,
 ) -> Any:
     """Persist a validated immutable run and all typed facts in one short transaction."""
     from psycopg.types.json import Jsonb
@@ -307,16 +308,18 @@ def _persist_analysis(
         cursor.execute(
             """
             insert into pumbility.analysis_runs (
-                run_key, mix_id, methodology_id, status, generated_at, source_hash,
+                run_key, job_id, mix_id, methodology_id, status, generated_at, source_hash,
                 summary, input_hash, output_hash, coverage, metrics,
                 started_at, completed_at, validated_at
             ) values (
-                %s, %s, %s, 'shadow', %s::timestamptz, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, 'shadow', %s::timestamptz, %s, %s, %s, %s, %s, %s,
                 %s, %s::timestamptz, %s::timestamptz
-            ) returning id
+            ) on conflict (run_key) do nothing
+            returning id
             """,
             (
                 run_key,
+                job_id,
                 output.database_input.mix_id,
                 methodology_id,
                 generated_at,
@@ -331,7 +334,41 @@ def _persist_analysis(
                 generated_at,
             ),
         )
-        run_id = cursor.fetchone()[0]
+        inserted_run = cursor.fetchone()
+        if inserted_run is None:
+            cursor.execute(
+                """
+                select id, job_id, mix_id, methodology_id, status, source_hash, input_hash, output_hash
+                from pumbility.analysis_runs
+                where run_key = %s
+                """,
+                (run_key,),
+            )
+            existing_run = cursor.fetchone()
+            expected_identity = (
+                job_id,
+                output.database_input.mix_id,
+                methodology_id,
+                output.source_hash,
+                output.source_hash,
+                output.output_hash,
+            )
+            actual_identity = (
+                existing_run[1],
+                existing_run[2],
+                existing_run[3],
+                existing_run[5],
+                existing_run[6],
+                existing_run[7],
+            ) if existing_run is not None else None
+            if (
+                existing_run is None
+                or existing_run[4] not in {"shadow", "published"}
+                or actual_identity != expected_identity
+            ):
+                raise RuntimeError("An immutable analysis run conflicts with parity output.")
+            return existing_run[0]
+        run_id = inserted_run[0]
 
         mode_rows = []
         for mode in ("Singles", "Doubles"):
