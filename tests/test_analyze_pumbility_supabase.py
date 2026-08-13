@@ -187,6 +187,49 @@ class TypedPersistenceTests(unittest.TestCase):
         self.assertEqual(player_rows[0][2], "a" * 64)
         self.assertEqual(contribution_rows[0][3], "a" * 64)
 
+    def test_identical_runtime_analysis_retry_reuses_the_immutable_run(self) -> None:
+        value = _output()
+        value = AnalysisOutput(
+            **{
+                **value.__dict__,
+                "config": AnalysisConfig(mix="phoenix2", bootstrap_samples=0),
+                "started_at": datetime(2026, 8, 13, tzinfo=timezone.utc),
+            }
+        )
+        cursor = Mock()
+        cursor.__enter__ = Mock(return_value=cursor)
+        cursor.__exit__ = Mock(return_value=False)
+        cursor.fetchone.side_effect = [
+            ("method-id",),
+            None,
+            (
+                "existing-run",
+                None,
+                "mix-db-id",
+                "method-id",
+                "shadow",
+                "b" * 64,
+                "b" * 64,
+                "c" * 64,
+            ),
+        ]
+        connection = Mock()
+        connection.transaction.return_value = nullcontext()
+        connection.cursor.return_value = cursor
+        fake_json_module = SimpleNamespace(Jsonb=lambda payload: payload)
+
+        with patch.dict("sys.modules", {"psycopg.types.json": fake_json_module}):
+            self.assertEqual(
+                _persist_analysis(
+                    connection,
+                    value,
+                    run_key_prefix="runtime-analysis",
+                ),
+                "existing-run",
+            )
+
+        cursor.executemany.assert_not_called()
+
 
 class AnalyzeSupabaseMainSafetyTests(unittest.TestCase):
     @patch("scripts.analyze_pumbility_supabase._assert_schema")

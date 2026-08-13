@@ -462,6 +462,60 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
                 database_url="postgresql://localhost/local"
             ).get_json("analysis/phoenix2/staging/job.json")
 
+    def test_runtime_typed_persistence_uses_the_same_canonical_snapshot(self) -> None:
+        snapshot = {
+            "schemaVersion": 2,
+            "mix": "Phoenix2",
+            "generatedAtUtc": "2026-08-13T00:00:00Z",
+            "players": [],
+            "charts": [],
+            "scores": [],
+        }
+        database_input = SimpleNamespace(snapshot=dict(snapshot))
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        cursor = Mock()
+        cursor.__enter__ = Mock(return_value=cursor)
+        cursor.__exit__ = Mock(return_value=False)
+        cursor.fetchone.side_effect = [
+            (EXPECTED_PUMBILITY_MIGRATION,),
+            ("job-uuid",),
+        ]
+        connection.cursor.return_value = cursor
+        config = SimpleNamespace()
+        payload = {"generatedAtUtc": "2026-08-13T00:00:00Z"}
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            patch(
+                "scripts.analyze_pumbility_supabase._read_database_input",
+                return_value=database_input,
+            ),
+            patch(
+                "scripts.analyze_pumbility_supabase._persist_analysis",
+                return_value="analysis-run",
+            ) as persist_analysis,
+        ):
+            result = PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).persist_typed_generation(
+                job_external_key="external-job",
+                mix_key="phoenix2",
+                snapshot=snapshot,
+                config=config,
+                payload=payload,
+                baselines=[],
+                contributions=[],
+                chart_results=[],
+            )
+
+        self.assertEqual(result, ("analysis-run", None))
+        persisted_output = persist_analysis.call_args.args[1]
+        self.assertEqual(persisted_output.database_input, database_input)
+        self.assertEqual(persisted_output.payload, payload)
+        self.assertEqual(persist_analysis.call_args.kwargs["job_id"], "job-uuid")
+
 
 class PumbilityJobHeartbeatTests(unittest.TestCase):
     def test_heartbeat_renews_owned_lease_and_payload_timestamp(self) -> None:

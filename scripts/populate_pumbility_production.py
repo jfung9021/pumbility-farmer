@@ -400,13 +400,12 @@ def _persist_model_generation(
             (generation,),
         )
         existing = cursor.fetchone()
-        if existing is None or tuple(existing[1:]) != (
+        if existing is None or tuple(existing[1:5]) != (
             artifact_id,
             str(MODEL_ARTIFACT_SCHEMA_VERSION),
             input_hash,
             output_hash,
-            "shadow",
-        ):
+        ) or existing[5] not in {"shadow", "published"}:
             raise RuntimeError("The immutable hosted model generation conflicts with parity output.")
         return existing[0]
 

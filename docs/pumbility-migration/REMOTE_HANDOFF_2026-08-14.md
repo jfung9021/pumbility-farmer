@@ -214,11 +214,15 @@ shared and may have advanced.
 
 ## Verification most recently passed
 
+- Runtime typed-persistence prerequisite (`PUM-S9-RUNTIME-TYPED-PERSISTENCE-01`):
+  97 focused and 247 full Python tests, 45 frontend tests, Python compilation,
+  TypeScript typecheck, and production build.
 - 20 focused production backfill/provision/reconcile/Supabase tool tests.
 - Python compilation for the focused production scripts.
 - `git diff --check`.
 - Hosted linked migration parity and Pumbility schema lint.
 - Hosted aggregate row/count/storage verification.
 
-No final cutover, shadow acceptance, typed model publication, exhaustive browser
-regression, or final local-owner signoff has been claimed.
+The runtime typed-persistence path remains dormant while canonical writes are off.
+No scheduled-cycle acceptance, canonical-write activation, final cutover, typed
+model publication, or final local-owner signoff has been claimed.

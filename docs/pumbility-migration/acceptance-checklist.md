@@ -202,7 +202,7 @@ Every item requires an owner, UTC date, result, evidence reference, and approved
 - [ ] Global five-minute and player 60-second retry rules match. Evidence:
 - [ ] Worker crash before publication leaves pointers unchanged. Evidence:
 - [ ] Artifact upload failure leaves the previous generation active. Evidence:
-- [ ] Atomic publication never exposes a partial generation. Evidence:
+- [ ] Atomic publication never exposes a partial generation. Evidence: Local implementation gate `PUM-S9-RUNTIME-TYPED-PERSISTENCE-01` proves typed persistence failure cannot promote the public latest pointer and retains the staging checkpoint; production fault-injection evidence remains pending.
 - [ ] `pumbility` remains unexposed through PostgREST. Evidence:
 - [ ] Supabase and PIU credentials remain server-side and are not stored in PostgreSQL. Evidence:
 - [ ] Evidence/log scanners find no IDs, raw scores, secrets, or SQL parameters. Evidence:
