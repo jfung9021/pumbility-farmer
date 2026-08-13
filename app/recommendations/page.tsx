@@ -1,7 +1,14 @@
 "use client";
 
 import { track } from "@vercel/analytics";
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 
 import { RefreshMeta } from "../_components/refresh-meta";
 import { ChartVideoLink } from "../_components/chart-video-link";
@@ -139,6 +146,35 @@ function RecommendationCard({
   const goal = chart.projectedGrade && chart.projectedPlateCode
     ? `Goal: ${chart.projectedGrade} ${chart.projectedPlateCode}`
     : null;
+  const [pumbilityOpen, setPumbilityOpen] = useState(false);
+  const pumbilityPopupId = useId();
+  const pumbilityControlRef = useRef<HTMLDivElement>(null);
+  const projectedGain = chart.projectedGain === null ? "-" : signed(chart.projectedGain);
+  const hasProjectedPumbility = chart.expectedPumbility !== null;
+
+  useEffect(() => {
+    if (!pumbilityOpen) return;
+
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node
+        && !pumbilityControlRef.current?.contains(event.target)
+      ) {
+        setPumbilityOpen(false);
+      }
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setPumbilityOpen(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [pumbilityOpen]);
+
   return (
     <article className="recommendation-card">
       <div className="recommendation-leading">
@@ -180,8 +216,44 @@ function RecommendationCard({
         </div>
       </div>
       <div className="recommendation-value">
-        <span>projected gain</span>
-        <strong>{chart.projectedGain === null ? "-" : signed(chart.projectedGain)}</strong>
+        <div
+          className="recommendation-pumbility-control"
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) {
+              setPumbilityOpen(false);
+            }
+          }}
+          ref={pumbilityControlRef}
+        >
+          {hasProjectedPumbility ? (
+            <button
+              aria-controls={pumbilityPopupId}
+              aria-expanded={pumbilityOpen}
+              aria-label={`Projected gain ${projectedGain}. ${pumbilityOpen ? "Hide" : "Show"} total projected Pumbility.`}
+              className="recommendation-pumbility-trigger"
+              onClick={() => setPumbilityOpen((open) => !open)}
+              type="button"
+            >
+              <span>projected gain</span>
+              <strong>{projectedGain}</strong>
+            </button>
+          ) : (
+            <div className="recommendation-pumbility-unavailable">
+              <span>projected gain</span>
+              <strong>{projectedGain}</strong>
+            </div>
+          )}
+          {pumbilityOpen && chart.expectedPumbility !== null ? (
+            <div
+              className="recommendation-pumbility-popup"
+              id={pumbilityPopupId}
+              role="status"
+            >
+              <span>Total projected Pumbility</span>
+              <strong>{pumbilityLabel(chart.expectedPumbility)}</strong>
+            </div>
+          ) : null}
+        </div>
         {goal ? (
           <div className="recommendation-goal">
             <b>{goal}</b>
