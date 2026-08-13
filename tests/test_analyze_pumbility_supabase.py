@@ -4,7 +4,7 @@ import unittest
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from piu_misgrade_analyzer import AnalysisConfig
 from scripts.analyze_pumbility_supabase import (
@@ -13,6 +13,7 @@ from scripts.analyze_pumbility_supabase import (
     DatabaseInput,
     _publish_latest,
     _persist_analysis,
+    _analyze,
     _validate_output,
     build_parser,
     main,
@@ -74,6 +75,34 @@ class AnalyzeSupabaseConfigurationTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "canonical row"):
             _validate_output(invalid)
+
+    @patch("scripts.analyze_pumbility_supabase.analyze_snapshot")
+    @patch("scripts.analyze_pumbility_supabase.analyzer_input")
+    def test_typed_analysis_uses_the_runtime_eligibility_projection(
+        self, analyzer_input: Mock, analyze_snapshot: Mock
+    ) -> None:
+        database_input = _output().database_input
+        analyzer_input.return_value = ([{"userId": "eligible"}], [], [])
+        analyze_snapshot.return_value = (
+            SimpleNamespace(to_json=lambda **kwargs: "[]"),
+            SimpleNamespace(to_json=lambda **kwargs: "[]"),
+            {"coverage": {}, "modes": {}},
+            SimpleNamespace(to_json=lambda **kwargs: "[]"),
+        )
+        with patch(
+            "scripts.analyze_pumbility_supabase.build_web_payload",
+            return_value=_output().payload,
+        ):
+            _analyze(database_input, 500)
+
+        analyzer_input.assert_called_once_with(
+            database_input.snapshot,
+            minimum_scores_per_mode=30,
+            eligible_only=True,
+        )
+        analyze_snapshot.assert_called_once_with(
+            [{"userId": "eligible"}], [], [], ANY
+        )
 
 
 class LatestPromotionTests(unittest.TestCase):

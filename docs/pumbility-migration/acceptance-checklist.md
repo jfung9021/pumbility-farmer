@@ -95,15 +95,15 @@ Every item requires an owner, UTC date, result, evidence reference, and approved
 - [x] Historical Phoenix 1 methodology is preserved, not silently recomputed. Evidence: Codex, 2026-08-13 UTC, public archive artifact/run retained separately; the current typed shadow analysis is a separate generation.
 - [x] Phoenix 2 `T0` snapshot is imported. Evidence: Codex, 2026-08-13 UTC, 831 players, 4,616 charts, and 7,998 score revisions imported from the validated local manifest.
 - [ ] Retained analysis and combined-tier generations are imported. Evidence:
-- [ ] Recommendation indexes, models, binaries, inputs, state, and caches are imported. Evidence:
+- [x] Recommendation indexes, models, binaries, inputs, state, and caches are imported. Evidence: Codex, 2026-08-14 UTC, `PUM-S4-HOSTED-RECONCILIATION-01`; the guarded hosted operator proved exact parity for 173 JSON artifacts, one private NPZ model, and 48 cached-player artifacts while Vercel remained authoritative.
 - [x] Rerates, videos, aliases, and score overrides are imported with provenance. Evidence: Codex, 2026-08-13 UTC, 231 rerates, 2,583 video rows, four aliases, and two score overrides imported.
 - [x] `T0` player, chart, and score counts match exactly. Evidence: Codex, 2026-08-13 UTC, backfill transaction assertions and privacy-safe reconciliation passed for both mixes.
-- [ ] `T0` consent, catalog, score-key, and score-record digests match exactly. Evidence:
+- [x] `T0` consent, catalog, score-key, and score-record digests match exactly. Evidence: Codex, 2026-08-14 UTC, `PUM-S4-HOSTED-RECONCILIATION-01`; exact keyed reconciliation matched 582,301 Phoenix 1 and 14,619 Phoenix 2 player/chart/score leaves with zero unexplained mismatches.
 - [x] Every score references an existing player and chart. Evidence: Codex, 2026-08-13 UTC, migration FKs plus completed 584,914-row current-score import and focused constraint tests.
 - [x] Every current chart references a valid revision. Evidence: Codex, 2026-08-13 UTC, full backfill count assertions and focused schema checks passed.
 - [x] No duplicate natural keys or foreign-key orphans exist. Evidence: Codex, 2026-08-13 UTC, idempotent second import, natural-key constraints, and focused SQL checks passed.
 - [ ] Every post-`T0` difference through `T1` has an accepted typed evidence entry. Evidence:
-- [x] Reconciliation reports zero unexplained mismatches and zero unused explanations. Evidence: Codex, 2026-08-13 UTC, ignored `db-reconciliation.json` passed its privacy scan with zero unexplained source-to-database mismatches; no ledger was required.
+- [x] Reconciliation reports zero unexplained mismatches and zero unused explanations. Evidence: Codex, 2026-08-14 UTC, `PUM-S4-HOSTED-RECONCILIATION-01`; guarded production reconciliation passed with zero unexplained mismatches and no accepted-change ledger, followed by an unchanged stable boundary and privacy scan.
 - [ ] Revoked players are absent from current operational/public state. Evidence:
 - [ ] No private fields exist in public views or evidence artifacts. Evidence:
 
@@ -129,7 +129,7 @@ Every item requires an owner, UTC date, result, evidence reference, and approved
 
 ## Phase 5: analysis parity
 
-- [ ] Methodology/source/dependency versions and random seed are recorded. Evidence:
+- [x] Methodology/source/dependency versions and random seed are recorded. Evidence: Codex, 2026-08-14 UTC, `PUM-S5-TYPED-POPULATION-01`; the hosted typed shadow runs persisted the pinned analyzer script version, source and dependency hashes, production configuration, and random seed after parity passed.
 - [ ] Eligible Singles players match. Evidence:
 - [ ] Eligible Doubles players match. Evidence:
 - [ ] Positive/non-broken filtering matches. Evidence:
@@ -145,7 +145,7 @@ Every item requires an owner, UTC date, result, evidence reference, and approved
 - [ ] Phoenix 1 special score conversions and rebands match. Evidence:
 - [ ] Phoenix 2 allowlist and overlap precedence match. Evidence:
 - [ ] Combined chart membership/order/results match. Evidence:
-- [ ] Public tier payload semantic and exact-field hashes match. Evidence:
+- [x] Public tier payload semantic and exact-field hashes match. Evidence: Codex, 2026-08-14 UTC, `PUM-S5-TYPED-POPULATION-01`; the production-equivalent Phoenix 2 analysis matched after removing only contract-defined volatile timestamps, and the combined-tier payload matched exactly.
 
 ## Phase 5: recommendation parity
 
