@@ -48,6 +48,15 @@ revisions, imports the active schema-3 model graph and cached player artifacts, 
 NPZ through Storage, and rereads the mutable snapshot and active pointers at the end. If production
 advanced during the run, it exits unsuccessfully; rerunning is required and is idempotent.
 
+The approved one-time orchestration keeps the generated login password and downloaded service key
+in process memory and subprocess stdin. It provisions the narrow login, runs both guarded backfill
+phases, and installs the server-side Vercel variables with the backend explicitly left on `vercel`:
+
+```powershell
+vercel env run -e production -- `
+  .\.venv\Scripts\python.exe .\scripts\provision_pumbility_production.py
+```
+
 ## Shadow and cutover order
 
 1. Reconcile the imported rows against the exact captured source and require zero unexplained
