@@ -23,6 +23,11 @@ ROLE_NAME = "pumbility_runtime_login"
 SESSION_HOST = "aws-1-us-east-2.pooler.supabase.com"
 
 
+def _executable(name: str) -> str:
+    """Resolve npm-installed command shims correctly on Windows."""
+    return f"{name}.cmd" if os.name == "nt" else name
+
+
 def _run(
     args: Sequence[str],
     *,
@@ -74,7 +79,7 @@ def _provision_login(password: str) -> None:
     grant pumbility_worker to {ROLE_NAME};
     """
     _run(
-        ("npx", "--yes", "supabase@2.114.0", "db", "query", "--linked"),
+        (_executable("npx"), "--yes", "supabase@2.114.0", "db", "query", "--linked"),
         cwd=SCHEMA_REPO,
         stdin=sql,
     )
@@ -83,7 +88,7 @@ def _provision_login(password: str) -> None:
 def _service_role_key() -> str:
     output = _run(
         (
-            "npx",
+            _executable("npx"),
             "--yes",
             "supabase@2.114.0",
             "projects",
@@ -107,7 +112,7 @@ def _install_vercel_value(name: str, value: str) -> None:
         raise ValueError(f"Refusing to install an empty {name} value.")
     _run(
         (
-            "vercel",
+            _executable("vercel"),
             "env",
             "add",
             name,

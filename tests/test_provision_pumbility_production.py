@@ -3,10 +3,19 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from scripts.provision_pumbility_production import _provision_login, _service_role_key
+from scripts.provision_pumbility_production import (
+    _executable,
+    _provision_login,
+    _service_role_key,
+)
 
 
 class ProvisionProductionTests(unittest.TestCase):
+    def test_windows_command_shims_are_resolved(self) -> None:
+        with patch("scripts.provision_pumbility_production.os.name", "nt"):
+            self.assertEqual(_executable("npx"), "npx.cmd")
+            self.assertEqual(_executable("vercel"), "vercel.cmd")
+
     @patch("scripts.provision_pumbility_production._run")
     def test_login_sql_is_narrow_and_password_stays_on_stdin(self, run) -> None:
         password = "a" * 64
