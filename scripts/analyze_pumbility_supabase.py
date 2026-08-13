@@ -24,6 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from analysis_runtime import latest_blob_path  # noqa: E402
 from mix_registry import MIX_SPECS, resolve_mix  # noqa: E402
+from phoenix2_sync import analyzer_input  # noqa: E402
 from piu_misgrade_analyzer import (  # noqa: E402
     SCRIPT_VERSION,
     AnalysisConfig,
@@ -187,8 +188,13 @@ def _analyze(database_input: DatabaseInput, bootstrap_samples: int) -> AnalysisO
         bootstrap_samples=bootstrap_samples,
     )
     snapshot = database_input.snapshot
+    players, charts, scores = analyzer_input(
+        snapshot,
+        minimum_scores_per_mode=config.minimum_scores_per_player,
+        eligible_only=True,
+    )
     chart_frame, baseline_frame, summary, contribution_frame = analyze_snapshot(
-        snapshot["players"], snapshot["charts"], snapshot["scores"], config
+        players, charts, scores, config
     )
     payload = build_web_payload(chart_frame, summary)
     output = AnalysisOutput(
@@ -228,14 +234,22 @@ def _methodology(output: AnalysisOutput) -> dict[str, Any]:
     }
 
 
-def _persist_analysis(connection: Any, output: AnalysisOutput) -> Any:
+def _persist_analysis(
+    connection: Any,
+    output: AnalysisOutput,
+    *,
+    run_key_prefix: str = "local-analysis",
+) -> Any:
     """Persist a validated immutable run and all typed facts in one short transaction."""
     from psycopg.types.json import Jsonb
 
+    if not run_key_prefix or any(character.isspace() for character in run_key_prefix):
+        raise ValueError("The analysis run-key prefix must be nonempty and contain no whitespace.")
     methodology = _methodology(output)
     summary = dict(output.payload["summary"])
     generated_at = str(output.payload["generatedAtUtc"])
-    run_key = "local-analysis:{mix}:{digest}".format(
+    run_key = "{prefix}:{mix}:{digest}".format(
+        prefix=run_key_prefix,
         mix=output.database_input.mix_key,
         digest=_sha256(
             {

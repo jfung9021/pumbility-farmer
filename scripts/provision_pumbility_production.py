@@ -29,10 +29,16 @@ OPERATOR_PHASE = "startup"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--reconcile-only",
         action="store_true",
         help="Reconcile an already completed backfill before installing flags-off secrets.",
+    )
+    mode.add_argument(
+        "--populate-shadow",
+        action="store_true",
+        help="Reconcile, prove hosted parity, and populate typed shadow rows flags-off.",
     )
     return parser
 
@@ -175,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"BACKFILL {PROJECT_REF} 20260813010000"
         )
 
-        if not args.reconcile_only:
+        if not args.reconcile_only and not args.populate_shadow:
             OPERATOR_PHASE = "load-backfill-module"
             from scripts.backfill_pumbility_production import main as backfill
 
@@ -193,6 +199,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if reconcile_production() != 0:
             raise RuntimeError("The production reconciliation did not pass.")
+
+        if args.populate_shadow:
+            OPERATOR_PHASE = "populate-shadow"
+            from scripts.populate_pumbility_production import (
+                CONFIRMATION as POPULATION_CONFIRMATION,
+                CONFIRMATION_ENV as POPULATION_CONFIRMATION_ENV,
+                main as populate_shadow,
+            )
+
+            os.environ[POPULATION_CONFIRMATION_ENV] = POPULATION_CONFIRMATION
+            if populate_shadow(["--apply"]) != 0:
+                raise RuntimeError("The hosted shadow population did not pass.")
 
         values = {
             "PUMBILITY_DATABASE_URL": runtime_url,
@@ -216,6 +234,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "PUMBILITY_PRODUCTION_CONFIRMATION",
             "PUMBILITY_DATABASE_URL",
             "PUMBILITY_DATA_BACKEND",
+            "PUMBILITY_PRODUCTION_POPULATION_CONFIRMATION",
         ):
             os.environ.pop(name, None)
 
@@ -226,6 +245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "projectVerified": True,
                 "leastPrivilegeLoginInstalled": True,
                 "backfillCompleted": True,
+                "shadowPopulationCompleted": args.populate_shadow,
                 "vercelBackend": "vercel",
             },
             sort_keys=True,

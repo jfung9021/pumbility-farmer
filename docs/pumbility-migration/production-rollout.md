@@ -57,6 +57,22 @@ vercel env run -e production -- `
   .\.venv\Scripts\python.exe .\scripts\provision_pumbility_production.py
 ```
 
+After exact hosted reconciliation passes and the flags-off adapter release is deployed, populate
+typed shadow analysis/model rows through the same secured wrapper:
+
+```powershell
+vercel env run -e production -- `
+  .\.venv\Scripts\python.exe .\scripts\provision_pumbility_production.py --populate-shadow
+```
+
+This mode rotates the narrow login in memory, reruns exact relational/artifact reconciliation,
+computes the production-equivalent typed analyses and schema-3 recommendation model, verifies the
+stable Vercel boundary, and only then inserts `shadow` typed rows. Analysis, combined-tier,
+recommendation JSON, indexes, and private shards must match exactly. Numeric NPZ arrays retain
+exact names, shapes, dtypes, and discrete values; floating score arrays may differ by at most
+`1e-8` absolute with zero relative tolerance to accommodate cross-platform floating-point drift.
+The copied source NPZ remains the stored artifact. No publication pointer or rollout flag changes.
+
 ## Shadow and cutover order
 
 1. Reconcile the imported rows against the exact captured source and require zero unexplained

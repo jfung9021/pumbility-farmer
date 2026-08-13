@@ -16,6 +16,9 @@ class ProvisionProductionTests(unittest.TestCase):
     def test_reconcile_only_is_explicit(self) -> None:
         self.assertFalse(build_parser().parse_args([]).reconcile_only)
         self.assertTrue(build_parser().parse_args(["--reconcile-only"]).reconcile_only)
+        self.assertTrue(build_parser().parse_args(["--populate-shadow"]).populate_shadow)
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["--reconcile-only", "--populate-shadow"])
 
     def test_windows_command_shims_are_resolved(self) -> None:
         with patch("scripts.provision_pumbility_production.os.name", "nt"):
