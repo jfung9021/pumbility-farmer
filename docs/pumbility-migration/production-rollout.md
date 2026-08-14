@@ -396,10 +396,13 @@ errors, or fallbacks. It nevertheless failed the fixed latency gate: analysis p9
 `1254.527/1323.056 ms` versus `977.721/1104.796 ms` baseline. The alias was immediately rolled back
 to the Vercel-only deployment above and warm public health checks passed.
 
-A same-commit protected region comparison showed that `cle1` materially improves Supabase connect
-and fetch latency, but worsens the still-authoritative private Blob read. Region adoption remains
-pending the worker, private Blob, cron, queue, cold-start, connection-capacity, failure, and rollback
-topology gates listed above. Do not run groups 2/3, re-enable a production read canary, move the
-production region, or enable Supabase authority until the relevant focused change or fully gated
-topology has either met the diagnostic latency target or received the explicit latency-only owner
-waiver described above. See `REMOTE_HANDOFF_2026-08-14.md` for exact evidence.
+The protected pool-off/pool-on IAD repeat and the pool-on IAD/CLE region comparison now both have
+100 scored samples per domain, exact response parity within each comparison, zero HTTP/cache errors,
+and exact 206/206 `candidate-served` telemetry per deployment. Pool-on improved endpoint p95 in two
+independent IAD comparisons. CLE improved analysis p95/p99 by `20.361%/23.284%` and tier-list by
+`3.158%/8.561%` in the accepted region comparison. These results qualify the read-path candidates
+only. Region or connection adoption remains pending the worker, private Blob, cron, queue,
+cold-start, connection-capacity, failure, and rollback topology gates listed above. Do not run groups
+2/3, re-enable a production read canary, move the production region, or enable Supabase authority
+until the fully gated topology has complete non-latency evidence. See
+`REMOTE_HANDOFF_2026-08-14.md` for exact evidence.

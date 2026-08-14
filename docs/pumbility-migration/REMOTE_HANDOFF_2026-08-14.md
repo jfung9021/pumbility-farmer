@@ -9,9 +9,10 @@ private artifact paths.
 ## Current live handoff (supersedes the historical pause sections below)
 
 - Rollout code is at `1ca5399`, `Instrument and optimize Pumbility read canaries`.
-- The next rollout candidate is committed locally at `38857ac`, `Optimize and qualify Pumbility
-  read rollout`. It has not been deployed. Production therefore remains on the live commit and
-  deployment recorded below.
+- The rollout candidate is pushed on `agent/pumbility-rollout-latency-qualification` through
+  `9fc7c64` and is tracked by draft PR #69. Runtime optimization begins at `38857ac`; the later
+  commits add the protected-Preview operator harness and its Windows entrypoint fixes. Production
+  remains on the live commit and deployment recorded below.
 - Candidate `38857ac` adds an opt-in, default-off bounded Psycopg read pool for hot artifact/job
   reads only; direct large-JSON responses; token-isolated Vercel Blob client reuse; lazy Celery
   imports; fixed sanitized pool telemetry/deadlines; and fail-closed topology qualification tools.
@@ -24,12 +25,27 @@ private artifact paths.
   distinct latency-only waiver after deep optimization if and only if every correctness, exact
   parity, integrity, privacy, capacity, fallback, failure, rollback, and evidence gate passes. A
   latency miss must never be relabeled as a pass or waive a non-latency failure.
-- Protected preview A/B execution is currently blocked because Vercel Preview has no
-  `PUMBILITY_DATABASE_URL`. The linked CLI is authenticated, but the encrypted production value
-  must be extended to Preview through an authorized sensitive-variable flow; never place it in a
-  command argument, shell history, or file. After that, compare pool off/on in `iad1` while varying
-  only `PUMBILITY_SUPABASE_READ_POOL_ENABLED`, then compare accepted pool-on builds in `iad1` and
-  `cle1` while varying only the region. Use `--skip-domain` and never assign a production alias.
+- The sensitive database variable is now scoped to Preview through Vercel without exposing its
+  value. All qualification deployments are isolated Preview targets with no production alias.
+- The same-source IAD pool-off/pool-on comparison completed two independent 3-warmup plus
+  100-scored-sample runs per domain. Both runs had exact response parity, 400/400 scored HTTP
+  successes, gzip throughout, and zero cache hits. In the accepted repeat, pool-on improved
+  analysis p95/p99 from `927.397/1114.606 ms` to `858.336/1072.641 ms` and tier-list from
+  `1010.346/1216.471 ms` to `977.592/1139.716 ms`. Both deployments reconciled exactly at 206/206
+  `candidate-served` events (103 analysis and 103 tier-list) with zero other outcomes or conflicting
+  duplicates. The bounded read pool is therefore the accepted connection candidate, still default
+  off and not enabled in production.
+- The accepted pool-on build was then compared between independently response-attested `iad1` and
+  `cle1` execution regions, again with 3 warmups plus 100 scored samples per domain. Exact response
+  parity, 400/400 scored successes, gzip, and zero cache hits held. CLE improved analysis p95/p99
+  from `989.563/1153.432 ms` to `788.082/884.863 ms` and tier-list from
+  `911.686/1134.544 ms` to `882.896/1037.418 ms`. Each region reconciled exactly at 206/206
+  `candidate-served` events with zero other outcomes. CLE is a measured latency candidate, not an
+  adopted topology.
+- A same-IAD Vercel-only versus pool-on-canary smoke returned semantically identical JSON for both
+  domains but different raw response bytes because the candidate-served PostgreSQL object has a
+  different JSON representation/order. The raw-byte diagnostic remains failed and was not weakened;
+  no full baseline/canary qualification was claimed from that smoke.
 - A read-only design audit found that compressed canonical artifact bytes could plausibly save
   another 100--250 ms for analysis and 70--180 ms for tier-list, but it remains conditional. Do not
   implement its additive schema/publication migration unless the lower-risk preview still shows
@@ -71,16 +87,16 @@ private artifact paths.
   post-rollback checks returned HTTP 200 for analysis, tier-list, and recommendation-player-list;
   canary telemetry is absent. Groups 2/3 and Supabase authority were not attempted.
 
-The current operational blocker is protected preview qualification of candidate `38857ac`, starting
-with the missing Preview database-variable scope above. The prior production canary proved latency,
-not correctness or parity, was the observed regression. `cle1` is a promising measured direction,
-but region adoption remains pending the explicit topology gates above. Do not re-enable any
-production read canary until the candidate has exact preview parity, capacity, fallback, and
-qualification evidence. The original latency target should still be pursued and reported; if it
-remains the only miss after the planned deep optimization, the owner may record the separate
-latency-only waiver. The shortest remaining live test path after qualification is the three
-15-minute grouped canaries followed by the owner-approved 45-minute active post-cutover watch. Allow
-additional time for deployment and rollback checks.
+The current operational blocker is topology qualification, not read-path parity. The tooling is
+fail-closed and intentionally has no hosted diagnostic route/task, so worker execution, private Blob
+behavior and mutation atomicity, genuine control-plane cron delivery, both queues with redelivery,
+30 cold starts per component, connection capacity, injected failures, and rollback evidence do not
+yet exist for the candidate topology. Do not manufacture those records from an operator laptop or
+move production to CLE. Do not re-enable a production read canary until the relevant topology has
+complete non-latency evidence. The original latency targets remain reported; if latency is the only
+remaining miss after that work, the owner may use the distinct latency-only waiver. The shortest
+remaining live test path after qualification is the three 15-minute grouped canaries followed by the
+owner-approved 45-minute active post-cutover watch.
 
 ## Resume instruction
 
