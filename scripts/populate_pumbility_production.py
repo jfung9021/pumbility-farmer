@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from analysis_runtime import VercelPrivateBlobStore  # noqa: E402
 from phoenix2_sync import sanitize_snapshot  # noqa: E402
 from piu_recommendations import (  # noqa: E402
+    COMBINED_TIER_SCHEMA_VERSION,
     build_combined_chart_results,
     build_combined_tier_payload,
 )
@@ -93,6 +94,7 @@ _PUBLIC_SUMMARY_FIELDS = (
     "coverage",
     "modes",
 )
+LEGACY_COMBINED_TIER_SCHEMA_VERSION = 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -230,6 +232,58 @@ def _assert_json_equal(actual: Mapping[str, Any], expected: Mapping[str, Any], r
         raise error
 
 
+def _combined_payload_for_active_generation(
+    payload: Mapping[str, Any], active: Mapping[str, Any]
+) -> dict[str, Any]:
+    active_schema = int(active.get("schemaVersion") or 0)
+    result = dict(payload)
+    if active_schema == COMBINED_TIER_SCHEMA_VERSION:
+        return result
+    if (
+        COMBINED_TIER_SCHEMA_VERSION != 3
+        or active_schema != LEGACY_COMBINED_TIER_SCHEMA_VERSION
+    ):
+        raise RuntimeError("The active combined-tier schema is not supported for population.")
+
+    summary = dict(result.get("summary") or {})
+    current_script_version = str(summary.get("scriptVersion") or "")
+    current_suffix = f"+combined-tier-v{COMBINED_TIER_SCHEMA_VERSION}"
+    if not current_script_version.endswith(current_suffix):
+        raise RuntimeError("The current combined-tier script version is inconsistent.")
+    summary["scriptVersion"] = (
+        current_script_version[: -len(current_suffix)]
+        + f"+combined-tier-v{LEGACY_COMBINED_TIER_SCHEMA_VERSION}"
+    )
+    method = dict(summary.get("method") or {})
+    method.pop("whatIfEstimates", None)
+    summary["method"] = method
+    result["schemaVersion"] = LEGACY_COMBINED_TIER_SCHEMA_VERSION
+    result["summary"] = summary
+    for field in ("singles", "doubles"):
+        result[field] = [
+            {key: value for key, value in dict(chart).items() if key != "whatIfEstimates"}
+            for chart in result.get(field, [])
+        ]
+    return result
+
+
+def _recommendation_index_for_active_generation(
+    index: Mapping[str, Any], active: Mapping[str, Any]
+) -> dict[str, Any]:
+    result = dict(index)
+    active_players = active.get("players")
+    if not isinstance(active_players, list) or any(
+        isinstance(player, Mapping) and "scoreProgress" in player
+        for player in active_players
+    ):
+        return result
+    result["players"] = [
+        {key: value for key, value in dict(player).items() if key != "scoreProgress"}
+        for player in result.get("players", [])
+    ]
+    return result
+
+
 def _assert_source_rows_equal(
     source: Mapping[str, Any], database_input: DatabaseInput
 ) -> None:
@@ -287,6 +341,9 @@ def _verify_model(
         metadata,
         generated_at_utc=combined_generated_at,
     )
+    combined = _combined_payload_for_active_generation(
+        combined, pointers["combinedTier"]
+    )
     _assert_json_equal(combined, pointers["combinedTier"], "combined-tier")
     print(json.dumps({"status": "stage-completed", "stage": "combined-parity"}, sort_keys=True))
 
@@ -308,6 +365,7 @@ def _verify_model(
     )
     print(json.dumps({"status": "stage-completed", "stage": "model-compute"}, sort_keys=True))
     index, model, score_bytes, phoenix1_shards, phoenix2_shards = artifacts
+    index = _recommendation_index_for_active_generation(index, active_index)
     _assert_json_equal(index, active_index, "recommendation-index")
     print(json.dumps({"status": "stage-completed", "stage": "model-index-parity"}, sort_keys=True))
     _assert_json_equal(

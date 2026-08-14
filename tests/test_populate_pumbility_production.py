@@ -9,7 +9,9 @@ import numpy as np
 from scripts.populate_pumbility_production import (
     NUMERIC_MODEL_ABSOLUTE_TOLERANCE,
     _assert_flags_off,
+    _combined_payload_for_active_generation,
     _parity_mismatch_evidence,
+    _recommendation_index_for_active_generation,
     _npz_difference_summary,
     _npz_arrays_equal,
     build_parser,
@@ -17,6 +19,42 @@ from scripts.populate_pumbility_production import (
 
 
 class HostedPopulationSafetyTests(unittest.TestCase):
+    def test_active_generation_compatibility_removes_only_pending_fields(self) -> None:
+        current_combined = {
+            "schemaVersion": 3,
+            "summary": {
+                "scriptVersion": "6.0+combined-tier-v3",
+                "method": {"catalog": "same", "whatIfEstimates": {"radius": 3}},
+            },
+            "singles": [{"chartId": "a", "whatIfEstimates": []}],
+            "doubles": [{"chartId": "b", "whatIfEstimates": []}],
+        }
+        active_combined = {
+            "schemaVersion": 2,
+            "summary": {
+                "scriptVersion": "6.0+combined-tier-v2",
+                "method": {"catalog": "same"},
+            },
+            "singles": [{"chartId": "a"}],
+            "doubles": [{"chartId": "b"}],
+        }
+        self.assertEqual(
+            _combined_payload_for_active_generation(current_combined, active_combined),
+            active_combined,
+        )
+
+        current_index = {
+            "schemaVersion": 21,
+            "players": [
+                {"playerKey": "a", "scoreProgress": {"singles": {"valid": 1}}}
+            ],
+        }
+        active_index = {"schemaVersion": 21, "players": [{"playerKey": "a"}]}
+        self.assertEqual(
+            _recommendation_index_for_active_generation(current_index, active_index),
+            active_index,
+        )
+
     def test_parity_mismatch_evidence_is_aggregate_only(self) -> None:
         actual = {
             "schemaVersion": 3,
