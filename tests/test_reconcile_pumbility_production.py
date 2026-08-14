@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
+import json
 import unittest
+from contextlib import redirect_stdout
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -113,8 +116,24 @@ class ProductionReconciliationTargetTests(unittest.TestCase):
         target.get_json.return_value = {"same": True}
         target.get_bytes.return_value = b"model"
 
-        with self.assertRaisesRegex(RuntimeError, "exact reconciliation"):
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaisesRegex(
+            RuntimeError, "exact reconciliation"
+        ):
             _verify_artifacts(source, target, pointers)
+        failure = json.loads(output.getvalue().splitlines()[-1])
+        self.assertEqual(
+            failure,
+            {
+                "cacheIndex": 1,
+                "sourceCount": 0,
+                "sourceOnlyCount": 0,
+                "stage": "player-caches",
+                "status": "mismatch",
+                "targetCount": 1,
+                "targetOnlyCount": 1,
+            },
+        )
 
 
 if __name__ == "__main__":

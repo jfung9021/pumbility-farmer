@@ -113,11 +113,16 @@ def reconciliation_failure_evidence(output: str) -> dict[str, object]:
             "status",
             "stage",
             "artifactIndex",
+            "cacheIndex",
             "side",
             "errorType",
             "digestMatches",
             "byteSizeMatches",
             "unexplainedMismatchCount",
+            "sourceCount",
+            "targetCount",
+            "sourceOnlyCount",
+            "targetOnlyCount",
         ):
             value = event.get(key)
             if isinstance(value, (str, int, bool)):
