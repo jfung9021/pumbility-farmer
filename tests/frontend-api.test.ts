@@ -465,6 +465,7 @@ test("tier list chart details provide local mode-specific what-if estimates", as
   assert.match(css, /\.chart-dialog-body \{[^}]*grid-template-columns: 96px minmax\(0, 1fr\);/);
   assert.match(css, /\.chart-dialog-body \.delta \{[^}]*grid-column: 2;[^}]*min-height: 0;[^}]*padding: 13px 0 0;/);
   assert.match(css, /\.what-if-control \{[^}]*font-size: 8px;[^}]*position: absolute;[^}]*right: calc\(100% \+ 19px\);[^}]*white-space: nowrap;/);
+  assert.match(css, /\.what-if-control select \{[^}]*width: calc\(4ch \+ 16px\);/);
   assert.match(css, /\.chart-dialog-body \.what-if-control \{[^}]*bottom: 0;[^}]*right: 0;/);
 });
 
