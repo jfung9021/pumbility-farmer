@@ -196,6 +196,121 @@ connection capacity, failure handling, and rollback from that deployment topolog
 protection requiring a credential is intentionally unsupported; do not pass bypass tokens to this
 tool.
 
+The comparison report applies the original diagnostic target directly to end-to-end latency:
+second-deployment p95 may be at most 10% above the first deployment and p99 at most 20% above it.
+The report is `failed` when either target misses. A `-SkipP99` run is reported as `smoke-passed`, not
+as qualification evidence. TTFB, download, JSON parsing, and end-to-end percentile decomposition
+remain in `latencyComparison` for diagnosis even when the aggregate target misses.
+
+### Offline topology qualification evidence
+
+Use the following tools only with already-created, non-production diagnostic environments. They do
+not deploy, change application configuration, change a rollout flag, or mutate the database, Blob,
+or queue. All private input and generated evidence belongs under ignored `.local-data/`. Keep the
+real alias Vercel-authoritative while gathering it.
+
+First create two local deployment-metadata files and one stable-boundary file. Deployment metadata
+schema version 1 contains only `label`, `region`, `gitCommit`, `sourceSha256`, `lockSha256`,
+`runtime`, `memoryMb`, `maxDurationSeconds`, `workerConcurrency`, `databaseConnectionLimit`,
+`connectionStrategy`, environment *key names*, and the sanitized rollout flags. Do not include an
+origin, deployment/project ID, environment value, connection string, or token. The boundary file
+contains `publicationFrozen`, `exactReconciliationPassed`, and two private SHA-256 boundary values.
+The capture command compares the private values but does not retain them:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\capture_pumbility_topology_manifest.py `
+  --first .\.local-data\qualification\iad1-metadata.json `
+  --second .\.local-data\qualification\cle1-metadata.json `
+  --stable-boundary .\.local-data\qualification\stable-boundary.json `
+  --topology-kind region `
+  --output .\.local-data\qualification\topology.json
+```
+
+The command fails unless the deployments have the same commit, source and lock identities, runtime,
+memory, timeout, concurrency, database limit, environment key set, safe flags, and connection
+strategy; only `region` may differ. A connection-strategy experiment instead uses
+`--topology-kind connection` and requires the region to match. Safe flags mean Vercel-authoritative
+`vercel` or accepted fail-open `shadow`, an empty read-canary list, cutover-only Blob controls off,
+selected-player refresh frozen, and no canonical writes in Vercel-only mode.
+
+Run the private-Blob harness *inside an isolated diagnostic task in each deployment topology*. The
+harness requires the platform-provided `VERCEL_REGION` to equal the supplied label, so running it
+from an operator laptop is not region evidence. Its private target manifest contains generic
+artifact names, private HTTPS Blob URLs, and expected payload SHA-256 values. The token is read from
+`BLOB_READ_WRITE_TOKEN`, never from an argument. It proves that anonymous reads are denied, then
+performs three warmups and at least 100 authenticated read-only samples per artifact with exact byte
+identity:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\benchmark_pumbility_blob_region.py `
+  --label cle1 `
+  --targets .\.local-data\qualification\blob-targets.json `
+  --output .\.local-data\qualification\blob-cle1.json
+```
+
+The output contains only the attested label, counts, latency percentiles, and booleans. URLs, hashes,
+bodies, tokens, and exception text are suppressed. A task/route capable of invoking this script in a
+deployment is intentionally not added by this tooling-only change; that runtime wiring must be
+reviewed separately before its evidence can exist.
+
+Export sanitized diagnostic events as JSONL. The verifier accepts only these exact event contracts;
+unknown fields fail closed so raw job, request, player, deployment, URL, or secret values cannot be
+silently retained:
+
+- `telemetry`: label, domain, allowlisted outcome, and aggregate count. Candidate-served counts must
+  exactly equal each probe summary's `expectedCandidateReadEvents`; candidate errors, fallbacks,
+  mismatches, and authority errors must all be zero.
+- `worker`: label, component (`analysis` or `player-recommendations`), outcome/count, and
+  `isolatedDiagnostic=true`. Each topology needs at least one successful isolated execution and zero
+  failures for both configured worker components.
+- `cron`: label, source (`platform-scheduler`, `route`, or `manual`), a locally HMAC/SHA-256-derived
+  correlation value, count, and authorization result. A genuine cron requires exactly one independent
+  platform control-plane delivery and one correlated route observation, with zero manual events.
+  A manually authorized HTTP request alone can never pass this gate.
+- `queue`: label, one of the configured `analysis` or `player-recommendations` topics, stage
+  (`published`, `consumed`, `durable-effect`, or `error`), a one-way identity value, and attempt.
+  Per topology and topic, at least 100 unique published/consumed/effect identities must reconcile,
+  durable effects must occur exactly once, and errors must be zero. At least one identity must have a
+  repeated consume with an attempt greater than one while retaining exactly one durable effect, so a
+  happy-path-only sample cannot claim redelivery safety.
+- `cold-start`: label, component (`api`, `analysis-worker`, or
+  `player-recommendations-worker`), duration, success, and `cold=true`. Each component/topology needs
+  30 successful samples and zero errors. The diagnostic target is +10% p95 and +20% maximum.
+- `capacity`: label, active connections, connection limit, connection/deadline error counts. Each
+  topology needs 30 samples, must reach configured worker concurrency, remain at or below 75% of the
+  dedicated database connection limit, and have zero connection or deadline errors.
+
+The schema-version-1 fault/rollback checklist must cover `supabase-timeout`, `blob-timeout`,
+`queue-redelivery`, `worker-crash`, and `cron-replay`, each with the expected outcome observed, zero
+data corruption, and an explicit pass. Its `privateBlobMutation` section must attest that a separately
+isolated diagnostic performed exact JSON and binary write/read/delete cycles and that an injected
+failed bundle retained the previous pointer with no partial publication. Read-only Blob timing cannot
+substitute for this worker-topology mutation gate. Rollback must finish within 300 seconds and prove
+safe flags, API and both worker smokes, exact reconciliation, absent canary telemetry, and zero data
+loss. Its privacy section must attest sanitized events and no raw identifiers, URLs, or secrets.
+
+Reconcile all evidence offline, passing the Blob reports in the same order as the topology manifest:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\verify_pumbility_topology_qualification.py `
+  --topology-manifest .\.local-data\qualification\topology.json `
+  --api-comparison .\.local-data\pumbility-region-benchmarks\<run>\comparison.json `
+  --blob-report .\.local-data\qualification\blob-iad1.json `
+  --blob-report .\.local-data\qualification\blob-cle1.json `
+  --events .\.local-data\qualification\diagnostic-events.jsonl `
+  --fault-rollback-checklist .\.local-data\qualification\fault-rollback.json `
+  --output .\.local-data\qualification\qualification.json
+```
+
+The original +10% p95/+20% p99 API and private-Blob targets always remain in
+`diagnosticLatencyGates`; a miss is always reported as `failed`. If the owner explicitly accepts only
+the measured latency variance after every non-latency gate passes, repeat the final offline command
+with `--owner-latency-waiver`. The only successful waived state is the distinct
+`owner-latency-waived`, never `passed`. The waiver is ineligible if latency evidence is incomplete or
+if correctness, exact parity, safe flags, telemetry, private access, worker execution, genuine cron,
+queue integrity, cold-start correctness, capacity, failure/fallback behavior, rollback, or privacy is
+missing or failing.
+
 The final switch is one configuration set:
 
 ```text
@@ -248,4 +363,5 @@ and fetch latency, but worsens the still-authoritative private Blob read. Region
 pending the worker, private Blob, cron, queue, cold-start, connection-capacity, failure, and rollback
 topology gates listed above. Do not run groups 2/3, re-enable a production read canary, move the
 production region, or enable Supabase authority until the relevant focused change or fully gated
-topology meets the existing p95/p99 limits. See `REMOTE_HANDOFF_2026-08-14.md` for exact evidence.
+topology has either met the diagnostic latency target or received the explicit latency-only owner
+waiver described above. See `REMOTE_HANDOFF_2026-08-14.md` for exact evidence.

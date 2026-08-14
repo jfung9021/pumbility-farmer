@@ -155,7 +155,9 @@ class PreviewRegionComparisonTests(unittest.TestCase):
 
             self.assertEqual(result, 0)
             report = json.loads(captured.getvalue())
-            self.assertEqual(report["status"], "passed")
+            self.assertEqual(report["status"], "smoke-passed")
+            self.assertEqual(report["latencyGate"]["status"], "not-scored")
+            self.assertFalse(report["latencyGate"]["ownerLatencyWaiver"]["acceptedHere"])
             self.assertEqual(report["adoptionDecision"], "pending")
             self.assertEqual(
                 report["requiredBeforeRegionAdoption"],

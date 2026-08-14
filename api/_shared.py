@@ -4,7 +4,7 @@ from typing import Any
 
 from analysis_runtime import PrivateBlobStore, RuntimeJobStore, request_refresh
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
-from worker.celery import QUEUE_NAME
+from worker.constants import QUEUE_NAME
 
 
 def enqueue_analysis(job_id: str) -> None:

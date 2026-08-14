@@ -31,6 +31,10 @@ def _connection_with_rows(*rows: object) -> Mock:
     connection.__enter__ = Mock(return_value=connection)
     connection.__exit__ = Mock(return_value=False)
     connection.cursor.return_value = cursor
+    pipeline = Mock()
+    pipeline.__enter__ = Mock(return_value=pipeline)
+    pipeline.__exit__ = Mock(return_value=False)
+    connection.pipeline.return_value = pipeline
     return connection
 
 
@@ -77,7 +81,7 @@ class ArtifactIntegritySafetyTests(unittest.TestCase):
                     (EXPECTED_PUMBILITY_MIGRATION, True, payload, digest, size),
                 )
                 with (
-                    patch("pumbility_store._connect", return_value=connection),
+                    patch("pumbility_store._read_connect", return_value=connection),
                     self.assertRaises(PumbilityArtifactIntegrityError) as captured,
                 ):
                     PumbilityArtifactStore(
@@ -95,7 +99,7 @@ class ArtifactIntegritySafetyTests(unittest.TestCase):
             ("unexpected-migration", False, None, None, None)
         )
         with (
-            patch("pumbility_store._connect", return_value=connection),
+            patch("pumbility_store._read_connect", return_value=connection),
             self.assertRaisesRegex(RuntimeError, "application-required migration"),
         ):
             PumbilityArtifactStore(

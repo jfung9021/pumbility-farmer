@@ -34,6 +34,8 @@ VALID_DOMAINS = (
 )
 LABEL_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+P95_MAX_INCREASE_PERCENT = 10.0
+P99_MAX_INCREASE_PERCENT = 20.0
 
 
 class PreviewComparisonError(RuntimeError):
@@ -319,6 +321,71 @@ def compare_latency(
     return comparison
 
 
+def evaluate_latency_gate(
+    comparison: Mapping[str, Any], *, domains: Sequence[str], p99_scored: bool
+) -> dict[str, object]:
+    """Apply the documented diagnostic target without concealing a miss.
+
+    A smoke run deliberately omits p99 and therefore cannot qualify a topology.
+    An eventual owner waiver is a separate final-rollout decision; this focused
+    comparison never converts a failed diagnostic target into a pass.
+    """
+    domain_results: dict[str, dict[str, object]] = {}
+    complete = p99_scored
+    passed = p99_scored
+    for domain in domains:
+        domain_comparison = comparison.get(domain)
+        if not isinstance(domain_comparison, Mapping):
+            raise PreviewComparisonError("A domain latency comparison is missing.")
+        end_to_end = domain_comparison.get("endToEndMs")
+        if not isinstance(end_to_end, Mapping):
+            raise PreviewComparisonError("An end-to-end latency comparison is missing.")
+        p95 = end_to_end.get("p95")
+        p99 = end_to_end.get("p99")
+        if not isinstance(p95, Mapping) or not isinstance(p99, Mapping):
+            raise PreviewComparisonError("A latency percentile comparison is missing.")
+        p95_delta = _finite_number(p95.get("secondVsFirstPercent"))
+        p99_delta = _finite_number(p99.get("secondVsFirstPercent"))
+        domain_complete = p95_delta is not None and (not p99_scored or p99_delta is not None)
+        domain_passed = bool(
+            p99_scored
+            and domain_complete
+            and p95_delta <= P95_MAX_INCREASE_PERCENT
+            and p99_delta is not None
+            and p99_delta <= P99_MAX_INCREASE_PERCENT
+        )
+        complete = complete and domain_complete
+        passed = passed and domain_passed
+        domain_results[domain] = {
+            "p95IncreasePercent": p95_delta,
+            "p95MaximumIncreasePercent": P95_MAX_INCREASE_PERCENT,
+            "p95Passed": p95_delta is not None and p95_delta <= P95_MAX_INCREASE_PERCENT,
+            "p99IncreasePercent": p99_delta,
+            "p99MaximumIncreasePercent": P99_MAX_INCREASE_PERCENT,
+            "p99Passed": bool(
+                p99_scored
+                and p99_delta is not None
+                and p99_delta <= P99_MAX_INCREASE_PERCENT
+            ),
+            "status": "passed" if domain_passed else ("failed" if domain_complete else "not-scored"),
+        }
+    status = "passed" if passed else ("failed" if complete else "not-scored")
+    return {
+        "status": status,
+        "passed": passed,
+        "complete": complete,
+        "target": {
+            "p95MaximumIncreasePercent": P95_MAX_INCREASE_PERCENT,
+            "p99MaximumIncreasePercent": P99_MAX_INCREASE_PERCENT,
+        },
+        "domains": domain_results,
+        "ownerLatencyWaiver": {
+            "acceptedHere": False,
+            "reason": "Only the final all-gates qualification may record an explicit latency-only waiver.",
+        },
+    }
+
+
 def _sanitized_probe_summary(
     summary: Mapping[str, Any], *, label: str
 ) -> dict[str, object]:
@@ -388,9 +455,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_directory=run_directory,
     )
     parity = compare_response_hashes(first_records, second_records)
+    latency_comparison = compare_latency(
+        first_summary,
+        second_summary,
+        domains=domains,
+        first_label=first_label,
+        second_label=second_label,
+    )
+    latency_gate = evaluate_latency_gate(
+        latency_comparison,
+        domains=domains,
+        p99_scored=not args.skip_p99,
+    )
+    if not parity["passed"]:
+        status = "failed"
+    elif latency_gate["status"] == "passed":
+        status = "passed"
+    elif latency_gate["status"] == "not-scored":
+        status = "smoke-passed"
+    else:
+        status = "failed"
     report = {
         "schemaVersion": 1,
-        "status": "passed" if parity["passed"] else "failed",
+        "status": status,
         "comparisonKind": "read-only-preview-region",
         "probeConfiguration": {
             "domains": domains,
@@ -405,13 +492,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             _sanitized_probe_summary(second_summary, label=second_label),
         ],
         "responseParity": parity,
-        "latencyComparison": compare_latency(
-            first_summary,
-            second_summary,
-            domains=domains,
-            first_label=first_label,
-            second_label=second_label,
-        ),
+        "latencyComparison": latency_comparison,
+        "latencyGate": latency_gate,
         "identityDisclosure": {
             "urlsPrinted": False,
             "hostsPrinted": False,
@@ -433,7 +515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     encoded = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     report_path.write_text(encoded, encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
-    return 0 if parity["passed"] else 4
+    return 0 if status in {"passed", "smoke-passed"} else 4
 
 
 if __name__ == "__main__":

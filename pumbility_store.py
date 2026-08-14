@@ -16,9 +16,10 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 from urllib.parse import quote, urlparse
 
 import requests
@@ -32,6 +33,9 @@ STORAGE_BUCKET_ENV = "PUMBILITY_STORAGE_BUCKET"
 SHADOW_STRICT_ENV = "PUMBILITY_SHADOW_STRICT"
 CANONICAL_SNAPSHOT_WRITE_ENV = "PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED"
 READ_CANARY_ENV = "PUMBILITY_SUPABASE_READ_CANARY"
+READ_POOL_ENABLED_ENV = "PUMBILITY_SUPABASE_READ_POOL_ENABLED"
+READ_POOL_MAX_SIZE_ENV = "PUMBILITY_SUPABASE_READ_POOL_MAX_SIZE"
+READ_POOL_MAX_WAITING_ENV = "PUMBILITY_SUPABASE_READ_POOL_MAX_WAITING"
 BLOB_MIRROR_ENV = "PUMBILITY_BLOB_MIRROR_ENABLED"
 BLOB_READ_FALLBACK_ENV = "PUMBILITY_BLOB_READ_FALLBACK_ENABLED"
 DEFAULT_BUCKET = "pumbility-artifacts"
@@ -53,6 +57,12 @@ STAGING_SNAPSHOT_RE = re.compile(
 FROZEN_PHOENIX1_SNAPSHOT_KEY = "analysis/private/phoenix1.json"
 JOB_LEASE_SECONDS = 800
 JOB_HEARTBEAT_INTERVAL_SECONDS = 60.0
+READ_CONNECT_TIMEOUT_SECONDS = 3
+READ_POOL_ACQUIRE_TIMEOUT_SECONDS = 1.0
+READ_STATEMENT_TIMEOUT_MILLISECONDS = 10_000
+READ_POOL_DEFAULT_MAX_SIZE = 2
+READ_POOL_DEFAULT_MAX_WAITING = 2
+READ_POOL_HEALTH_CHECK_INTERVAL_SECONDS = 30.0
 
 
 def _enabled(value: str | None) -> bool:
@@ -164,9 +174,11 @@ def _safe_rollout_event(
     logging.getLogger("pumbility.rollout").warning(
         "pumbility_store operation=%s domain=%s outcome=%s authoritative_ms=%.3f "
         "candidate_ms=%s comparison_ms=%s overall_ms=%s "
-        "authoritative_connect_ms=%s authoritative_schema_ms=%s "
+        "authoritative_acquire_ms=%s authoritative_connect_ms=%s "
+        "authoritative_health_ms=%s authoritative_schema_ms=%s "
         "authoritative_fetch_ms=%s authoritative_decode_ms=%s "
-        "authoritative_integrity_ms=%s candidate_connect_ms=%s "
+        "authoritative_integrity_ms=%s candidate_acquire_ms=%s "
+        "candidate_connect_ms=%s candidate_health_ms=%s "
         "candidate_schema_ms=%s candidate_fetch_ms=%s candidate_decode_ms=%s "
         "candidate_integrity_ms=%s authoritative_error=%s candidate_error=%s",
         operation,
@@ -176,12 +188,16 @@ def _safe_rollout_event(
         "none" if candidate_ms is None else f"{candidate_ms:.3f}",
         "none" if comparison_ms is None else f"{comparison_ms:.3f}",
         "none" if overall_ms is None else f"{overall_ms:.3f}",
+        phase_value(authoritative_phases, "acquire"),
         phase_value(authoritative_phases, "connect"),
+        phase_value(authoritative_phases, "health"),
         phase_value(authoritative_phases, "schema"),
         phase_value(authoritative_phases, "fetch"),
         phase_value(authoritative_phases, "decode"),
         phase_value(authoritative_phases, "integrity"),
+        phase_value(candidate_phases, "acquire"),
         phase_value(candidate_phases, "connect"),
+        phase_value(candidate_phases, "health"),
         phase_value(candidate_phases, "schema"),
         phase_value(candidate_phases, "fetch"),
         phase_value(candidate_phases, "decode"),
@@ -232,7 +248,9 @@ def _equivalent_to_exact_json(left: object, right: _ExactJsonRead) -> bool:
     return _canonical_json_bytes(left) == right.canonical_bytes
 
 
-_READ_PHASES = frozenset({"connect", "schema", "fetch", "decode", "integrity"})
+_READ_PHASES = frozenset(
+    {"acquire", "connect", "health", "schema", "fetch", "decode", "integrity"}
+)
 _read_telemetry = threading.local()
 
 
@@ -252,7 +270,16 @@ def _record_read_phase(phase: str, started: float | None) -> None:
     phases = getattr(_read_telemetry, "phases", None)
     if phases is None:
         return
-    elapsed_ms = (time.perf_counter() - started) * 1000
+    _record_read_phase_ms(phase, (time.perf_counter() - started) * 1000)
+
+
+def _record_read_phase_ms(phase: str, elapsed_ms: float) -> None:
+    """Accumulate an already-measured fixed-name phase."""
+    if phase not in _READ_PHASES:
+        raise ValueError("Unsupported Pumbility read telemetry phase.")
+    phases = getattr(_read_telemetry, "phases", None)
+    if phases is None:
+        return
     phases[phase] = phases.get(phase, 0.0) + elapsed_ms
 
 
@@ -301,6 +328,174 @@ def _connect(database_url: str):
         return psycopg.connect(database_url, prepare_threshold=None)
     finally:
         _record_read_phase("connect", started)
+
+
+_read_pool_lock = threading.Lock()
+_read_pool: Any | None = None
+_read_pool_key: tuple[str, int, int, int] | None = None
+
+
+def _bounded_read_pool_setting(
+    name: str, default: int, *, minimum: int, maximum: int
+) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer.") from error
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f"{name} must be between {minimum} and {maximum}.")
+    return value
+
+
+def _read_pool_configuration() -> tuple[int, int]:
+    """Return per-process capacity bounds without allowing the role limit to be bypassed."""
+    return (
+        _bounded_read_pool_setting(
+            READ_POOL_MAX_SIZE_ENV,
+            READ_POOL_DEFAULT_MAX_SIZE,
+            minimum=1,
+            maximum=2,
+        ),
+        _bounded_read_pool_setting(
+            READ_POOL_MAX_WAITING_ENV,
+            READ_POOL_DEFAULT_MAX_WAITING,
+            minimum=1,
+            maximum=16,
+        ),
+    )
+
+
+def _check_read_connection(connection: Any) -> None:
+    """Probe only connections old enough to plausibly have gone stale while idle."""
+    last_checked = float(getattr(connection, "_pumbility_last_checked_at", 0.0))
+    if time.monotonic() - last_checked < READ_POOL_HEALTH_CHECK_INTERVAL_SECONDS:
+        return
+    started = _read_phase_started()
+    try:
+        from psycopg_pool import ConnectionPool
+
+        ConnectionPool.check_connection(connection)
+        connection._pumbility_last_checked_at = time.monotonic()
+    finally:
+        _record_read_phase("health", started)
+
+
+def _create_read_pool(database_url: str, *, max_size: int, max_waiting: int) -> Any:
+    try:
+        import psycopg
+        from psycopg_pool import ConnectionPool
+    except ImportError as error:  # pragma: no cover - environment diagnostic
+        raise RuntimeError(
+            "The Supabase read pool requires psycopg with its pool extra. "
+            "Run `uv sync --frozen`."
+        ) from error
+
+    class _TimedReadConnection(psycopg.Connection):
+        @classmethod
+        def connect(cls, conninfo: str = "", **kwargs: Any) -> Any:
+            started = time.perf_counter()
+            connection = super().connect(conninfo, **kwargs)
+            connection._pumbility_connect_ms = (
+                time.perf_counter() - started
+            ) * 1000
+            connection._pumbility_last_checked_at = time.monotonic()
+            return connection
+
+    pool = ConnectionPool(
+        conninfo=database_url,
+        connection_class=_TimedReadConnection,
+        kwargs={
+            "connect_timeout": READ_CONNECT_TIMEOUT_SECONDS,
+            # Supavisor transaction mode cannot safely retain named prepared statements.
+            "prepare_threshold": None,
+        },
+        min_size=0,
+        max_size=max_size,
+        max_waiting=max_waiting,
+        timeout=READ_POOL_ACQUIRE_TIMEOUT_SECONDS,
+        max_idle=60.0,
+        max_lifetime=600.0,
+        reconnect_timeout=float(READ_CONNECT_TIMEOUT_SECONDS),
+        num_workers=max_size,
+        check=_check_read_connection,
+        name="pumbility-read",
+        open=False,
+    )
+    pool.open(wait=False)
+    return pool
+
+
+def _get_read_pool(database_url: str) -> Any:
+    global _read_pool, _read_pool_key
+    max_size, max_waiting = _read_pool_configuration()
+    key = (database_url, max_size, max_waiting, os.getpid())
+    with _read_pool_lock:
+        if _read_pool is not None and _read_pool_key == key:
+            return _read_pool
+        previous = _read_pool
+        _read_pool = _create_read_pool(
+            database_url, max_size=max_size, max_waiting=max_waiting
+        )
+        _read_pool_key = key
+    if previous is not None:
+        previous.close(timeout=0)
+    return _read_pool
+
+
+@contextmanager
+def _read_connect(database_url: str) -> Iterator[Any]:
+    """Acquire a bounded hot-read connection, or use the direct A/B control path."""
+    if not _enabled(os.getenv(READ_POOL_ENABLED_ENV)):
+        started = _read_phase_started()
+        try:
+            try:
+                import psycopg
+            except ImportError as error:  # pragma: no cover - environment diagnostic
+                raise RuntimeError(
+                    "The Supabase backend requires psycopg. Run `uv sync --frozen`."
+                ) from error
+            connection = psycopg.connect(
+                database_url,
+                connect_timeout=READ_CONNECT_TIMEOUT_SECONDS,
+                prepare_threshold=None,
+            )
+        finally:
+            _record_read_phase("connect", started)
+        with connection:
+            yield connection
+        return
+
+    acquire_started = _read_phase_started()
+    acquired = False
+    try:
+        pool = _get_read_pool(database_url)
+        with pool.connection(timeout=READ_POOL_ACQUIRE_TIMEOUT_SECONDS) as connection:
+            _record_read_phase("acquire", acquire_started)
+            acquired = True
+            connect_ms = getattr(connection, "_pumbility_connect_ms", None)
+            if connect_ms is not None:
+                _record_read_phase_ms("connect", float(connect_ms))
+                connection._pumbility_connect_ms = None
+            yield connection
+    finally:
+        if not acquired:
+            _record_read_phase("acquire", acquire_started)
+
+
+@contextmanager
+def _read_cursor(database_url: str) -> Iterator[Any]:
+    """Create a transaction-scoped hot-read cursor with a per-statement deadline."""
+    with _read_connect(database_url) as connection, connection.cursor() as cursor:
+        # Session settings are not reliable through Supavisor transaction mode.
+        # Pipeline the transaction-local setting with the read to avoid another RTT.
+        with connection.pipeline():
+            cursor.execute(
+                f"set local statement_timeout = '{READ_STATEMENT_TIMEOUT_MILLISECONDS}ms'"
+            )
+            yield cursor
 
 
 def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
@@ -548,7 +743,7 @@ class PumbilityArtifactStore:
             finally:
                 _record_read_phase("integrity", integrity_started)
             return _ExactJsonRead(result, body)
-        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+        with _read_cursor(self.database_url) as cursor:
             fetch_started = _read_phase_started()
             try:
                 cursor.execute(
@@ -858,7 +1053,7 @@ class PumbilityArtifactStore:
                 self._put_json_row(cursor, pathname, payload)
 
     def get_bytes(self, pathname: str) -> bytes | None:
-        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+        with _read_cursor(self.database_url) as cursor:
             fetch_started = _read_phase_started()
             try:
                 cursor.execute(
@@ -1146,7 +1341,7 @@ class PumbilityJobStore:
         return _ContinuousLeaseHeartbeat(lambda: self.heartbeat(job_id)).start()
 
     def get(self, job_id: str) -> dict[str, Any] | None:
-        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+        with _read_cursor(self.database_url) as cursor:
             fetch_started = _read_phase_started()
             try:
                 cursor.execute(

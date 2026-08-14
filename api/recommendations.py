@@ -29,7 +29,7 @@ from pumbility_contract import (
     recommendation_shard_path,
     with_staleness,
 )
-from worker.celery import PLAYER_QUEUE_NAME
+from worker.constants import PLAYER_QUEUE_NAME
 
 
 router = APIRouter()

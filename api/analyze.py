@@ -61,7 +61,7 @@ def get_analysis(
                 status_code=404,
                 content={"error": "No completed analysis is stored yet."},
             )
-        return payload
+        return JSONResponse(content=payload)
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
     except (RuntimeError, json.JSONDecodeError):

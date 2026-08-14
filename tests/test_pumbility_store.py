@@ -16,12 +16,22 @@ from pumbility_store import (
     JOB_LEASE_SECONDS,
     PumbilityArtifactStore,
     PumbilityJobStore,
+    READ_CONNECT_TIMEOUT_SECONDS,
+    READ_POOL_ACQUIRE_TIMEOUT_SECONDS,
+    READ_POOL_ENABLED_ENV,
+    READ_POOL_MAX_SIZE_ENV,
+    READ_POOL_MAX_WAITING_ENV,
     ShadowJobStore,
     ShadowJsonStore,
     SupabasePrimaryJsonStore,
     _ContinuousLeaseHeartbeat,
     _canonical_json_bytes,
+    _check_read_connection,
+    _create_read_pool,
+    _read_connect,
     _read_phase_started,
+    _read_pool_configuration,
+    _read_telemetry,
     _record_read_phase,
     configured_backend,
     configured_read_canaries,
@@ -194,12 +204,16 @@ class ReadCanaryTests(unittest.TestCase):
             "candidate_ms",
             "comparison_ms",
             "overall_ms",
+            "authoritative_acquire_ms",
             "authoritative_connect_ms",
+            "authoritative_health_ms",
             "authoritative_schema_ms",
             "authoritative_fetch_ms",
             "authoritative_decode_ms",
             "authoritative_integrity_ms",
+            "candidate_acquire_ms",
             "candidate_connect_ms",
+            "candidate_health_ms",
             "candidate_schema_ms",
             "candidate_fetch_ms",
             "candidate_decode_ms",
@@ -459,6 +473,163 @@ class ContinuousLeaseHeartbeatTests(unittest.TestCase):
             handle.stop()
 
 
+class PumbilityReadPoolTests(unittest.TestCase):
+    def test_pool_is_lazy_bounded_and_transaction_pooler_compatible(self) -> None:
+        pool = Mock()
+        with patch("psycopg_pool.ConnectionPool", return_value=pool) as constructor:
+            self.assertIs(
+                _create_read_pool(
+                    "postgresql://localhost/local", max_size=2, max_waiting=2
+                ),
+                pool,
+            )
+
+        settings = constructor.call_args.kwargs
+        self.assertEqual(settings["min_size"], 0)
+        self.assertEqual(settings["max_size"], 2)
+        self.assertEqual(settings["max_waiting"], 2)
+        self.assertFalse(settings["open"])
+        self.assertEqual(settings["timeout"], READ_POOL_ACQUIRE_TIMEOUT_SECONDS)
+        self.assertEqual(
+            settings["kwargs"]["connect_timeout"], READ_CONNECT_TIMEOUT_SECONDS
+        )
+        self.assertIsNone(settings["kwargs"]["prepare_threshold"])
+        self.assertIs(settings["check"], _check_read_connection)
+        pool.open.assert_called_once_with(wait=False)
+
+    def test_pool_capacity_settings_are_bounded(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_read_pool_configuration(), (2, 2))
+        with patch.dict(
+            os.environ,
+            {READ_POOL_MAX_SIZE_ENV: "3", READ_POOL_MAX_WAITING_ENV: "2"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, READ_POOL_MAX_SIZE_ENV):
+                _read_pool_configuration()
+        with patch.dict(
+            os.environ,
+            {READ_POOL_MAX_SIZE_ENV: "2", READ_POOL_MAX_WAITING_ENV: "0"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, READ_POOL_MAX_WAITING_ENV):
+                _read_pool_configuration()
+
+    def test_pool_acquisition_records_wait_and_one_time_physical_connect(self) -> None:
+        connection = Mock()
+        connection._pumbility_connect_ms = 12.5
+        manager = Mock()
+        manager.__enter__ = Mock(return_value=connection)
+        manager.__exit__ = Mock(return_value=False)
+        pool = Mock()
+        pool.connection.return_value = manager
+        phases: dict[str, float] = {}
+        _read_telemetry.phases = phases
+        try:
+            with (
+                patch.dict(os.environ, {READ_POOL_ENABLED_ENV: "true"}, clear=False),
+                patch("pumbility_store._get_read_pool", return_value=pool),
+            ):
+                with _read_connect("postgresql://localhost/local") as acquired:
+                    self.assertIs(acquired, connection)
+        finally:
+            del _read_telemetry.phases
+
+        pool.connection.assert_called_once_with(
+            timeout=READ_POOL_ACQUIRE_TIMEOUT_SECONDS
+        )
+        self.assertIn("acquire", phases)
+        self.assertEqual(phases["connect"], 12.5)
+        self.assertIsNone(connection._pumbility_connect_ms)
+        manager.__exit__.assert_called_once_with(None, None, None)
+
+    def test_pool_context_receives_errors_for_transaction_rollback(self) -> None:
+        connection = Mock()
+        connection._pumbility_connect_ms = None
+        manager = Mock()
+        manager.__enter__ = Mock(return_value=connection)
+        manager.__exit__ = Mock(return_value=False)
+        pool = Mock()
+        pool.connection.return_value = manager
+
+        with (
+            patch.dict(os.environ, {READ_POOL_ENABLED_ENV: "true"}, clear=False),
+            patch("pumbility_store._get_read_pool", return_value=pool),
+            self.assertRaisesRegex(ValueError, "read failed"),
+        ):
+            with _read_connect("postgresql://localhost/local"):
+                raise ValueError("read failed")
+
+        exit_args = manager.__exit__.call_args.args
+        self.assertIs(exit_args[0], ValueError)
+
+    def test_failed_pool_acquisition_is_bounded_and_telemetried(self) -> None:
+        manager = Mock()
+        manager.__enter__ = Mock(side_effect=RuntimeError("pool unavailable"))
+        manager.__exit__ = Mock(return_value=False)
+        pool = Mock()
+        pool.connection.return_value = manager
+        phases: dict[str, float] = {}
+        _read_telemetry.phases = phases
+        try:
+            with (
+                patch.dict(os.environ, {READ_POOL_ENABLED_ENV: "true"}, clear=False),
+                patch("pumbility_store._get_read_pool", return_value=pool),
+                self.assertRaisesRegex(RuntimeError, "pool unavailable"),
+            ):
+                with _read_connect("postgresql://localhost/local"):
+                    pass
+        finally:
+            del _read_telemetry.phases
+
+        pool.connection.assert_called_once_with(
+            timeout=READ_POOL_ACQUIRE_TIMEOUT_SECONDS
+        )
+        self.assertIn("acquire", phases)
+        self.assertNotIn("connect", phases)
+
+    def test_pool_acquisition_failure_preserves_canary_fallback(self) -> None:
+        authoritative = Mock()
+        authoritative.get_json.return_value = {"source": "vercel"}
+        candidate = PumbilityArtifactStore(
+            database_url="postgresql://localhost/local"
+        )
+        with (
+            patch(
+                "pumbility_store._read_connect",
+                side_effect=RuntimeError("pool unavailable"),
+            ),
+            self.assertLogs("pumbility.rollout", level="WARNING") as captured,
+        ):
+            result = CanaryJsonStore(
+                authoritative, candidate, domain="analysis"
+            ).get_json("analysis/public.json")
+
+        self.assertEqual(result, {"source": "vercel"})
+        self.assertIn("outcome=candidate-error-fallback", captured.output[0])
+
+    def test_stale_connection_is_checked_but_recent_connection_skips_probe(self) -> None:
+        from psycopg_pool import ConnectionPool
+
+        stale = SimpleNamespace(_pumbility_last_checked_at=0.0)
+        recent = SimpleNamespace(_pumbility_last_checked_at=90.0)
+        phases: dict[str, float] = {}
+        _read_telemetry.phases = phases
+        try:
+            with (
+                patch("pumbility_store.time.monotonic", return_value=100.0),
+                patch.object(ConnectionPool, "check_connection") as check,
+            ):
+                _check_read_connection(stale)
+                _check_read_connection(recent)
+        finally:
+            del _read_telemetry.phases
+
+        check.assert_called_once_with(stale)
+        self.assertEqual(stale._pumbility_last_checked_at, 100.0)
+        self.assertIn("health", phases)
+
+
 class PumbilityArtifactStoreTests(unittest.TestCase):
     @staticmethod
     def _database_mocks(*normalized_payloads: dict[str, object]):
@@ -473,6 +644,10 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         connection.__enter__ = Mock(return_value=connection)
         connection.__exit__ = Mock(return_value=False)
         connection.cursor.return_value = cursor
+        pipeline = Mock()
+        pipeline.__enter__ = Mock(return_value=pipeline)
+        pipeline.__exit__ = Mock(return_value=False)
+        connection.pipeline.return_value = pipeline
         return connection, cursor
 
     @staticmethod
@@ -485,6 +660,10 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         connection.__enter__ = Mock(return_value=connection)
         connection.__exit__ = Mock(return_value=False)
         connection.cursor.return_value = cursor
+        pipeline = Mock()
+        pipeline.__enter__ = Mock(return_value=pipeline)
+        pipeline.__exit__ = Mock(return_value=False)
+        connection.pipeline.return_value = pipeline
         return connection, cursor
 
     def test_canary_records_supabase_artifact_read_phases(self) -> None:
@@ -508,6 +687,7 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         )
 
         with (
+            patch.dict(os.environ, {READ_POOL_ENABLED_ENV: "false"}, clear=False),
             patch.dict(sys.modules, {"psycopg": fake_psycopg}),
             self.assertLogs("pumbility.rollout", level="WARNING") as captured,
         ):
@@ -526,7 +706,9 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         ):
             self.assertRegex(event, rf"\b{field}=\d+\.\d{{3}}\b")
         fake_psycopg.connect.assert_called_once_with(
-            "postgresql://localhost/local", prepare_threshold=None
+            "postgresql://localhost/local",
+            connect_timeout=3,
+            prepare_threshold=None,
         )
 
     def test_hot_json_read_combines_schema_and_artifact_fetch(self) -> None:
@@ -542,14 +724,15 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
             )
         )
 
-        with patch("pumbility_store._connect", return_value=connection):
+        with patch("pumbility_store._read_connect", return_value=connection):
             result = PumbilityArtifactStore(
                 database_url="postgresql://localhost/local"
             ).get_json("analysis/public.json")
 
         self.assertEqual(result, payload)
-        cursor.execute.assert_called_once()
-        query = cursor.execute.call_args.args[0]
+        self.assertEqual(cursor.execute.call_count, 2)
+        self.assertIn("statement_timeout", cursor.execute.call_args_list[0].args[0])
+        query = cursor.execute.call_args_list[1].args[0]
         self.assertIn("pumbility.schema_metadata", query)
         self.assertIn("pumbility.artifacts", query)
 
@@ -562,16 +745,16 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         )
         store = PumbilityArtifactStore(database_url="postgresql://localhost/local")
 
-        with patch("pumbility_store._connect", return_value=missing_connection):
+        with patch("pumbility_store._read_connect", return_value=missing_connection):
             self.assertIsNone(store.get_json("analysis/missing.json"))
-        missing_cursor.execute.assert_called_once()
+        self.assertEqual(missing_cursor.execute.call_count, 2)
 
         with (
-            patch("pumbility_store._connect", return_value=invalid_connection),
+            patch("pumbility_store._read_connect", return_value=invalid_connection),
             self.assertRaisesRegex(RuntimeError, "schema is not"),
         ):
             store.get_json("analysis/missing.json")
-        invalid_cursor.execute.assert_called_once()
+        self.assertEqual(invalid_cursor.execute.call_count, 2)
 
     def test_missing_binary_still_fails_closed_on_missing_schema(self) -> None:
         missing_connection, missing_cursor = self._read_connection(
@@ -582,16 +765,16 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         )
         store = PumbilityArtifactStore(database_url="postgresql://localhost/local")
 
-        with patch("pumbility_store._connect", return_value=missing_connection):
+        with patch("pumbility_store._read_connect", return_value=missing_connection):
             self.assertIsNone(store.get_bytes("models/missing.npz"))
-        missing_cursor.execute.assert_called_once()
+        self.assertEqual(missing_cursor.execute.call_count, 2)
 
         with (
-            patch("pumbility_store._connect", return_value=invalid_connection),
+            patch("pumbility_store._read_connect", return_value=invalid_connection),
             self.assertRaisesRegex(RuntimeError, "schema is not"),
         ):
             store.get_bytes("models/missing.npz")
-        invalid_cursor.execute.assert_called_once()
+        self.assertEqual(invalid_cursor.execute.call_count, 2)
 
     def test_canary_reuses_checksum_validated_candidate_bytes(self) -> None:
         authority = {"authority": True, "value": 1}
@@ -613,7 +796,7 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         )
 
         with (
-            patch("pumbility_store._connect", return_value=connection),
+            patch("pumbility_store._read_connect", return_value=connection),
             patch(
                 "pumbility_store._canonical_json_bytes",
                 wraps=_canonical_json_bytes,
@@ -637,7 +820,7 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         )
 
         with (
-            patch("pumbility_store._connect", return_value=connection),
+            patch("pumbility_store._read_connect", return_value=connection),
             patch(
                 "pumbility_store._canonical_json_bytes",
                 wraps=_canonical_json_bytes,
@@ -673,7 +856,7 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         )
 
         with (
-            patch("pumbility_store._connect", return_value=connection),
+            patch("pumbility_store._read_connect", return_value=connection),
             self.assertLogs("pumbility.rollout", level="WARNING") as captured,
         ):
             result = CanaryJsonStore(
@@ -797,6 +980,10 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
             connection.__enter__ = Mock(return_value=connection)
             connection.__exit__ = Mock(return_value=False)
             connection.cursor.return_value = cursor
+            pipeline = Mock()
+            pipeline.__enter__ = Mock(return_value=pipeline)
+            pipeline.__exit__ = Mock(return_value=False)
+            connection.pipeline.return_value = pipeline
             return connection
 
         root_body = _canonical_json_bytes(root)
@@ -807,9 +994,9 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         child_connection = connection_with(
             rows=[(child, hashlib.sha256(child_body).hexdigest(), len(child_body))]
         )
-        with patch(
-            "pumbility_store._connect",
-            side_effect=[root_connection, child_connection],
+        with (
+            patch("pumbility_store._read_connect", return_value=root_connection),
+            patch("pumbility_store._connect", return_value=child_connection),
         ):
             result = PumbilityArtifactStore(
                 database_url="postgresql://localhost/local"
@@ -820,18 +1007,16 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
 
         with (
             patch(
-                "pumbility_store._connect",
-                side_effect=[
-                    connection_with(
-                        fetched=(
-                            root,
-                            hashlib.sha256(root_body).hexdigest(),
-                            len(root_body),
-                        )
-                    ),
-                    connection_with(rows=[]),
-                ],
+                "pumbility_store._read_connect",
+                return_value=connection_with(
+                    fetched=(
+                        root,
+                        hashlib.sha256(root_body).hexdigest(),
+                        len(root_body),
+                    )
+                ),
             ),
+            patch("pumbility_store._connect", return_value=connection_with(rows=[])),
             self.assertRaisesRegex(RuntimeError, "checkpoint set is incomplete"),
         ):
             PumbilityArtifactStore(
@@ -906,6 +1091,10 @@ class PumbilityJobReadTests(unittest.TestCase):
         connection.__enter__ = Mock(return_value=connection)
         connection.__exit__ = Mock(return_value=False)
         connection.cursor.return_value = cursor
+        pipeline = Mock()
+        pipeline.__enter__ = Mock(return_value=pipeline)
+        pipeline.__exit__ = Mock(return_value=False)
+        connection.pipeline.return_value = pipeline
         return connection, cursor
 
     def test_hot_job_read_combines_schema_and_payload_fetch(self) -> None:
@@ -914,14 +1103,15 @@ class PumbilityJobReadTests(unittest.TestCase):
             (EXPECTED_PUMBILITY_MIGRATION, True, payload)
         )
 
-        with patch("pumbility_store._connect", return_value=connection):
+        with patch("pumbility_store._read_connect", return_value=connection):
             result = PumbilityJobStore(
                 database_url="postgresql://localhost/local"
             ).get("job-id")
 
         self.assertEqual(result, payload)
-        cursor.execute.assert_called_once()
-        query = cursor.execute.call_args.args[0]
+        self.assertEqual(cursor.execute.call_count, 2)
+        self.assertIn("statement_timeout", cursor.execute.call_args_list[0].args[0])
+        query = cursor.execute.call_args_list[1].args[0]
         self.assertIn("pumbility.schema_metadata", query)
         self.assertIn("pumbility.jobs", query)
 
@@ -932,16 +1122,16 @@ class PumbilityJobReadTests(unittest.TestCase):
         invalid_connection, invalid_cursor = self._connection((None, False, None))
         store = PumbilityJobStore(database_url="postgresql://localhost/local")
 
-        with patch("pumbility_store._connect", return_value=missing_connection):
+        with patch("pumbility_store._read_connect", return_value=missing_connection):
             self.assertIsNone(store.get("missing-job"))
-        missing_cursor.execute.assert_called_once()
+        self.assertEqual(missing_cursor.execute.call_count, 2)
 
         with (
-            patch("pumbility_store._connect", return_value=invalid_connection),
+            patch("pumbility_store._read_connect", return_value=invalid_connection),
             self.assertRaisesRegex(RuntimeError, "schema is not"),
         ):
             store.get("missing-job")
-        invalid_cursor.execute.assert_called_once()
+        self.assertEqual(invalid_cursor.execute.call_count, 2)
 
 
 class PumbilityJobHeartbeatTests(unittest.TestCase):

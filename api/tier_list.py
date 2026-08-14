@@ -25,7 +25,7 @@ def get_combined_tier_list():
                 status_code=404,
                 content={"error": "The combined tier list has not been generated yet."},
             )
-        return payload
+        return JSONResponse(content=payload)
     except (RuntimeError, json.JSONDecodeError):
         return JSONResponse(
             status_code=503,

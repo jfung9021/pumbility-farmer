@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -17,12 +18,14 @@ import sys
 import {module}
 
 print(json.dumps({{
+    "celery": "celery" in sys.modules,
     "numpy": "numpy" in sys.modules,
     "pandas": "pandas" in sys.modules,
     "analyzer": "piu_misgrade_analyzer" in sys.modules,
     "recommendations": "piu_recommendations" in sys.modules,
     "recommendationRefresh": "recommendation_refresh" in sys.modules,
     "workerTasks": "worker.tasks" in sys.modules,
+    "workerCelery": "worker.celery" in sys.modules,
 }}, sort_keys=True))
 """
     completed = subprocess.run(
@@ -44,11 +47,13 @@ class ApiColdStartTests(unittest.TestCase):
             imported,
             {
                 "analyzer": False,
+                "celery": False,
                 "numpy": False,
                 "pandas": False,
                 "recommendationRefresh": False,
                 "recommendations": False,
                 "workerTasks": False,
+                "workerCelery": False,
             },
         )
 
@@ -85,6 +90,7 @@ with (
     ]
 
 print(json.dumps({
+    "celery": "celery" in sys.modules,
     "statuses": statuses,
     "numpy": "numpy" in sys.modules,
     "pandas": "pandas" in sys.modules,
@@ -92,6 +98,7 @@ print(json.dumps({
     "recommendations": "piu_recommendations" in sys.modules,
     "recommendationRefresh": "recommendation_refresh" in sys.modules,
     "workerTasks": "worker.tasks" in sys.modules,
+    "workerCelery": "worker.celery" in sys.modules,
 }, sort_keys=True))
 """
         completed = subprocess.run(
@@ -106,11 +113,13 @@ print(json.dumps({
 
         self.assertEqual(result["statuses"], [200, 200, 200])
         self.assertFalse(result["numpy"])
+        self.assertFalse(result["celery"])
         self.assertFalse(result["pandas"])
         self.assertFalse(result["analyzer"])
         self.assertFalse(result["recommendations"])
         self.assertFalse(result["recommendationRefresh"])
         self.assertFalse(result["workerTasks"])
+        self.assertFalse(result["workerCelery"])
 
     def test_worker_entrypoints_register_tasks_without_eager_numeric_imports(self) -> None:
         imported = _isolated_import("worker.run")
@@ -121,6 +130,50 @@ print(json.dumps({
         self.assertFalse(imported["recommendations"])
         self.assertFalse(imported["recommendationRefresh"])
         self.assertTrue(imported["workerTasks"])
+        self.assertTrue(imported["workerCelery"])
+        self.assertTrue(imported["celery"])
+
+    def test_queue_names_and_worker_routing_still_honor_environment(self) -> None:
+        source = """
+import json
+
+from api._shared import QUEUE_NAME as api_queue
+from api.recommendations import PLAYER_QUEUE_NAME as api_player_queue
+from worker.celery import PLAYER_QUEUE_NAME, QUEUE_NAME, app
+
+print(json.dumps({
+    "apiQueue": api_queue,
+    "apiPlayerQueue": api_player_queue,
+    "workerQueue": QUEUE_NAME,
+    "workerPlayerQueue": PLAYER_QUEUE_NAME,
+    "defaultQueue": app.conf.task_default_queue,
+}, sort_keys=True))
+"""
+        environment = {
+            **os.environ,
+            "CELERY_QUEUE_NAME": "analysis-test",
+            "CELERY_PLAYER_QUEUE_NAME": "player-test",
+        }
+        completed = subprocess.run(
+            [sys.executable, "-c", source],
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+
+        self.assertEqual(
+            json.loads(completed.stdout.strip()),
+            {
+                "apiPlayerQueue": "player-test",
+                "apiQueue": "analysis-test",
+                "defaultQueue": "analysis-test",
+                "workerPlayerQueue": "player-test",
+                "workerQueue": "analysis-test",
+            },
+        )
 
     def test_lightweight_contract_matches_compatibility_exports(self) -> None:
         from piu_misgrade_analyzer import SCRIPT_VERSION as analyzer_version
