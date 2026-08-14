@@ -979,6 +979,14 @@ class WorkerClient:
 
 
 class WorkerTests(unittest.TestCase):
+    def test_queue_visibility_covers_the_full_worker_duration(self) -> None:
+        from worker.celery import app
+
+        options = app.conf.broker_transport_options
+        self.assertEqual(options["visibility_timeout_seconds"], 800)
+        self.assertEqual(options["visibility_refresh_interval_seconds"], 240)
+        self.assertNotIn("lease_duration", options)
+
     def test_player_queue_has_a_conservative_four_worker_cap(self) -> None:
         with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as source:
             project = tomllib.load(source)
