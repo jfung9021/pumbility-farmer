@@ -572,4 +572,3 @@ secrets on command lines, or persist private deployment references in tracked fi
 > has evidence. Latency alone may use the documented owner waiver only after every non-latency gate
 > passes. Do not ask for routine approvals; use the existing authenticated CLI access and stop only
 > for a genuine missing authority, secret, or external blocker.
-
