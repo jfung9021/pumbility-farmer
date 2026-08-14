@@ -323,7 +323,7 @@ def _run_shadow_restore(
                         _claim_lock(cursor)
                     lock_connection.commit()
                     try:
-                        if populate(["--apply"]) != 0:
+                        if populate(["--apply", "--pinned-model-only"]) != 0:
                             raise RuntimeError(
                                 "The guarded hosted typed population did not pass."
                             )

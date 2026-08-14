@@ -292,11 +292,12 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
         ) as release, patch(
             "scripts.populate_pumbility_production.main",
             side_effect=population_error,
-        ):
+        ) as populate:
             with self.assertRaisesRegex(
                 RuntimeError, "Hosted shadow restoration failed safely"
             ) as caught:
                 _run_shadow_restore(environment, action="populate")
+        populate.assert_called_once_with(["--apply", "--pinned-model-only"])
         schema.assert_called_once_with(cursor)
         target.assert_called_once_with(cursor)
         claim.assert_called_once_with(cursor)

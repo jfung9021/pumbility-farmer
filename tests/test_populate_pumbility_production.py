@@ -207,8 +207,14 @@ class HostedPopulationSafetyTests(unittest.TestCase):
     def test_apply_is_explicit_and_bootstrap_default_is_fixed(self) -> None:
         args = build_parser().parse_args([])
         self.assertFalse(args.apply)
+        self.assertFalse(args.pinned_model_only)
         self.assertEqual(args.bootstrap_samples, 500)
         self.assertTrue(build_parser().parse_args(["--apply"]).apply)
+        self.assertTrue(
+            build_parser()
+            .parse_args(["--apply", "--pinned-model-only"])
+            .pinned_model_only
+        )
 
     def test_requires_vercel_authoritative_reads_and_write_flags_off(self) -> None:
         _assert_flags_off({"PUMBILITY_DATA_BACKEND": "vercel"})

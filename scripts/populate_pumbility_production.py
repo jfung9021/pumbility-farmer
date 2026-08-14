@@ -180,6 +180,21 @@ _LIVE_RECOMMENDATION_MODEL_FIELDS = frozenset(
         "method",
     }
 )
+_PINNED_RECOMMENDATION_MODEL_FIELDS = frozenset(
+    {
+        "artifactSchemaVersion",
+        "recommendationSchemaVersion",
+        "generationKey",
+        "generatedAtUtc",
+        "catalog",
+        "recommendationCharts",
+        "phoenix2Slopes",
+        "scoreResponseModelPath",
+        "scoreProjectionMetadata",
+        "plateModel",
+        "method",
+    }
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -190,6 +205,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_BOOTSTRAP_SAMPLES,
         help="Production-equivalent analysis bootstrap count (default: 500).",
+    )
+    parser.add_argument(
+        "--pinned-model-only",
+        action="store_true",
+        help="Validate and persist the pinned source model without rebuilding live-derived data.",
     )
     return parser
 
@@ -646,10 +666,86 @@ def _verify_analysis(
         raise RuntimeError("Hosted Phoenix 2 analysis semantic parity failed.")
 
 
+def _load_pinned_model_artifacts(
+    source: VercelPrivateBlobStore,
+    active_index: Mapping[str, Any],
+) -> tuple[dict[str, Any], bytes, int]:
+    generation = str(active_index.get("generationKey") or "")
+    shard_count = int(active_index.get("inputShardCount") or 0)
+    active_player_keys = _recommendation_player_keys(active_index, "active")
+    if not generation or shard_count < 1 or shard_count > MAX_INPUT_SHARDS:
+        raise RuntimeError("The active hosted recommendation model boundary is invalid.")
+    source_model = _required_production_json(
+        source, recommendation_model_path(generation), "model"
+    )
+    if set(source_model) != _PINNED_RECOMMENDATION_MODEL_FIELDS:
+        raise RuntimeError("The pinned recommendation model shape is invalid.")
+    if (
+        source_model.get("artifactSchemaVersion") != MODEL_ARTIFACT_SCHEMA_VERSION
+        or source_model.get("recommendationSchemaVersion")
+        != active_index.get("schemaVersion")
+        or source_model.get("generationKey") != generation
+        or parse_utc(source_model.get("generatedAtUtc")) is None
+        or source_model.get("scoreResponseModelPath")
+        != recommendation_score_model_path(generation)
+        or not isinstance(source_model.get("catalog"), list)
+        or not isinstance(source_model.get("recommendationCharts"), list)
+        or not isinstance(source_model.get("phoenix2Slopes"), Mapping)
+        or not isinstance(source_model.get("scoreProjectionMetadata"), Mapping)
+        or not isinstance(source_model.get("plateModel"), Mapping)
+    ):
+        raise RuntimeError("The pinned recommendation model contract is invalid.")
+    source_method = source_model.get("method")
+    active_method = active_index.get("method")
+    if not isinstance(source_method, Mapping) or not isinstance(active_method, Mapping):
+        raise RuntimeError("The pinned recommendation method contract is invalid.")
+    if set(source_method) != set(active_method) or _mapping_mismatches(
+        source_method, active_method
+    ).difference(_LIVE_RECOMMENDATION_METHOD_FIELDS):
+        raise RuntimeError("The pinned recommendation method contract is inconsistent.")
+    print(json.dumps({"status": "stage-completed", "stage": "pinned-model-json"}, sort_keys=True))
+
+    versioned = _required_production_json(
+        source, recommendation_index_path(generation), "versioned recommendation index"
+    )
+    timestamp_variance_seconds = _assert_versioned_index_timestamp_variance(
+        active_index, versioned
+    )
+    print(
+        json.dumps(
+            {
+                "status": "stage-completed",
+                "stage": "versioned-index-parity",
+                "timestampOnlyVarianceAccepted": bool(timestamp_variance_seconds),
+                "maximumTimestampVarianceSeconds": timestamp_variance_seconds,
+            },
+            sort_keys=True,
+        )
+    )
+    _assert_source_input_shards(
+        source,
+        generation=generation,
+        shard_count=shard_count,
+        player_count=len(active_player_keys),
+    )
+    print(json.dumps({"status": "stage-completed", "stage": "pinned-model-shards"}, sort_keys=True))
+    source_score_bytes = _required_production_bytes(
+        source, recommendation_score_model_path(generation), "numeric recommendation model"
+    )
+    try:
+        ScoreResponseModel.from_npz_bytes(source_score_bytes)
+    except ValueError:
+        raise RuntimeError("The pinned recommendation numeric model is invalid.") from None
+    print(json.dumps({"status": "stage-completed", "stage": "pinned-model-numeric"}, sort_keys=True))
+    return source_model, source_score_bytes, shard_count
+
+
 def _verify_model(
     source: VercelPrivateBlobStore,
     inputs: Mapping[str, DatabaseInput],
     pointers: Mapping[str, Mapping[str, Any]],
+    *,
+    rebuild_live_model: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any], bytes, int, int]:
     combined_charts, slopes, metadata = build_combined_chart_results(
         inputs["phoenix1"].snapshot,
@@ -675,6 +771,21 @@ def _verify_model(
     shard_count = int(active_index.get("inputShardCount") or 0)
     if not generation or not generated_at or shard_count < 1 or shard_count > MAX_INPUT_SHARDS:
         raise RuntimeError("The active hosted recommendation model boundary is invalid.")
+    if not rebuild_live_model:
+        source_model, source_score_bytes, shard_count = _load_pinned_model_artifacts(
+            source, active_index
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "stage-completed",
+                    "stage": "model-rebuild",
+                    "mode": "pinned-source-after-bounded-live-drift-evidence",
+                },
+                sort_keys=True,
+            )
+        )
+        return active_index, source_model, source_score_bytes, shard_count, shard_count
     artifacts = build_recommendation_model_artifacts(
         inputs["phoenix1"].snapshot,
         inputs["phoenix2"].snapshot,
@@ -874,6 +985,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.bootstrap_samples != DEFAULT_BOOTSTRAP_SAMPLES:
         raise ValueError("Hosted population requires the production-equivalent bootstrap count.")
+    if args.pinned_model_only and not args.apply:
+        raise ValueError("Pinned-model-only population requires --apply.")
     _assert_flags_off(os.environ)
     if not os.getenv("BLOB_READ_WRITE_TOKEN", "").strip():
         raise RuntimeError("Run hosted population through `vercel env run -e production`.")
@@ -911,7 +1024,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(json.dumps({"status": "stage-completed", "stage": "analysis-compute"}, sort_keys=True))
     _verify_analysis(outputs, pointers)
     print(json.dumps({"status": "stage-completed", "stage": "analysis-parity"}, sort_keys=True))
-    artifacts = _verify_model(source, inputs, pointers)
+    artifacts = _verify_model(
+        source,
+        inputs,
+        pointers,
+        rebuild_live_model=not args.pinned_model_only,
+    )
     print(json.dumps({"status": "stage-completed", "stage": "model-parity"}, sort_keys=True))
     _assert_boundary_unchanged(source, pointers, phoenix2)
     print(json.dumps({"status": "stage-completed", "stage": "boundary"}, sort_keys=True))
