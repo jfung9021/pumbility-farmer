@@ -8,8 +8,8 @@ private artifact paths.
 
 ## Current live handoff (supersedes the historical pause sections below)
 
-- Rollout code is at `4fa8e9a` after PR #67, `Parallelize Pumbility canary reads`.
-- Production deployment `dpl_5sSxQezmjvXopWzHwEJJF3m6XC3M` is READY and aliased to the real
+- Rollout code is at `1ca5399`, `Instrument and optimize Pumbility read canaries`.
+- Production deployment `dpl_GMs4LwAMcvZKu76t7FPLDx45MFZp` is READY in `iad1` and aliased to the real
   `https://pumbility-farmer.vercel.app` site.
 - Vercel remains authoritative for every read and publication. Production is `shadow`, strict
   shadowing is false, canonical Supabase shadow writes are enabled, Blob mirror/read fallback are
@@ -22,19 +22,37 @@ private artifact paths.
   173 JSON artifacts, one binary artifact, 56 cached-player artifacts, privacy scan passed.
 - The dedicated runtime credential was rotated after a stale credential was detected. The new
   credential was installed in Vercel only after the exact reconciliation above passed.
-- Canary group 1 (`analysis,tier-list`) then produced 60/60 exact `candidate-served` comparisons and
-  zero HTTP errors, mismatches, candidate errors, or fallbacks. It nevertheless failed the latency
-  gate: analysis p95/p99 was `3098.320/5695.727 ms` versus `2531.782/2570.183 ms` baseline, and
-  tier-list p95/p99 was `2584.942/14273.838 ms` versus `1967.591/1985.784 ms` baseline.
-- Because the permitted increases are 10% at p95 and 20% at p99, the read canary was removed and
-  groups 2/3 plus Supabase authority were not attempted. A post-rollback smoke test returned valid
-  JSON and HTTP 200 for analysis, tier-list, and recommendation-player-list routes.
+- The optimized commit passed 281 Python tests, 45 frontend tests, TypeScript typecheck, the Next
+  production build, and a fresh remote pre-canary gate. That gate again proved exact relational and
+  artifact parity, a stable boundary, privacy, Phoenix 1 `582301`, Phoenix 2 `15238`, 173 JSON
+  artifacts, one binary artifact, and 56 cached-player artifacts.
+- A protected, same-commit region experiment sent 100 compressed scored analysis requests to each
+  of `iad1` and `cle1`; every decoded response was identical and all 200 sampled server events were
+  `candidate-served`. `cle1` reduced client p50/p95/p99 TTFB from
+  `931.612/998.508/1036.324 ms` to `801.525/903.262/930.232 ms`. Median Supabase connect/fetch fell
+  from `86.663/229.780 ms` to `21.203/106.051 ms`, but median authoritative Blob read rose from
+  `153.219 ms` to `283.816 ms`. Do not move production to `cle1` until its worker, private Blob,
+  cron, queue, cold-start, connection-capacity, failure, and rollback topology gates pass.
+- The corrected adjacent Vercel-only baseline completed 100/100 scored requests per domain with
+  zero errors or cache hits: analysis p95/p99 was `1189.065/1271.094 ms`; tier-list was
+  `977.721/1104.796 ms`.
+- The optimized production group-1 canary then completed 103/103 exact `candidate-served` events per
+  domain, including warmups, with zero HTTP errors, cache hits, mismatches, authority errors,
+  candidate errors, or fallbacks. It still failed the fixed latency gate: analysis p95/p99 was
+  `1599.077/1752.292 ms` (+34.5%/+37.9%), and tier-list p95/p99 was
+  `1254.527/1323.056 ms` (+28.3%/+19.8%).
+- The real alias was immediately rolled back to the optimized Vercel-only deployment above. Warm
+  post-rollback checks returned HTTP 200 for analysis, tier-list, and recommendation-player-list;
+  canary telemetry is absent. Groups 2/3 and Supabase authority were not attempted.
 
-The current proven blocker is Supabase candidate-read latency under production canary load, not
-correctness or parity. Do not re-enable any read canary until a focused change has direct evidence
-that it can meet the existing p95/p99 gate. After such a fix is ready, the shortest remaining live
-test path is three 15-minute grouped canaries followed by the owner-approved 45-minute active
-post-cutover watch. Allow additional time for deployment and rollback checks.
+The current proven blocker remains Supabase candidate-read latency under production canary load,
+not correctness or parity. The one-roundtrip and cold-import changes materially improved absolute
+latency but did not meet the existing p95/p99 delta gate in `iad1`. `cle1` is a promising measured
+direction, but region adoption remains pending the explicit topology gates above. Do not re-enable
+any production read canary until another focused change or fully gated topology has direct evidence
+that it can meet the same latency limits. After that evidence, the shortest remaining live test path
+is the three 15-minute grouped canaries followed by the owner-approved 45-minute active post-cutover
+watch. Allow additional time for deployment and rollback checks.
 
 ## Resume instruction
 

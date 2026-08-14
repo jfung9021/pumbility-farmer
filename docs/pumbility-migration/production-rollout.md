@@ -229,12 +229,23 @@ PUMBILITY_BLOB_READ_FALLBACK_ENABLED=false
 PUMBILITY_SUPABASE_READ_CANARY=
 ```
 
-Current safe stage on 2026-08-14 JST: the genuine production cron, immediate full sync, canonical
-typed shadow generation, exact reconciliation, privacy, regression, capacity, and rollback gates
-passed. The production deployment is running `PUMBILITY_DATA_BACKEND=shadow` in fail-open mode,
-with `PUMBILITY_SHADOW_STRICT=false` and canonical Supabase shadow writes enabled. Vercel remains
-authoritative for every read and publication; Blob mirror/read fallback are disabled and the read
-canary allowlist is absent. Canary group 1 produced 60/60 exact candidate reads with no HTTP error,
-mismatch, candidate error, or fallback, but exceeded both endpoint latency limits. It was rolled
-back immediately. Do not run groups 2/3 or enable Supabase authority until a focused candidate-read
-latency change meets the existing p95/p99 gate. See `REMOTE_HANDOFF_2026-08-14.md` for exact evidence.
+Current safe stage on 2026-08-14 JST: the optimized commit `1ca5399` is live in `iad1` on deployment
+`dpl_GMs4LwAMcvZKu76t7FPLDx45MFZp`. Production is still
+`PUMBILITY_DATA_BACKEND=shadow` in fail-open mode, with `PUMBILITY_SHADOW_STRICT=false` and accepted
+canonical Supabase shadow writes enabled. Vercel remains authoritative for every read and
+publication; Blob mirror/read fallback are disabled and the read-canary allowlist is absent.
+
+The optimized production group-1 attempt followed a fresh exact pre-canary reconciliation and an
+adjacent corrected baseline. It produced 103/103 `candidate-served` telemetry events per domain,
+including warmups, with zero HTTP errors, cache hits, mismatches, authority errors, candidate
+errors, or fallbacks. It nevertheless failed the fixed latency gate: analysis p95/p99 was
+`1599.077/1752.292 ms` versus `1189.065/1271.094 ms` baseline, and tier-list was
+`1254.527/1323.056 ms` versus `977.721/1104.796 ms` baseline. The alias was immediately rolled back
+to the Vercel-only deployment above and warm public health checks passed.
+
+A same-commit protected region comparison showed that `cle1` materially improves Supabase connect
+and fetch latency, but worsens the still-authoritative private Blob read. Region adoption remains
+pending the worker, private Blob, cron, queue, cold-start, connection-capacity, failure, and rollback
+topology gates listed above. Do not run groups 2/3, re-enable a production read canary, move the
+production region, or enable Supabase authority until the relevant focused change or fully gated
+topology meets the existing p95/p99 limits. See `REMOTE_HANDOFF_2026-08-14.md` for exact evidence.
