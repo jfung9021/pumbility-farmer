@@ -20,15 +20,19 @@ class ProductionTargetTests(unittest.TestCase):
     def test_backend_bundle_includes_immutable_reference_inputs(self) -> None:
         root = Path(__file__).resolve().parents[1]
         config = json.loads((root / "vercel.json").read_text(encoding="utf-8"))
-        include_files = config["services"]["backend"]["functions"]["**/*.py"][
-            "includeFiles"
-        ]
+        backend = config["services"]["backend"]
         self.assertEqual(
-            include_files,
-            "{public/data/phoenix1.json,public/data/phoenix1.manifest.json,"
-            "public/data/phoenix1-rerates.json,lib/data/nevsister-chart-videos.json,"
-            "lib/data/nevsister-chart-video-overrides.json}",
+            backend["includeFiles"],
+            [
+                "public/data/phoenix1.json",
+                "public/data/phoenix1.manifest.json",
+                "public/data/phoenix1-rerates.json",
+                "lib/data/nevsister-chart-videos.json",
+                "lib/data/nevsister-chart-video-overrides.json",
+            ],
         )
+        self.assertEqual(backend["maxDuration"], 800)
+        self.assertNotIn("functions", backend)
 
     def test_accepts_only_exact_session_pooler_target(self) -> None:
         validate_production_database_url(
