@@ -9,6 +9,8 @@ import numpy as np
 from scripts.populate_pumbility_production import (
     NUMERIC_MODEL_ABSOLUTE_TOLERANCE,
     _assert_flags_off,
+    _assert_recommendation_live_drift,
+    _assert_recommendation_model_live_drift,
     _combined_payload_for_active_generation,
     _parity_mismatch_evidence,
     _recommendation_index_for_active_generation,
@@ -19,6 +21,70 @@ from scripts.populate_pumbility_production import (
 
 
 class HostedPopulationSafetyTests(unittest.TestCase):
+    def _recommendation_index(self, player_keys: list[str]) -> dict[str, object]:
+        shard_size = 2
+        return {
+            "schemaVersion": 21,
+            "storageSchemaVersion": 3,
+            "generationKey": "generation",
+            "modelGeneratedAtUtc": "2026-08-15T00:00:00Z",
+            "generatedAtUtc": "2026-08-15T00:00:00Z",
+            "modelPath": "model.json",
+            "refreshSupported": True,
+            "method": {
+                "catalog": "same",
+                "pumbilityPerLevel": {"singles": 1.0},
+                "scoreProjectionCoverage": {"players": len(player_keys)},
+            },
+            "players": [
+                {
+                    "playerKey": key,
+                    "username": key,
+                    "inputShard": offset // shard_size,
+                }
+                for offset, key in enumerate(player_keys)
+            ],
+            "inputShardCount": (len(player_keys) + shard_size - 1) // shard_size,
+            "inputShardSize": shard_size,
+        }
+
+    def test_live_recommendation_drift_is_bounded_and_structure_preserving(self) -> None:
+        active = self._recommendation_index(["a", "b", "c"])
+        candidate = self._recommendation_index(["a", "b", "d", "e"])
+        evidence = _assert_recommendation_live_drift(candidate, active)
+        self.assertEqual(evidence["playerCountDifference"], 1)
+        self.assertEqual(evidence["playerKeySetDifferenceCount"], 3)
+
+        active_model = {
+            "generationKey": "generation",
+            "catalog": ["same"],
+            "phoenix2Slopes": {"singles": 1.0},
+            "scoreProjectionMetadata": {"players": 3},
+            "plateModel": {"players": 3},
+            "method": active["method"],
+        }
+        candidate_model = {
+            **active_model,
+            "phoenix2Slopes": {"singles": 2.0},
+            "scoreProjectionMetadata": {"players": 4},
+            "plateModel": {"players": 4},
+            "method": candidate["method"],
+        }
+        _assert_recommendation_model_live_drift(candidate_model, active_model)
+
+    def test_live_recommendation_drift_rejects_contract_changes(self) -> None:
+        active = self._recommendation_index(["a", "b"])
+        changed = self._recommendation_index(["a", "b"])
+        changed["schemaVersion"] = 22
+        with self.assertRaises(RuntimeError):
+            _assert_recommendation_live_drift(changed, active)
+
+        excessive = self._recommendation_index(
+            [chr(ord("a") + offset) for offset in range(11)]
+        )
+        with self.assertRaises(RuntimeError):
+            _assert_recommendation_live_drift(excessive, self._recommendation_index(["z"]))
+
     def test_active_generation_compatibility_removes_only_pending_fields(self) -> None:
         current_combined = {
             "schemaVersion": 3,
