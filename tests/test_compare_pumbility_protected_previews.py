@@ -17,6 +17,7 @@ from scripts.compare_pumbility_protected_previews import (
     PROJECT_ROOT,
     ProtectedPreviewProbeError,
     _deployment_reference_from_environment,
+    _windows_safe_vercel_command,
     main,
     run_comparison,
 )
@@ -90,6 +91,26 @@ class ProtectedPreviewComparisonTests(unittest.TestCase):
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8"))
+
+    @unittest.skipUnless(os.name == "nt", "Windows npm shim regression")
+    def test_windows_cli_bypasses_cmd_shim_for_ampersand_query(self) -> None:
+        with tempfile.TemporaryDirectory(dir=self.local_data) as temporary:
+            root = Path(temporary)
+            shim = root / "vercel.cmd"
+            entrypoint = root / "node_modules" / "vercel" / "dist" / "vc.js"
+            node = root / "node.exe"
+            entrypoint.parent.mkdir(parents=True)
+            shim.write_text("@echo off\n", encoding="utf-8")
+            entrypoint.write_text("", encoding="utf-8")
+            node.write_bytes(b"")
+            query = "/api/analyze?mix=phoenix2&probeNonce=exact"
+
+            command = _windows_safe_vercel_command(
+                [str(shim), "curl", query, "--deployment", "preview-reference"]
+            )
+
+        self.assertEqual(command[:2], [str(node), str(entrypoint)])
+        self.assertEqual(command[3], query)
 
     def _run_smoke(
         self, output_root: Path, runner: FakeVercelRunner

@@ -135,9 +135,10 @@ def _run_command(
     command_runner: CommandRunner,
     timeout: float,
 ) -> Any:
+    safe_command = _windows_safe_vercel_command(command)
     try:
         return command_runner(
-            list(command),
+            safe_command,
             cwd=PROJECT_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -148,6 +149,24 @@ def _run_command(
         raise ProtectedPreviewProbeError(
             "An authenticated preview command failed safely."
         ) from None
+
+
+def _windows_safe_vercel_command(command: Sequence[str]) -> list[str]:
+    """Bypass npm's cmd shim so query-string ampersands remain one argument."""
+    safe_command = list(command)
+    if os.name != "nt" or not safe_command:
+        return safe_command
+    shim = Path(safe_command[0])
+    if shim.suffix.casefold() != ".cmd":
+        return safe_command
+    entrypoint = shim.parent / "node_modules" / "vercel" / "dist" / "vc.js"
+    bundled_node = shim.parent / "node.exe"
+    node = str(bundled_node) if bundled_node.is_file() else shutil.which("node")
+    if not entrypoint.is_file() or not node:
+        raise ProtectedPreviewProbeError(
+            "The authenticated Vercel CLI entrypoint could not be resolved safely."
+        )
+    return [node, str(entrypoint), *safe_command[1:]]
 
 
 def _attest_preview_deployment(
