@@ -136,6 +136,31 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
         self.assertEqual(result["action"], "backfill")
         self.assertFalse(result["typedPopulationCompleted"])
 
+    def test_shadow_backfill_failure_exposes_only_safe_stage_evidence(self) -> None:
+        environment = {"PUMBILITY_DATABASE_URL": "runtime-url"}
+        error = RuntimeError("private host and object path")
+        error.sqlstate = "23505"
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "api.operator._validated_shadow_restore_environment",
+            return_value=({"productionBackend": "vercel"}, "session-url"),
+        ), patch(
+            "scripts.backfill_pumbility_production.OPERATOR_PHASE", "references"
+        ), patch(
+            "scripts.backfill_pumbility_production.main", side_effect=error
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                _run_shadow_restore(environment, action="backfill")
+        self.assertEqual(
+            caught.exception.safe_evidence,
+            {
+                "action": "backfill",
+                "failureStage": "references",
+                "errorType": "RuntimeError",
+                "sqlstate": "23505",
+            },
+        )
+        self.assertNotIn("private host", str(caught.exception))
+
     def test_shadow_population_uses_advisory_lock_and_releases_on_failure(self) -> None:
         environment = {"PUMBILITY_DATABASE_URL": "runtime-url"}
         flags = {"productionBackend": "vercel"}
@@ -161,7 +186,9 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
             "scripts.populate_pumbility_production.main",
             side_effect=RuntimeError("private failure"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "private failure"):
+            with self.assertRaisesRegex(
+                RuntimeError, "Hosted shadow restoration failed safely"
+            ) as caught:
                 _run_shadow_restore(environment, action="populate")
         schema.assert_called_once_with(cursor)
         target.assert_called_once_with(cursor)
@@ -169,6 +196,14 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
         release.assert_called_once_with(cursor)
         self.assertEqual(connection.commit.call_count, 2)
         self.assertNotIn("PUMBILITY_PRODUCTION_POPULATION_CONFIRMATION", os.environ)
+        self.assertEqual(
+            caught.exception.safe_evidence,
+            {
+                "action": "populate",
+                "failureStage": "typed-population",
+                "errorType": "RuntimeError",
+            },
+        )
 
     def test_route_is_absent_outside_explicit_preview_diagnostic(self) -> None:
         for environment in (

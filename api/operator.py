@@ -85,6 +85,7 @@ def _validated_shadow_restore_environment(
 def _run_shadow_restore(
     environment: Mapping[str, str], *, action: str
 ) -> dict[str, object]:
+    from scripts import backfill_pumbility_production as backfill_module
     from scripts.backfill_pumbility_production import (
         CONFIRMATION as BACKFILL_CONFIRMATION,
         CONFIRMATION_ENV as BACKFILL_CONFIRMATION_ENV,
@@ -92,7 +93,6 @@ def _run_shadow_restore(
         _assert_database_target,
         _claim_lock,
         _release_lock,
-        main as backfill,
     )
     from scripts.populate_pumbility_production import (
         CONFIRMATION as POPULATION_CONFIRMATION,
@@ -112,36 +112,56 @@ def _run_shadow_restore(
 
     # Environment confirmations are process-global, so serialize them locally;
     # the production advisory lock below provides cross-instance serialization.
-    with _shadow_restore_environment_lock, _temporary_operator_environment(values):
-        if action == "backfill":
-            if backfill(["--expected-project-ref", EXPECTED_PROJECT_REF]) != 0:
-                raise RuntimeError("The guarded hosted backfill plan did not pass.")
-            if backfill(
-                ["--expected-project-ref", EXPECTED_PROJECT_REF, "--apply"]
-            ) != 0:
-                raise RuntimeError("The guarded hosted backfill did not pass.")
-        else:
-            import psycopg
+    try:
+        with _shadow_restore_environment_lock, _temporary_operator_environment(values):
+            if action == "backfill":
+                if backfill_module.main(
+                    ["--expected-project-ref", EXPECTED_PROJECT_REF]
+                ) != 0:
+                    raise RuntimeError("The guarded hosted backfill plan did not pass.")
+                if backfill_module.main(
+                    ["--expected-project-ref", EXPECTED_PROJECT_REF, "--apply"]
+                ) != 0:
+                    raise RuntimeError("The guarded hosted backfill did not pass.")
+            else:
+                import psycopg
 
-            from pumbility_store import _assert_schema
+                from pumbility_store import _assert_schema
 
-            with psycopg.connect(
-                session_url, prepare_threshold=None
-            ) as lock_connection:
-                with lock_connection.cursor() as cursor:
-                    _assert_schema(cursor)
-                    _assert_database_target(cursor)
-                    _claim_lock(cursor)
-                lock_connection.commit()
-                try:
-                    if populate(["--apply"]) != 0:
-                        raise RuntimeError(
-                            "The guarded hosted typed population did not pass."
-                        )
-                finally:
+                with psycopg.connect(
+                    session_url, prepare_threshold=None
+                ) as lock_connection:
                     with lock_connection.cursor() as cursor:
-                        _release_lock(cursor)
+                        _assert_schema(cursor)
+                        _assert_database_target(cursor)
+                        _claim_lock(cursor)
                     lock_connection.commit()
+                    try:
+                        if populate(["--apply"]) != 0:
+                            raise RuntimeError(
+                                "The guarded hosted typed population did not pass."
+                            )
+                    finally:
+                        with lock_connection.cursor() as cursor:
+                            _release_lock(cursor)
+                        lock_connection.commit()
+    except Exception as error:
+        phase = (
+            str(backfill_module.OPERATOR_PHASE)
+            if action == "backfill"
+            else "typed-population"
+        )
+        safe_evidence: dict[str, object] = {
+            "action": action,
+            "failureStage": phase,
+            "errorType": type(error).__name__,
+        }
+        sqlstate = str(getattr(error, "sqlstate", "") or "").upper()
+        if len(sqlstate) == 5 and sqlstate.isalnum():
+            safe_evidence["sqlstate"] = sqlstate
+        wrapped = RuntimeError("Hosted shadow restoration failed safely.")
+        wrapped.safe_evidence = safe_evidence
+        raise wrapped from None
 
     session_url = ""
     return {

@@ -69,6 +69,7 @@ MAX_BOUNDARY_ATTEMPTS = 3
 MAX_CACHED_PLAYER_OBJECTS = 10_000
 FROZEN_SCORE_BATCH_SIZE = 5_000
 GENERATION_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
+OPERATOR_PHASE = "startup"
 
 
 def validate_production_database_url(
@@ -437,6 +438,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global OPERATOR_PHASE
+    OPERATOR_PHASE = "validate-request"
     args = build_parser().parse_args(argv)
     if args.expected_project_ref != EXPECTED_PROJECT_REF:
         raise RuntimeError("The requested Supabase project is not the approved project.")
@@ -449,6 +452,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.apply and os.getenv(CONFIRMATION_ENV, "") != CONFIRMATION:
         raise RuntimeError(f"{CONFIRMATION_ENV} does not match the required confirmation.")
 
+    OPERATOR_PHASE = "source-boundary"
     source = VercelPrivateBlobStore()
     pointers, phoenix1, phoenix2 = _read_stable_boundary(source)
     counts = {
@@ -464,12 +468,14 @@ def main(argv: list[str] | None = None) -> int:
         },
     }
     if not args.apply:
+        OPERATOR_PHASE = "planned"
         print(json.dumps({"status": "planned", "mixes": counts}, sort_keys=True))
         return 0
 
     import psycopg
 
     results: dict[str, Any] = {}
+    OPERATOR_PHASE = "database-target-and-lock"
     with psycopg.connect(database_url, prepare_threshold=None) as connection:
         with connection.cursor() as cursor:
             _assert_schema(cursor)
@@ -477,21 +483,26 @@ def main(argv: list[str] | None = None) -> int:
             _claim_lock(cursor)
         connection.commit()
         try:
+            OPERATOR_PHASE = "phoenix1"
             results["phoenix1"] = _import_frozen_phoenix1(
                 connection, _snapshot_manifest(phoenix1), phoenix1
             )
             print(json.dumps({"status": "stage-completed", "stage": "phoenix1"}, sort_keys=True))
+            OPERATOR_PHASE = "phoenix2"
             with connection.transaction():
                 results["phoenix2"] = _import_mix(
                     connection, "phoenix2", _snapshot_manifest(phoenix2), phoenix2
                 )
             print(json.dumps({"status": "stage-completed", "stage": "phoenix2"}, sort_keys=True))
+            OPERATOR_PHASE = "references"
             with connection.transaction():
                 _, reference_counts = _import_reference_rows(connection)
             print(json.dumps({"status": "stage-completed", "stage": "references"}, sort_keys=True))
+            OPERATOR_PHASE = "artifacts"
             target = PumbilityArtifactStore(database_url=database_url)
             artifact_counts = _copy_active_artifacts(source, target, pointers)
             print(json.dumps({"status": "stage-completed", "stage": "artifacts"}, sort_keys=True))
+            OPERATOR_PHASE = "boundary"
             _assert_boundary_unchanged(source, pointers, phoenix2)
             print(json.dumps({"status": "stage-completed", "stage": "boundary"}, sort_keys=True))
         finally:
@@ -499,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
                 _release_lock(cursor)
             connection.commit()
 
+    OPERATOR_PHASE = "completed"
     print(
         json.dumps(
             {
