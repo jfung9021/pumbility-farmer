@@ -4,11 +4,7 @@ import os
 
 from celery import Celery
 
-
-QUEUE_NAME = os.getenv("CELERY_QUEUE_NAME", "analysis")
-PLAYER_QUEUE_NAME = os.getenv(
-    "CELERY_PLAYER_QUEUE_NAME", "player-recommendations"
-)
+from worker.constants import PLAYER_QUEUE_NAME, QUEUE_NAME
 
 app = Celery(
     "pumbility-analysis-worker",

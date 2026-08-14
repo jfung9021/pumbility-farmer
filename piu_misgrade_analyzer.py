@@ -60,6 +60,8 @@ from urllib.parse import urljoin, urlparse
 
 import numpy as np
 import pandas as pd
+
+from pumbility_contract import SCRIPT_VERSION
 import requests
 
 from mix_registry import DEFAULT_MIX_KEY, resolve_mix
@@ -99,7 +101,6 @@ DIFFICULTY_DELTA_SCALE = 0.4
 FOLDER_RANGE_REFERENCE_CHARTS = 30
 SYNTHETIC_PUMBILITY_PER_LEVEL = 7.3
 KEY_RE = re.compile(r"^(?:piu_scores_live_|pst_live_)[0-9a-f]{64}$")
-SCRIPT_VERSION = "6.4.0-phoenix1-score-overrides-folder-normalized-0.4-scale"
 
 
 class ApiError(RuntimeError):

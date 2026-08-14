@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import gc
 import json
 import os
@@ -21,34 +22,72 @@ from phoenix2_sync import (
     utc_now,
 )
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
-from piu_misgrade_analyzer import (
-    AnalysisConfig,
-    ApiError,
-    PiuScoresClient,
+from pumbility_contract import (
     SCRIPT_VERSION,
-    analyze_snapshot,
-    build_web_payload,
-    load_snapshot,
-)
-from piu_recommendations import (
-    build_combined_chart_results,
-    build_combined_tier_payload,
     combined_tier_blob_path,
     phoenix1_snapshot_path,
     recommendation_blob_path,
     recommendation_generation_key,
-    recommendation_shard_prefix,
-)
-from recommendation_refresh import (
-    build_recommendation_model_artifacts,
     player_refresh_enabled,
-    publish_recommendation_model_artifacts,
     recommendation_index_path,
     recommendation_model_path,
     recommendation_phoenix1_shard_path,
     recommendation_phoenix2_shard_path,
+    recommendation_shard_prefix,
     recommendation_score_model_path,
 )
+
+
+def PiuScoresClient(*args: Any, **kwargs: Any) -> Any:  # noqa: N802 - compatibility API
+    from piu_misgrade_analyzer import PiuScoresClient as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def analyze_snapshot(*args: Any, **kwargs: Any) -> Any:
+    from piu_misgrade_analyzer import analyze_snapshot as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def build_web_payload(*args: Any, **kwargs: Any) -> Any:
+    from piu_misgrade_analyzer import build_web_payload as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def load_snapshot(*args: Any, **kwargs: Any) -> Any:
+    from piu_misgrade_analyzer import load_snapshot as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def build_combined_chart_results(*args: Any, **kwargs: Any) -> Any:
+    from piu_recommendations import build_combined_chart_results as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def build_combined_tier_payload(*args: Any, **kwargs: Any) -> Any:
+    from piu_recommendations import build_combined_tier_payload as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def build_recommendation_model_artifacts(*args: Any, **kwargs: Any) -> Any:
+    from recommendation_refresh import (
+        build_recommendation_model_artifacts as implementation,
+    )
+
+    return implementation(*args, **kwargs)
+
+
+def publish_recommendation_model_artifacts(*args: Any, **kwargs: Any) -> Any:
+    from recommendation_refresh import (
+        publish_recommendation_model_artifacts as implementation,
+    )
+
+    return implementation(*args, **kwargs)
 
 
 LEGACY_LATEST_BLOB_PATH = "analysis/latest.json"
@@ -126,6 +165,114 @@ class JsonBlobStore(Protocol):
     def list(self, prefix: str) -> list[BlobObject]: ...
 
 
+@dataclass
+class _CachedBlobClient:
+    client: Any
+    client_type: type[Any]
+    users: int = 0
+    retired: bool = False
+
+
+_blob_client_cache: dict[str, _CachedBlobClient] = {}
+_blob_client_cache_lock = threading.RLock()
+
+
+def _close_blob_client(entry: _CachedBlobClient) -> None:
+    close = getattr(entry.client, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            # Closing a retired keep-alive client must not mask a completed read.
+            pass
+
+
+def _blob_client_is_closed(client: Any) -> bool:
+    return bool(getattr(client, "_closed", False))
+
+
+def _closed_blob_client_error(client: Any, error: Exception) -> bool:
+    if _blob_client_is_closed(client):
+        return True
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "client is closed",
+            "client has been closed",
+            "connection pool was closed",
+        )
+    )
+
+
+def _acquire_blob_client(token: str) -> _CachedBlobClient:
+    from vercel.blob import BlobClient
+
+    retired: _CachedBlobClient | None = None
+    with _blob_client_cache_lock:
+        entry = _blob_client_cache.get(token)
+        if entry is not None and (
+            entry.client_type is not BlobClient or _blob_client_is_closed(entry.client)
+        ):
+            _blob_client_cache.pop(token, None)
+            entry.retired = True
+            if entry.users == 0:
+                retired = entry
+            entry = None
+        if entry is None:
+            entry = _CachedBlobClient(BlobClient(token=token), BlobClient)
+            _blob_client_cache[token] = entry
+        entry.users += 1
+    if retired is not None:
+        _close_blob_client(retired)
+    return entry
+
+
+def _release_blob_client(
+    token: str, entry: _CachedBlobClient, *, retire: bool = False
+) -> None:
+    should_close = False
+    with _blob_client_cache_lock:
+        if retire and _blob_client_cache.get(token) is entry:
+            _blob_client_cache.pop(token, None)
+            entry.retired = True
+        entry.users -= 1
+        should_close = entry.retired and entry.users == 0
+    if should_close:
+        _close_blob_client(entry)
+
+
+def _read_with_blob_client(token: str, operation: Callable[[Any], Any]) -> Any:
+    """Use a shared keep-alive client and retry once if that client was closed."""
+    for attempt in range(2):
+        entry = _acquire_blob_client(token)
+        retire = False
+        try:
+            return operation(entry.client)
+        except Exception as error:
+            retire = _closed_blob_client_error(entry.client, error)
+            if not retire or attempt:
+                raise
+        finally:
+            _release_blob_client(token, entry, retire=retire)
+    raise AssertionError("A closed Blob client retry did not return or raise.")
+
+
+def _close_cached_blob_clients() -> None:
+    close_now: list[_CachedBlobClient] = []
+    with _blob_client_cache_lock:
+        for entry in _blob_client_cache.values():
+            entry.retired = True
+            if entry.users == 0:
+                close_now.append(entry)
+        _blob_client_cache.clear()
+    for entry in close_now:
+        _close_blob_client(entry)
+
+
+atexit.register(_close_cached_blob_clients)
+
+
 class VercelPrivateBlobStore:
     """Minimal private-only Vercel Blob adapter."""
 
@@ -135,12 +282,15 @@ class VercelPrivateBlobStore:
             raise RuntimeError("BLOB_READ_WRITE_TOKEN is not configured for the private analysis store.")
 
     def get_json(self, pathname: str) -> dict[str, Any] | None:
-        from vercel.blob import BlobClient
         from vercel.blob.errors import BlobNotFoundError
 
         try:
-            with BlobClient(token=self.token) as client:
-                result = client.get(pathname, access="private", use_cache=False)
+            result = _read_with_blob_client(
+                self.token,
+                lambda client: client.get(
+                    pathname, access="private", use_cache=False
+                ),
+            )
         except BlobNotFoundError:
             return None
         value = json.loads(result.content.decode("utf-8"))
@@ -149,12 +299,15 @@ class VercelPrivateBlobStore:
         return value
 
     def get_bytes(self, pathname: str) -> bytes | None:
-        from vercel.blob import BlobClient
         from vercel.blob.errors import BlobNotFoundError
 
         try:
-            with BlobClient(token=self.token) as client:
-                result = client.get(pathname, access="private", use_cache=False)
+            result = _read_with_blob_client(
+                self.token,
+                lambda client: client.get(
+                    pathname, access="private", use_cache=False
+                ),
+            )
         except BlobNotFoundError:
             return None
         return bytes(result.content)
@@ -854,6 +1007,8 @@ _SECRET_PATTERN = re.compile(r"(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}", re.
 
 
 def safe_error(exc: BaseException) -> str:
+    from piu_misgrade_analyzer import ApiError
+
     if isinstance(exc, (ApiError, FileNotFoundError, ValueError)):
         message = str(exc).strip() or "The analysis could not be completed."
         return _SECRET_PATTERN.sub("[credential redacted]", message)[:500]
@@ -925,6 +1080,8 @@ def _resume_typed_analysis_checkpoint(
     checkpoint_path: str,
     lease_heartbeat: Any | None,
 ) -> dict[str, Any]:
+    from piu_misgrade_analyzer import AnalysisConfig
+
     if (
         int(checkpoint.get("schemaVersion") or 0) != TYPED_CHECKPOINT_SCHEMA_VERSION
         or str(checkpoint.get("jobId") or "") != job_id
@@ -1075,6 +1232,8 @@ def execute_analysis_job(
     now: Callable[[], datetime] = utc_now,
 ) -> dict[str, Any]:
     """Run one idempotent, checkpointed refresh in a queue worker."""
+    from piu_misgrade_analyzer import AnalysisConfig, ApiError
+
     blob_store = blobs or PrivateBlobStore()
     job_store = jobs or RuntimeJobStore()
     existing = job_store.get(job_id)

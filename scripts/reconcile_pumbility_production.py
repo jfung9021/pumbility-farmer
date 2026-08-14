@@ -187,20 +187,30 @@ def _verify_artifacts(
     }
 
 
-def _assert_reconciliation_state(environment: Mapping[str, str]) -> str:
+def _assert_reconciliation_state(
+    environment: Mapping[str, str],
+    *,
+    allow_canonical_shadow_writes: bool = False,
+) -> str:
     backend = str(environment.get("PUMBILITY_DATA_BACKEND", "vercel")).strip().casefold()
     backend = backend or "vercel"
     if backend not in {"vercel", "shadow"}:
         raise RuntimeError("Production reconciliation requires Vercel-authoritative reads.")
     if _enabled(environment.get(SHADOW_STRICT_ENV)):
         raise RuntimeError("Production reconciliation requires fail-open shadow mode.")
-    if _enabled(environment.get(CANONICAL_SNAPSHOT_WRITE_ENV)):
+    canonical_writes = _enabled(environment.get(CANONICAL_SNAPSHOT_WRITE_ENV))
+    if canonical_writes and not (
+        allow_canonical_shadow_writes and backend == "shadow"
+    ):
         raise RuntimeError("Production reconciliation requires canonical snapshot writes off.")
     return backend
 
 
-def main() -> int:
-    backend = _assert_reconciliation_state(os.environ)
+def main(*, allow_canonical_shadow_writes: bool = False) -> int:
+    backend = _assert_reconciliation_state(
+        os.environ,
+        allow_canonical_shadow_writes=allow_canonical_shadow_writes,
+    )
     runtime_url = os.getenv("PUMBILITY_DATABASE_URL", "").strip()
     private_key = os.getenv("BLOB_READ_WRITE_TOKEN", "").encode("utf-8")
     if not runtime_url or len(private_key) < 32:

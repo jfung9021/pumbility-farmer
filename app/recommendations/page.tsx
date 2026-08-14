@@ -30,7 +30,9 @@ import type {
   PlayerRefreshResponse,
   RecommendationChart,
   RecommendationModeKey,
+  RecommendationPlayerSummary,
   RecommendationPlayersResponse,
+  RecommendationScoreProgress,
 } from "../../lib/types";
 
 
@@ -44,6 +46,7 @@ const INITIAL_DIFFICULTY_FILTERS: Record<RecommendationModeKey, string> = {
   singles: ALL_DIFFICULTIES,
   doubles: ALL_DIFFICULTIES,
 };
+const DEFAULT_RECOMMENDATION_SCORE_TARGET = 30;
 
 
 function signed(value: number, digits = 2): string {
@@ -119,6 +122,88 @@ function ProgressStat({
         </span>
       </div>
     </article>
+  );
+}
+
+function scoreProgressForMode(
+  summary: RecommendationPlayerSummary | undefined,
+  payload: PlayerRecommendationsResponse | null,
+  mode: ModeKey,
+): RecommendationScoreProgress {
+  const summaryProgress = summary?.scoreProgress?.[mode];
+  const modeResult = payload?.player.modes[mode];
+  const required = summaryProgress?.requiredScoreCount
+    ?? modeResult?.projectionRatingRequiredScoreCount
+    ?? modeResult?.requiredScoreCount
+    ?? DEFAULT_RECOMMENDATION_SCORE_TARGET;
+  const valid = summaryProgress?.validScoreCount
+    ?? (modeResult?.projectionAvailable
+      ? modeResult.projectionRatingSourceScoreCount
+      : modeResult?.phoenix2ScoreCount)
+    ?? modeResult?.validScoreCount
+    ?? 0;
+  return {
+    validScoreCount: Math.max(0, Number.isFinite(valid) ? valid : 0),
+    requiredScoreCount: Math.max(1, Number.isFinite(required) ? required : 1),
+  };
+}
+
+function RecommendationReadiness({
+  progress,
+  detail,
+}: {
+  progress: Record<ModeKey, RecommendationScoreProgress>;
+  detail?: string;
+}) {
+  const allModesReady = (["singles", "doubles"] as ModeKey[]).every(
+    (modeKey) => progress[modeKey].validScoreCount
+      >= progress[modeKey].requiredScoreCount,
+  );
+  return (
+    <div className="recommendation-empty insufficient-state recommendation-readiness">
+      <span aria-hidden="true">PF</span>
+      <h2>{allModesReady ? "Recommendations are being prepared" : "Play more charts to unlock recommendations"}</h2>
+      <p>{detail || (allModesReady
+        ? "Your score history is ready. Recommendations will appear after the next player refresh."
+        : "Build a larger score history in Singles and Doubles so we can calculate a reliable route for each mode.")}</p>
+      <div className="recommendation-readiness-grid">
+        {(["singles", "doubles"] as ModeKey[]).map((modeKey) => {
+          const modeProgress = progress[modeKey];
+          const current = Math.min(
+            modeProgress.validScoreCount,
+            modeProgress.requiredScoreCount,
+          );
+          const remaining = Math.max(
+            0,
+            modeProgress.requiredScoreCount - modeProgress.validScoreCount,
+          );
+          const percent = Math.min(
+            100,
+            (current / modeProgress.requiredScoreCount) * 100,
+          );
+          const label = modeKey === "singles" ? "Singles" : "Doubles";
+          return (
+            <article className="recommendation-readiness-mode" key={modeKey}>
+              <div>
+                <strong>{label}</strong>
+                <b>{current}/{modeProgress.requiredScoreCount}</b>
+              </div>
+              <div
+                aria-label={`${label} recommendation readiness`}
+                aria-valuemax={modeProgress.requiredScoreCount}
+                aria-valuemin={0}
+                aria-valuenow={current}
+                className="recommendation-readiness-progress"
+                role="progressbar"
+              >
+                <b style={{ width: `${percent}%` }} />
+              </div>
+              <small>{remaining ? `${remaining} more to go` : "Ready for recommendations"}</small>
+            </article>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -411,6 +496,13 @@ export default function RecommendationsPage() {
         (modeKey) => !sourceModeEligibility[modeKey],
       )
     : [];
+  const selectedPlayer = playersPayload?.players.find(
+    (player) => player.playerKey === selectedKey,
+  );
+  const scoreReadiness: Record<ModeKey, RecommendationScoreProgress> = {
+    singles: scoreProgressForMode(selectedPlayer, playerPayload, "singles"),
+    doubles: scoreProgressForMode(selectedPlayer, playerPayload, "doubles"),
+  };
 
   const handleTabKeyDown = (
     event: KeyboardEvent<HTMLButtonElement>,
@@ -591,17 +683,28 @@ export default function RecommendationsPage() {
               id="recommendation-panel"
               role="tabpanel"
             >
-              {mode ? (
+              {mode?.eligible ? (
                 <ProgressStat mode={activeMode} value={modePumbility} />
               ) : null}
 
-              {unavailableOverallModes.map((modeKey) => (
-                <div className="recommendation-notice overall-source-notice" key={modeKey}>
-                  <b>{modeKey === "singles" ? "Single" : "Double"} recommendations unavailable.</b>{" "}
-                  {playerPayload.player.modes[modeKey].reason || "This mode cannot be rated yet."}{" "}
-                  Existing {modeKey === "singles" ? "Single" : "Double"} Phoenix 2 scores still count toward Overall Pumbility.
-                </div>
-              ))}
+              {unavailableOverallModes.map((modeKey) => {
+                const label = modeKey === "singles" ? "Singles" : "Doubles";
+                const remaining = Math.max(
+                  0,
+                  scoreReadiness[modeKey].requiredScoreCount
+                    - scoreReadiness[modeKey].validScoreCount,
+                );
+                return (
+                  <div className="recommendation-notice overall-source-notice" key={modeKey}>
+                    <span aria-hidden="true" className="recommendation-warning-icon">!</span>
+                    <span>
+                      {remaining
+                        ? `Need to play ${remaining} more ${label} chart${remaining === 1 ? "" : "s"} to show ${label} recommendations.`
+                        : `${label} recommendations are not available yet. ${playerPayload.player.modes[modeKey].reason || "This mode cannot be rated yet."}`}
+                    </span>
+                  </div>
+                );
+              })}
 
               {activeMode === "overall" && !mode ? (
                 <div className="recommendation-empty insufficient-state">
@@ -613,11 +716,10 @@ export default function RecommendationsPage() {
                   </p>
                 </div>
               ) : !mode?.eligible ? (
-                <div className="recommendation-empty insufficient-state">
-                  <span>{mode?.validScoreCount ?? 0}/{mode?.requiredScoreCount ?? 1}</span>
-                  <h2>Not enough score data yet</h2>
-                  <p>{mode?.reason || "This mode cannot be rated yet."}</p>
-                </div>
+                <RecommendationReadiness
+                  detail={mode?.reason || "This mode cannot be rated yet."}
+                  progress={scoreReadiness}
+                />
               ) : (
                 <section className="top-recommendations" aria-labelledby="top-recommendations-title">
                   <div className="recommendation-section-heading">
@@ -654,6 +756,8 @@ export default function RecommendationsPage() {
               )}
             </div>
           </>
+        ) : selectedPlayer ? (
+          <RecommendationReadiness progress={scoreReadiness} />
         ) : null}
       </section>
 

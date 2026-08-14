@@ -866,9 +866,27 @@ test("recommendation player list exposes names and eligibility without mode payl
       username: "PLAYER",
       displayName: "PLAYER",
       eligibility: { singles: true, doubles: false },
+      scoreProgress: {
+        singles: { validScoreCount: 30, requiredScoreCount: 30 },
+        doubles: { validScoreCount: 4, requiredScoreCount: 30 },
+      },
     },
   ]);
   assert.equal("modes" in response.players[0], false);
+});
+
+test("recommendation readiness explains missing score history", async () => {
+  const [page, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(page, /Play more charts to unlock recommendations/);
+  assert.match(page, /recommendation-readiness-progress/);
+  assert.match(page, /Need to play \$\{remaining\} more \$\{label\}/);
+  assert.match(page, /recommendation-warning-icon/);
+  assert.match(css, /\.recommendation-readiness-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendation-readiness-grid \{ grid-template-columns: 1fr; \}/);
 });
 
 test("manual recommendations include charts up to 0.5 above the scoring rating", () => {
