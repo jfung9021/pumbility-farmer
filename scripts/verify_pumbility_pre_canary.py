@@ -75,6 +75,59 @@ REGRESSION_TESTS = (
 class PreCanaryGateError(RuntimeError):
     """A pre-canary requirement was not proven."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        safe_evidence: Mapping[str, object] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.safe_evidence = dict(safe_evidence or {})
+
+
+def reconciliation_failure_evidence(output: str) -> dict[str, object]:
+    """Retain only allowlisted aggregate fields from a failed reconciliation."""
+    events: list[Mapping[str, Any]] = []
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, Mapping):
+            events.append(event)
+    completed = [
+        str(event.get("stage"))
+        for event in events
+        if event.get("status") == "stage-completed"
+        and event.get("stage") in REQUIRED_RECONCILIATION_STAGES
+    ]
+    failure_event: dict[str, object] = {}
+    for event in reversed(events):
+        if event.get("status") not in {
+            "integrity-failed",
+            "read-failed",
+            "mismatch",
+        }:
+            continue
+        for key in (
+            "status",
+            "stage",
+            "artifactIndex",
+            "side",
+            "errorType",
+            "digestMatches",
+            "byteSizeMatches",
+            "unexplainedMismatchCount",
+        ):
+            value = event.get(key)
+            if isinstance(value, (str, int, bool)):
+                failure_event[key] = value
+        break
+    return {
+        "completedStages": completed,
+        "failureEvent": failure_event,
+    }
+
 
 def assert_pre_canary_environment(environment: Mapping[str, str]) -> dict[str, object]:
     """Require the exact non-authoritative flag state without printing values."""
@@ -215,8 +268,14 @@ def run_regression_checks(
 def run_exact_reconciliation() -> dict[str, object]:
     """Run the existing read-only reconciler and retain only sanitized evidence."""
     captured = io.StringIO()
-    with redirect_stdout(captured):
-        result = reconcile_production(allow_canonical_shadow_writes=True)
+    try:
+        with redirect_stdout(captured):
+            result = reconcile_production(allow_canonical_shadow_writes=True)
+    except Exception:
+        raise PreCanaryGateError(
+            "Production reconciliation did not pass.",
+            safe_evidence=reconciliation_failure_evidence(captured.getvalue()),
+        ) from None
     if result != 0:
         raise PreCanaryGateError("Production reconciliation did not pass.")
     return verify_reconciliation_output(captured.getvalue())

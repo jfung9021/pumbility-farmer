@@ -63,7 +63,7 @@ def _safe_failure_evidence(
         failure_code = "artifact-reconciliation"
     else:
         failure_code = "reconciliation-runtime"
-    return {
+    evidence = {
         "failureCode": failure_code,
         "databaseConfigured": bool(
             environment.get("PUMBILITY_DATABASE_URL", "").strip()
@@ -72,6 +72,10 @@ def _safe_failure_evidence(
             environment.get("BLOB_READ_WRITE_TOKEN", "").encode("utf-8")
         ) >= 32,
     }
+    safe_reconciliation = getattr(error, "safe_evidence", None)
+    if isinstance(safe_reconciliation, Mapping):
+        evidence["reconciliation"] = dict(safe_reconciliation)
+    return evidence
 
 
 @router.post("/api/internal/pumbility-pre-canary")

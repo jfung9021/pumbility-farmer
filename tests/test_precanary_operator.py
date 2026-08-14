@@ -111,6 +111,41 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
             },
         )
 
+    def test_safe_reconciliation_evidence_is_forwarded(self) -> None:
+        from scripts.verify_pumbility_pre_canary import PreCanaryGateError
+
+        error = PreCanaryGateError(
+            "Production reconciliation did not pass.",
+            safe_evidence={
+                "completedStages": ["source-boundary", "relational"],
+                "failureEvent": {
+                    "status": "mismatch",
+                    "stage": "model-json",
+                    "artifactIndex": 2,
+                },
+            },
+        )
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "VERCEL_ENV": "preview",
+                    "PUMBILITY_PRECANARY_DIAGNOSTIC_ENABLED": "true",
+                    "PUMBILITY_DATABASE_URL": "postgresql://private-host/db",
+                    "BLOB_READ_WRITE_TOKEN": "x" * 32,
+                },
+                clear=True,
+            ),
+            patch("api.operator._run_hosted_gate", side_effect=error),
+        ):
+            response = run_hosted_precanary_reconciliation()
+
+        diagnostic = json.loads(response.body)["diagnostic"]
+        self.assertEqual(
+            diagnostic["reconciliation"],
+            error.safe_evidence,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

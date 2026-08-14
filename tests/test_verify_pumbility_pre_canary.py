@@ -17,6 +17,7 @@ from scripts.verify_pumbility_pre_canary import (
     REGRESSION_TESTS,
     REQUIRED_RECONCILIATION_STAGES,
     assert_pre_canary_environment,
+    reconciliation_failure_evidence,
     run_regression_checks,
     verify_reconciliation_output,
 )
@@ -169,6 +170,36 @@ class PreCanaryGateTests(unittest.TestCase):
             verify_reconciliation_output(
                 "\n".join([*events[:-1], json.dumps(summary)])
             )
+
+    def test_failed_reconciliation_retains_only_allowlisted_aggregate_evidence(self) -> None:
+        output = "\n".join(
+            (
+                json.dumps({"status": "stage-completed", "stage": "source-boundary"}),
+                json.dumps({"status": "stage-completed", "stage": "relational"}),
+                json.dumps(
+                    {
+                        "status": "mismatch",
+                        "stage": "model-json",
+                        "artifactIndex": 4,
+                        "sourceType": "dict",
+                        "targetType": "dict",
+                        "privatePath": "PRIVATE/PATH",
+                    }
+                ),
+            )
+        )
+
+        self.assertEqual(
+            reconciliation_failure_evidence(output),
+            {
+                "completedStages": ["source-boundary", "relational"],
+                "failureEvent": {
+                    "status": "mismatch",
+                    "stage": "model-json",
+                    "artifactIndex": 4,
+                },
+            },
+        )
 
     def test_regression_runner_uses_only_the_fixed_focused_suite(self) -> None:
         command_runner = Mock(return_value=SimpleNamespace(returncode=0))
