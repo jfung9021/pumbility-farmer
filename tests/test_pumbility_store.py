@@ -1079,6 +1079,56 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         self.assertEqual(persisted_output.payload, payload)
         self.assertEqual(persist_analysis.call_args.kwargs["job_id"], "job-uuid")
 
+    def test_runtime_typed_model_phase_resumes_from_analysis_generation(self) -> None:
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        artifacts = (
+            {"generationKey": "generation"},
+            {"generationKey": "generation"},
+            b"model",
+            [],
+            [],
+        )
+        database_input = SimpleNamespace(snapshot={})
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            patch(
+                "scripts.analyze_pumbility_supabase._read_database_input",
+                return_value=database_input,
+            ) as read_input,
+            patch(
+                "scripts.analyze_pumbility_supabase._persist_analysis"
+            ) as persist_analysis,
+            patch(
+                "scripts.populate_pumbility_production._persist_model_generation",
+                return_value="model-generation",
+            ) as persist_model,
+        ):
+            result = PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).persist_typed_generation(
+                job_external_key="external-job",
+                mix_key="phoenix2",
+                snapshot={"generatedAtUtc": "2026-08-13T00:00:00Z"},
+                config=SimpleNamespace(),
+                payload={"generatedAtUtc": "2026-08-13T00:00:00Z"},
+                baselines=[],
+                contributions=[],
+                chart_results=[],
+                model_artifacts=artifacts,
+                phase="model",
+                analysis_run_id="analysis-run",
+            )
+
+        self.assertEqual(result, ("analysis-run", "model-generation"))
+        self.assertEqual(read_input.call_count, 2)
+        persist_analysis.assert_not_called()
+        self.assertEqual(
+            persist_model.call_args.kwargs["analysis_run_id"], "analysis-run"
+        )
+
 
 class PumbilityJobReadTests(unittest.TestCase):
     @staticmethod

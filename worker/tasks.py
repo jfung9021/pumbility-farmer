@@ -36,7 +36,13 @@ def refresh_one_player(*args: Any, **kwargs: Any) -> Any:
 def refresh_analysis(job_id: str) -> dict[str, Any]:
     result = execute_analysis_job(job_id, yield_after_typed_checkpoint=True)
     continuation = result.pop(ANALYSIS_CONTINUATION_FIELD, None)
-    if continuation in {"model", "publish"}:
+    if continuation in {
+        "model",
+        "snapshot",
+        "database-analysis",
+        "database-model",
+        "publish",
+    }:
         refresh_analysis.apply_async(
             args=[job_id],
             task_id=(

@@ -19,8 +19,11 @@ from analysis_runtime import (
     RUNS_PREFIX,
     STAGING_PREFIX,
     TYPED_CHECKPOINT_ANALYSIS_PHASE,
+    TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+    TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
     TYPED_CHECKPOINT_MODEL_PHASE,
     TYPED_CHECKPOINT_SCHEMA_VERSION,
+    TYPED_CHECKPOINT_SNAPSHOT_PHASE,
     MemoryBlobStore,
     MemoryJobStore,
     cleanup_abandoned_staging,
@@ -1383,7 +1386,7 @@ class WorkerTests(unittest.TestCase):
             )
 
         self.assertEqual(second["status"], "completed")
-        self.assertEqual(blobs.persist_attempts, 2)
+        self.assertEqual(blobs.persist_attempts, 3)
         self.assertIsNone(blobs.get_json(typed_checkpoint_path(job["id"])))
         self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
 
@@ -1393,11 +1396,19 @@ class WorkerTests(unittest.TestCase):
 
             def __init__(self) -> None:
                 super().__init__()
-                self.persist_attempts = 0
+                self.persist_phases = []
 
-            def persist_typed_generation(self, **_kwargs):
-                self.persist_attempts += 1
-                return "analysis-run", None
+            def persist_typed_generation(self, **kwargs):
+                phase = kwargs["phase"]
+                self.persist_phases.append(phase)
+                if phase == "analysis":
+                    return "analysis-run", None
+                self.assertEqual(kwargs["analysis_run_id"], "analysis-run")
+                return "analysis-run", "model-generation"
+
+            def assertEqual(self, first, second):
+                if first != second:
+                    raise AssertionError(f"{first!r} != {second!r}")
 
         blobs = TypedMemoryStore()
         jobs = MemoryJobStore()
@@ -1447,7 +1458,7 @@ class WorkerTests(unittest.TestCase):
             patch(
                 "analysis_runtime.build_recommendation_model_artifacts",
                 return_value=model_artifacts,
-            ),
+            ) as build_model,
         ):
             second = execute_analysis_job(
                 job["id"],
@@ -1457,22 +1468,7 @@ class WorkerTests(unittest.TestCase):
                 now=lambda: NOW,
                 yield_after_typed_checkpoint=True,
             )
-
-        checkpoint = blobs.get_json(typed_checkpoint_path(job["id"]))
-        self.assertEqual(second[ANALYSIS_CONTINUATION_FIELD], "publish")
-        self.assertEqual(checkpoint["phase"], TYPED_CHECKPOINT_MODEL_PHASE)
-        self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
-
-        with (
-            patch(
-                "analysis_runtime.analyze_snapshot",
-                side_effect=AssertionError("base analysis must not repeat"),
-            ),
-            patch(
-                "analysis_runtime.build_recommendation_model_artifacts",
-                side_effect=AssertionError("recommendation modeling must not repeat"),
-            ),
-        ):
+            second_phase = blobs.get_json(typed_checkpoint_path(job["id"]))["phase"]
             third = execute_analysis_job(
                 job["id"],
                 blobs=blobs,
@@ -1481,9 +1477,50 @@ class WorkerTests(unittest.TestCase):
                 now=lambda: NOW,
                 yield_after_typed_checkpoint=True,
             )
+            third_phase = blobs.get_json(typed_checkpoint_path(job["id"]))["phase"]
+            fourth = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+            fourth_phase = blobs.get_json(typed_checkpoint_path(job["id"]))["phase"]
+            fifth = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+            fifth_phase = blobs.get_json(typed_checkpoint_path(job["id"]))["phase"]
+            sixth = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
 
-        self.assertEqual(third["status"], "completed")
-        self.assertEqual(blobs.persist_attempts, 1)
+        self.assertEqual(second[ANALYSIS_CONTINUATION_FIELD], "snapshot")
+        self.assertEqual(third[ANALYSIS_CONTINUATION_FIELD], "database-analysis")
+        self.assertEqual(fourth[ANALYSIS_CONTINUATION_FIELD], "database-model")
+        self.assertEqual(fifth[ANALYSIS_CONTINUATION_FIELD], "publish")
+        self.assertEqual(sixth["status"], "completed")
+        self.assertEqual(
+            [second_phase, third_phase, fourth_phase, fifth_phase],
+            [
+                TYPED_CHECKPOINT_MODEL_PHASE,
+                TYPED_CHECKPOINT_SNAPSHOT_PHASE,
+                TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+                TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+            ],
+        )
+        self.assertEqual(build_model.call_count, 1)
+        self.assertEqual(blobs.persist_phases, ["analysis", "model"])
         self.assertIsNone(blobs.get_json(typed_checkpoint_path(job["id"])))
         self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
 

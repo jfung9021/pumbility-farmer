@@ -131,9 +131,12 @@ FRESHNESS = timedelta(0)
 FAILED_RETRY_DELAY = timedelta(minutes=5)
 ACTIVE_JOB_STALE_AFTER = timedelta(minutes=5)
 STAGING_MAX_AGE = timedelta(hours=24)
-TYPED_CHECKPOINT_SCHEMA_VERSION = 2
+TYPED_CHECKPOINT_SCHEMA_VERSION = 3
 TYPED_CHECKPOINT_ANALYSIS_PHASE = "analysis"
 TYPED_CHECKPOINT_MODEL_PHASE = "model"
+TYPED_CHECKPOINT_SNAPSHOT_PHASE = "snapshot"
+TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE = "database-analysis"
+TYPED_CHECKPOINT_DATABASE_MODEL_PHASE = "database-model"
 ANALYSIS_CONTINUATION_FIELD = "_analysisContinuation"
 RUN_RETENTION = 10
 RECOMMENDATION_GENERATION_MIN_RETENTION = 2
@@ -1223,12 +1226,18 @@ def _resume_typed_analysis_checkpoint(
     raw_model = checkpoint.get("model")
     checkpoint_phase = str(checkpoint.get("phase") or "")
     eligible_player_count = checkpoint.get("eligiblePlayerCount")
+    checkpoint_phases = {
+        TYPED_CHECKPOINT_ANALYSIS_PHASE,
+        TYPED_CHECKPOINT_MODEL_PHASE,
+        TYPED_CHECKPOINT_SNAPSHOT_PHASE,
+        TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+        TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+    }
     if (
         not isinstance(raw_snapshot, Mapping)
         or not isinstance(raw_config, Mapping)
         or not isinstance(raw_payload, Mapping)
-        or checkpoint_phase
-        not in {TYPED_CHECKPOINT_ANALYSIS_PHASE, TYPED_CHECKPOINT_MODEL_PHASE}
+        or checkpoint_phase not in checkpoint_phases
         or not isinstance(eligible_player_count, int)
         or eligible_player_count < 0
         or (raw_combined_tier is not None and not isinstance(raw_combined_tier, Mapping))
@@ -1242,6 +1251,7 @@ def _resume_typed_analysis_checkpoint(
     payload = dict(raw_payload)
     if parse_utc(payload.get("generatedAtUtc")) is None:
         raise ValueError("The typed analysis checkpoint timestamp is invalid.")
+    checkpoint = dict(checkpoint)
 
     if checkpoint_phase == TYPED_CHECKPOINT_ANALYSIS_PHASE:
         (
@@ -1265,62 +1275,165 @@ def _resume_typed_analysis_checkpoint(
                 "phoenix2ShardCount": len(model_artifacts[4]),
             }
         checkpoint = {
-            **dict(checkpoint),
+            **checkpoint,
             "phase": TYPED_CHECKPOINT_MODEL_PHASE,
             "combinedTier": combined_tier_payload,
             "model": model_checkpoint,
         }
         blob_store.put_json(checkpoint_path, checkpoint)
         _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_MODEL_PHASE
         raw_combined_tier = combined_tier_payload
         raw_model = model_checkpoint
         if yield_after_checkpoint:
             return _checkpoint_continuation(
                 job_store=job_store,
                 job_id=job_id,
-                continuation="publish",
+                continuation="snapshot",
                 stage="publishing",
-                message="Recommendation model checkpointed; queued for typed publication.",
+                message="Recommendation model checkpointed; queued for snapshot persistence.",
                 lease_heartbeat=lease_heartbeat,
             )
+
+    if checkpoint_phase == TYPED_CHECKPOINT_MODEL_PHASE:
+        update_job(
+            job_store,
+            job_id,
+            status="running",
+            stage="publishing",
+            progress={
+                "current": 1,
+                "total": 1,
+                "percent": 100,
+                "message": "Persisting the canonical private snapshot.",
+            },
+        )
+        if not bool(checkpoint.get("reanalyzeOnly")):
+            blob_store.put_json(current_snapshot_path(mix_spec), snapshot)
+        checkpoint = {
+            **checkpoint,
+            "phase": TYPED_CHECKPOINT_SNAPSHOT_PHASE,
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_SNAPSHOT_PHASE
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="database-analysis",
+                stage="publishing",
+                message="Canonical snapshot checkpointed; queued for typed analysis persistence.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
+    typed_publisher = getattr(blob_store, "persist_typed_generation", None)
+    if not callable(typed_publisher):
+        raise RuntimeError("Typed Pumbility persistence is not available.")
+    typed_kwargs = {
+        "job_external_key": job_id,
+        "mix_key": mix_spec.key,
+        "snapshot": snapshot,
+        "config": config,
+        "payload": payload,
+        "baselines": _checkpoint_records(
+            checkpoint.get("baselines"), field="baselines"
+        ),
+        "contributions": _checkpoint_records(
+            checkpoint.get("contributions"), field="contributions"
+        ),
+        "chart_results": _checkpoint_records(
+            checkpoint.get("chartResults"), field="chartResults"
+        ),
+    }
+
+    if checkpoint_phase == TYPED_CHECKPOINT_SNAPSHOT_PHASE:
+        update_job(
+            job_store,
+            job_id,
+            status="running",
+            stage="publishing",
+            progress={
+                "current": 1,
+                "total": 1,
+                "percent": 100,
+                "message": "Persisting typed analysis output.",
+            },
+        )
+        analysis_run_id, _ = typed_publisher(
+            **typed_kwargs,
+            model_artifacts=None,
+            phase="analysis",
+        )
+        if analysis_run_id is None:
+            raise RuntimeError("Typed analysis persistence returned no generation identity.")
+        checkpoint = {
+            **checkpoint,
+            "phase": TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+            "analysisRunId": str(analysis_run_id),
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="database-model",
+                stage="publishing",
+                message="Typed analysis checkpointed; queued for model persistence.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
+    analysis_run_id = checkpoint.get("analysisRunId")
+    if checkpoint_phase in {
+        TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+        TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+    } and (not isinstance(analysis_run_id, str) or not analysis_run_id.strip()):
+        raise ValueError("The typed analysis checkpoint has no analysis generation identity.")
 
     recommendation_payload, model_artifacts = _load_checkpoint_model_artifacts(
         blob_store, dict(raw_model) if raw_model is not None else None
     )
-    typed_publisher = getattr(blob_store, "persist_typed_generation", None)
-    if not callable(typed_publisher):
-        raise RuntimeError("Typed Pumbility persistence is not available.")
-    update_job(
-        job_store,
-        job_id,
-        status="running",
-        stage="publishing",
-        progress={
-            "current": 1,
-            "total": 1,
-            "percent": 100,
-            "message": "Resuming typed persistence from the private checkpoint.",
-        },
-    )
-    if not bool(checkpoint.get("reanalyzeOnly")):
-        blob_store.put_json(current_snapshot_path(mix_spec), snapshot)
-    _pulse_job_lease(lease_heartbeat)
-    typed_publisher(
-        job_external_key=job_id,
-        mix_key=mix_spec.key,
-        snapshot=snapshot,
-        config=config,
-        payload=payload,
-        baselines=_checkpoint_records(checkpoint.get("baselines"), field="baselines"),
-        contributions=_checkpoint_records(
-            checkpoint.get("contributions"), field="contributions"
-        ),
-        chart_results=_checkpoint_records(
-            checkpoint.get("chartResults"), field="chartResults"
-        ),
-        model_artifacts=model_artifacts,
-    )
-    _pulse_job_lease(lease_heartbeat)
+    if checkpoint_phase == TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE:
+        update_job(
+            job_store,
+            job_id,
+            status="running",
+            stage="publishing",
+            progress={
+                "current": 1,
+                "total": 1,
+                "percent": 100,
+                "message": "Persisting the typed recommendation model.",
+            },
+        )
+        _, model_generation_id = typed_publisher(
+            **typed_kwargs,
+            model_artifacts=model_artifacts,
+            phase="model",
+            analysis_run_id=analysis_run_id,
+        )
+        checkpoint = {
+            **checkpoint,
+            "phase": TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+            "modelGenerationId": (
+                str(model_generation_id) if model_generation_id is not None else None
+            ),
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_DATABASE_MODEL_PHASE
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="publish",
+                stage="publishing",
+                message="Typed model checkpointed; queued for atomic pointer publication.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
     publish_success(
         blob_store,
         job_id=job_id,

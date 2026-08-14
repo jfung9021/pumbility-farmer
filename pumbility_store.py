@@ -975,6 +975,8 @@ class PumbilityArtifactStore:
             list[dict[str, Any]],
         ]
         | None = None,
+        phase: str = "all",
+        analysis_run_id: Any | None = None,
     ) -> tuple[Any, Any | None]:
         """Persist the already-computed runtime generation before pointer publication."""
         from scripts.analyze_pumbility_supabase import (
@@ -986,52 +988,60 @@ class PumbilityArtifactStore:
         from scripts.populate_pumbility_production import _persist_model_generation
         from phoenix2_sync import sanitize_snapshot
 
+        if phase not in {"all", "analysis", "model"}:
+            raise ValueError("Typed runtime persistence received an invalid phase.")
         generated_at = _parse_timestamp(payload.get("generatedAtUtc"))
         if generated_at is None:
             raise ValueError("Typed runtime persistence requires a generation timestamp.")
-        with _connect(self.database_url) as connection:
-            with connection.cursor() as cursor:
-                _assert_schema(cursor)
-                cursor.execute(
-                    "select id from pumbility.jobs where external_key = %s",
-                    (job_external_key,),
+        if phase in {"all", "analysis"}:
+            with _connect(self.database_url) as connection:
+                with connection.cursor() as cursor:
+                    _assert_schema(cursor)
+                    cursor.execute(
+                        "select id from pumbility.jobs where external_key = %s",
+                        (job_external_key,),
+                    )
+                    job_row = cursor.fetchone()
+                if job_row is None:
+                    raise RuntimeError("The typed runtime job row is unavailable.")
+                database_input = _read_database_input(connection, mix_key)
+                runtime_snapshot = sanitize_snapshot(snapshot, mix=mix_key)
+                # Relational reconstruction intentionally has no capture timestamp.
+                # Compare the immutable entity content while retaining every other
+                # canonical snapshot field in the source identity.
+                runtime_snapshot["generatedAtUtc"] = str(
+                    database_input.snapshot.get("generatedAtUtc") or ""
                 )
-                job_row = cursor.fetchone()
-            if job_row is None:
-                raise RuntimeError("The typed runtime job row is unavailable.")
-            database_input = _read_database_input(connection, mix_key)
-            runtime_snapshot = sanitize_snapshot(snapshot, mix=mix_key)
-            # Relational reconstruction intentionally has no capture timestamp.
-            # Compare the immutable entity content while retaining every other
-            # canonical snapshot field in the source identity.
-            runtime_snapshot["generatedAtUtc"] = str(
-                database_input.snapshot.get("generatedAtUtc") or ""
-            )
-            runtime_source_hash = _sha256(runtime_snapshot)
-            database_source_hash = _sha256(database_input.snapshot)
-            if runtime_source_hash != database_source_hash:
-                raise RuntimeError(
-                    "The canonical snapshot changed before typed runtime persistence."
+                runtime_source_hash = _sha256(runtime_snapshot)
+                database_source_hash = _sha256(database_input.snapshot)
+                if runtime_source_hash != database_source_hash:
+                    raise RuntimeError(
+                        "The canonical snapshot changed before typed runtime persistence."
+                    )
+                output = AnalysisOutput(
+                    database_input=database_input,
+                    config=config,
+                    started_at=generated_at,
+                    payload=dict(payload),
+                    baselines=[dict(row) for row in baselines],
+                    contributions=[dict(row) for row in contributions],
+                    chart_results=[dict(row) for row in chart_results],
+                    source_hash=database_source_hash,
+                    output_hash=_sha256(payload),
                 )
-            output = AnalysisOutput(
-                database_input=database_input,
-                config=config,
-                started_at=generated_at,
-                payload=dict(payload),
-                baselines=[dict(row) for row in baselines],
-                contributions=[dict(row) for row in contributions],
-                chart_results=[dict(row) for row in chart_results],
-                source_hash=database_source_hash,
-                output_hash=_sha256(payload),
+                analysis_run_id = _persist_analysis(
+                    connection,
+                    output,
+                    run_key_prefix="runtime-analysis",
+                    job_id=job_row[0],
+                )
+        elif analysis_run_id is None:
+            raise ValueError(
+                "Typed model persistence requires the checkpointed analysis run."
             )
-            analysis_run_id = _persist_analysis(
-                connection,
-                output,
-                run_key_prefix="runtime-analysis",
-                job_id=job_row[0],
-            )
+
         model_generation_id = None
-        if model_artifacts is not None:
+        if phase in {"all", "model"} and model_artifacts is not None:
             with _connect(self.database_url) as connection:
                 inputs = {
                     mix: _read_database_input(connection, mix)
