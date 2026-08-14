@@ -34,6 +34,10 @@ export interface ChartResult {
   bpmMin?: number | null;
   bpmMax?: number | null;
   estimatedDifficulty: number | null;
+  whatIfEstimates?: Array<{
+    level: number;
+    estimatedDifficulty: number | null;
+  }>;
   averageDifficulty: number;
   difficultyDelta: number | null;
   folderMeasuredCharts?: number;

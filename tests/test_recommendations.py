@@ -23,6 +23,7 @@ from phoenix1_score_overrides import (
     phoenix1_score_overrides_metadata,
 )
 from piu_recommendations import (
+    COMBINED_TIER_SCHEMA_VERSION,
     PHOENIX2_RATING_SCORE_THRESHOLD,
     RECOMMENDATION_SCHEMA_VERSION,
     SCORE_PROJECTION_MODEL_NAME,
@@ -40,6 +41,8 @@ from piu_recommendations import (
     _rating_lookup,
     _recommendation_chart_rows,
     _top50_marginal_gain,
+    _what_if_residual_shift,
+    build_chart_what_if_estimates,
     build_combined_tier_payload,
     build_manual_recommendation_mode,
     build_player_recommendation,
@@ -50,6 +53,7 @@ from piu_recommendations import (
     rebase_source_rows_to_catalog,
     retain_catalog_source_rows,
     retain_phoenix2_catalog_contributions,
+    what_if_levels,
 )
 from recommendation_refresh import (
     build_recommendation_model_artifacts,
@@ -2021,6 +2025,132 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertTrue(all(float(row["projectedGain"]) > 0 for row in mode["filterCandidates"]))
 
 
+class WhatIfDifficultyTests(unittest.TestCase):
+    def test_levels_include_three_each_side_and_stop_at_sixteen(self) -> None:
+        self.assertEqual(what_if_levels(19), [16, 17, 18, 20, 21, 22])
+        self.assertEqual(what_if_levels(16), [17, 18, 19])
+
+    def test_phoenix2_shift_revalues_pumbility_across_formula_breakpoint(
+        self,
+    ) -> None:
+        observation = {
+            "source": "phoenix2",
+            "chartType": "Single",
+            "chartLevel": 23,
+            "sourceSlope": 7.5,
+            "score": 970_000,
+            "plate": "Fair Game",
+        }
+
+        shift = _what_if_residual_shift(observation, 24)
+        expected = (
+            phoenix2_pumbility("Single", 24, "S", "Fair Game")
+            - phoenix2_pumbility("Single", 23, "S", "Fair Game")
+        ) / 7.5
+
+        self.assertAlmostEqual(shift, expected)
+        self.assertAlmostEqual(shift, 1.936)
+        self.assertNotEqual(shift, 1.0)
+
+    def test_phoenix1_and_missing_plate_use_normalized_level_fallback(self) -> None:
+        phoenix1 = {
+            "source": "phoenix1",
+            "chartType": "Double",
+            "chartLevel": 20,
+            "sourceSlope": 12.0,
+            "score": 970_000,
+            "plate": "Fair Game",
+        }
+        missing_plate = {
+            **phoenix1,
+            "source": "phoenix2",
+            "plate": None,
+        }
+
+        self.assertEqual(_what_if_residual_shift(phoenix1, 17), -3.0)
+        self.assertEqual(_what_if_residual_shift(missing_plate, 23), 3.0)
+
+    def test_estimate_uses_frozen_target_folder_model(self) -> None:
+        result = pd.DataFrame(
+            [
+                {
+                    "chartId": "subject",
+                    "level": 19,
+                    "levelReferenceResidualPb": -100.0,
+                    "folderRangeCompression": 0.01,
+                    "reliabilityWeight": 0.8,
+                },
+                {
+                    "chartId": "target-folder-chart",
+                    "level": 20,
+                    "levelReferenceResidualPb": 0.5,
+                    "folderRangeCompression": 0.75,
+                    "reliabilityWeight": 1.0,
+                },
+            ]
+        )
+        observations = pd.DataFrame(
+            [
+                {
+                    "chartId": "subject",
+                    "source": "phoenix1",
+                    "normalizedResidual": -0.25,
+                    "chartLevel": 19,
+                }
+            ]
+        )
+
+        estimates = build_chart_what_if_estimates(result, observations).iloc[0]
+        target = next(item for item in estimates if item["level"] == 20)
+
+        # The shifted chart residual is 0.75. The frozen D20 reference is 0.5,
+        # its compression is 0.75, and the subject reliability remains 0.8.
+        self.assertEqual(target["estimatedDifficulty"], 20.44)
+
+    def test_missing_target_model_and_no_observations_are_unavailable(self) -> None:
+        result = pd.DataFrame(
+            [
+                {
+                    "chartId": "observed",
+                    "level": 19,
+                    "levelReferenceResidualPb": 0.0,
+                    "folderRangeCompression": 1.0,
+                    "reliabilityWeight": 1.0,
+                },
+                {
+                    "chartId": "unobserved",
+                    "level": 20,
+                    "levelReferenceResidualPb": 0.0,
+                    "folderRangeCompression": 1.0,
+                    "reliabilityWeight": 1.0,
+                },
+            ]
+        )
+        observations = pd.DataFrame(
+            [
+                {
+                    "chartId": "observed",
+                    "source": "phoenix1",
+                    "normalizedResidual": 0.0,
+                    "chartLevel": 19,
+                }
+            ]
+        )
+
+        estimates = build_chart_what_if_estimates(result, observations)
+        observed = estimates.iloc[0]
+        unobserved = estimates.iloc[1]
+
+        self.assertIsNone(
+            next(item for item in observed if item["level"] == 18)[
+                "estimatedDifficulty"
+            ]
+        )
+        self.assertTrue(
+            all(item["estimatedDifficulty"] is None for item in unobserved)
+        )
+
+
 class CombinedTierPayloadTests(unittest.TestCase):
     def test_payload_uses_combined_identity_and_filters_below_level_sixteen(self) -> None:
         chart = {
@@ -2043,6 +2173,9 @@ class CombinedTierPayloadTests(unittest.TestCase):
             "noteCount": None,
             "stepArtist": None,
             "estimatedDifficulty": 16.5,
+            "whatIfEstimates": [
+                {"level": 17, "estimatedDifficulty": 17.123456}
+            ],
             "averageDifficulty": 16.5,
             "difficultyDelta": 0.0,
             "folderMeasuredCharts": 2,
@@ -2083,11 +2216,31 @@ class CombinedTierPayloadTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["mix"]["key"], "combined")
+        self.assertEqual(payload["schemaVersion"], COMBINED_TIER_SCHEMA_VERSION)
+        self.assertEqual(payload["schemaVersion"], 3)
         self.assertEqual(
             [row["chartId"] for row in payload["singles"]],
             ["easier", "current"],
         )
         self.assertEqual(payload["singles"][0]["phoenix1Contributors"], 10)
+        self.assertEqual(
+            payload["singles"][0]["whatIfEstimates"],
+            [{"level": 17, "estimatedDifficulty": 17.123456}],
+        )
+        self.assertEqual(
+            set(payload["singles"][0]["whatIfEstimates"][0]),
+            {"level", "estimatedDifficulty"},
+        )
+        for private_field in (
+            "normalizedResidual",
+            "chartResidualPb",
+            "levelReferenceResidualPb",
+            "reliabilityWeight",
+            "sourceSlope",
+            "score",
+            "plate",
+        ):
+            self.assertNotIn(private_field, payload["singles"][0])
         self.assertEqual(
             payload["summary"]["method"]["displayMinimumOfficialLevel"], 16
         )

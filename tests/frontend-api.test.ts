@@ -437,6 +437,37 @@ test("tier list compact layout uses art-only buttons and a details dialog", asyn
   assert.match(css, /\.compact-jacket \{[^}]*aspect-ratio: 1;/);
 });
 
+test("tier list chart details provide local mode-specific what-if estimates", async () => {
+  const [page, types, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "lib", "types.ts"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+  const whatIfComponent = page.slice(
+    page.indexOf("function WhatIfDifficulty"),
+    page.indexOf("function ChartDetails"),
+  );
+  const chartDetails = page.slice(
+    page.indexOf("function ChartDetails"),
+    page.indexOf("function ChartCard"),
+  );
+
+  assert.match(types, /whatIfEstimates\?: Array<\{\s*level: number;\s*estimatedDifficulty: number \| null;\s*\}>;/);
+  assert.match(whatIfComponent, /const prefix = chart\.type === "Single" \? "S" : "D";/);
+  assert.match(whatIfComponent, /<option value="">\{prefix\}\?\?<\/option>/);
+  assert.match(whatIfComponent, /disabled=\{estimate\.estimatedDifficulty === null\}/);
+  assert.match(whatIfComponent, /unavailable/);
+  assert.match(whatIfComponent, /formatEstimatedDifficulty\(selectedEstimate\)/);
+  assert.doesNotMatch(whatIfComponent, /fetch\s*\(/);
+  assert.match(chartDetails, /<WhatIfDifficulty chart=\{chart\} \/>/);
+
+  assert.match(css, /\.chart-card \{[^}]*grid-template-columns: 58px minmax\(0, 1fr\) 104px;[^}]*min-height: 86px;[^}]*padding: 13px 18px;/);
+  assert.match(css, /\.chart-dialog-body \{[^}]*grid-template-columns: 96px minmax\(0, 1fr\);/);
+  assert.match(css, /\.chart-dialog-body \.delta \{[^}]*grid-column: 2;[^}]*min-height: 0;[^}]*padding: 13px 0 0;/);
+  assert.match(css, /\.what-if-control \{[^}]*font-size: 8px;[^}]*position: absolute;[^}]*right: calc\(100% \+ 19px\);[^}]*white-space: nowrap;/);
+  assert.match(css, /\.chart-dialog-body \.what-if-control \{[^}]*bottom: 0;[^}]*right: 0;/);
+});
+
 test("chart art uses mode-colored borders in every rendering layout", async () => {
   const [tierList, recommendations, css] = await Promise.all([
     readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
