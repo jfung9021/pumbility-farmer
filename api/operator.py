@@ -39,6 +39,41 @@ def _run_hosted_gate(environment: Mapping[str, str]) -> dict[str, object]:
     }
 
 
+def _safe_failure_evidence(
+    environment: Mapping[str, str], error: Exception
+) -> dict[str, object]:
+    """Classify a hosted failure without returning exception text or private values."""
+    message = str(error)
+    if not environment.get("PUMBILITY_DATABASE_URL", "").strip() or len(
+        environment.get("BLOB_READ_WRITE_TOKEN", "").encode("utf-8")
+    ) < 32:
+        failure_code = "credentials-unavailable"
+    elif type(error).__name__ == "PreCanaryGateError":
+        failure_code = "pre-canary-contract"
+    elif type(error).__module__.startswith("psycopg"):
+        failure_code = "database-operation"
+    elif "boundary" in message.casefold() or "source" in message.casefold():
+        failure_code = "source-boundary"
+    elif "relational" in message.casefold() or "database" in message.casefold():
+        failure_code = "relational-reconciliation"
+    elif any(
+        token in message.casefold()
+        for token in ("artifact", "pointer", "numeric model", "cached player")
+    ):
+        failure_code = "artifact-reconciliation"
+    else:
+        failure_code = "reconciliation-runtime"
+    return {
+        "failureCode": failure_code,
+        "databaseConfigured": bool(
+            environment.get("PUMBILITY_DATABASE_URL", "").strip()
+        ),
+        "blobConfigured": len(
+            environment.get("BLOB_READ_WRITE_TOKEN", "").encode("utf-8")
+        ) >= 32,
+    }
+
+
 @router.post("/api/internal/pumbility-pre-canary")
 def run_hosted_precanary_reconciliation() -> JSONResponse:
     if os.getenv("VERCEL_ENV", "").strip().casefold() != "preview" or not _enabled(
@@ -47,8 +82,11 @@ def run_hosted_precanary_reconciliation() -> JSONResponse:
         return JSONResponse(status_code=404, content={"error": "Not found."})
     try:
         return JSONResponse(status_code=200, content=_run_hosted_gate(os.environ))
-    except Exception:
+    except Exception as error:
         return JSONResponse(
             status_code=503,
-            content={"error": "Hosted pre-canary reconciliation did not pass."},
+            content={
+                "error": "Hosted pre-canary reconciliation did not pass.",
+                "diagnostic": _safe_failure_evidence(os.environ, error),
+            },
         )

@@ -60,6 +60,8 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
                 {
                     "VERCEL_ENV": "preview",
                     "PUMBILITY_PRECANARY_DIAGNOSTIC_ENABLED": "true",
+                    "PUMBILITY_DATABASE_URL": "postgresql://private-host/db",
+                    "BLOB_READ_WRITE_TOKEN": "x" * 32,
                 },
                 clear=True,
             ),
@@ -74,6 +76,40 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("PRIVATE_DATABASE_HOST", body)
         self.assertNotIn("PRIVATE_PATH", body)
+        self.assertEqual(
+            json.loads(response.body)["diagnostic"],
+            {
+                "failureCode": "relational-reconciliation",
+                "databaseConfigured": True,
+                "blobConfigured": True,
+            },
+        )
+
+    def test_missing_credentials_are_reported_without_values(self) -> None:
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "VERCEL_ENV": "preview",
+                    "PUMBILITY_PRECANARY_DIAGNOSTIC_ENABLED": "true",
+                },
+                clear=True,
+            ),
+            patch(
+                "api.operator._run_hosted_gate",
+                side_effect=RuntimeError("Required production credentials were not injected."),
+            ),
+        ):
+            response = run_hosted_precanary_reconciliation()
+
+        self.assertEqual(
+            json.loads(response.body)["diagnostic"],
+            {
+                "failureCode": "credentials-unavailable",
+                "databaseConfigured": False,
+                "blobConfigured": False,
+            },
+        )
 
 
 if __name__ == "__main__":
