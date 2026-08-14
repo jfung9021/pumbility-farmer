@@ -9,6 +9,32 @@ private artifact paths.
 ## Current live handoff (supersedes the historical pause sections below)
 
 - Rollout code is at `1ca5399`, `Instrument and optimize Pumbility read canaries`.
+- The next rollout candidate is committed locally at `38857ac`, `Optimize and qualify Pumbility
+  read rollout`. It has not been deployed. Production therefore remains on the live commit and
+  deployment recorded below.
+- Candidate `38857ac` adds an opt-in, default-off bounded Psycopg read pool for hot artifact/job
+  reads only; direct large-JSON responses; token-isolated Vercel Blob client reuse; lazy Celery
+  imports; fixed sanitized pool telemetry/deadlines; and fail-closed topology qualification tools.
+  Writes, worker snapshot reconstruction, statistical algorithms, API data, and rollout flags are
+  unchanged.
+- The candidate passed 303 Python tests, 45 frontend tests, TypeScript typecheck, dependency-lock
+  and frozen-sync checks, Python compilation, Phoenix 1 archive verification, the Next production
+  build, PowerShell parsing, and `git diff --check` on 2026-08-14 JST.
+- The original p95 +10% / p99 +20% targets remain reported honestly. The owner now permits a
+  distinct latency-only waiver after deep optimization if and only if every correctness, exact
+  parity, integrity, privacy, capacity, fallback, failure, rollback, and evidence gate passes. A
+  latency miss must never be relabeled as a pass or waive a non-latency failure.
+- Protected preview A/B execution is currently blocked because Vercel Preview has no
+  `PUMBILITY_DATABASE_URL`. The linked CLI is authenticated, but the encrypted production value
+  must be extended to Preview through an authorized sensitive-variable flow; never place it in a
+  command argument, shell history, or file. After that, compare pool off/on in `iad1` while varying
+  only `PUMBILITY_SUPABASE_READ_POOL_ENABLED`, then compare accepted pool-on builds in `iad1` and
+  `cle1` while varying only the region. Use `--skip-domain` and never assign a production alias.
+- A read-only design audit found that compressed canonical artifact bytes could plausibly save
+  another 100--250 ms for analysis and 70--180 ms for tier-list, but it remains conditional. Do not
+  implement its additive schema/publication migration unless the lower-risk preview still shows
+  candidate fetch plus integrity as a material residual bottleneck; it is not a prerequisite for an
+  otherwise evidence-complete owner latency waiver.
 - Production deployment `dpl_GMs4LwAMcvZKu76t7FPLDx45MFZp` is READY in `iad1` and aliased to the real
   `https://pumbility-farmer.vercel.app` site.
 - Vercel remains authoritative for every read and publication. Production is `shadow`, strict
@@ -45,14 +71,16 @@ private artifact paths.
   post-rollback checks returned HTTP 200 for analysis, tier-list, and recommendation-player-list;
   canary telemetry is absent. Groups 2/3 and Supabase authority were not attempted.
 
-The current proven blocker remains Supabase candidate-read latency under production canary load,
-not correctness or parity. The one-roundtrip and cold-import changes materially improved absolute
-latency but did not meet the existing p95/p99 delta gate in `iad1`. `cle1` is a promising measured
-direction, but region adoption remains pending the explicit topology gates above. Do not re-enable
-any production read canary until another focused change or fully gated topology has direct evidence
-that it can meet the same latency limits. After that evidence, the shortest remaining live test path
-is the three 15-minute grouped canaries followed by the owner-approved 45-minute active post-cutover
-watch. Allow additional time for deployment and rollback checks.
+The current operational blocker is protected preview qualification of candidate `38857ac`, starting
+with the missing Preview database-variable scope above. The prior production canary proved latency,
+not correctness or parity, was the observed regression. `cle1` is a promising measured direction,
+but region adoption remains pending the explicit topology gates above. Do not re-enable any
+production read canary until the candidate has exact preview parity, capacity, fallback, and
+qualification evidence. The original latency target should still be pursued and reported; if it
+remains the only miss after the planned deep optimization, the owner may record the separate
+latency-only waiver. The shortest remaining live test path after qualification is the three
+15-minute grouped canaries followed by the owner-approved 45-minute active post-cutover watch. Allow
+additional time for deployment and rollback checks.
 
 ## Resume instruction
 
