@@ -1128,6 +1128,7 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         self.assertEqual(
             persist_model.call_args.kwargs["analysis_run_id"], "analysis-run"
         )
+        self.assertEqual(persist_model.call_args.kwargs["artifacts"][3:], (0, 0))
 
 
 class PumbilityJobReadTests(unittest.TestCase):

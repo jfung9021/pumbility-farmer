@@ -1051,7 +1051,13 @@ class PumbilityArtifactStore:
                     connection,
                     analysis_run_id=analysis_run_id,
                     inputs=inputs,
-                    artifacts=model_artifacts,
+                    artifacts=(
+                        model_artifacts[0],
+                        model_artifacts[1],
+                        model_artifacts[2],
+                        len(model_artifacts[3]),
+                        len(model_artifacts[4]),
+                    ),
                 )
         return analysis_run_id, model_generation_id
 
