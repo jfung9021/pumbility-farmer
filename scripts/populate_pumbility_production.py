@@ -76,7 +76,7 @@ CONFIRMATION_ENV = "PUMBILITY_PRODUCTION_POPULATION_CONFIRMATION"
 CONFIRMATION = f"POPULATE {EXPECTED_PROJECT_REF} {EXPECTED_PUMBILITY_MIGRATION}"
 MAX_INPUT_SHARDS = 1_000
 NUMERIC_MODEL_ABSOLUTE_TOLERANCE = 1e-8
-_PUBLIC_PARITY_FIELDS = (
+_PUBLIC_COMBINED_PARITY_FIELDS = (
     "schemaVersion",
     "generatedAtUtc",
     "mix",
@@ -86,6 +86,19 @@ _PUBLIC_PARITY_FIELDS = (
     "relativeGroups",
     "effectBands",
 )
+_PUBLIC_RECOMMENDATION_INDEX_FIELDS = (
+    "schemaVersion",
+    "storageSchemaVersion",
+    "generationKey",
+    "modelGeneratedAtUtc",
+    "generatedAtUtc",
+    "modelPath",
+    "refreshSupported",
+    "method",
+    "players",
+    "inputShardCount",
+    "inputShardSize",
+)
 _PUBLIC_SUMMARY_FIELDS = (
     "scriptVersion",
     "generatedAtUtc",
@@ -93,6 +106,58 @@ _PUBLIC_SUMMARY_FIELDS = (
     "method",
     "coverage",
     "modes",
+)
+_PUBLIC_RECOMMENDATION_METHOD_FIELDS = (
+    "catalog",
+    "overlapRule",
+    "phoenix1RerateHandling",
+    "crossVersionNormalization",
+    "difficultyDeltaScale",
+    "phoenix1ScoreOverrides",
+    "pumbilityPerLevel",
+    "scoreProjectionCoverage",
+    "scoreProjectionData",
+    "baselineRanks",
+    "recommendationRatingRanks",
+    "projectionRatingRanks",
+    "phoenix1RatingRanks",
+    "phoenix2RatingRanks",
+    "phoenix2RatingScoreThreshold",
+    "projectionRatingScoreThreshold",
+    "ratingReference",
+    "ratingReferenceGrade",
+    "ratingReferencePlate",
+    "ratingReferenceMultiplier",
+    "ratingSource",
+    "projectionRatingSource",
+    "shortHistoryBaseline",
+    "candidateUpperRadius",
+    "candidateLowerBound",
+    "topPumbilityCount",
+    "overallPumbility",
+    "overallRecommendations",
+    "actualPumbilitySource",
+    "projection",
+    "plateProjection",
+    "plateProjectionStatistic",
+    "pumbilityProjectionStatistic",
+    "phoenix1PlatePriorCap",
+    "projectedGain",
+    "projectedGainTieBreak",
+    "skillRatingCatalog",
+    "currentStateSource",
+    "displayMinimumOfficialLevel",
+    "scoreProjection",
+    "scoreProjectionModel",
+)
+_PUBLIC_RECOMMENDATION_PLAYER_FIELDS = (
+    "playerKey",
+    "internalPlayerId",
+    "username",
+    "displayName",
+    "eligibility",
+    "scoreProgress",
+    "inputShard",
 )
 LEGACY_COMBINED_TIER_SCHEMA_VERSION = 2
 
@@ -187,9 +252,18 @@ def _npz_arrays_equal(first: bytes, second: bytes) -> bool:
 def _parity_mismatch_evidence(
     actual: Mapping[str, Any], expected: Mapping[str, Any], role: str
 ) -> dict[str, Any]:
+    recommendation_index = role in {
+        "recommendation-index",
+        "versioned recommendation-index",
+    }
+    parity_fields = (
+        _PUBLIC_RECOMMENDATION_INDEX_FIELDS
+        if recommendation_index
+        else _PUBLIC_COMBINED_PARITY_FIELDS
+    )
     mismatched_fields = [
         field
-        for field in _PUBLIC_PARITY_FIELDS
+        for field in parity_fields
         if _exact_json_bytes({field: actual.get(field)})
         != _exact_json_bytes({field: expected.get(field)})
     ]
@@ -199,7 +273,9 @@ def _parity_mismatch_evidence(
     }
     summary_actual = actual.get("summary")
     summary_expected = expected.get("summary")
-    if isinstance(summary_actual, Mapping) and isinstance(summary_expected, Mapping):
+    if not recommendation_index and isinstance(summary_actual, Mapping) and isinstance(
+        summary_expected, Mapping
+    ):
         evidence["mismatchedSummaryFields"] = [
             field
             for field in _PUBLIC_SUMMARY_FIELDS
@@ -207,7 +283,12 @@ def _parity_mismatch_evidence(
             != _exact_json_bytes({field: summary_expected.get(field)})
         ]
     list_evidence: dict[str, dict[str, int]] = {}
-    for field in ("singles", "doubles", "relativeGroups", "effectBands"):
+    list_fields = (
+        ("players",)
+        if recommendation_index
+        else ("singles", "doubles", "relativeGroups", "effectBands")
+    )
+    for field in list_fields:
         actual_items = actual.get(field)
         expected_items = expected.get(field)
         if not isinstance(actual_items, list) or not isinstance(expected_items, list):
@@ -221,7 +302,67 @@ def _parity_mismatch_evidence(
             "expectedCount": len(expected_items),
             "differingItems": differing_items,
         }
+        if field == "players" and all(
+            isinstance(item, Mapping) for item in actual_items + expected_items
+        ):
+            paired_players = list(zip(actual_items, expected_items))
+            field_difference_counts = {
+                player_field: sum(
+                    _exact_json_bytes({player_field: left.get(player_field)})
+                    != _exact_json_bytes({player_field: right.get(player_field)})
+                    for left, right in paired_players
+                )
+                for player_field in _PUBLIC_RECOMMENDATION_PLAYER_FIELDS
+            }
+            field_difference_counts = {
+                field_name: count
+                for field_name, count in field_difference_counts.items()
+                if count
+            }
+            evidence["mismatchedPlayerFields"] = list(field_difference_counts)
+            evidence["playerFieldDifferenceCounts"] = field_difference_counts
+            actual_keys = {
+                str(item.get("playerKey"))
+                for item in actual_items
+                if item.get("playerKey") is not None
+            }
+            expected_keys = {
+                str(item.get("playerKey"))
+                for item in expected_items
+                if item.get("playerKey") is not None
+            }
+            list_evidence[field]["playerKeySetDifferenceCount"] = len(
+                actual_keys.symmetric_difference(expected_keys)
+            )
+            list_evidence[field]["playerOrderDifferenceCount"] = sum(
+                left.get("playerKey") != right.get("playerKey")
+                for left, right in paired_players
+            )
+            list_evidence[field]["fieldKeySymmetricDifferenceCount"] = sum(
+                len(set(left).symmetric_difference(right))
+                for left, right in paired_players
+            )
     evidence["lists"] = list_evidence
+    if recommendation_index:
+        method_actual = actual.get("method")
+        method_expected = expected.get("method")
+        if isinstance(method_actual, Mapping) and isinstance(method_expected, Mapping):
+            evidence["mismatchedMethodFields"] = [
+                field
+                for field in _PUBLIC_RECOMMENDATION_METHOD_FIELDS
+                if _exact_json_bytes({field: method_actual.get(field)})
+                != _exact_json_bytes({field: method_expected.get(field)})
+            ]
+            evidence["method"] = {
+                "actualFieldCount": len(method_actual),
+                "expectedFieldCount": len(method_expected),
+                "fieldKeySymmetricDifferenceCount": len(
+                    set(method_actual).symmetric_difference(method_expected)
+                ),
+            }
+        evidence["topLevelKeySymmetricDifferenceCount"] = len(
+            set(actual).symmetric_difference(expected)
+        )
     return evidence
 
 

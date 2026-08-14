@@ -39,13 +39,78 @@ _POPULATION_PARITY_FIELDS = frozenset(
         "doubles",
         "relativeGroups",
         "effectBands",
+        "storageSchemaVersion",
+        "generationKey",
+        "modelGeneratedAtUtc",
+        "modelPath",
+        "refreshSupported",
+        "method",
+        "players",
+        "inputShardCount",
+        "inputShardSize",
     }
 )
 _POPULATION_SUMMARY_FIELDS = frozenset(
     {"scriptVersion", "generatedAtUtc", "mix", "method", "coverage", "modes"}
 )
 _POPULATION_LIST_FIELDS = frozenset(
-    {"singles", "doubles", "relativeGroups", "effectBands"}
+    {"singles", "doubles", "relativeGroups", "effectBands", "players"}
+)
+_POPULATION_RECOMMENDATION_METHOD_FIELDS = frozenset(
+    {
+        "catalog",
+        "overlapRule",
+        "phoenix1RerateHandling",
+        "crossVersionNormalization",
+        "difficultyDeltaScale",
+        "phoenix1ScoreOverrides",
+        "pumbilityPerLevel",
+        "scoreProjectionCoverage",
+        "scoreProjectionData",
+        "baselineRanks",
+        "recommendationRatingRanks",
+        "projectionRatingRanks",
+        "phoenix1RatingRanks",
+        "phoenix2RatingRanks",
+        "phoenix2RatingScoreThreshold",
+        "projectionRatingScoreThreshold",
+        "ratingReference",
+        "ratingReferenceGrade",
+        "ratingReferencePlate",
+        "ratingReferenceMultiplier",
+        "ratingSource",
+        "projectionRatingSource",
+        "shortHistoryBaseline",
+        "candidateUpperRadius",
+        "candidateLowerBound",
+        "topPumbilityCount",
+        "overallPumbility",
+        "overallRecommendations",
+        "actualPumbilitySource",
+        "projection",
+        "plateProjection",
+        "plateProjectionStatistic",
+        "pumbilityProjectionStatistic",
+        "phoenix1PlatePriorCap",
+        "projectedGain",
+        "projectedGainTieBreak",
+        "skillRatingCatalog",
+        "currentStateSource",
+        "displayMinimumOfficialLevel",
+        "scoreProjection",
+        "scoreProjectionModel",
+    }
+)
+_POPULATION_RECOMMENDATION_PLAYER_FIELDS = frozenset(
+    {
+        "playerKey",
+        "internalPlayerId",
+        "username",
+        "displayName",
+        "eligibility",
+        "scoreProgress",
+        "inputShard",
+    }
 )
 
 
@@ -87,6 +152,16 @@ def _safe_population_parity_evidence(value: object) -> dict[str, object] | None:
             "mismatchedSummaryFields",
             _POPULATION_SUMMARY_FIELDS,
         ),
+        (
+            "mismatchedMethodFields",
+            "mismatchedMethodFields",
+            _POPULATION_RECOMMENDATION_METHOD_FIELDS,
+        ),
+        (
+            "mismatchedPlayerFields",
+            "mismatchedPlayerFields",
+            _POPULATION_RECOMMENDATION_PLAYER_FIELDS,
+        ),
     ):
         fields = value.get(source_name)
         if isinstance(fields, list):
@@ -102,12 +177,43 @@ def _safe_population_parity_evidence(value: object) -> dict[str, object] | None:
                 continue
             safe_counts = {
                 name: count
-                for name in ("actualCount", "expectedCount", "differingItems")
+                for name in (
+                    "actualCount",
+                    "expectedCount",
+                    "differingItems",
+                    "playerKeySetDifferenceCount",
+                    "playerOrderDifferenceCount",
+                    "fieldKeySymmetricDifferenceCount",
+                )
                 if isinstance((count := counts.get(name)), int) and count >= 0
             }
             if safe_counts:
                 safe_lists[field] = safe_counts
         evidence["lists"] = safe_lists
+    player_field_counts = value.get("playerFieldDifferenceCounts")
+    if isinstance(player_field_counts, Mapping):
+        evidence["playerFieldDifferenceCounts"] = {
+            field: count
+            for field in _POPULATION_RECOMMENDATION_PLAYER_FIELDS
+            if isinstance((count := player_field_counts.get(field)), int) and count >= 0
+        }
+    method = value.get("method")
+    if isinstance(method, Mapping):
+        safe_method = {
+            name: count
+            for name in (
+                "actualFieldCount",
+                "expectedFieldCount",
+                "fieldKeySymmetricDifferenceCount",
+            )
+            if isinstance((count := method.get(name)), int) and count >= 0
+        }
+        if safe_method:
+            evidence["method"] = safe_method
+    if isinstance(
+        (top_level_difference := value.get("topLevelKeySymmetricDifferenceCount")), int
+    ) and top_level_difference >= 0:
+        evidence["topLevelKeySymmetricDifferenceCount"] = top_level_difference
     return evidence
 
 

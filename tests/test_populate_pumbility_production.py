@@ -76,6 +76,44 @@ class HostedPopulationSafetyTests(unittest.TestCase):
         self.assertEqual(evidence["lists"]["doubles"]["differingItems"], 1)
         self.assertNotIn("private", json.dumps(evidence))
 
+    def test_recommendation_index_evidence_is_aggregate_only(self) -> None:
+        actual = {
+            "schemaVersion": 21,
+            "method": {"catalog": "private-actual", "unknown": "private"},
+            "players": [
+                {
+                    "playerKey": "private-key-actual",
+                    "username": "private-actual",
+                    "eligibility": {"singles": True},
+                    "inputShard": 0,
+                }
+            ],
+        }
+        expected = {
+            "schemaVersion": 21,
+            "method": {"catalog": "private-expected"},
+            "players": [
+                {
+                    "playerKey": "private-key-expected",
+                    "username": "private-expected",
+                    "eligibility": {"singles": False},
+                    "inputShard": 0,
+                }
+            ],
+        }
+        evidence = _parity_mismatch_evidence(actual, expected, "recommendation-index")
+        self.assertEqual(evidence["mismatchedFields"], ["method", "players"])
+        self.assertEqual(evidence["mismatchedMethodFields"], ["catalog"])
+        self.assertEqual(
+            evidence["playerFieldDifferenceCounts"],
+            {"playerKey": 1, "username": 1, "eligibility": 1},
+        )
+        self.assertEqual(evidence["lists"]["players"]["differingItems"], 1)
+        self.assertEqual(
+            evidence["lists"]["players"]["playerKeySetDifferenceCount"], 2
+        )
+        self.assertNotIn("private-", json.dumps(evidence))
+
     def test_apply_is_explicit_and_bootstrap_default_is_fixed(self) -> None:
         args = build_parser().parse_args([])
         self.assertFalse(args.apply)

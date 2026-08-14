@@ -46,6 +46,64 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
                 },
             }
         )
+
+        index_evidence = _safe_population_parity_evidence(
+            {
+                "parityRole": "recommendation-index",
+                "mismatchedFields": ["method", "players", "private-field"],
+                "mismatchedMethodFields": ["catalog", "private-method"],
+                "mismatchedPlayerFields": ["eligibility", "private-player"],
+                "playerFieldDifferenceCounts": {
+                    "eligibility": 839,
+                    "private-player": 839,
+                },
+                "method": {
+                    "actualFieldCount": 42,
+                    "expectedFieldCount": 41,
+                    "fieldKeySymmetricDifferenceCount": 1,
+                    "private": 1,
+                },
+                "topLevelKeySymmetricDifferenceCount": 0,
+                "lists": {
+                    "players": {
+                        "actualCount": 839,
+                        "expectedCount": 839,
+                        "differingItems": 839,
+                        "playerKeySetDifferenceCount": 0,
+                        "playerOrderDifferenceCount": 0,
+                        "fieldKeySymmetricDifferenceCount": 0,
+                        "private": 839,
+                    }
+                },
+                "private": "secret",
+            }
+        )
+        self.assertEqual(
+            index_evidence,
+            {
+                "parityRole": "recommendation-index",
+                "mismatchedFields": ["method", "players"],
+                "mismatchedMethodFields": ["catalog"],
+                "mismatchedPlayerFields": ["eligibility"],
+                "lists": {
+                    "players": {
+                        "actualCount": 839,
+                        "expectedCount": 839,
+                        "differingItems": 839,
+                        "playerKeySetDifferenceCount": 0,
+                        "playerOrderDifferenceCount": 0,
+                        "fieldKeySymmetricDifferenceCount": 0,
+                    }
+                },
+                "playerFieldDifferenceCounts": {"eligibility": 839},
+                "method": {
+                    "actualFieldCount": 42,
+                    "expectedFieldCount": 41,
+                    "fieldKeySymmetricDifferenceCount": 1,
+                },
+                "topLevelKeySymmetricDifferenceCount": 0,
+            },
+        )
         self.assertEqual(
             evidence,
             {
