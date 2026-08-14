@@ -192,9 +192,47 @@ publication change will fail exact parity and must be repeated.
 A faster API result is not sufficient evidence to move production. The runner always records the
 adoption decision as pending. Before selecting a region or connection strategy, separately prove
 worker execution, private Blob behavior, cron delivery, queue publish/consume behavior, cold starts,
-connection capacity, failure handling, and rollback from that deployment topology. Preview
-protection requiring a credential is intentionally unsupported; do not pass bypass tokens to this
-tool.
+connection capacity, failure handling, and rollback from that deployment topology. The origin-based
+runner intentionally does not accept a protection credential or bypass token. Use it only when both
+explicit preview origins are already reachable without weakening their configured protection.
+
+For protected previews, inject the two deployment references into the operator process through the
+named environment variables below. Never put either reference on the command line, in a report, or
+in a checked-in file. The tracked authenticated runner attests that both references are Preview
+deployments, uses `vercel curl --deployment` without a bypass token, and keeps the references,
+request paths, decoded bodies, response digests, and captured command output only in memory or
+short-lived temporary files:
+
+```powershell
+# Set these through the approved secure operator-shell mechanism; do not echo them.
+if ([string]::IsNullOrWhiteSpace($env:PUMBILITY_FIRST_PREVIEW_DEPLOYMENT)) {
+  throw "The first protected preview reference is not injected."
+}
+if ([string]::IsNullOrWhiteSpace($env:PUMBILITY_SECOND_PREVIEW_DEPLOYMENT)) {
+  throw "The second protected preview reference is not injected."
+}
+
+.\.venv\Scripts\python.exe .\scripts\compare_pumbility_protected_previews.py `
+  --first-label "pool-control" `
+  --second-label "pool-candidate" `
+  --domain analysis `
+  --domain tier-list `
+  --samples 100 `
+  --warmup-samples 3 `
+  --window-minutes 15 `
+  --expect-canary-telemetry
+```
+
+The protected runner alternates deployment order and pairs both variants inside one scored window.
+It requests gzip and cache bypass, requires curl to provide separate TTFB and total-transfer timing,
+times decoded JSON parsing separately, and fails closed if any timing boundary is unavailable. The
+reported end-to-end value is curl's network total plus local JSON parsing; authenticated CLI startup
+is explicitly excluded and reported as such. It compares decoded-body SHA-256 values only in memory;
+the sanitized comparison and sample files retain only generic labels, timing/count evidence, and
+exact-pair booleans. With the command above, each
+preview must produce exactly 103 expected `candidate-served` events per domain. Reconcile those exact
+counts in server logs before treating the telemetry gate as complete; the runner never marks that
+external gate complete itself.
 
 The comparison report applies the original diagnostic target directly to end-to-end latency:
 second-deployment p95 may be at most 10% above the first deployment and p99 at most 20% above it.
