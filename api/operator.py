@@ -16,6 +16,7 @@ router = APIRouter()
 PRECANARY_DIAGNOSTIC_ENV = "PUMBILITY_PRECANARY_DIAGNOSTIC_ENABLED"
 PRECANARY_ARTIFACT_REPAIR_ENV = "PUMBILITY_PRECANARY_ARTIFACT_REPAIR_ENABLED"
 PRECANARY_SHADOW_RESTORE_ENV = "PUMBILITY_PRECANARY_SHADOW_RESTORE_ENABLED"
+PHASE4_FULL_SYNC_ENV = "PUMBILITY_PHASE4_FULL_SYNC_OPERATOR_ENABLED"
 _shadow_restore_environment_lock = threading.Lock()
 _RESTORE_INPUT_LABELS = {
     "public/data/phoenix1.json": "phoenix1-public",
@@ -123,6 +124,14 @@ def _mutation_route_enabled(environment: Mapping[str, str]) -> bool:
         environment.get("VERCEL_ENV", "").strip().casefold() == "preview"
         and _enabled(environment.get(PRECANARY_DIAGNOSTIC_ENV))
         and _enabled(environment.get(PRECANARY_SHADOW_RESTORE_ENV))
+    )
+
+
+def _phase4_full_sync_route_enabled(environment: Mapping[str, str]) -> bool:
+    return (
+        environment.get("VERCEL_ENV", "").strip().casefold() == "preview"
+        and _enabled(environment.get(PRECANARY_DIAGNOSTIC_ENV))
+        and _enabled(environment.get(PHASE4_FULL_SYNC_ENV))
     )
 
 
@@ -567,3 +576,72 @@ def run_hosted_shadow_backfill() -> JSONResponse:
 @router.post("/api/internal/pumbility-pre-canary/shadow/populate")
 def run_hosted_shadow_population() -> JSONResponse:
     return _run_shadow_restore_route("populate")
+
+
+@router.post("/api/internal/pumbility-phase4/full-sync")
+def run_hosted_phase4_full_sync() -> JSONResponse:
+    if not _phase4_full_sync_route_enabled(os.environ):
+        return JSONResponse(status_code=404, content={"error": "Not found."})
+    try:
+        from api._shared import start_or_reuse_analysis
+
+        status, payload = start_or_reuse_analysis(
+            mix="phoenix2",
+            force_refresh=True,
+            full_sync=True,
+            trigger="phase4-operator",
+        )
+        job = payload.get("job") if isinstance(payload, Mapping) else None
+        if status != 202 or not isinstance(job, Mapping) or not job.get("fullSync"):
+            return JSONResponse(
+                status_code=409,
+                content={"error": "A production full sync could not be accepted safely."},
+            )
+        outcome = str(payload.get("outcome") or "")
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "accepted",
+                "fullSync": True,
+                "outcome": outcome if outcome in {"queued", "existing"} else "accepted",
+            },
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "The production full sync could not be started safely."},
+        )
+
+
+@router.get("/api/internal/pumbility-phase4/full-sync")
+def get_hosted_phase4_full_sync_status() -> JSONResponse:
+    if not _phase4_full_sync_route_enabled(os.environ):
+        return JSONResponse(status_code=404, content={"error": "Not found."})
+    try:
+        from analysis_runtime import RuntimeJobStore
+
+        jobs = RuntimeJobStore()
+        active_id = jobs.active_job_id()
+        job = jobs.get(active_id) if active_id else None
+        if not isinstance(job, Mapping):
+            return JSONResponse(content={"active": False})
+        state = str(job.get("status") or "")
+        stage = str(job.get("stage") or "")
+        progress = job.get("progress")
+        percent = progress.get("percent") if isinstance(progress, Mapping) else None
+        return JSONResponse(
+            content={
+                "active": state in {"queued", "running"},
+                "status": state if state in {"queued", "running", "completed", "failed"} else "unknown",
+                "stage": stage
+                if stage in {"queued", "discovering", "syncing", "analyzing", "publishing"}
+                else "unknown",
+                "fullSync": bool(job.get("fullSync")),
+                "percent": percent if isinstance(percent, int) and 0 <= percent <= 100 else None,
+            }
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "The production full-sync status is unavailable."},
+        )

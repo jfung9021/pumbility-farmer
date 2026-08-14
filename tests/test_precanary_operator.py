@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from api.operator import (
+    get_hosted_phase4_full_sync_status,
     _repair_numeric_artifact,
     _run_shadow_restore,
     _safe_missing_restore_input,
@@ -13,12 +14,77 @@ from api.operator import (
     _validated_shadow_restore_environment,
     run_hosted_precanary_artifact_repair,
     run_hosted_precanary_reconciliation,
+    run_hosted_phase4_full_sync,
     run_hosted_shadow_backfill,
     run_hosted_shadow_population,
 )
 
 
 class HostedPreCanaryOperatorTests(unittest.TestCase):
+    def test_phase4_full_sync_operator_is_preview_and_flag_gated(self) -> None:
+        for environment in (
+            {},
+            {
+                "VERCEL_ENV": "production",
+                "PUMBILITY_PRECANARY_DIAGNOSTIC_ENABLED": "true",
+                "PUMBILITY_PHASE4_FULL_SYNC_OPERATOR_ENABLED": "true",
+            },
+            {
+                "VERCEL_ENV": "preview",
+                "PUMBILITY_PRECANARY_DIAGNOSTIC_ENABLED": "true",
+                "PUMBILITY_PHASE4_FULL_SYNC_OPERATOR_ENABLED": "false",
+            },
+        ):
+            with self.subTest(environment=environment), patch.dict(
+                "os.environ", environment, clear=True
+            ):
+                self.assertEqual(run_hosted_phase4_full_sync().status_code, 404)
+                self.assertEqual(get_hosted_phase4_full_sync_status().status_code, 404)
+
+    def test_phase4_full_sync_operator_suppresses_job_identity(self) -> None:
+        environment = {
+            "VERCEL_ENV": "preview",
+            "PUMBILITY_PRECANARY_DIAGNOSTIC_ENABLED": "true",
+            "PUMBILITY_PHASE4_FULL_SYNC_OPERATOR_ENABLED": "true",
+        }
+        job = {
+            "id": "private-job-id",
+            "fullSync": True,
+            "status": "running",
+            "stage": "syncing",
+            "progress": {"percent": 40},
+        }
+        store = Mock()
+        store.active_job_id.return_value = "private-job-id"
+        store.get.return_value = job
+        with patch.dict("os.environ", environment, clear=True), patch(
+            "api._shared.start_or_reuse_analysis",
+            return_value=(202, {"outcome": "queued", "job": job}),
+        ) as start, patch("analysis_runtime.RuntimeJobStore", return_value=store):
+            accepted = run_hosted_phase4_full_sync()
+            status = get_hosted_phase4_full_sync_status()
+        self.assertEqual(accepted.status_code, 202)
+        self.assertEqual(json.loads(accepted.body), {
+            "status": "accepted",
+            "fullSync": True,
+            "outcome": "queued",
+        })
+        self.assertEqual(json.loads(status.body), {
+            "active": True,
+            "status": "running",
+            "stage": "syncing",
+            "fullSync": True,
+            "percent": 40,
+        })
+        self.assertNotIn("private-job-id", accepted.body.decode())
+        self.assertNotIn("private-job-id", status.body.decode())
+        start.assert_called_once_with(
+            mix="phoenix2",
+            force_refresh=True,
+            full_sync=True,
+            trigger="phase4-operator",
+        )
+
     def test_missing_restore_input_exposes_only_allowlisted_label(self) -> None:
         known = FileNotFoundError(
             2,
