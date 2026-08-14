@@ -20,6 +20,48 @@ from phoenix2_sync import isoformat_utc, parse_utc, utc_now
 from worker.celery import PLAYER_QUEUE_NAME, QUEUE_NAME, app
 
 
+def _topology_worker_component(topic: str) -> str:
+    return (
+        "analysis-worker"
+        if topic == QUEUE_NAME
+        else "player-recommendations-worker"
+    )
+
+
+def _create_topology_effect_once(marker_path: str) -> bool:
+    """Atomically create one isolated durable effect for an at-least-once task."""
+    import os
+
+    import psycopg
+
+    from pumbility_store import PumbilityArtifactStore, _assert_schema
+    from scripts.reconcile_pumbility_production import session_url_from_runtime
+
+    database_url = session_url_from_runtime(
+        os.environ.get("PUMBILITY_DATABASE_URL", "")
+    )
+    effect_path = f"{marker_path}.effect"
+    with psycopg.connect(database_url, prepare_threshold=None) as connection:
+        with connection.transaction(), connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute(
+                "select pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (effect_path,),
+            )
+            cursor.execute(
+                "select 1 from pumbility.artifacts where object_key = %s",
+                (effect_path,),
+            )
+            if cursor.fetchone() is not None:
+                return False
+            PumbilityArtifactStore._put_json_row(
+                cursor,
+                effect_path,
+                {"schemaVersion": 1, "effect": True},
+            )
+    return True
+
+
 def PiuScoresClient(*args: Any, **kwargs: Any) -> Any:  # noqa: N802 - test seam
     from piu_misgrade_analyzer import PiuScoresClient as implementation
 
@@ -153,3 +195,154 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
             "durationMs": failed.get("durationMs"),
         }, separators=(",", ":"), sort_keys=True))
         return failed
+
+
+@app.task(bind=True, name="worker.tasks.topology_queue_probe")
+def topology_queue_probe(
+    self: Any,
+    label: str,
+    topic: str,
+    identity_sha256: str,
+    force_redelivery: bool = False,
+) -> dict[str, Any]:
+    """Produce one isolated, idempotent queue effect for hosted qualification."""
+    import os
+
+    from celery.exceptions import Reject
+
+    from topology_diagnostics import (
+        emit_event,
+        emit_worker_cold_start_once,
+        queue_marker_path,
+        require_diagnostic_environment,
+        require_topic,
+        SHA256_RE,
+    )
+
+    from analysis_runtime import VercelPrivateBlobStore
+
+    expected_label, _connection_limit = require_diagnostic_environment(os.environ)
+    normalized_topic = require_topic(topic)
+    if label != expected_label:
+        raise RuntimeError("The diagnostic queue label is invalid for this topology.")
+    digest = identity_sha256.strip().casefold()
+    if not SHA256_RE.fullmatch(digest):
+        raise RuntimeError("The diagnostic queue identity is malformed.")
+    marker_path = queue_marker_path(label, normalized_topic, digest)
+    store = VercelPrivateBlobStore()
+    marker = store.get_json(marker_path) or {}
+    raw_attempts = marker.get("attempts")
+    attempts = (
+        [attempt for attempt in raw_attempts if isinstance(attempt, int) and attempt > 0]
+        if isinstance(raw_attempts, list)
+        else []
+    )
+    attempt = max(attempts, default=0) + 1
+    attempts.append(attempt)
+    emit_event(
+        {
+            "kind": "queue",
+            "label": label,
+            "topic": normalized_topic,
+            "stage": "consumed",
+            "identitySha256": digest,
+            "attempt": attempt,
+        }
+    )
+    if force_redelivery and attempt == 1:
+        store.put_json(
+            marker_path,
+            {"schemaVersion": 1, "attempts": attempts, "effect": False},
+        )
+        raise Reject("Injected diagnostic redelivery.", requeue=True)
+
+    effect_created = _create_topology_effect_once(marker_path)
+    if effect_created:
+        emit_event(
+            {
+                "kind": "queue",
+                "label": label,
+                "topic": normalized_topic,
+                "stage": "durable-effect",
+                "identitySha256": digest,
+                "attempt": attempt,
+            }
+        )
+    store.put_json(
+        marker_path,
+        {"schemaVersion": 1, "attempts": attempts, "effect": True},
+    )
+    emit_event(
+        {
+            "kind": "worker",
+            "label": label,
+            "component": (
+                "analysis"
+                if normalized_topic == QUEUE_NAME
+                else "player-recommendations"
+            ),
+            "outcome": "succeeded",
+            "count": 1,
+            "isolatedDiagnostic": True,
+        }
+    )
+    emit_worker_cold_start_once(
+        label=label,
+        component=_topology_worker_component(normalized_topic),
+    )
+    return {"status": "completed", "effectCreated": effect_created}
+
+
+@app.task(bind=True, name="worker.tasks.topology_capacity_probe")
+def topology_capacity_probe(
+    self: Any,
+    label: str,
+    connection_limit: int,
+) -> dict[str, Any]:
+    """Measure dedicated-role database usage under real queue concurrency."""
+    del self
+    import os
+    import psycopg
+
+    from topology_diagnostics import emit_event, require_diagnostic_environment
+
+    from scripts.reconcile_pumbility_production import session_url_from_runtime
+
+    expected_label, expected_limit = require_diagnostic_environment(os.environ)
+    if label != expected_label or connection_limit != expected_limit:
+        raise RuntimeError("The diagnostic capacity scope is invalid.")
+    try:
+        with psycopg.connect(
+            session_url_from_runtime(os.environ.get("PUMBILITY_DATABASE_URL", "")),
+            prepare_threshold=None,
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("select pg_sleep(1)")
+                cursor.execute(
+                    "select count(*) from pg_stat_activity where usename = current_user"
+                )
+                row = cursor.fetchone()
+                active = int(row[0]) if row else 0
+        emit_event(
+            {
+                "kind": "capacity",
+                "label": label,
+                "activeConnections": active,
+                "connectionLimit": connection_limit,
+                "connectionErrors": 0,
+                "deadlineErrors": 0,
+            }
+        )
+        return {"status": "completed", "sampled": True}
+    except Exception:
+        emit_event(
+            {
+                "kind": "capacity",
+                "label": label,
+                "activeConnections": 0,
+                "connectionLimit": connection_limit,
+                "connectionErrors": 1,
+                "deadlineErrors": 0,
+            }
+        )
+        raise

@@ -44,7 +44,7 @@ def _deployment(label: str, region: str) -> dict[str, object]:
         "environmentKeyNames": [
             "BLOB_READ_WRITE_TOKEN",
             "PUMBILITY_DATABASE_URL",
-            "QSTASH_TOKEN",
+            "VERCEL_OIDC_TOKEN",
         ],
         "rolloutFlags": _flags(),
     }

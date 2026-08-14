@@ -996,6 +996,13 @@ class WorkerTests(unittest.TestCase):
         )
         self.assertEqual(player["max_concurrency"], 4)
 
+    def test_analysis_queue_has_a_conservative_four_worker_cap(self) -> None:
+        with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as source:
+            project = tomllib.load(source)
+        subscribers = project["tool"]["vercel"]["subscribers"]
+        analysis = next(row for row in subscribers if row["topics"] == ["analysis"])
+        self.assertEqual(analysis["max_concurrency"], 4)
+
     def test_player_refresh_task_uses_the_dedicated_lightweight_path(self) -> None:
         jobs = MemoryJobStore()
         job = {

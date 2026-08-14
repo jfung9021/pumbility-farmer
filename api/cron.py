@@ -19,6 +19,31 @@ def cron_authorized(authorization: str, secret: str) -> bool:
     return bool(secret) and hmac.compare_digest(authorization, f"Bearer {secret}")
 
 
+def _emit_topology_cron_route_event(request: Request) -> None:
+    from topology_diagnostics import (
+        cron_diagnostic_enabled,
+        emit_event,
+        require_cron_diagnostic_environment,
+        validated_cron_correlation,
+    )
+
+    if not cron_diagnostic_enabled(os.environ):
+        return
+    if request.headers.get("user-agent", "").strip().casefold() != "vercel-cron/1.0":
+        return
+    label, _connection_limit = require_cron_diagnostic_environment(os.environ)
+    emit_event(
+        {
+            "kind": "cron",
+            "label": label,
+            "source": "route",
+            "correlationSha256": validated_cron_correlation(os.environ),
+            "count": 1,
+            "authorized": True,
+        }
+    )
+
+
 @router.get("/api/cron")
 def run_cron(request: Request, mix: str = Query(default=DEFAULT_MIX_KEY)):
     secret = os.getenv("CRON_SECRET", "").strip()
@@ -26,6 +51,7 @@ def run_cron(request: Request, mix: str = Query(default=DEFAULT_MIX_KEY)):
     if not cron_authorized(authorization, secret):
         return JSONResponse(status_code=401, content={"error": "Unauthorized cron request."})
     try:
+        _emit_topology_cron_route_event(request)
         status, payload = start_or_reuse_analysis(
             mix=resolve_mix(mix), trigger="cron"
         )

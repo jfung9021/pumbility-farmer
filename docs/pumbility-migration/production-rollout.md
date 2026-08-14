@@ -268,8 +268,10 @@ The command fails unless the deployments have the same commit, source and lock i
 memory, timeout, concurrency, database limit, environment key set, safe flags, and connection
 strategy; only `region` may differ. A connection-strategy experiment instead uses
 `--topology-kind connection` and requires the region to match. Safe flags mean Vercel-authoritative
-`vercel` or accepted fail-open `shadow`, an empty read-canary list, cutover-only Blob controls off,
-selected-player refresh frozen, and no canonical writes in Vercel-only mode.
+`vercel` or accepted fail-open `shadow`, cutover-only Blob controls off, selected-player refresh
+frozen, and no canonical writes in Vercel-only mode. The read-canary list must be either empty or,
+only for the protected Phase 5 API comparison, exactly `analysis,tier-list`; Production and rollback
+deployments keep it empty.
 
 Run the private-Blob harness *inside an isolated diagnostic task in each deployment topology*. The
 harness requires the platform-provided `VERCEL_REGION` to equal the supplied label, so running it

@@ -27,6 +27,7 @@ P95_MAX_INCREASE_PERCENT = 10.0
 P99_MAX_INCREASE_PERCENT = 20.0
 REQUIRED_TOPICS = frozenset({"analysis", "player-recommendations"})
 REQUIRED_WORKER_COMPONENTS = frozenset({"analysis", "player-recommendations"})
+QUALIFICATION_CANARY_DOMAINS = ["analysis", "tier-list"]
 REQUIRED_FAULT_SCENARIOS = frozenset(
     {
         "supabase-timeout",
@@ -192,7 +193,8 @@ def verify_topology(
             and flags.get("shadowStrict") is False
             and flags.get("blobMirrorEnabled") is False
             and flags.get("blobReadFallbackEnabled") is False
-            and flags.get("readCanaryDomains") == []
+            and flags.get("readCanaryDomains")
+            in ([], QUALIFICATION_CANARY_DOMAINS)
             and flags.get("selectedPlayerRefreshEnabled") is False
             and (
                 flags.get("backend") == "shadow"

@@ -12,6 +12,7 @@ from api.jonathan import router as jonathan_router
 from api.operator import router as operator_router
 from api.recommendations import router as recommendations_router
 from api.tier_list import router as tier_list_router
+from api.topology import router as topology_router
 from pumbility_store import validate_rollout_configuration
 
 
@@ -24,6 +25,7 @@ app.include_router(jonathan_router)
 app.include_router(operator_router)
 app.include_router(recommendations_router)
 app.include_router(tier_list_router)
+app.include_router(topology_router)
 
 
 @app.exception_handler(Exception)
