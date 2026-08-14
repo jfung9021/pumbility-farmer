@@ -58,6 +58,7 @@ class HostedPopulationSafetyTests(unittest.TestCase):
         active_model = {
             "generationKey": "generation",
             "catalog": ["same"],
+            "recommendationCharts": ["same"],
             "phoenix2Slopes": {"singles": 1.0},
             "scoreProjectionMetadata": {"players": 3},
             "plateModel": {"players": 3},
@@ -65,6 +66,8 @@ class HostedPopulationSafetyTests(unittest.TestCase):
         }
         candidate_model = {
             **active_model,
+            "catalog": ["live"],
+            "recommendationCharts": ["live"],
             "phoenix2Slopes": {"singles": 2.0},
             "scoreProjectionMetadata": {"players": 4},
             "plateModel": {"players": 4},

@@ -169,7 +169,14 @@ _LIVE_RECOMMENDATION_METHOD_FIELDS = frozenset(
     {"pumbilityPerLevel", "scoreProjectionCoverage"}
 )
 _LIVE_RECOMMENDATION_MODEL_FIELDS = frozenset(
-    {"phoenix2Slopes", "scoreProjectionMetadata", "plateModel", "method"}
+    {
+        "catalog",
+        "recommendationCharts",
+        "phoenix2Slopes",
+        "scoreProjectionMetadata",
+        "plateModel",
+        "method",
+    }
 )
 
 
@@ -665,11 +672,16 @@ def _verify_model(
         source, recommendation_model_path(generation), "model"
     )
     _assert_recommendation_model_live_drift(candidate_model, source_model)
-    if (
-        source_model.get("generationKey") != generation
-        or source_model.get("method") != active_index.get("method")
-    ):
+    source_method = source_model.get("method")
+    active_method = active_index.get("method")
+    if source_model.get("generationKey") != generation or not isinstance(
+        source_method, Mapping
+    ) or not isinstance(active_method, Mapping):
         raise RuntimeError("The pinned recommendation model boundary is inconsistent.")
+    if set(source_method) != set(active_method) or _mapping_mismatches(
+        source_method, active_method
+    ).difference(_LIVE_RECOMMENDATION_METHOD_FIELDS):
+        raise RuntimeError("The pinned recommendation method contract is inconsistent.")
     print(json.dumps({"status": "stage-completed", "stage": "model-json-live-drift"}, sort_keys=True))
     versioned = _required_production_json(
         source, recommendation_index_path(generation), "versioned recommendation index"
