@@ -62,6 +62,42 @@ def _player_eligibility(player: Mapping) -> dict[str, bool]:
     }
 
 
+def _player_score_progress(player: Mapping) -> dict[str, dict[str, int]]:
+    stored = player.get("scoreProgress")
+    modes = player.get("modes")
+    result: dict[str, dict[str, int]] = {}
+    for mode in ("singles", "doubles"):
+        details = stored.get(mode) if isinstance(stored, Mapping) else None
+        if not isinstance(details, Mapping) and isinstance(modes, Mapping):
+            details = modes.get(mode)
+        if not isinstance(details, Mapping):
+            continue
+        projection_ready = bool(details.get("projectionAvailable"))
+        valid = (
+            details.get("projectionRatingSourceScoreCount")
+            if projection_ready
+            else details.get("phoenix2ScoreCount", details.get("validScoreCount"))
+        )
+        required = details.get(
+            "projectionRatingRequiredScoreCount",
+            details.get("requiredScoreCount"),
+        )
+        if (
+            isinstance(valid, bool)
+            or not isinstance(valid, int)
+            or valid < 0
+            or isinstance(required, bool)
+            or not isinstance(required, int)
+            or required <= 0
+        ):
+            continue
+        result[mode] = {
+            "validScoreCount": valid,
+            "requiredScoreCount": required,
+        }
+    return result
+
+
 def _read_player(store: PrivateBlobStore, payload: dict, player_key: str) -> dict | None:
     metadata = next(
         (row for row in payload.get("players", []) if row.get("playerKey") == player_key),
@@ -114,6 +150,7 @@ def get_recommendation_players():
                     "username": player.get("username"),
                     "displayName": player.get("displayName"),
                     "eligibility": _player_eligibility(player),
+                    "scoreProgress": _player_score_progress(player),
                 }
             )
         return JSONResponse(

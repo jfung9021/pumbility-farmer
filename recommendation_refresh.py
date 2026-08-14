@@ -322,6 +322,18 @@ def build_recommendation_model_artifacts(
                 )
                 for mode in ("singles", "doubles")
             }
+            score_progress = {
+                mode: {
+                    "validScoreCount": (
+                        PROJECTION_RATING_SCORE_THRESHOLD
+                        if int(p1_counts.get(player_id, {}).get(mode, 0))
+                        >= PROJECTION_RATING_SCORE_THRESHOLD
+                        else int(p2_counts.get(player_id, {}).get(mode, 0))
+                    ),
+                    "requiredScoreCount": PROJECTION_RATING_SCORE_THRESHOLD,
+                }
+                for mode in ("singles", "doubles")
+            }
             index_players.append(
                 {
                     "playerKey": player_key,
@@ -329,6 +341,7 @@ def build_recommendation_model_artifacts(
                     "username": username,
                     "displayName": display_name,
                     "eligibility": eligibility,
+                    "scoreProgress": score_progress,
                     "inputShard": shard_number,
                 }
             )

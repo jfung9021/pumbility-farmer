@@ -9,6 +9,7 @@ import type {
   RecommendationModeResult,
   RecommendationPlayer,
   RecommendationPlayersResponse,
+  RecommendationScoreProgress,
 } from "./types";
 
 
@@ -48,6 +49,7 @@ type LocalRecommendationPlayerEntry = RecommendationPlayer | {
   username: string;
   displayName: string;
   eligibility: { singles: boolean; doubles: boolean };
+  scoreProgress?: Partial<Record<ModeKey, RecommendationScoreProgress>>;
   shard: number;
 };
 
@@ -403,6 +405,32 @@ export function recommendationPlayerList(
           ? Boolean(player.modes.doubles?.eligible)
           : Boolean(player.eligibility.doubles),
       },
+      scoreProgress: "modes" in player
+        ? {
+            singles: {
+              validScoreCount: player.modes.singles?.projectionAvailable
+                ? player.modes.singles?.projectionRatingSourceScoreCount ?? 0
+                : player.modes.singles?.phoenix2ScoreCount
+                  ?? player.modes.singles?.validScoreCount
+                  ?? 0,
+              requiredScoreCount:
+                player.modes.singles?.projectionRatingRequiredScoreCount
+                ?? player.modes.singles?.requiredScoreCount
+                ?? 30,
+            },
+            doubles: {
+              validScoreCount: player.modes.doubles?.projectionAvailable
+                ? player.modes.doubles?.projectionRatingSourceScoreCount ?? 0
+                : player.modes.doubles?.phoenix2ScoreCount
+                  ?? player.modes.doubles?.validScoreCount
+                  ?? 0,
+              requiredScoreCount:
+                player.modes.doubles?.projectionRatingRequiredScoreCount
+                ?? player.modes.doubles?.requiredScoreCount
+                ?? 30,
+            },
+          }
+        : player.scoreProgress,
     })),
   };
 }
