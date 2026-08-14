@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import unittest
 
 import numpy as np
@@ -8,6 +9,7 @@ import numpy as np
 from scripts.populate_pumbility_production import (
     NUMERIC_MODEL_ABSOLUTE_TOLERANCE,
     _assert_flags_off,
+    _parity_mismatch_evidence,
     _npz_difference_summary,
     _npz_arrays_equal,
     build_parser,
@@ -15,6 +17,27 @@ from scripts.populate_pumbility_production import (
 
 
 class HostedPopulationSafetyTests(unittest.TestCase):
+    def test_parity_mismatch_evidence_is_aggregate_only(self) -> None:
+        actual = {
+            "schemaVersion": 3,
+            "summary": {"coverage": {"private": "actual"}},
+            "singles": [{"chartId": "private-actual"}],
+            "doubles": [],
+        }
+        expected = {
+            "schemaVersion": 3,
+            "summary": {"coverage": {"private": "expected"}},
+            "singles": [{"chartId": "private-expected"}],
+            "doubles": [{"chartId": "private-extra"}],
+        }
+        evidence = _parity_mismatch_evidence(actual, expected, "combined-tier")
+        self.assertEqual(evidence["parityRole"], "combined-tier")
+        self.assertEqual(evidence["mismatchedFields"], ["summary", "singles", "doubles"])
+        self.assertEqual(evidence["mismatchedSummaryFields"], ["coverage"])
+        self.assertEqual(evidence["lists"]["singles"]["differingItems"], 1)
+        self.assertEqual(evidence["lists"]["doubles"]["differingItems"], 1)
+        self.assertNotIn("private", json.dumps(evidence))
+
     def test_apply_is_explicit_and_bootstrap_default_is_fixed(self) -> None:
         args = build_parser().parse_args([])
         self.assertFalse(args.apply)

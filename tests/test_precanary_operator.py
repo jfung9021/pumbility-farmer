@@ -9,6 +9,7 @@ from api.operator import (
     _repair_numeric_artifact,
     _run_shadow_restore,
     _safe_missing_restore_input,
+    _safe_population_parity_evidence,
     _validated_shadow_restore_environment,
     run_hosted_precanary_artifact_repair,
     run_hosted_precanary_reconciliation,
@@ -27,6 +28,38 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
         unknown = FileNotFoundError(2, "private path", "/var/task/private.json")
         self.assertEqual(_safe_missing_restore_input(known), "phoenix1-manifest")
         self.assertIsNone(_safe_missing_restore_input(unknown))
+
+    def test_population_parity_evidence_drops_unapproved_values(self) -> None:
+        evidence = _safe_population_parity_evidence(
+            {
+                "parityRole": "combined-tier",
+                "mismatchedFields": ["summary", "private-field"],
+                "private": "secret",
+                "lists": {
+                    "singles": {
+                        "actualCount": 1,
+                        "expectedCount": 2,
+                        "differingItems": 2,
+                        "private": 3,
+                    },
+                    "private-list": {"actualCount": 1},
+                },
+            }
+        )
+        self.assertEqual(
+            evidence,
+            {
+                "parityRole": "combined-tier",
+                "mismatchedFields": ["summary"],
+                "lists": {
+                    "singles": {
+                        "actualCount": 1,
+                        "expectedCount": 2,
+                        "differingItems": 2,
+                    }
+                },
+            },
+        )
 
     def test_shadow_restore_routes_require_preview_and_both_controls(self) -> None:
         environments = (
@@ -175,6 +208,11 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
     def test_shadow_population_uses_advisory_lock_and_releases_on_failure(self) -> None:
         environment = {"PUMBILITY_DATABASE_URL": "runtime-url"}
         flags = {"productionBackend": "vercel"}
+        population_error = RuntimeError("private failure")
+        population_error.safe_evidence = {
+            "parityRole": "combined-tier",
+            "mismatchedFields": ["summary"],
+        }
         cursor = Mock()
         cursor.__enter__ = Mock(return_value=cursor)
         cursor.__exit__ = Mock(return_value=False)
@@ -195,7 +233,7 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
             "scripts.backfill_pumbility_production._release_lock"
         ) as release, patch(
             "scripts.populate_pumbility_production.main",
-            side_effect=RuntimeError("private failure"),
+            side_effect=population_error,
         ):
             with self.assertRaisesRegex(
                 RuntimeError, "Hosted shadow restoration failed safely"
@@ -213,6 +251,10 @@ class HostedPreCanaryOperatorTests(unittest.TestCase):
                 "action": "populate",
                 "failureStage": "typed-population",
                 "errorType": "RuntimeError",
+                "populationParity": {
+                    "parityRole": "combined-tier",
+                    "mismatchedFields": ["summary"],
+                },
             },
         )
 

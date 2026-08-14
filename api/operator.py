@@ -29,6 +29,24 @@ _RESTORE_INPUT_LABELS = {
     "runtime_reference_data/phoenix1.manifest.json": "phoenix1-manifest",
     "runtime_reference_data/phoenix1-rerates.json": "phoenix1-rerates",
 }
+_POPULATION_PARITY_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "generatedAtUtc",
+        "mix",
+        "summary",
+        "singles",
+        "doubles",
+        "relativeGroups",
+        "effectBands",
+    }
+)
+_POPULATION_SUMMARY_FIELDS = frozenset(
+    {"scriptVersion", "generatedAtUtc", "mix", "method", "coverage", "modes"}
+)
+_POPULATION_LIST_FIELDS = frozenset(
+    {"singles", "doubles", "relativeGroups", "effectBands"}
+)
 
 
 def _enabled(value: str | None) -> bool:
@@ -51,6 +69,46 @@ def _safe_missing_restore_input(error: Exception) -> str | None:
         if filename.endswith(suffix.casefold()):
             return label
     return None
+
+
+def _safe_population_parity_evidence(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping) or value.get("parityRole") not in {
+        "combined-tier",
+        "recommendation-index",
+        "recommendation-model",
+        "versioned recommendation-index",
+    }:
+        return None
+    evidence: dict[str, object] = {"parityRole": value["parityRole"]}
+    for source_name, target_name, allowed in (
+        ("mismatchedFields", "mismatchedFields", _POPULATION_PARITY_FIELDS),
+        (
+            "mismatchedSummaryFields",
+            "mismatchedSummaryFields",
+            _POPULATION_SUMMARY_FIELDS,
+        ),
+    ):
+        fields = value.get(source_name)
+        if isinstance(fields, list):
+            evidence[target_name] = [
+                field for field in fields if isinstance(field, str) and field in allowed
+            ]
+    lists = value.get("lists")
+    if isinstance(lists, Mapping):
+        safe_lists: dict[str, dict[str, int]] = {}
+        for field in _POPULATION_LIST_FIELDS:
+            counts = lists.get(field)
+            if not isinstance(counts, Mapping):
+                continue
+            safe_counts = {
+                name: count
+                for name in ("actualCount", "expectedCount", "differingItems")
+                if isinstance((count := counts.get(name)), int) and count >= 0
+            }
+            if safe_counts:
+                safe_lists[field] = safe_counts
+        evidence["lists"] = safe_lists
+    return evidence
 
 
 @contextmanager
@@ -184,6 +242,11 @@ def _run_shadow_restore(
         missing_input = _safe_missing_restore_input(error)
         if missing_input:
             safe_evidence["missingInput"] = missing_input
+        population_evidence = _safe_population_parity_evidence(
+            getattr(error, "safe_evidence", None)
+        )
+        if action == "populate" and population_evidence:
+            safe_evidence["populationParity"] = population_evidence
         wrapped = RuntimeError("Hosted shadow restoration failed safely.")
         wrapped.safe_evidence = safe_evidence
         raise wrapped from None

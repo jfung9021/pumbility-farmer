@@ -75,6 +75,24 @@ CONFIRMATION_ENV = "PUMBILITY_PRODUCTION_POPULATION_CONFIRMATION"
 CONFIRMATION = f"POPULATE {EXPECTED_PROJECT_REF} {EXPECTED_PUMBILITY_MIGRATION}"
 MAX_INPUT_SHARDS = 1_000
 NUMERIC_MODEL_ABSOLUTE_TOLERANCE = 1e-8
+_PUBLIC_PARITY_FIELDS = (
+    "schemaVersion",
+    "generatedAtUtc",
+    "mix",
+    "summary",
+    "singles",
+    "doubles",
+    "relativeGroups",
+    "effectBands",
+)
+_PUBLIC_SUMMARY_FIELDS = (
+    "scriptVersion",
+    "generatedAtUtc",
+    "mix",
+    "method",
+    "coverage",
+    "modes",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -164,9 +182,52 @@ def _npz_arrays_equal(first: bytes, second: bytes) -> bool:
     return not _npz_difference_summary(first, second)
 
 
+def _parity_mismatch_evidence(
+    actual: Mapping[str, Any], expected: Mapping[str, Any], role: str
+) -> dict[str, Any]:
+    mismatched_fields = [
+        field
+        for field in _PUBLIC_PARITY_FIELDS
+        if _exact_json_bytes({field: actual.get(field)})
+        != _exact_json_bytes({field: expected.get(field)})
+    ]
+    evidence: dict[str, Any] = {
+        "parityRole": role,
+        "mismatchedFields": mismatched_fields,
+    }
+    summary_actual = actual.get("summary")
+    summary_expected = expected.get("summary")
+    if isinstance(summary_actual, Mapping) and isinstance(summary_expected, Mapping):
+        evidence["mismatchedSummaryFields"] = [
+            field
+            for field in _PUBLIC_SUMMARY_FIELDS
+            if _exact_json_bytes({field: summary_actual.get(field)})
+            != _exact_json_bytes({field: summary_expected.get(field)})
+        ]
+    list_evidence: dict[str, dict[str, int]] = {}
+    for field in ("singles", "doubles", "relativeGroups", "effectBands"):
+        actual_items = actual.get(field)
+        expected_items = expected.get(field)
+        if not isinstance(actual_items, list) or not isinstance(expected_items, list):
+            continue
+        differing_items = abs(len(actual_items) - len(expected_items)) + sum(
+            _exact_json_bytes({"item": left}) != _exact_json_bytes({"item": right})
+            for left, right in zip(actual_items, expected_items)
+        )
+        list_evidence[field] = {
+            "actualCount": len(actual_items),
+            "expectedCount": len(expected_items),
+            "differingItems": differing_items,
+        }
+    evidence["lists"] = list_evidence
+    return evidence
+
+
 def _assert_json_equal(actual: Mapping[str, Any], expected: Mapping[str, Any], role: str) -> None:
     if _exact_json_bytes(actual) != _exact_json_bytes(expected):
-        raise RuntimeError(f"Hosted {role} parity failed.")
+        error = RuntimeError(f"Hosted {role} parity failed.")
+        error.safe_evidence = _parity_mismatch_evidence(actual, expected, role)
+        raise error
 
 
 def _assert_source_rows_equal(
