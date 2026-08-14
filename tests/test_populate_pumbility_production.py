@@ -11,6 +11,7 @@ from scripts.populate_pumbility_production import (
     _assert_flags_off,
     _assert_recommendation_live_drift,
     _assert_recommendation_model_live_drift,
+    _assert_versioned_index_timestamp_variance,
     _combined_payload_for_active_generation,
     _parity_mismatch_evidence,
     _recommendation_index_for_active_generation,
@@ -87,6 +88,26 @@ class HostedPopulationSafetyTests(unittest.TestCase):
         )
         with self.assertRaises(RuntimeError):
             _assert_recommendation_live_drift(excessive, self._recommendation_index(["z"]))
+
+    def test_versioned_index_accepts_only_bounded_timestamp_variance(self) -> None:
+        active = self._recommendation_index(["a", "b"])
+        versioned = json.loads(json.dumps(active))
+        versioned["modelGeneratedAtUtc"] = "2026-08-15T01:00:00Z"
+        versioned["generatedAtUtc"] = "2026-08-15T01:00:00Z"
+        self.assertEqual(
+            _assert_versioned_index_timestamp_variance(active, versioned), 3600
+        )
+
+        changed = json.loads(json.dumps(versioned))
+        changed["players"][0]["username"] = "different"
+        with self.assertRaises(RuntimeError):
+            _assert_versioned_index_timestamp_variance(active, changed)
+
+        too_old = json.loads(json.dumps(active))
+        too_old["modelGeneratedAtUtc"] = "2026-08-13T00:00:00Z"
+        too_old["generatedAtUtc"] = "2026-08-13T00:00:00Z"
+        with self.assertRaises(RuntimeError):
+            _assert_versioned_index_timestamp_variance(active, too_old)
 
     def test_active_generation_compatibility_removes_only_pending_fields(self) -> None:
         current_combined = {

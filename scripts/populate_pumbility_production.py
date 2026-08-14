@@ -14,6 +14,7 @@ import io
 import json
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -24,7 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from analysis_runtime import VercelPrivateBlobStore  # noqa: E402
-from phoenix2_sync import sanitize_snapshot  # noqa: E402
+from phoenix2_sync import parse_utc, sanitize_snapshot  # noqa: E402
 from piu_recommendations import (  # noqa: E402
     COMBINED_TIER_SCHEMA_VERSION,
     ScoreResponseModel,
@@ -78,6 +79,7 @@ CONFIRMATION = f"POPULATE {EXPECTED_PROJECT_REF} {EXPECTED_PUMBILITY_MIGRATION}"
 MAX_INPUT_SHARDS = 1_000
 NUMERIC_MODEL_ABSOLUTE_TOLERANCE = 1e-8
 MAX_RECOMMENDATION_PLAYER_DRIFT = 10
+MAX_VERSIONED_INDEX_TIMESTAMP_DRIFT = timedelta(hours=24)
 _PUBLIC_COMBINED_PARITY_FIELDS = (
     "schemaVersion",
     "generatedAtUtc",
@@ -487,6 +489,39 @@ def _assert_recommendation_model_live_drift(
         raise RuntimeError("The recommendation model method has non-live-data differences.")
 
 
+def _assert_versioned_index_timestamp_variance(
+    active: Mapping[str, Any], versioned: Mapping[str, Any]
+) -> int:
+    timestamp_fields = ("modelGeneratedAtUtc", "generatedAtUtc")
+    active_without_timestamps = {
+        field: value for field, value in active.items() if field not in timestamp_fields
+    }
+    versioned_without_timestamps = {
+        field: value for field, value in versioned.items() if field not in timestamp_fields
+    }
+    _assert_json_equal(
+        active_without_timestamps,
+        versioned_without_timestamps,
+        "versioned recommendation-index",
+    )
+    parsed_pairs = []
+    for field in timestamp_fields:
+        active_timestamp = parse_utc(active.get(field))
+        versioned_timestamp = parse_utc(versioned.get(field))
+        if active_timestamp is None or versioned_timestamp is None:
+            raise RuntimeError("A recommendation index timestamp is invalid.")
+        parsed_pairs.append((active_timestamp, versioned_timestamp))
+    if parsed_pairs[0][0] != parsed_pairs[1][0] or parsed_pairs[0][1] != parsed_pairs[1][1]:
+        raise RuntimeError("A recommendation index timestamp pair is inconsistent.")
+    maximum_difference = max(
+        abs(active_timestamp - versioned_timestamp)
+        for active_timestamp, versioned_timestamp in parsed_pairs
+    )
+    if maximum_difference > MAX_VERSIONED_INDEX_TIMESTAMP_DRIFT:
+        raise RuntimeError("The recommendation index timestamp variance exceeds the approved bound.")
+    return int(maximum_difference.total_seconds())
+
+
 def _assert_source_input_shards(
     source: VercelPrivateBlobStore,
     *,
@@ -686,8 +721,20 @@ def _verify_model(
     versioned = _required_production_json(
         source, recommendation_index_path(generation), "versioned recommendation index"
     )
-    _assert_json_equal(active_index, versioned, "versioned recommendation-index")
-    print(json.dumps({"status": "stage-completed", "stage": "versioned-index-parity"}, sort_keys=True))
+    timestamp_variance_seconds = _assert_versioned_index_timestamp_variance(
+        active_index, versioned
+    )
+    print(
+        json.dumps(
+            {
+                "status": "stage-completed",
+                "stage": "versioned-index-parity",
+                "timestampOnlyVarianceAccepted": bool(timestamp_variance_seconds),
+                "maximumTimestampVarianceSeconds": timestamp_variance_seconds,
+            },
+            sort_keys=True,
+        )
+    )
     if (
         len(phoenix1_shards) != int(candidate_index["inputShardCount"])
         or len(phoenix2_shards) != int(candidate_index["inputShardCount"])
