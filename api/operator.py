@@ -25,6 +25,9 @@ _RESTORE_INPUT_LABELS = {
     "lib/data/nevsister-chart-video-overrides.json": "nevsister-video-overrides",
     "piu_misgrade_analyzer.py": "analyzer-code",
     "phoenix1_score_overrides.py": "phoenix1-score-overrides-code",
+    "runtime_reference_data/phoenix1.json": "phoenix1-public",
+    "runtime_reference_data/phoenix1.manifest.json": "phoenix1-manifest",
+    "runtime_reference_data/phoenix1-rerates.json": "phoenix1-rerates",
 }
 
 

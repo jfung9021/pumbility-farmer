@@ -29,6 +29,7 @@ from pumbility_store import (  # noqa: E402
     _assert_schema,
 )
 from scripts.backfill_pumbility_supabase import (  # noqa: E402
+    REFERENCE_JSON_ARTIFACTS,
     _canonical_bytes,
     _copy_rows,
     _digest,
@@ -256,7 +257,9 @@ def _copy_active_artifacts(
     )
     target.put_bytes(numeric_path, numeric, content_type="application/x-npz")
     phoenix1_public = json.loads(
-        (PROJECT_ROOT / "public/data/phoenix1.json").read_text(encoding="utf-8")
+        REFERENCE_JSON_ARTIFACTS["reference/phoenix1/public.json"].read_text(
+            encoding="utf-8"
+        )
     )
     target.put_json_bundle(
         {
