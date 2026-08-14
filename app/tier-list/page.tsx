@@ -69,6 +69,48 @@ function LimitedDataWarning({ chart, compact = false }: { chart: ChartResult; co
   );
 }
 
+function fallbackWhatIfEstimates(chart: ChartResult): NonNullable<ChartResult["whatIfEstimates"]> {
+  const minimumLevel = Math.max(16, chart.level - 3);
+  return Array.from({ length: chart.level + 3 - minimumLevel + 1 }, (_, offset) => minimumLevel + offset)
+    .filter((level) => level !== chart.level)
+    .map((level) => ({ level, estimatedDifficulty: null }));
+}
+
+function WhatIfDifficulty({ chart }: { chart: ChartResult }) {
+  const [selectedLevel, setSelectedLevel] = useState<number | null>(null);
+  const prefix = chart.type === "Single" ? "S" : "D";
+  const estimates = chart.whatIfEstimates ?? fallbackWhatIfEstimates(chart);
+  const selectedEstimate = selectedLevel === null
+    ? null
+    : estimates.find((estimate) => estimate.level === selectedLevel)?.estimatedDifficulty ?? null;
+
+  return (
+    <div className="what-if-control">
+      <span>If</span>
+      <select
+        aria-label={`Hypothetical official difficulty for ${chart.songName}`}
+        onChange={(event) => setSelectedLevel(event.target.value ? Number(event.target.value) : null)}
+        value={selectedLevel ?? ""}
+      >
+        <option value="">{prefix}??</option>
+        {estimates.map((estimate) => (
+          <option
+            disabled={estimate.estimatedDifficulty === null}
+            key={estimate.level}
+            value={estimate.level}
+          >
+            {prefix}{estimate.level}{estimate.estimatedDifficulty === null ? " — unavailable" : ""}
+          </option>
+        ))}
+      </select>
+      <span>then</span>
+      <span className="what-if-result">
+        {selectedEstimate === null ? "—" : `${prefix}${formatEstimatedDifficulty(selectedEstimate)}`}
+      </span>
+    </div>
+  );
+}
+
 function ChartDetails({ chart, headingId }: { chart: ChartResult; headingId?: string }) {
   const delta = chart.difficultyDelta;
   return (
@@ -100,6 +142,7 @@ function ChartDetails({ chart, headingId }: { chart: ChartResult; headingId?: st
         {chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null ? (
           <small>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
         ) : null}
+        <WhatIfDifficulty chart={chart} />
       </div>
     </>
   );

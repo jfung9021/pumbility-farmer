@@ -55,8 +55,9 @@ from phoenix2_pumbility import (
 RECOMMENDATION_SCHEMA_VERSION = 21
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
-COMBINED_TIER_SCHEMA_VERSION = 2
+COMBINED_TIER_SCHEMA_VERSION = 3
 RECOMMENDATION_RADIUS = 0.5
+WHAT_IF_LEVEL_RADIUS = 3
 BASELINE_START_RANK = 11
 BASELINE_END_RANK = 30
 RECOMMENDATION_RATING_SCORE_COUNT = 20
@@ -763,7 +764,18 @@ def _source_contributions(
     if allowed_chart_ids is not None:
         charts, scores = retain_catalog_source_rows(charts, scores, allowed_chart_ids)
     if charts.empty or scores.empty:
-        columns = ["playerId", "chartId", "mode", "source", "normalizedResidual"]
+        columns = [
+            "playerId",
+            "chartId",
+            "mode",
+            "source",
+            "normalizedResidual",
+            "chartType",
+            "chartLevel",
+            "sourceSlope",
+            "score",
+            "plate",
+        ]
         return pd.DataFrame(columns=columns), {}
     merged = scores.merge(
         charts[["chartId", "type", "level"]],
@@ -844,6 +856,11 @@ def _source_contributions(
         ) / slope
         contribution["mode"] = MODE_LABELS[chart_type]
         contribution["source"] = source
+        contribution["chartType"] = chart_type
+        contribution["chartLevel"] = contribution["level"].astype(int)
+        contribution["sourceSlope"] = slope
+        if "plate" not in contribution.columns:
+            contribution["plate"] = None
         frames.append(
             contribution[
                 [
@@ -852,14 +869,148 @@ def _source_contributions(
                     "mode",
                     "source",
                     "normalizedResidual",
+                    "chartType",
+                    "chartLevel",
+                    "sourceSlope",
+                    "score",
+                    "plate",
                 ]
             ]
         )
-    columns = ["playerId", "chartId", "mode", "source", "normalizedResidual"]
+    columns = [
+        "playerId",
+        "chartId",
+        "mode",
+        "source",
+        "normalizedResidual",
+        "chartType",
+        "chartLevel",
+        "sourceSlope",
+        "score",
+        "plate",
+    ]
     return (
         pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns),
         slopes,
     )
+
+
+def what_if_levels(level: int) -> list[int]:
+    """Return the bounded alternative official levels shown for one chart."""
+    current = int(level)
+    return [
+        candidate
+        for candidate in range(
+            max(MIN_TARGET_LEVEL, current - WHAT_IF_LEVEL_RADIUS),
+            current + WHAT_IF_LEVEL_RADIUS + 1,
+        )
+        if candidate != current
+    ]
+
+
+def _what_if_residual_shift(
+    observation: Mapping[str, Any],
+    target_level: int,
+) -> float:
+    """Revalue one selected contribution while leaving its baseline frozen."""
+    current_level = int(observation["chartLevel"])
+    level_delta = float(target_level - current_level)
+    if observation.get("source") != "phoenix2":
+        return level_delta
+
+    grade = grade_for_score(observation.get("score"))
+    plate = normalize_plate(observation.get("plate"))
+    slope = float(observation.get("sourceSlope") or math.nan)
+    chart_type = str(observation.get("chartType") or "")
+    if (
+        grade is None
+        or plate is None
+        or chart_type not in MODE_TYPES
+        or not math.isfinite(slope)
+        or slope <= 0
+    ):
+        # The contribution is already normalized into level units. Retaining the
+        # empirical one-level shift keeps the selected evidence set intact when
+        # a historical Phoenix 2 row lacks its plate.
+        return level_delta
+
+    current_pumbility = phoenix2_pumbility(
+        chart_type,
+        current_level,
+        grade,
+        plate,
+    )
+    target_pumbility = phoenix2_pumbility(
+        chart_type,
+        target_level,
+        grade,
+        plate,
+    )
+    return (target_pumbility - current_pumbility) / slope
+
+
+def build_chart_what_if_estimates(
+    result: pd.DataFrame,
+    observations: pd.DataFrame,
+) -> pd.Series:
+    """Calculate chart-only estimates against frozen target-folder references."""
+    folder_models: dict[int, tuple[float, float]] = {}
+    for level, group in result.groupby("level", sort=False):
+        reference = pd.to_numeric(
+            group["levelReferenceResidualPb"], errors="coerce"
+        ).dropna()
+        compression = pd.to_numeric(
+            group["folderRangeCompression"], errors="coerce"
+        ).dropna()
+        if reference.empty or compression.empty:
+            continue
+        reference_value = float(reference.iloc[0])
+        compression_value = float(compression.iloc[0])
+        if math.isfinite(reference_value) and math.isfinite(compression_value):
+            folder_models[int(level)] = (reference_value, compression_value)
+
+    observations_by_chart = {
+        str(chart_id): group.to_dict(orient="records")
+        for chart_id, group in observations.groupby("chartId", sort=False)
+    }
+    estimates: list[list[dict[str, Any]]] = []
+    for row in result.to_dict(orient="records"):
+        current_level = int(row["level"])
+        chart_observations = observations_by_chart.get(str(row["chartId"]), [])
+        reliability = float(row.get("reliabilityWeight") or math.nan)
+        chart_estimates: list[dict[str, Any]] = []
+        for target_level in what_if_levels(current_level):
+            estimated_difficulty: float | None = None
+            folder_model = folder_models.get(target_level)
+            if chart_observations and folder_model and math.isfinite(reliability):
+                hypothetical_residuals = np.asarray(
+                    [
+                        float(observation["normalizedResidual"])
+                        + _what_if_residual_shift(observation, target_level)
+                        for observation in chart_observations
+                    ],
+                    dtype=float,
+                )
+                chart_location = _robust_location(hypothetical_residuals)
+                reference, compression = folder_model
+                estimate = (
+                    target_level
+                    + 0.5
+                    - DIFFICULTY_DELTA_SCALE
+                    * reliability
+                    * (chart_location - reference)
+                    * compression
+                )
+                if math.isfinite(estimate):
+                    estimated_difficulty = round(float(estimate), 6)
+            chart_estimates.append(
+                {
+                    "level": target_level,
+                    "estimatedDifficulty": estimated_difficulty,
+                }
+            )
+        estimates.append(chart_estimates)
+    return pd.Series(estimates, index=result.index, dtype=object)
 
 
 def merge_source_contributions(
@@ -1020,6 +1171,10 @@ def build_combined_chart_results(
             default="Unrated",
         )
         result = apply_within_level_difficulty(result, 1.0, config)
+        result["whatIfEstimates"] = build_chart_what_if_estimates(
+            result,
+            mode_observations,
+        )
         rows.append(result)
 
     if not rows:
@@ -1047,6 +1202,7 @@ def build_combined_chart_results(
         "bpmMin",
         "bpmMax",
         "estimatedDifficulty",
+        "whatIfEstimates",
         "averageDifficulty",
         "difficultyDelta",
         "folderMeasuredCharts",
@@ -1181,6 +1337,19 @@ def build_combined_tier_payload(
             },
             "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(),
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
+            "whatIfEstimates": {
+                "calculation": "chart-only contribution revaluation against frozen target-folder models",
+                "levelRadius": WHAT_IF_LEVEL_RADIUS,
+                "minimumOfficialLevel": MIN_TARGET_LEVEL,
+                "frozen": [
+                    "player baselines",
+                    "contribution selection",
+                    "target-folder reference and range compression",
+                    "reliability shrinkage",
+                    "ranks and tier membership",
+                ],
+                "missingTargetReference": "unavailable",
+            },
         },
         "coverage": {
             "sourceObservations": int(metadata.get("sourceObservations", 0)),

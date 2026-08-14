@@ -64,6 +64,22 @@ const demoRows: Record<ModeKey, Array<[string, number, number | null, number, nu
   ],
 };
 
+function makeWhatIfEstimates(
+  level: number,
+  estimatedDifficulty: number | null,
+  includeUnavailable: boolean,
+): NonNullable<ChartResult["whatIfEstimates"]> {
+  const minimumLevel = Math.max(16, level - 3);
+  return Array.from({ length: level + 3 - minimumLevel + 1 }, (_, offset) => minimumLevel + offset)
+    .filter((targetLevel) => targetLevel !== level)
+    .map((targetLevel) => ({
+      level: targetLevel,
+      estimatedDifficulty: estimatedDifficulty === null || (includeUnavailable && targetLevel === level + 3)
+        ? null
+        : Number((estimatedDifficulty + targetLevel - level).toFixed(6)),
+    }));
+}
+
 function makeChart(mode: ModeKey, row: [string, number, number | null, number, number], index: number): ChartResult {
   const [songName, level, unscaledDelta, contributors, group] = row;
   const prefix = mode === "singles" ? "S" : "D";
@@ -72,6 +88,7 @@ function makeChart(mode: ModeKey, row: [string, number, number | null, number, n
     ? null
     : Number((unscaledDelta * DEMO_DIFFICULTY_DELTA_SCALE).toFixed(6));
   const effect = effectBand(delta);
+  const estimatedDifficulty = delta === null ? null : averageDifficulty + delta;
   return {
     mode: mode === "singles" ? "Singles" : "Doubles",
     modeRank: delta === null ? null : index + 1,
@@ -92,7 +109,8 @@ function makeChart(mode: ModeKey, row: [string, number, number | null, number, n
     noteCount: 1120 + index * 87,
     stepArtist: index % 2 ? "NIMGO" : "EXC",
     averageDifficulty,
-    estimatedDifficulty: delta === null ? null : averageDifficulty + delta,
+    estimatedDifficulty,
+    whatIfEstimates: makeWhatIfEstimates(level, estimatedDifficulty, index === 2),
     difficultyDelta: delta,
     folderMeasuredCharts: 10,
     folderRangeCompression: 1,

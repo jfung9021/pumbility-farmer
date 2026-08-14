@@ -399,6 +399,7 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
   grid-template-columns: 58px minmax(0, 1fr) 104px;
   min-height: 86px;
   padding: 13px 18px;
+  position: relative;
 }
 .chart-card:last-child { border-bottom: 0; }
 .chart-card:hover { background: rgba(255, 255, 255, 0.018); }
@@ -482,12 +483,17 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 .compact-jacket .compact-warning { background: transparent; border: 0; left: 5px; padding: 0; position: absolute; top: 5px; z-index: 2; }
 .compact-jacket .compact-warning > b { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55); }
 
-.delta { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 54px; padding-left: 19px; }
-.delta span { color: #636c64; font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; }
-.delta strong { font-size: 23px; letter-spacing: -0.05em; margin-top: 2px; }
-.delta small { color: #5f685f; font-size: 8px; margin-top: 1px; }
-.delta-easy strong { color: var(--tone); }
-.delta-hard strong { color: #ff7575; }
+.delta { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 54px; padding-left: 19px; position: relative; }
+.delta > span { color: #636c64; font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; }
+.delta > strong { font-size: 23px; letter-spacing: -0.05em; margin-top: 2px; }
+.delta > small { color: #5f685f; font-size: 8px; margin-top: 1px; }
+.delta-easy > strong { color: var(--tone); }
+.delta-hard > strong { color: #ff7575; }
+.what-if-control { align-items: center; bottom: 0; color: #626b63; display: flex; font-size: 8px; gap: 4px; letter-spacing: 0; line-height: 1; position: absolute; right: calc(100% + 19px); text-transform: none; white-space: nowrap; }
+.what-if-control select { background: #0b100c; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 4px; color: #aeb7af; font: inherit; height: 19px; max-width: 86px; padding: 0 2px; }
+.what-if-control select:focus-visible { border-color: rgba(200, 255, 46, 0.5); outline: 2px solid white; outline-offset: 1px; }
+.what-if-control option:disabled { color: #626b63; }
+.what-if-control .what-if-result { color: #aeb7af; display: inline-block; font-size: 8px; font-weight: 800; letter-spacing: 0; min-width: 26px; text-transform: none; }
 .empty-tier { color: #535b54; font-size: 11px; margin: 0; padding: 20px; }
 
 .unrated-section header { align-items: center; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; padding: 20px; }
@@ -509,6 +515,7 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 .chart-dialog-body .chart-meta { gap: 8px 16px; line-height: 1.5; }
 .chart-dialog-body .delta { align-items: baseline; border-left: 0; border-top: 1px solid var(--line); flex-direction: row; flex-wrap: wrap; gap: 8px; grid-column: 2; min-height: 0; padding: 13px 0 0; }
 .chart-dialog-body .delta strong { font-size: 20px; }
+.chart-dialog-body .what-if-control { bottom: 0; right: 0; }
 
 footer {
   border-top: 1px solid var(--line);
@@ -757,6 +764,7 @@ footer b { color: #929b93; }
   .chart-meta { gap: 7px 12px; line-height: 1.45; }
   .delta { align-items: baseline; border-left: 0; border-top: 1px solid var(--line); flex-direction: row; flex-wrap: wrap; gap: 7px; grid-column: 2; min-height: 0; padding: 9px 0 0; }
   .delta strong { font-size: 19px; }
+  .what-if-control { bottom: 1px; right: 0; }
   .chart-dialog { padding: 45px 16px 18px; }
   .chart-dialog-body { gap: 13px; grid-template-columns: 62px minmax(0, 1fr); }
   .chart-dialog-art-rail { height: 102px; width: 62px; }

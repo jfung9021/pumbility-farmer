@@ -99,7 +99,7 @@ Required statistical invariants are implemented and tested in `tests/test_analyz
 
 ## Combined tier contract
 
-`piu_recommendations.COMBINED_TIER_SCHEMA_VERSION` is 2.
+`piu_recommendations.COMBINED_TIER_SCHEMA_VERSION` is 3.
 
 - Phoenix 2 charts are the strict target allowlist.
 - Phoenix 2 replaces Phoenix 1 for an overlapping player/chart observation.
@@ -107,6 +107,11 @@ Required statistical invariants are implemented and tested in `tests/test_analyz
 - Output is limited to official level 16+ and retains separate mode arrays.
 - Phoenix 1 rerates are presentation provenance, not inputs that mutate the frozen public analysis.
 - Two Phoenix 1 score overrides are applied only to Phoenix 1 evidence.
+- Every schema-3 chart contains `whatIfEstimates`, ordered by alternative official level. Each entry has `level` and an `estimatedDifficulty` rounded to six decimal digits or `null` when the target folder has no measured reference or the chart has no usable observations.
+- Alternatives cover the three official levels below and above the chart, omit its current level, and never go below level 16. Near the floor the list is correspondingly shorter.
+- What-if values are chart-only projections, not tier-list recalculations. They preserve the selected contribution set, player baselines, reliability/shrinkage, target-folder reference and range compression, ranks, percentiles, and tier membership.
+- Phoenix 2 observations are revalued at the hypothetical level with the existing score-derived grade, recorded plate, and Phoenix 2 Pumbility formula. Phoenix 1 observations, and Phoenix 2 observations without sufficient grade/plate data, retain the existing normalized one-level residual shift.
+- The hypothetical chart residual is recomputed from the frozen observations and compared with the frozen target-folder model using the existing 0.4 difficulty-delta scale. No hypothetical confidence interval, rank, percentile, or effect band is published.
 
 ## Recommendation contract
 
