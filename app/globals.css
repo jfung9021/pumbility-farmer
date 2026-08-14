@@ -490,7 +490,7 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 .delta-easy > strong { color: var(--tone); }
 .delta-hard > strong { color: #ff7575; }
 .what-if-control { align-items: center; bottom: 0; color: #626b63; display: flex; font-size: 8px; gap: 4px; letter-spacing: 0; line-height: 1; position: absolute; right: calc(100% + 19px); text-transform: none; white-space: nowrap; }
-.what-if-control select { background: #0b100c; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 4px; color: #aeb7af; font: inherit; height: 19px; max-width: 86px; padding: 0 2px; }
+.what-if-control select { background: #0b100c; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 4px; color: #aeb7af; font: inherit; height: 19px; padding: 0 2px; width: calc(4ch + 16px); }
 .what-if-control select:focus-visible { border-color: rgba(200, 255, 46, 0.5); outline: 2px solid white; outline-offset: 1px; }
 .what-if-control option:disabled { color: #626b63; }
 .what-if-control .what-if-result { color: #aeb7af; display: inline-block; font-size: 8px; font-weight: 800; letter-spacing: 0; min-width: 26px; text-transform: none; }
