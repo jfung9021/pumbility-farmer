@@ -27,6 +27,9 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import quote
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from scripts.compare_pumbility_preview_regions import (
     VALID_DOMAINS,
     compare_latency,

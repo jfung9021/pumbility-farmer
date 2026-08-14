@@ -5,6 +5,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -74,6 +75,21 @@ class ProtectedPreviewComparisonTests(unittest.TestCase):
     def setUp(self) -> None:
         self.local_data = PROJECT_ROOT / ".local-data"
         self.local_data.mkdir(exist_ok=True)
+
+    def test_direct_script_entrypoint_resolves_repository_imports(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts" / "compare_pumbility_protected_previews.py"),
+                "--help",
+            ],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8"))
 
     def _run_smoke(
         self, output_root: Path, runner: FakeVercelRunner
