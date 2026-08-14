@@ -8,6 +8,7 @@ an explicit process-only confirmation before writing typed shadow metadata.
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import io
 import json
@@ -214,7 +215,7 @@ def _verify_model(
     source: VercelPrivateBlobStore,
     inputs: Mapping[str, DatabaseInput],
     pointers: Mapping[str, Mapping[str, Any]],
-) -> tuple[dict[str, Any], dict[str, Any], bytes, list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], dict[str, Any], bytes, int, int]:
     combined_charts, slopes, metadata = build_combined_chart_results(
         inputs["phoenix1"].snapshot,
         inputs["phoenix2"].snapshot,
@@ -321,7 +322,13 @@ def _verify_model(
             sort_keys=True,
         )
     )
-    return index, model, source_score_bytes, phoenix1_shards, phoenix2_shards
+    return (
+        index,
+        model,
+        source_score_bytes,
+        len(phoenix1_shards),
+        len(phoenix2_shards),
+    )
 
 
 def _persist_model_generation(
@@ -333,13 +340,19 @@ def _persist_model_generation(
         dict[str, Any],
         dict[str, Any],
         bytes,
-        list[dict[str, Any]],
-        list[dict[str, Any]],
+        int,
+        int,
     ],
 ) -> Any:
     from psycopg.types.json import Jsonb
 
-    index, model, score_bytes, phoenix1_shards, phoenix2_shards = artifacts
+    (
+        index,
+        model,
+        score_bytes,
+        phoenix1_shard_count,
+        phoenix2_shard_count,
+    ) = artifacts
     generation = str(index["generationKey"])
     input_hash = _sha256(
         {mix: inputs[mix].snapshot for mix in ("phoenix1", "phoenix2")}
@@ -383,8 +396,8 @@ def _persist_model_generation(
                     {
                         "parity": "exact",
                         "playerCount": len(index.get("players", [])),
-                        "inputShardCount": len(phoenix1_shards),
-                        "phoenix2InputShardCount": len(phoenix2_shards),
+                        "inputShardCount": phoenix1_shard_count,
+                        "phoenix2InputShardCount": phoenix2_shard_count,
                     }
                 ),
             ),
@@ -441,6 +454,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
     relational = _verify_relational(source_snapshots, inputs, private_key=private_key)
     print(json.dumps({"status": "stage-completed", "stage": "relational"}, sort_keys=True))
+    source_snapshots.clear()
+    del phoenix1
+    gc.collect()
     outputs = {
         mix: _analyze(inputs[mix], args.bootstrap_samples)
         for mix in ("phoenix1", "phoenix2")
@@ -496,7 +512,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 },
                 "model": {
                     "players": len(index.get("players", [])),
-                    "inputShards": len(artifacts[3]),
+                    "inputShards": artifacts[3],
                     "jsonParity": "exact",
                     "numericArrayParity": "absolute-tolerance",
                     "numericAbsoluteTolerance": NUMERIC_MODEL_ABSOLUTE_TOLERANCE,
