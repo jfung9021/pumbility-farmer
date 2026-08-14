@@ -184,7 +184,8 @@ def _claim_lock(cursor: Any) -> None:
         raise RuntimeError("Another Pumbility production backfill owns the operator lock.")
     cursor.execute("set application_name = 'pumbility-production-backfill'")
     cursor.execute("set lock_timeout = '10s'")
-    cursor.execute("set statement_timeout = '15min'")
+    # Keep database work below the hosted operator function's 800-second ceiling.
+    cursor.execute("set statement_timeout = '12min'")
     cursor.execute("set idle_in_transaction_session_timeout = '60s'")
 
 

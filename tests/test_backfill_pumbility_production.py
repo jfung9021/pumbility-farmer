@@ -7,6 +7,7 @@ from unittest.mock import Mock
 from scripts.backfill_pumbility_production import (
     EXPECTED_PROJECT_REF,
     _assert_database_target,
+    _claim_lock,
     _copy_cached_players,
     _read_stable_boundary,
     validate_production_database_url,
@@ -72,6 +73,12 @@ class ProductionTargetTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "fingerprint"):
             _assert_database_target(cursor)
+
+    def test_operator_statement_timeout_finishes_before_serverless_ceiling(self) -> None:
+        cursor = Mock()
+        cursor.fetchone.return_value = (True,)
+        _claim_lock(cursor)
+        cursor.execute.assert_any_call("set statement_timeout = '12min'")
 
 
 class ProductionBoundaryTests(unittest.TestCase):
