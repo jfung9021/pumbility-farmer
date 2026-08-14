@@ -7,6 +7,8 @@ from typing import Any
 from time import perf_counter
 
 from analysis_runtime import (
+    ANALYSIS_CONTINUATION_FIELD,
+    TYPED_CHECKPOINT_SCHEMA_VERSION,
     PrivateBlobStore,
     RuntimeJobStore,
     execute_analysis_job,
@@ -32,7 +34,18 @@ def refresh_one_player(*args: Any, **kwargs: Any) -> Any:
 
 @app.task(queue=QUEUE_NAME, name="worker.tasks.refresh_analysis")
 def refresh_analysis(job_id: str) -> dict[str, Any]:
-    return execute_analysis_job(job_id)
+    result = execute_analysis_job(job_id, yield_after_typed_checkpoint=True)
+    continuation = result.pop(ANALYSIS_CONTINUATION_FIELD, None)
+    if continuation in {"model", "publish"}:
+        refresh_analysis.apply_async(
+            args=[job_id],
+            task_id=(
+                f"{job_id}-{continuation}-checkpoint-"
+                f"v{TYPED_CHECKPOINT_SCHEMA_VERSION}"
+            ),
+            queue=QUEUE_NAME,
+        )
+    return result
 
 
 @app.task(

@@ -11,12 +11,16 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from analysis_runtime import (
+    ANALYSIS_CONTINUATION_FIELD,
     CURRENT_SNAPSHOT_PATH,
     FAILED_RETRY_DELAY,
     LATEST_BLOB_PATH,
     PrivateBlobStore,
     RUNS_PREFIX,
     STAGING_PREFIX,
+    TYPED_CHECKPOINT_ANALYSIS_PHASE,
+    TYPED_CHECKPOINT_MODEL_PHASE,
+    TYPED_CHECKPOINT_SCHEMA_VERSION,
     MemoryBlobStore,
     MemoryJobStore,
     cleanup_abandoned_staging,
@@ -1382,6 +1386,129 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(blobs.persist_attempts, 2)
         self.assertIsNone(blobs.get_json(typed_checkpoint_path(job["id"])))
         self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
+
+    def test_typed_queue_execution_yields_at_bounded_checkpoint_phases(self) -> None:
+        class TypedMemoryStore(MemoryBlobStore):
+            typed_persistence_enabled = True
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.persist_attempts = 0
+
+            def persist_typed_generation(self, **_kwargs):
+                self.persist_attempts += 1
+                return "analysis-run", None
+
+        blobs = TypedMemoryStore()
+        jobs = MemoryJobStore()
+        job = new_job("typed-bounded-phases", NOW)
+        jobs.save(job)
+        jobs.set_latest_job_id(job["id"])
+        jobs.set_active_job_id(job["id"])
+        blobs.put_json(
+            "analysis/private/phoenix1.json",
+            {"mix": "Phoenix", "players": [], "charts": [], "scores": []},
+        )
+        generation = "typed-bounded-phases"
+        model_artifacts = (
+            {
+                "storageSchemaVersion": 3,
+                "generationKey": generation,
+                "generatedAtUtc": isoformat_utc(NOW),
+                "players": [],
+            },
+            {"generationKey": generation},
+            b"model",
+            [],
+            [],
+        )
+
+        first = execute_analysis_job(
+            job["id"],
+            blobs=blobs,
+            jobs=jobs,
+            client=WorkerClient(),
+            now=lambda: NOW,
+            yield_after_typed_checkpoint=True,
+        )
+
+        checkpoint = blobs.get_json(typed_checkpoint_path(job["id"]))
+        self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "model")
+        self.assertEqual(checkpoint["phase"], TYPED_CHECKPOINT_ANALYSIS_PHASE)
+        self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
+
+        with (
+            patch(
+                "analysis_runtime.analyze_snapshot",
+                side_effect=AssertionError("base analysis must not repeat"),
+            ),
+            patch("analysis_runtime.build_combined_chart_results", return_value=([], {}, {})),
+            patch("analysis_runtime.build_combined_tier_payload", return_value={}),
+            patch(
+                "analysis_runtime.build_recommendation_model_artifacts",
+                return_value=model_artifacts,
+            ),
+        ):
+            second = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+
+        checkpoint = blobs.get_json(typed_checkpoint_path(job["id"]))
+        self.assertEqual(second[ANALYSIS_CONTINUATION_FIELD], "publish")
+        self.assertEqual(checkpoint["phase"], TYPED_CHECKPOINT_MODEL_PHASE)
+        self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
+
+        with (
+            patch(
+                "analysis_runtime.analyze_snapshot",
+                side_effect=AssertionError("base analysis must not repeat"),
+            ),
+            patch(
+                "analysis_runtime.build_recommendation_model_artifacts",
+                side_effect=AssertionError("recommendation modeling must not repeat"),
+            ),
+        ):
+            third = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+
+        self.assertEqual(third["status"], "completed")
+        self.assertEqual(blobs.persist_attempts, 1)
+        self.assertIsNone(blobs.get_json(typed_checkpoint_path(job["id"])))
+        self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
+
+    def test_analysis_worker_queues_checkpoint_continuation_once(self) -> None:
+        from worker.tasks import refresh_analysis
+
+        result = {
+            "status": "running",
+            ANALYSIS_CONTINUATION_FIELD: "model",
+        }
+        with (
+            patch("worker.tasks.execute_analysis_job", return_value=result.copy()),
+            patch.object(refresh_analysis, "apply_async") as enqueue,
+        ):
+            returned = refresh_analysis.run("bounded-worker")
+
+        self.assertEqual(returned, {"status": "running"})
+        enqueue.assert_called_once_with(
+            args=["bounded-worker"],
+            task_id=(
+                "bounded-worker-model-checkpoint-"
+                f"v{TYPED_CHECKPOINT_SCHEMA_VERSION}"
+            ),
+            queue="analysis",
+        )
 
     def test_supabase_capable_store_heartbeats_through_every_heavy_phase(self) -> None:
         class HeartbeatHandle:
