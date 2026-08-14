@@ -8,6 +8,17 @@ private artifact paths.
 
 ## Current live handoff (supersedes the historical pause sections below)
 
+Continuation update, 2026-08-14 UTC / 2026-08-15 JST: rollout commit `119fc11` was deployed with
+Vercel authority and the read pool enabled. A new adjacent production group-1 retest produced
+103/103 unique `candidate-served` events per domain with zero non-latency failures, but analysis
+p95/p99 and tier-list p95 still failed the fixed latency diagnostic. The alias was returned to the
+READY no-canary deployment. An authenticated immediate Vercel Cron smoke then returned 202, its
+queue subscriber returned 200, and the public Phoenix 2 generation advanced. Because that smoke ran
+in the stricter Vercel-only state, a subsequent hosted reconciliation correctly stopped after
+`source-boundary`; the Supabase shadow is now stale and must be restored through the guarded
+backfill/population path before another canary. This immediate-run smoke is not the missing genuine
+time-scheduled topology evidence. See `evidence/PUM-S10-PRODUCTION-GROUP1-RETEST-01.md`.
+
 - Rollout code is at `1ca5399`, `Instrument and optimize Pumbility read canaries`.
 - The rollout candidate is pushed on `agent/pumbility-rollout-latency-qualification` through
   `9fc7c64` and is tracked by draft PR #69. Runtime optimization begins at `38857ac`; the later
