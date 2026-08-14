@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter()
 PRECANARY_DIAGNOSTIC_ENV = "PUMBILITY_PRECANARY_DIAGNOSTIC_ENABLED"
+PRECANARY_ARTIFACT_REPAIR_ENV = "PUMBILITY_PRECANARY_ARTIFACT_REPAIR_ENABLED"
 
 
 def _enabled(value: str | None) -> bool:
@@ -78,6 +79,73 @@ def _safe_failure_evidence(
     return evidence
 
 
+def _repair_numeric_artifact(environment: Mapping[str, str]) -> dict[str, object]:
+    """Repair only the active numeric model under the production backfill guards."""
+    import psycopg
+
+    from analysis_runtime import VercelPrivateBlobStore
+    from pumbility_store import PumbilityArtifactStore, _assert_schema
+    from scripts.backfill_pumbility_production import (
+        _assert_boundary_unchanged,
+        _assert_database_target,
+        _claim_lock,
+        _read_stable_boundary,
+        _recommendation_paths,
+        _release_lock,
+    )
+    from scripts.capture_pumbility_migration_baseline import (
+        _required_production_bytes,
+    )
+    from scripts.reconcile_pumbility_production import session_url_from_runtime
+    from scripts.verify_pumbility_pre_canary import assert_pre_canary_environment
+
+    assert_pre_canary_environment(environment)
+    session_url = session_url_from_runtime(
+        environment.get("PUMBILITY_DATABASE_URL", "").strip()
+    )
+    source = VercelPrivateBlobStore()
+    pointers, _phoenix1, phoenix2 = _read_stable_boundary(source)
+    _json_paths, numeric_path = _recommendation_paths(pointers["recommendations"])
+    numeric = _required_production_bytes(
+        source, numeric_path, "recommendation numeric model"
+    )
+    target = PumbilityArtifactStore(
+        database_url=session_url,
+        supabase_url=environment.get("PUMBILITY_SUPABASE_URL", ""),
+        service_key=environment.get("PUMBILITY_SUPABASE_SERVICE_ROLE_KEY", ""),
+        bucket=environment.get("PUMBILITY_STORAGE_BUCKET", ""),
+    )
+
+    with psycopg.connect(session_url, prepare_threshold=None) as connection:
+        with connection.cursor() as cursor:
+            _assert_schema(cursor)
+            _assert_database_target(cursor)
+            _claim_lock(cursor)
+        connection.commit()
+        try:
+            target.put_bytes(
+                numeric_path,
+                numeric,
+                content_type="application/x-npz",
+            )
+            if target.get_bytes(numeric_path) != numeric:
+                raise RuntimeError("Numeric artifact exact readback did not pass.")
+            _assert_boundary_unchanged(source, pointers, phoenix2)
+        finally:
+            with connection.cursor() as cursor:
+                _release_lock(cursor)
+            connection.commit()
+
+    return {
+        "status": "repaired",
+        "gate": "hosted-pre-canary-numeric-artifact-repair",
+        "binaryArtifacts": 1,
+        "exactReadback": True,
+        "stableBoundary": True,
+        "productionBackendChanged": False,
+    }
+
+
 @router.post("/api/internal/pumbility-pre-canary")
 def run_hosted_precanary_reconciliation() -> JSONResponse:
     if os.getenv("VERCEL_ENV", "").strip().casefold() != "preview" or not _enabled(
@@ -91,6 +159,29 @@ def run_hosted_precanary_reconciliation() -> JSONResponse:
             status_code=503,
             content={
                 "error": "Hosted pre-canary reconciliation did not pass.",
+                "diagnostic": _safe_failure_evidence(os.environ, error),
+            },
+        )
+
+
+@router.post("/api/internal/pumbility-pre-canary/artifacts/repair")
+def run_hosted_precanary_artifact_repair() -> JSONResponse:
+    if (
+        os.getenv("VERCEL_ENV", "").strip().casefold() != "preview"
+        or not _enabled(os.getenv(PRECANARY_DIAGNOSTIC_ENV))
+        or not _enabled(os.getenv(PRECANARY_ARTIFACT_REPAIR_ENV))
+    ):
+        return JSONResponse(status_code=404, content={"error": "Not found."})
+    try:
+        return JSONResponse(
+            status_code=200,
+            content=_repair_numeric_artifact(os.environ),
+        )
+    except Exception as error:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Hosted pre-canary artifact repair did not pass.",
                 "diagnostic": _safe_failure_evidence(os.environ, error),
             },
         )
