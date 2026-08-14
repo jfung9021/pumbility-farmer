@@ -8,15 +8,13 @@
     "backend": {
       "root": ".",
       "entrypoint": "pyproject.toml",
-      "maxDuration": 800,
-      "includeFiles": [
-        "public/data/phoenix1.json",
-        "public/data/phoenix1.manifest.json",
-        "public/data/phoenix1-rerates.json",
-        "lib/data/nevsister-chart-videos.json",
-        "lib/data/nevsister-chart-video-overrides.json"
-      ],
-      "excludeFiles": "{piu_live_run/**,piu_phoenix_run/**,synthetic_demo/**,tests/**,__pycache__/**}"
+      "functions": {
+        "**/*.py": {
+          "maxDuration": 800,
+          "includeFiles": "{public/data/phoenix1.json,public/data/phoenix1.manifest.json,public/data/phoenix1-rerates.json,lib/data/nevsister-chart-videos.json,lib/data/nevsister-chart-video-overrides.json}",
+          "excludeFiles": "{piu_live_run/**,piu_phoenix_run/**,synthetic_demo/**,tests/**,__pycache__/**}"
+        }
+      }
     }
   },
   "rewrites": [

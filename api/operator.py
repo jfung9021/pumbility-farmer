@@ -17,6 +17,15 @@ PRECANARY_DIAGNOSTIC_ENV = "PUMBILITY_PRECANARY_DIAGNOSTIC_ENABLED"
 PRECANARY_ARTIFACT_REPAIR_ENV = "PUMBILITY_PRECANARY_ARTIFACT_REPAIR_ENABLED"
 PRECANARY_SHADOW_RESTORE_ENV = "PUMBILITY_PRECANARY_SHADOW_RESTORE_ENABLED"
 _shadow_restore_environment_lock = threading.Lock()
+_RESTORE_INPUT_LABELS = {
+    "public/data/phoenix1.json": "phoenix1-public",
+    "public/data/phoenix1.manifest.json": "phoenix1-manifest",
+    "public/data/phoenix1-rerates.json": "phoenix1-rerates",
+    "lib/data/nevsister-chart-videos.json": "nevsister-videos",
+    "lib/data/nevsister-chart-video-overrides.json": "nevsister-video-overrides",
+    "piu_misgrade_analyzer.py": "analyzer-code",
+    "phoenix1_score_overrides.py": "phoenix1-score-overrides-code",
+}
 
 
 def _enabled(value: str | None) -> bool:
@@ -29,6 +38,16 @@ def _mutation_route_enabled(environment: Mapping[str, str]) -> bool:
         and _enabled(environment.get(PRECANARY_DIAGNOSTIC_ENV))
         and _enabled(environment.get(PRECANARY_SHADOW_RESTORE_ENV))
     )
+
+
+def _safe_missing_restore_input(error: Exception) -> str | None:
+    if not isinstance(error, FileNotFoundError):
+        return None
+    filename = str(error.filename or "").replace("\\", "/").casefold()
+    for suffix, label in _RESTORE_INPUT_LABELS.items():
+        if filename.endswith(suffix.casefold()):
+            return label
+    return None
 
 
 @contextmanager
@@ -159,6 +178,9 @@ def _run_shadow_restore(
         sqlstate = str(getattr(error, "sqlstate", "") or "").upper()
         if len(sqlstate) == 5 and sqlstate.isalnum():
             safe_evidence["sqlstate"] = sqlstate
+        missing_input = _safe_missing_restore_input(error)
+        if missing_input:
+            safe_evidence["missingInput"] = missing_input
         wrapped = RuntimeError("Hosted shadow restoration failed safely.")
         wrapped.safe_evidence = safe_evidence
         raise wrapped from None

@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from api.operator import (
     _repair_numeric_artifact,
     _run_shadow_restore,
+    _safe_missing_restore_input,
     _validated_shadow_restore_environment,
     run_hosted_precanary_artifact_repair,
     run_hosted_precanary_reconciliation,
@@ -17,6 +18,16 @@ from api.operator import (
 
 
 class HostedPreCanaryOperatorTests(unittest.TestCase):
+    def test_missing_restore_input_exposes_only_allowlisted_label(self) -> None:
+        known = FileNotFoundError(
+            2,
+            "private path",
+            "/var/task/public/data/phoenix1.manifest.json",
+        )
+        unknown = FileNotFoundError(2, "private path", "/var/task/private.json")
+        self.assertEqual(_safe_missing_restore_input(known), "phoenix1-manifest")
+        self.assertIsNone(_safe_missing_restore_input(unknown))
+
     def test_shadow_restore_routes_require_preview_and_both_controls(self) -> None:
         environments = (
             {},
