@@ -64,6 +64,9 @@ STAGING_SNAPSHOT_RE = re.compile(
 FROZEN_PHOENIX1_SNAPSHOT_KEY = "analysis/private/phoenix1.json"
 JOB_LEASE_SECONDS = 800
 JOB_HEARTBEAT_INTERVAL_SECONDS = 60.0
+WRITE_CONNECT_TIMEOUT_SECONDS = 10
+PUBLICATION_LOCK_TIMEOUT_MILLISECONDS = 5_000
+PUBLICATION_STATEMENT_TIMEOUT_MILLISECONDS = 180_000
 READ_CONNECT_TIMEOUT_SECONDS = 3
 READ_POOL_ACQUIRE_TIMEOUT_SECONDS = 1.0
 READ_STATEMENT_TIMEOUT_MILLISECONDS = 10_000
@@ -318,7 +321,11 @@ def _connect(database_url: str):
             ) from error
         # Transaction-pooled runtime connections must not create named prepared
         # statements that can be routed to another server connection.
-        return psycopg.connect(database_url, prepare_threshold=None)
+        return psycopg.connect(
+            database_url,
+            prepare_threshold=None,
+            connect_timeout=WRITE_CONNECT_TIMEOUT_SECONDS,
+        )
     finally:
         _record_read_phase("connect", started)
 
@@ -1607,6 +1614,148 @@ class PumbilityArtifactStore:
             for pathname, payload in payloads.items():
                 self._put_json_row(cursor, pathname, payload)
 
+    def publish_generation(
+        self,
+        payloads: Mapping[str, Mapping[str, Any]],
+        *,
+        generation_key: str,
+        analysis_run_id: str,
+        model_generation_id: str,
+    ) -> None:
+        """Atomically promote compatibility pointers and their typed generation."""
+        from pumbility_contract import recommendation_blob_path, recommendation_index_path
+
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", generation_key):
+            raise ValueError("The publication generation identity is invalid.")
+        with _connect(self.database_url) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                cursor.execute(
+                    f"set local lock_timeout = '{PUBLICATION_LOCK_TIMEOUT_MILLISECONDS}ms'"
+                )
+                cursor.execute(
+                    "set local statement_timeout = "
+                    f"'{PUBLICATION_STATEMENT_TIMEOUT_MILLISECONDS}ms'"
+                )
+                _assert_schema(cursor)
+                cursor.execute(
+                    """
+                    select ar.status, mg.status, mg.generation_key,
+                           mg.analysis_run_id::text
+                    from pumbility.analysis_runs ar
+                    join pumbility.model_generations mg on mg.id = %s::uuid
+                    where ar.id = %s::uuid
+                    for update of ar, mg
+                    """,
+                    (model_generation_id, analysis_run_id),
+                )
+                typed = cursor.fetchone()
+                if (
+                    typed is None
+                    or typed[0] not in {"shadow", "published"}
+                    or typed[1] not in {"shadow", "published"}
+                    or str(typed[2]) != generation_key
+                    or str(typed[3]) != analysis_run_id
+                ):
+                    raise RuntimeError(
+                        "The validated typed generation is unavailable for publication."
+                    )
+
+                latest_path = recommendation_blob_path()
+                cursor.execute(
+                    """
+                    select payload_json ->> 'generationKey'
+                    from pumbility.artifacts
+                    where object_key = %s and payload_json is not null
+                    """,
+                    (latest_path,),
+                )
+                previous = cursor.fetchone()
+                previous_generation = str(previous[0] or "").strip() if previous else ""
+                if (
+                    previous_generation
+                    and previous_generation != generation_key
+                    and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", previous_generation)
+                ):
+                    cursor.execute(
+                        """
+                        insert into pumbility.artifacts (
+                            object_key, media_type, payload_json, storage_bucket,
+                            storage_object_path, sha256, byte_size, validated_at,
+                            updated_at
+                        )
+                        select %s, media_type, payload_json, storage_bucket,
+                               storage_object_path, sha256, byte_size, validated_at,
+                               now()
+                        from pumbility.artifacts
+                        where object_key = %s
+                        on conflict (object_key) do update set
+                            media_type = excluded.media_type,
+                            payload_json = excluded.payload_json,
+                            storage_bucket = excluded.storage_bucket,
+                            storage_object_path = excluded.storage_object_path,
+                            sha256 = excluded.sha256,
+                            byte_size = excluded.byte_size,
+                            validated_at = excluded.validated_at,
+                            updated_at = excluded.updated_at
+                        """,
+                        (recommendation_index_path(previous_generation), latest_path),
+                    )
+
+                for pathname, payload in payloads.items():
+                    self._put_json_row(cursor, pathname, payload)
+                cursor.execute(
+                    """
+                    update pumbility.analysis_runs
+                    set status = 'published', updated_at = now()
+                    where id = %s::uuid and status in ('shadow', 'published')
+                    """,
+                    (analysis_run_id,),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("The typed analysis generation was not promoted.")
+                cursor.execute(
+                    """
+                    update pumbility.model_generations
+                    set status = 'published'
+                    where id = %s::uuid and status in ('shadow', 'published')
+                    """,
+                    (model_generation_id,),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("The typed model generation was not promoted.")
+
+    def publication_committed(
+        self,
+        *,
+        generation_key: str,
+        analysis_run_id: str,
+        model_generation_id: str,
+    ) -> bool:
+        """Resolve an ambiguous commit without exposing artifact contents."""
+        from pumbility_contract import recommendation_blob_path
+
+        with _read_cursor(self.database_url) as cursor:
+            cursor.execute(
+                """
+                select a.payload_json ->> 'generationKey', ar.status, mg.status,
+                       mg.generation_key, mg.analysis_run_id::text
+                from pumbility.analysis_runs ar
+                join pumbility.model_generations mg on mg.id = %s::uuid
+                left join pumbility.artifacts a on a.object_key = %s
+                where ar.id = %s::uuid
+                """,
+                (model_generation_id, recommendation_blob_path(), analysis_run_id),
+            )
+            row = cursor.fetchone()
+        return bool(
+            row
+            and str(row[0] or "") == generation_key
+            and row[1] == "published"
+            and row[2] == "published"
+            and str(row[3]) == generation_key
+            and str(row[4]) == analysis_run_id
+        )
+
     def get_bytes(self, pathname: str) -> bytes | None:
         with _read_cursor(self.database_url) as cursor:
             fetch_started = _read_phase_started()
@@ -1733,6 +1882,29 @@ class PumbilityArtifactStore:
             cursor.execute(
                 "delete from pumbility.artifacts where object_key = any(%s)", (targets,)
             )
+
+    def delete_unreferenced(self, pathnames: str | Sequence[str]) -> None:
+        """Delete cleanup candidates while retaining typed-model FK targets."""
+        targets = [pathnames] if isinstance(pathnames, str) else list(pathnames)
+        if not targets:
+            return
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute(
+                """
+                select artifact.object_key
+                from pumbility.artifacts artifact
+                where artifact.object_key = any(%s)
+                  and not exists (
+                      select 1 from pumbility.model_generations generation
+                      where generation.artifact_id = artifact.id
+                  )
+                """,
+                (targets,),
+            )
+            deletable = [str(row[0]) for row in cursor.fetchall()]
+        if deletable:
+            self.delete(deletable)
 
     def list(self, prefix: str) -> list[StoredObject]:
         with _connect(self.database_url) as connection, connection.cursor() as cursor:
@@ -1925,6 +2097,41 @@ class PumbilityJobStore:
                 raise RuntimeError(
                     "The Pumbility job continuation lease could not be handed off."
                 )
+
+    def requeue(self, job_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Atomically resurrect one failed checkpointed job for the same job ID."""
+        from psycopg.types.json import Jsonb
+
+        value = {**dict(payload), "id": job_id, "status": "queued"}
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute(
+                """
+                update pumbility.jobs
+                set status = 'queued',
+                    stage = %s,
+                    payload = %s,
+                    retry_at = null,
+                    completed_at = null,
+                    lease_owner = null,
+                    lease_expires_at = null,
+                    error = null,
+                    updated_at = coalesce(%s::timestamptz, clock_timestamp())
+                where external_key = %s
+                  and status = 'failed'
+                  and cancellation_requested_at is null
+                returning id
+                """,
+                (
+                    str(value.get("stage") or "publishing"),
+                    Jsonb(value),
+                    value.get("updatedAtUtc"),
+                    job_id,
+                ),
+            )
+            if cursor.fetchone() is None:
+                raise RuntimeError("The failed Pumbility job could not be requeued.")
+        return value
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         with _read_cursor(self.database_url) as cursor:

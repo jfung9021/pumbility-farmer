@@ -6,9 +6,11 @@ import atexit
 import gc
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,12 +26,13 @@ from phoenix2_sync import (
 )
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 from pumbility_contract import (
+    PLAYER_REFRESH_STORAGE_SCHEMA_VERSION,
+    RECOMMENDATION_SCHEMA_VERSION,
     SCRIPT_VERSION,
     combined_tier_blob_path,
     phoenix1_snapshot_path,
     recommendation_blob_path,
     recommendation_generation_key,
-    player_refresh_enabled,
     recommendation_index_path,
     recommendation_model_path,
     recommendation_phoenix1_shard_path,
@@ -174,6 +177,8 @@ TYPED_CHECKPOINT_SNAPSHOT_PHASE = "snapshot"
 TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE = "database-analysis-shards"
 TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE = "database-analysis"
 TYPED_CHECKPOINT_DATABASE_MODEL_PHASE = "database-model"
+TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE = "database-pointers"
+MAX_PUBLICATION_ATTEMPTS = 5
 ANALYSIS_CONTINUATION_FIELD = "_analysisContinuation"
 ANALYSIS_CONTINUATION_SEQUENCE_FIELD = "_analysisContinuationSequence"
 RUN_RETENTION = 10
@@ -461,6 +466,16 @@ class MemoryBlobStore:
             self.values[pathname] = json.loads(json.dumps(dict(payload)))
             self.uploaded[pathname] = utc_now()
 
+    def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:
+        with self._lock:
+            prepared = {
+                pathname: json.loads(json.dumps(dict(payload)))
+                for pathname, payload in payloads.items()
+            }
+            timestamp = utc_now()
+            self.values.update(prepared)
+            self.uploaded.update({pathname: timestamp for pathname in prepared})
+
     def get_bytes(self, pathname: str) -> bytes | None:
         with self._lock:
             value = self.binary_values.get(pathname)
@@ -494,6 +509,7 @@ class MemoryBlobStore:
 class JobStore(Protocol):
     def get(self, job_id: str) -> dict[str, Any] | None: ...
     def save(self, job: Mapping[str, Any]) -> dict[str, Any]: ...
+    def requeue(self, job_id: str, job: Mapping[str, Any]) -> dict[str, Any]: ...
     def active_job_id(self) -> str | None: ...
     def set_active_job_id(self, job_id: str | None) -> None: ...
     def latest_job_id(self, mix: str | MixSpec = DEFAULT_MIX_KEY) -> str | None: ...
@@ -545,6 +561,12 @@ class VercelRuntimeJobStore:
             self._options(f"Analysis job {job_id}"),
         )
         return value
+
+    def requeue(self, job_id: str, job: Mapping[str, Any]) -> dict[str, Any]:
+        existing = self.get(job_id)
+        if existing is None or existing.get("status") != "failed":
+            raise RuntimeError("The failed analysis job could not be requeued.")
+        return self.save({**dict(job), "id": job_id, "status": "queued"})
 
     def _get_id(self, key: str) -> str | None:
         value = self.cache.get(key)
@@ -599,6 +621,15 @@ class MemoryJobStore:
         with self._lock:
             value = json.loads(json.dumps(dict(job)))
             self.jobs[str(value["id"])] = value
+            return json.loads(json.dumps(value))
+
+    def requeue(self, job_id: str, job: Mapping[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            existing = self.jobs.get(job_id)
+            if existing is None or existing.get("status") != "failed":
+                raise RuntimeError("The failed analysis job could not be requeued.")
+            value = json.loads(json.dumps({**dict(job), "id": job_id, "status": "queued"}))
+            self.jobs[job_id] = value
             return json.loads(json.dumps(value))
 
     def active_job_id(self) -> str | None:
@@ -831,6 +862,75 @@ def request_refresh(
         retry_at = parse_utc(previous.get("retryAllowedAtUtc"))
         if retry_at is not None and effective_now < retry_at:
             return 202, {"outcome": "existing", "job": previous}
+        previous_job_id = str(previous.get("id") or "").strip()
+        checkpoint = (
+            blobs.get_json(typed_checkpoint_path(previous_job_id, mix_spec))
+            if previous_job_id
+            else None
+        )
+        checkpoint_phase = (
+            str(checkpoint.get("phase") or "")
+            if isinstance(checkpoint, Mapping)
+            else ""
+        )
+        publication_attempts = (
+            int(checkpoint.get("publicationAttempts") or 0)
+            if isinstance(checkpoint, Mapping)
+            else MAX_PUBLICATION_ATTEMPTS
+        )
+        requeue = getattr(jobs, "requeue", None)
+        if (
+            checkpoint_phase
+            in {
+                TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+                TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE,
+            }
+            and publication_attempts < MAX_PUBLICATION_ATTEMPTS
+            and callable(requeue)
+        ):
+            resumed = {
+                **previous,
+                "status": "queued",
+                "stage": "publishing",
+                "updatedAtUtc": isoformat_utc(effective_now),
+                "completedAtUtc": None,
+                "retryAllowedAtUtc": None,
+                "error": None,
+                "progress": {
+                    "current": 1,
+                    "total": 1,
+                    "percent": 100,
+                    "message": "Waiting to resume the validated pointer publication.",
+                },
+            }
+            resumed = requeue(previous_job_id, resumed)
+            jobs.set_latest_job_id(previous_job_id, mix_spec)
+            jobs.set_active_job_id(previous_job_id)
+            try:
+                enqueue(previous_job_id)
+            except Exception as exc:
+                failed = update_job(
+                    jobs,
+                    previous_job_id,
+                    now=effective_now,
+                    status="failed",
+                    error=(
+                        "The analysis publication could not be queued. "
+                        "Please try again in five minutes."
+                    ),
+                    retryAllowedAtUtc=isoformat_utc(
+                        effective_now + FAILED_RETRY_DELAY
+                    ),
+                    progress={
+                        "current": 0,
+                        "total": 1,
+                        "percent": 0,
+                        "message": "Publication queue submission failed.",
+                    },
+                )
+                jobs.set_active_job_id(None)
+                raise RuntimeError(failed["error"]) from exc
+            return 202, {"outcome": "resumed", "job": resumed}
 
     attempt = int(previous.get("attempt") or 0) + 1 if deterministic_existing else 0
     if previous and not deterministic_job_id:
@@ -940,6 +1040,118 @@ def _run_path(
     return f"{runs_prefix(mix)}{stamp}-{job_id}.json"
 
 
+_PUBLICATION_LOGGER = logging.getLogger("pumbility.publication")
+_PUBLICATION_PHASES = frozenset(
+    {"publish-preflight", "pointer-commit", "post-publish-cleanup"}
+)
+
+
+def _publication_error_fields(error: BaseException | None) -> dict[str, str]:
+    if error is None:
+        return {"exceptionClass": "none", "category": "none", "sqlstate": "none"}
+    normalized = str(error).casefold()
+    category = next(
+        (
+            label
+            for label, markers in (
+                ("timeout", ("timeout", "timed out")),
+                ("connection", ("connection", "server closed", "network")),
+                ("integrity", ("checksum", "validation", "conflict")),
+                ("lease", ("lease",)),
+            )
+            if any(marker in normalized for marker in markers)
+        ),
+        "other",
+    )
+    sqlstate = str(getattr(error, "sqlstate", None) or "none")
+    if not re.fullmatch(r"[A-Za-z0-9]{5}|none", sqlstate):
+        sqlstate = "other"
+    return {
+        "exceptionClass": re.sub(r"[^A-Za-z0-9_]", "", type(error).__name__)
+        or "Exception",
+        "category": category,
+        "sqlstate": sqlstate,
+    }
+
+
+def _publication_event(
+    phase: str,
+    outcome: str,
+    started: float,
+    *,
+    byte_count: int = 0,
+    item_count: int = 0,
+    warning_count: int = 0,
+    error: BaseException | None = None,
+) -> None:
+    if phase not in _PUBLICATION_PHASES:
+        raise ValueError("Unsupported publication telemetry phase.")
+    event = {
+        "event": "analysis_publication",
+        "phase": phase,
+        "outcome": outcome,
+        "durationMs": round((time.perf_counter() - started) * 1000, 3),
+        "byteCount": int(byte_count),
+        "itemCount": int(item_count),
+        "warningCount": int(warning_count),
+        **_publication_error_fields(error),
+    }
+    _PUBLICATION_LOGGER.warning(
+        json.dumps(event, separators=(",", ":"), sort_keys=True)
+    )
+
+
+def _publication_byte_count(payloads: Mapping[str, Mapping[str, Any]]) -> int:
+    return sum(
+        len(
+            json.dumps(
+                dict(payload),
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        )
+        for payload in payloads.values()
+    )
+
+
+def _validate_typed_publication(
+    *,
+    job_id: str,
+    payload: Mapping[str, Any],
+    recommendations: Mapping[str, Any] | None,
+    combined_tier: Mapping[str, Any] | None,
+    analysis_run_id: str | None,
+    model_generation_id: str | None,
+) -> str:
+    if recommendations is None or combined_tier is None:
+        raise ValueError("Typed publication requires all public compatibility payloads.")
+    generation = str(recommendations.get("generationKey") or "").strip()
+    generated_at = str(payload.get("generatedAtUtc") or "").strip()
+    recommendation_generated_at = str(
+        recommendations.get("modelGeneratedAtUtc")
+        or recommendations.get("generatedAtUtc")
+        or ""
+    ).strip()
+    tier_generated_at = str(combined_tier.get("generatedAtUtc") or "").strip()
+    if (
+        not analysis_run_id
+        or not model_generation_id
+        or generation != recommendation_generation_key(job_id)
+        or int(recommendations.get("schemaVersion") or 0)
+        != RECOMMENDATION_SCHEMA_VERSION
+        or int(recommendations.get("storageSchemaVersion") or 0)
+        != PLAYER_REFRESH_STORAGE_SCHEMA_VERSION
+        or recommendations.get("refreshSupported") is not True
+        or parse_utc(generated_at) is None
+        or recommendation_generated_at != generated_at
+        or tier_generated_at != generated_at
+    ):
+        raise ValueError("The typed publication preflight contract is invalid.")
+    return generation
+
+
 def publish_success(
     blobs: JsonBlobStore,
     *,
@@ -950,74 +1162,218 @@ def publish_success(
     combined_tier: Mapping[str, Any] | None = None,
     publish_snapshot: bool = True,
     mix: str | MixSpec = DEFAULT_MIX_KEY,
-) -> None:
-    """Publish derived artifacts, optionally promote the snapshot, and enforce retention."""
+    analysis_run_id: str | None = None,
+    model_generation_id: str | None = None,
+    defer_cleanup: bool = False,
+) -> int:
+    """Promote derived pointers atomically; optionally defer noncritical cleanup."""
     mix_spec = resolve_mix(mix)
     if mix_spec.archived:
         raise ValueError(f"{mix_spec.label} is archived and cannot be published.")
-    blobs.put_json(_run_path(payload, job_id, mix_spec), payload)
-    publication_pointers: dict[str, Mapping[str, Any]] = {}
+    preflight_started = time.perf_counter()
+    typed_publication = analysis_run_id is not None or model_generation_id is not None
+    generation_key = ""
+    try:
+        if typed_publication:
+            generation_key = _validate_typed_publication(
+                job_id=job_id,
+                payload=payload,
+                recommendations=recommendations,
+                combined_tier=combined_tier,
+                analysis_run_id=analysis_run_id,
+                model_generation_id=model_generation_id,
+            )
+        elif recommendations is not None:
+            generation_key = str(recommendations.get("generationKey") or "").strip()
+    except Exception as error:
+        _publication_event("publish-preflight", "failed", preflight_started, error=error)
+        raise
+    _publication_event("publish-preflight", "completed", preflight_started)
+
     if publish_snapshot:
         blobs.put_json(
             current_snapshot_path(mix_spec),
             sanitize_snapshot(snapshot, mix=mix_spec),
         )
+    publication_pointers: dict[str, Mapping[str, Any]] = {
+        _run_path(payload, job_id, mix_spec): payload
+    }
     if recommendations is not None:
-        generation_key = str(recommendations.get("generationKey") or "").strip()
-        storage_schema = int(recommendations.get("storageSchemaVersion") or 0)
-        promote = storage_schema < 3 or player_refresh_enabled(recommendations)
-        if promote:
+        publication_pointers[recommendation_blob_path()] = recommendations
+        if not typed_publication:
             previous_recommendations = blobs.get_json(recommendation_blob_path())
             if previous_recommendations is not None:
                 previous_generation = str(
                     previous_recommendations.get("generationKey") or ""
                 ).strip()
                 if previous_generation:
-                    blobs.put_json(
-                        recommendation_index_path(previous_generation),
-                        previous_recommendations,
-                    )
-            publication_pointers[recommendation_blob_path()] = recommendations
-        if (
-            storage_schema == 2
-            and generation_key
-            and os.getenv("PLAYER_RECOMMENDATION_PRUNE_LEGACY", "").strip().lower()
-            in {"1", "true", "yes", "on"}
-        ):
-            keep_prefix = recommendation_shard_prefix(generation_key)
-            stale_recommendations = [
-                item.pathname
-                for item in blobs.list(recommendation_shard_prefix())
-                if not item.pathname.startswith(keep_prefix)
-            ]
-            if stale_recommendations:
-                blobs.delete(stale_recommendations)
-        elif storage_schema >= 3 and generation_key:
-            _cleanup_recommendation_generations(blobs, generation_key)
-            _cleanup_revoked_player_artifacts(blobs, recommendations)
-            if promote and os.getenv(
-                "PLAYER_RECOMMENDATION_PRUNE_LEGACY", ""
-            ).strip().lower() in {"1", "true", "yes", "on"}:
-                legacy_paths = [
-                    item.pathname for item in blobs.list(recommendation_shard_prefix())
-                ]
-                if legacy_paths:
-                    blobs.delete(legacy_paths)
+                    publication_pointers[
+                        recommendation_index_path(previous_generation)
+                    ] = previous_recommendations
     if combined_tier is not None:
         publication_pointers[combined_tier_blob_path()] = combined_tier
     publication_pointers[latest_blob_path(mix_spec)] = payload
-    bundle_writer = getattr(blobs, "put_json_bundle", None)
-    if callable(bundle_writer):
-        bundle_writer(publication_pointers)
+    byte_count = _publication_byte_count(publication_pointers)
+    commit_started = time.perf_counter()
+    try:
+        generation_publisher = getattr(blobs, "publish_generation", None)
+        if typed_publication and callable(generation_publisher):
+            generation_publisher(
+                publication_pointers,
+                generation_key=generation_key,
+                analysis_run_id=str(analysis_run_id),
+                model_generation_id=str(model_generation_id),
+            )
+        else:
+            bundle_writer = getattr(blobs, "put_json_bundle", None)
+            if callable(bundle_writer):
+                bundle_writer(publication_pointers)
+            else:
+                for pathname, pointer_payload in publication_pointers.items():
+                    blobs.put_json(pathname, pointer_payload)
+    except Exception as error:
+        committed_reader = getattr(blobs, "publication_committed", None)
+        if typed_publication and callable(committed_reader):
+            try:
+                if committed_reader(
+                    generation_key=generation_key,
+                    analysis_run_id=str(analysis_run_id),
+                    model_generation_id=str(model_generation_id),
+                ):
+                    _publication_event(
+                        "pointer-commit",
+                        "resolved-ambiguous-commit",
+                        commit_started,
+                        byte_count=byte_count,
+                        item_count=len(publication_pointers),
+                        error=error,
+                    )
+                else:
+                    raise error
+            except Exception as verification_error:
+                _publication_event(
+                    "pointer-commit",
+                    "failed",
+                    commit_started,
+                    byte_count=byte_count,
+                    item_count=len(publication_pointers),
+                    error=verification_error,
+                )
+                raise error
+        else:
+            _publication_event(
+                "pointer-commit",
+                "failed",
+                commit_started,
+                byte_count=byte_count,
+                item_count=len(publication_pointers),
+                error=error,
+            )
+            raise
     else:
-        for pathname, pointer_payload in publication_pointers.items():
-            blobs.put_json(pathname, pointer_payload)
-    runs = sorted(
-        blobs.list(runs_prefix(mix_spec)), key=lambda item: item.pathname, reverse=True
+        _publication_event(
+            "pointer-commit",
+            "completed",
+            commit_started,
+            byte_count=byte_count,
+            item_count=len(publication_pointers),
+        )
+
+    if defer_cleanup:
+        return 0
+    return _post_publish_cleanup(
+        blobs,
+        recommendations=recommendations,
+        mix=mix_spec,
     )
-    stale = [item.pathname for item in runs[RUN_RETENTION:]]
-    if stale:
-        blobs.delete(stale)
+
+
+def _delete_cleanup_batches(
+    blobs: JsonBlobStore,
+    paths: Sequence[str],
+    *,
+    retain_typed_references: bool = False,
+) -> None:
+    deleter = (
+        getattr(blobs, "delete_unreferenced", None)
+        if retain_typed_references
+        else None
+    )
+    if not callable(deleter):
+        deleter = blobs.delete
+    unique_paths = sorted(set(paths))
+    for offset in range(0, len(unique_paths), BLOB_DELETE_BATCH_SIZE):
+        deleter(unique_paths[offset : offset + BLOB_DELETE_BATCH_SIZE])
+
+
+def _post_publish_cleanup(
+    blobs: JsonBlobStore,
+    *,
+    recommendations: Mapping[str, Any] | None,
+    mix: str | MixSpec,
+    checkpoint_paths: Sequence[str] = (),
+) -> int:
+    """Run bounded, idempotent maintenance without changing publication success."""
+    started = time.perf_counter()
+    warnings: list[BaseException] = []
+    if recommendations is not None:
+        generation_key = str(recommendations.get("generationKey") or "").strip()
+        storage_schema = int(recommendations.get("storageSchemaVersion") or 0)
+        operations: list[Callable[[], None]] = []
+        if storage_schema >= 3 and generation_key:
+            operations.extend(
+                (
+                    lambda: _cleanup_recommendation_generations(blobs, generation_key),
+                    lambda: _cleanup_revoked_player_artifacts(blobs, recommendations),
+                )
+            )
+        if (
+            generation_key
+            and os.getenv("PLAYER_RECOMMENDATION_PRUNE_LEGACY", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        ):
+            operations.append(
+                lambda: _delete_cleanup_batches(
+                    blobs,
+                    [
+                        item.pathname
+                        for item in blobs.list(recommendation_shard_prefix())
+                        if storage_schema >= 3
+                        or not item.pathname.startswith(
+                            recommendation_shard_prefix(generation_key)
+                        )
+                    ],
+                )
+            )
+        for operation in operations:
+            try:
+                operation()
+            except Exception as error:
+                warnings.append(error)
+                _publication_event(
+                    "post-publish-cleanup", "warning", started, error=error
+                )
+    try:
+        runs = sorted(
+            blobs.list(runs_prefix(mix)), key=lambda item: item.pathname, reverse=True
+        )
+        _delete_cleanup_batches(blobs, [item.pathname for item in runs[RUN_RETENTION:]])
+    except Exception as error:
+        warnings.append(error)
+        _publication_event("post-publish-cleanup", "warning", started, error=error)
+    if checkpoint_paths:
+        try:
+            _delete_cleanup_batches(blobs, checkpoint_paths)
+        except Exception as error:
+            warnings.append(error)
+            _publication_event("post-publish-cleanup", "warning", started, error=error)
+    _publication_event(
+        "post-publish-cleanup",
+        "completed-with-warnings" if warnings else "completed",
+        started,
+        warning_count=len(warnings),
+    )
+    return len(warnings)
 
 
 def _cleanup_recommendation_generations(
@@ -1032,8 +1388,14 @@ def _cleanup_recommendation_generations(
     keep = {current_generation}
     v3_indexes: list[BlobObject] = []
     for item in indexes:
-        stored_index = blobs.get_json(item.pathname)
         generation = Path(item.pathname).stem
+        try:
+            stored_index = blobs.get_json(item.pathname)
+        except Exception:
+            # Retain unreadable historical indexes for operator repair. They must
+            # never block promotion of a fully validated current generation.
+            keep.add(generation)
+            continue
         if int((stored_index or {}).get("storageSchemaVersion") or 0) >= 3:
             v3_indexes.append(item)
         else:
@@ -1061,8 +1423,7 @@ def _cleanup_recommendation_generations(
     for item in indexes:
         if Path(item.pathname).stem not in keep:
             stale.append(item.pathname)
-    if stale:
-        blobs.delete(sorted(set(stale)))
+    _delete_cleanup_batches(blobs, stale, retain_typed_references=True)
 
 
 def _cleanup_revoked_player_artifacts(
@@ -1081,8 +1442,7 @@ def _cleanup_revoked_player_artifacts(
         for item in blobs.list(prefix):
             if Path(item.pathname).stem not in allowed:
                 stale.append(item.pathname)
-    if stale:
-        blobs.delete(stale)
+    _delete_cleanup_batches(blobs, stale)
 
 
 _SECRET_PATTERN = re.compile(r"(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}", re.IGNORECASE)
@@ -1370,6 +1730,18 @@ def _audit_checkpoint_resume(
 ) -> dict[str, Any]:
     """Fail a repeatedly resumed checkpoint that never advances its durable token."""
     value = dict(checkpoint)
+    if str(value.get("phase") or "") in {
+        TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+        TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE,
+    }:
+        attempts = int(value.get("publicationAttempts") or 0) + 1
+        if attempts > MAX_PUBLICATION_ATTEMPTS:
+            raise ValueError(
+                "The typed publication checkpoint exhausted its automatic retries."
+            )
+        value["publicationAttempts"] = attempts
+        blob_store.put_json(checkpoint_path, value)
+        return value
     token = _database_cursor_token(value)
     raw_audit = value.get("resumeAudit")
     audit = dict(raw_audit) if isinstance(raw_audit, Mapping) else {}
@@ -1558,6 +1930,30 @@ def _load_checkpoint_model_artifacts(
     )
 
 
+def _load_checkpoint_recommendation_index(
+    blobs: JsonBlobStore, metadata: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """Validate only the committed index needed by the final pointer continuation."""
+    if metadata is None:
+        return None
+    generation = str(metadata.get("generationKey") or "").strip()
+    phoenix1_count = int(metadata.get("phoenix1ShardCount") or 0)
+    phoenix2_count = int(metadata.get("phoenix2ShardCount") or 0)
+    if not generation or phoenix1_count < 0 or phoenix2_count < 0:
+        raise ValueError("The typed analysis checkpoint has invalid model metadata.")
+    index = blobs.get_json(recommendation_index_path(generation))
+    if index is None:
+        raise RuntimeError("A typed analysis checkpoint recommendation index is unavailable.")
+    if (
+        index.get("generationKey") != generation
+        or index.get("inputShardCount") != phoenix1_count
+        or index.get("inputShardCount") != phoenix2_count
+        or metadata.get("indexSha256") != _canonical_json_sha256(index)
+    ):
+        raise ValueError("A typed analysis checkpoint recommendation index failed validation.")
+    return dict(index)
+
+
 def _build_analysis_model_artifacts(
     *,
     blob_store: JsonBlobStore,
@@ -1723,6 +2119,7 @@ def _resume_typed_analysis_checkpoint(
         TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE,
         TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
         TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+        TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE,
     }
     if (
         not isinstance(raw_snapshot_reference, Mapping)
@@ -1927,6 +2324,7 @@ def _resume_typed_analysis_checkpoint(
         TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE,
         TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
         TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+        TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE,
     } and (not isinstance(analysis_run_id, str) or not analysis_run_id.strip()):
         raise ValueError("The typed analysis checkpoint has no analysis generation identity.")
 
@@ -2040,10 +2438,11 @@ def _resume_typed_analysis_checkpoint(
                 lease_heartbeat=lease_heartbeat,
             )
 
-    recommendation_payload, model_artifacts = _load_checkpoint_model_artifacts(
-        blob_store, dict(raw_model) if raw_model is not None else None
-    )
+    recommendation_payload: dict[str, Any] | None = None
     if checkpoint_phase == TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE:
+        recommendation_payload, model_artifacts = _load_checkpoint_model_artifacts(
+            blob_store, dict(raw_model) if raw_model is not None else None
+        )
         update_job(
             job_store,
             job_id,
@@ -2082,28 +2481,59 @@ def _resume_typed_analysis_checkpoint(
                 lease_heartbeat=lease_heartbeat,
             )
 
-    publish_success(
-        blob_store,
-        job_id=job_id,
-        snapshot=snapshot,
-        payload=payload,
-        recommendations=recommendation_payload,
-        combined_tier=(
-            dict(raw_combined_tier) if raw_combined_tier is not None else None
-        ),
-        publish_snapshot=False,
-        mix=mix_spec,
+    if recommendation_payload is None:
+        recommendation_payload = _load_checkpoint_recommendation_index(
+            blob_store, dict(raw_model) if raw_model is not None else None
+        )
+    model_generation_id = checkpoint.get("modelGenerationId")
+    if not isinstance(model_generation_id, str) or not model_generation_id.strip():
+        raise ValueError("The typed analysis checkpoint has no model generation identity.")
+    combined_tier_payload = (
+        dict(raw_combined_tier) if raw_combined_tier is not None else None
     )
-    blob_store.delete(
-        [
-            staging_path,
-            checkpoint_path,
-            typed_checkpoint_snapshot_path(job_id, mix_spec),
-            *_typed_checkpoint_shard_paths(manifest),
-        ]
-    )
-    _pulse_job_lease(lease_heartbeat)
-    _stop_job_lease(lease_heartbeat)
+    if checkpoint_phase != TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE:
+        update_job(
+            job_store,
+            job_id,
+            status="running",
+            stage="publishing",
+            progress={
+                "current": 1,
+                "total": 1,
+                "percent": 100,
+                "message": "Committing validated public ranking pointers.",
+            },
+        )
+        _pulse_job_lease(lease_heartbeat)
+        publish_success(
+            blob_store,
+            job_id=job_id,
+            snapshot=snapshot,
+            payload=payload,
+            recommendations=recommendation_payload,
+            combined_tier=combined_tier_payload,
+            publish_snapshot=False,
+            mix=mix_spec,
+            analysis_run_id=str(analysis_run_id),
+            model_generation_id=model_generation_id,
+            defer_cleanup=True,
+        )
+        checkpoint = {
+            **checkpoint,
+            "phase": TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE,
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE
+    else:
+        committed_reader = getattr(blob_store, "publication_committed", None)
+        if callable(committed_reader) and not committed_reader(
+            generation_key=str(recommendation_payload.get("generationKey") or ""),
+            analysis_run_id=str(analysis_run_id),
+            model_generation_id=model_generation_id,
+        ):
+            raise RuntimeError("The durable pointer publication could not be confirmed.")
+
     completed = update_job(
         job_store,
         job_id,
@@ -2119,8 +2549,36 @@ def _resume_typed_analysis_checkpoint(
             "message": "Rankings refreshed successfully.",
         },
     )
-    if job_store.active_job_id() == job_id:
-        job_store.set_active_job_id(None)
+    try:
+        if job_store.active_job_id() == job_id:
+            job_store.set_active_job_id(None)
+    except Exception as active_head_error:
+        _publication_event(
+            "post-publish-cleanup",
+            "active-head-warning",
+            time.perf_counter(),
+            error=active_head_error,
+        )
+    try:
+        _stop_job_lease(lease_heartbeat)
+    except Exception as heartbeat_error:
+        _publication_event(
+            "post-publish-cleanup",
+            "heartbeat-warning",
+            time.perf_counter(),
+            error=heartbeat_error,
+        )
+    _post_publish_cleanup(
+        blob_store,
+        recommendations=recommendation_payload,
+        mix=mix_spec,
+        checkpoint_paths=[
+            staging_path,
+            checkpoint_path,
+            typed_checkpoint_snapshot_path(job_id, mix_spec),
+            *_typed_checkpoint_shard_paths(manifest),
+        ],
+    )
     return completed
 
 
@@ -2217,23 +2675,31 @@ def execute_analysis_job(
                 retryAllowedAtUtc=isoformat_utc(now() + FAILED_RETRY_DELAY),
             )
     job_store.set_active_job_id(job_id)
-    update_job(
-        job_store,
-        job_id,
-        status="running",
-        stage="discovering",
-        error=None,
-        progress={
-            "current": 0,
-            "total": 0,
-            "percent": 0,
-            "message": (
-                f"Loading the stored {mix_spec.label} snapshot for model reanalysis."
-                if existing.get("reanalyzeOnly")
-                else f"Reading the consented-player list and {mix_spec.label} catalog."
-            ),
-        },
-    )
+    try:
+        update_job(
+            job_store,
+            job_id,
+            status="running",
+            stage="discovering",
+            error=None,
+            progress={
+                "current": 0,
+                "total": 0,
+                "percent": 0,
+                "message": (
+                    f"Loading the stored {mix_spec.label} snapshot for model reanalysis."
+                    if existing.get("reanalyzeOnly")
+                    else f"Reading the consented-player list and {mix_spec.label} catalog."
+                ),
+            },
+        )
+    except RuntimeError:
+        current = job_store.get(job_id)
+        if current is not None and current.get("status") == "running":
+            # At-least-once delivery may overlap the worker already holding this
+            # job's lease. A duplicate delivery is an acknowledged no-op.
+            return current
+        raise
     staging_path = f"{staging_prefix(mix_spec)}{job_id}.json"
     checkpoint_path = typed_checkpoint_path(job_id, mix_spec)
     typed_persistence_enabled = bool(
@@ -2474,11 +2940,8 @@ def execute_analysis_job(
             combined_tier=combined_tier_payload,
             publish_snapshot=publish_snapshot,
             mix=mix_spec,
+            defer_cleanup=True,
         )
-        blob_store.delete([staging_path, checkpoint_path])
-        _pulse_job_lease(lease_heartbeat)
-        _stop_job_lease(lease_heartbeat)
-        lease_heartbeat = None
         completed = update_job(
             job_store,
             job_id,
@@ -2494,15 +2957,49 @@ def execute_analysis_job(
                 "message": "Rankings refreshed successfully.",
             },
         )
-        if job_store.active_job_id() == job_id:
-            job_store.set_active_job_id(None)
+        try:
+            if job_store.active_job_id() == job_id:
+                job_store.set_active_job_id(None)
+        except Exception as active_head_error:
+            _publication_event(
+                "post-publish-cleanup",
+                "active-head-warning",
+                time.perf_counter(),
+                error=active_head_error,
+            )
+        try:
+            _stop_job_lease(lease_heartbeat)
+        except Exception as heartbeat_error:
+            _publication_event(
+                "post-publish-cleanup",
+                "heartbeat-warning",
+                time.perf_counter(),
+                error=heartbeat_error,
+            )
+        lease_heartbeat = None
+        _post_publish_cleanup(
+            blob_store,
+            recommendations=recommendation_payload,
+            mix=mix_spec,
+            checkpoint_paths=[staging_path, checkpoint_path],
+        )
         return completed
     except Exception as exc:
         if lease_heartbeat is not None:
             try:
                 _stop_job_lease(lease_heartbeat)
             except Exception as heartbeat_error:
-                exc = heartbeat_error
+                _PUBLICATION_LOGGER.warning(
+                    json.dumps(
+                        {
+                            "event": "analysis_lease_stop",
+                            "outcome": "secondary-failure",
+                            **_publication_error_fields(heartbeat_error),
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                )
             lease_heartbeat = None
         failed_at = now()
         message = safe_error(exc)

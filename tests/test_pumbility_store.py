@@ -6,7 +6,7 @@ import sys
 import threading
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from pumbility_store import (
     CanaryJobStore,
@@ -16,6 +16,8 @@ from pumbility_store import (
     JOB_LEASE_SECONDS,
     PumbilityArtifactStore,
     PumbilityJobStore,
+    PUBLICATION_LOCK_TIMEOUT_MILLISECONDS,
+    PUBLICATION_STATEMENT_TIMEOUT_MILLISECONDS,
     READ_CONNECT_TIMEOUT_SECONDS,
     READ_POOL_ACQUIRE_TIMEOUT_SECONDS,
     READ_POOL_ENABLED_ENV,
@@ -955,6 +957,96 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
                 call.args[1], (hashlib.sha256(body).hexdigest(), len(body), pathname)
             )
 
+    def test_generation_publication_promotes_pointers_and_typed_rows_atomically(self) -> None:
+        generation = "generation-one"
+        analysis_run_id = "00000000-0000-0000-0000-000000000001"
+        model_generation_id = "00000000-0000-0000-0000-000000000002"
+        payloads = {
+            "analysis/recommendations/latest.json": {
+                "generationKey": generation,
+                "value": 1e20,
+            },
+            "analysis/phoenix2/latest.json": {"value": 2},
+        }
+        cursor = MagicMock()
+        cursor.fetchone.side_effect = [
+            (EXPECTED_PUMBILITY_MIGRATION,),
+            ("shadow", "shadow", generation, analysis_run_id),
+            ("previous-generation",),
+            ({"generationKey": generation, "value": 100000000000000000000},),
+            ({"value": 2},),
+        ]
+        cursor.rowcount = 1
+        cursor.__enter__.return_value = cursor
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.cursor.return_value = cursor
+        fake_json_module = SimpleNamespace(Jsonb=lambda payload: payload)
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            patch.dict(sys.modules, {"psycopg.types.json": fake_json_module}),
+        ):
+            PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).publish_generation(
+                payloads,
+                generation_key=generation,
+                analysis_run_id=analysis_run_id,
+                model_generation_id=model_generation_id,
+            )
+
+        queries = [str(call.args[0]) for call in cursor.execute.call_args_list]
+        self.assertTrue(
+            any(
+                f"lock_timeout = '{PUBLICATION_LOCK_TIMEOUT_MILLISECONDS}ms'" in query
+                for query in queries
+            )
+        )
+        self.assertTrue(
+            any(
+                f"statement_timeout = '{PUBLICATION_STATEMENT_TIMEOUT_MILLISECONDS}ms'"
+                in query
+                for query in queries
+            )
+        )
+        self.assertTrue(any("for update of ar, mg" in query for query in queries))
+        self.assertTrue(any("status = 'published'" in query for query in queries))
+        self.assertTrue(
+            any(
+                "insert into pumbility.artifacts" in query and "select %s" in query
+                for query in queries
+            )
+        )
+        self.assertEqual(connection.transaction.call_count, 1)
+
+    def test_generation_publication_stops_without_typed_identity(self) -> None:
+        cursor = MagicMock()
+        cursor.fetchone.side_effect = [
+            (EXPECTED_PUMBILITY_MIGRATION,),
+            None,
+        ]
+        cursor.__enter__.return_value = cursor
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.cursor.return_value = cursor
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            self.assertRaisesRegex(RuntimeError, "typed generation"),
+        ):
+            PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).publish_generation(
+                {"analysis/recommendations/latest.json": {"generationKey": "missing"}},
+                generation_key="missing",
+                analysis_run_id="00000000-0000-0000-0000-000000000001",
+                model_generation_id="00000000-0000-0000-0000-000000000002",
+            )
+
+        queries = [str(call.args[0]) for call in cursor.execute.call_args_list]
+        self.assertFalse(any("status = 'published'" in query for query in queries))
+
     def test_supabase_staging_root_omits_the_whole_snapshot(self) -> None:
         normalized = {
             "schemaVersion": 1,
@@ -1354,6 +1446,40 @@ class PumbilityJobReadTests(unittest.TestCase):
 
 
 class PumbilityJobHeartbeatTests(unittest.TestCase):
+    def test_failed_job_requeue_clears_terminal_state_atomically(self) -> None:
+        cursor = MagicMock()
+        cursor.fetchone.side_effect = [
+            (EXPECTED_PUMBILITY_MIGRATION,),
+            ("job-uuid",),
+        ]
+        cursor.__enter__.return_value = cursor
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.cursor.return_value = cursor
+        fake_json_module = SimpleNamespace(Jsonb=lambda payload: payload)
+        payload = {
+            "id": "external-job",
+            "status": "queued",
+            "stage": "publishing",
+            "updatedAtUtc": "2026-08-15T00:01:00+00:00",
+        }
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            patch.dict(sys.modules, {"psycopg.types.json": fake_json_module}),
+        ):
+            result = PumbilityJobStore(
+                database_url="postgresql://localhost/local"
+            ).requeue("external-job", payload)
+
+        self.assertEqual(result["status"], "queued")
+        query = cursor.execute.call_args_list[1].args[0]
+        self.assertIn("status = 'queued'", query)
+        self.assertIn("retry_at = null", query)
+        self.assertIn("completed_at = null", query)
+        self.assertIn("lease_owner = null", query)
+        self.assertIn("status = 'failed'", query)
+
     def test_continuation_handoff_allows_a_distinct_owner_to_reclaim(self) -> None:
         first_store = PumbilityJobStore(database_url="postgresql://localhost/local")
         next_store = PumbilityJobStore(database_url="postgresql://localhost/local")
