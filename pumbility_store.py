@@ -889,13 +889,9 @@ class PumbilityArtifactStore:
             else "phoenix1" if pathname == FROZEN_PHOENIX1_SNAPSHOT_KEY else None
         )
         if canonical_mix:
-            if not _enabled(os.getenv(CANONICAL_SNAPSHOT_WRITE_ENV)):
-                raise RuntimeError(
-                    f"{CANONICAL_SNAPSHOT_WRITE_ENV} must be enabled before relational snapshot writes."
-                )
-            # Keep this opt-in during shadowing. The existing synchronizer still
-            # supplies whole compatibility checkpoints; the importer turns each
-            # one into content-hash-suppressed temporal relational revisions.
+            # The live runtime is Supabase-only. The synchronizer still supplies
+            # whole compatibility checkpoints; the importer turns each one into
+            # content-hash-suppressed temporal relational revisions.
             from scripts.backfill_pumbility_supabase import _import_mix
 
             mix_key = canonical_mix
