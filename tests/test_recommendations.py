@@ -1114,6 +1114,13 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertEqual(index["method"]["candidateUpperRadius"], 0.5)
         self.assertEqual(model["method"]["candidateUpperRadius"], 0.5)
+        self.assertEqual(
+            index["players"][0]["scoreProgress"],
+            {
+                "singles": {"validScoreCount": 30, "requiredScoreCount": 30},
+                "doubles": {"validScoreCount": 0, "requiredScoreCount": 30},
+            },
+        )
         store = MemoryBlobStore()
         publish_recommendation_model_artifacts(
             store,
@@ -2336,8 +2343,16 @@ class RecommendationPlayerListRouteTests(unittest.TestCase):
                     "username": "PLAYER",
                     "displayName": "PLAYER",
                     "modes": {
-                        "singles": {"eligible": True},
-                        "doubles": {"eligible": False},
+                        "singles": {
+                            "eligible": True,
+                            "validScoreCount": 30,
+                            "projectionRatingRequiredScoreCount": 30,
+                        },
+                        "doubles": {
+                            "eligible": False,
+                            "validScoreCount": 10,
+                            "requiredScoreCount": 30,
+                        },
                     },
                 }
             ],
@@ -2350,6 +2365,13 @@ class RecommendationPlayerListRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], PLAYER_LIST_CACHE_CONTROL)
         content = json.loads(response.body)
         self.assertEqual(content["players"][0]["playerKey"], "public-key")
+        self.assertEqual(
+            content["players"][0]["scoreProgress"],
+            {
+                "singles": {"validScoreCount": 30, "requiredScoreCount": 30},
+                "doubles": {"validScoreCount": 10, "requiredScoreCount": 30},
+            },
+        )
 
     def test_errors_are_not_cacheable(self) -> None:
         with patch("api.recommendations._read_index", return_value=None):

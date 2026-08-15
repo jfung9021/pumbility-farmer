@@ -224,11 +224,17 @@ export interface RecommendationModeResult {
   topRecommendations: RecommendationChart[];
 }
 
+export interface RecommendationScoreProgress {
+  validScoreCount: number;
+  requiredScoreCount: number;
+}
+
 export interface RecommendationPlayerSummary {
   playerKey: string;
   username: string;
   displayName: string;
   eligibility: Record<ModeKey, boolean>;
+  scoreProgress?: Partial<Record<ModeKey, RecommendationScoreProgress>>;
 }
 
 export interface RecommendationPlayer {

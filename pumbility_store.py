@@ -16,9 +16,10 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 from urllib.parse import quote, urlparse
 
 import requests
@@ -32,6 +33,9 @@ STORAGE_BUCKET_ENV = "PUMBILITY_STORAGE_BUCKET"
 SHADOW_STRICT_ENV = "PUMBILITY_SHADOW_STRICT"
 CANONICAL_SNAPSHOT_WRITE_ENV = "PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED"
 READ_CANARY_ENV = "PUMBILITY_SUPABASE_READ_CANARY"
+READ_POOL_ENABLED_ENV = "PUMBILITY_SUPABASE_READ_POOL_ENABLED"
+READ_POOL_MAX_SIZE_ENV = "PUMBILITY_SUPABASE_READ_POOL_MAX_SIZE"
+READ_POOL_MAX_WAITING_ENV = "PUMBILITY_SUPABASE_READ_POOL_MAX_WAITING"
 BLOB_MIRROR_ENV = "PUMBILITY_BLOB_MIRROR_ENABLED"
 BLOB_READ_FALLBACK_ENV = "PUMBILITY_BLOB_READ_FALLBACK_ENABLED"
 DEFAULT_BUCKET = "pumbility-artifacts"
@@ -53,6 +57,12 @@ STAGING_SNAPSHOT_RE = re.compile(
 FROZEN_PHOENIX1_SNAPSHOT_KEY = "analysis/private/phoenix1.json"
 JOB_LEASE_SECONDS = 800
 JOB_HEARTBEAT_INTERVAL_SECONDS = 60.0
+READ_CONNECT_TIMEOUT_SECONDS = 3
+READ_POOL_ACQUIRE_TIMEOUT_SECONDS = 1.0
+READ_STATEMENT_TIMEOUT_MILLISECONDS = 10_000
+READ_POOL_DEFAULT_MAX_SIZE = 2
+READ_POOL_DEFAULT_MAX_WAITING = 2
+READ_POOL_HEALTH_CHECK_INTERVAL_SECONDS = 30.0
 
 
 def _enabled(value: str | None) -> bool:
@@ -147,19 +157,52 @@ def _safe_rollout_event(
     outcome: str,
     authoritative_ms: float,
     candidate_ms: float | None = None,
+    authoritative_phases: Mapping[str, float] | None = None,
+    candidate_phases: Mapping[str, float] | None = None,
+    comparison_ms: float | None = None,
+    overall_ms: float | None = None,
+    authoritative_error: Exception | None = None,
     candidate_error: Exception | None = None,
 ) -> None:
     """Emit aggregate-safe evidence without artifact keys, digests, or private IDs."""
+    def phase_value(phases: Mapping[str, float] | None, phase: str) -> str:
+        value = (phases or {}).get(phase)
+        return "none" if value is None else f"{value:.3f}"
+
     # Vercel's default Python logging threshold is WARNING. Canary evidence
     # must survive that default without globally changing application logging.
     logging.getLogger("pumbility.rollout").warning(
         "pumbility_store operation=%s domain=%s outcome=%s authoritative_ms=%.3f "
-        "candidate_ms=%s candidate_error=%s",
+        "candidate_ms=%s comparison_ms=%s overall_ms=%s "
+        "authoritative_acquire_ms=%s authoritative_connect_ms=%s "
+        "authoritative_health_ms=%s authoritative_schema_ms=%s "
+        "authoritative_fetch_ms=%s authoritative_decode_ms=%s "
+        "authoritative_integrity_ms=%s candidate_acquire_ms=%s "
+        "candidate_connect_ms=%s candidate_health_ms=%s "
+        "candidate_schema_ms=%s candidate_fetch_ms=%s candidate_decode_ms=%s "
+        "candidate_integrity_ms=%s authoritative_error=%s candidate_error=%s",
         operation,
         domain,
         outcome,
         authoritative_ms,
         "none" if candidate_ms is None else f"{candidate_ms:.3f}",
+        "none" if comparison_ms is None else f"{comparison_ms:.3f}",
+        "none" if overall_ms is None else f"{overall_ms:.3f}",
+        phase_value(authoritative_phases, "acquire"),
+        phase_value(authoritative_phases, "connect"),
+        phase_value(authoritative_phases, "health"),
+        phase_value(authoritative_phases, "schema"),
+        phase_value(authoritative_phases, "fetch"),
+        phase_value(authoritative_phases, "decode"),
+        phase_value(authoritative_phases, "integrity"),
+        phase_value(candidate_phases, "acquire"),
+        phase_value(candidate_phases, "connect"),
+        phase_value(candidate_phases, "health"),
+        phase_value(candidate_phases, "schema"),
+        phase_value(candidate_phases, "fetch"),
+        phase_value(candidate_phases, "decode"),
+        phase_value(candidate_phases, "integrity"),
+        _safe_error_code(authoritative_error),
         _safe_error_code(candidate_error),
     )
 
@@ -197,6 +240,49 @@ def _equivalent(left: object, right: object) -> bool:
     return left == right
 
 
+def _equivalent_to_exact_json(left: object, right: _ExactJsonRead) -> bool:
+    if right.canonical_bytes is None:
+        return left is None
+    if not isinstance(left, Mapping):
+        return False
+    return _canonical_json_bytes(left) == right.canonical_bytes
+
+
+_READ_PHASES = frozenset(
+    {"acquire", "connect", "health", "schema", "fetch", "decode", "integrity"}
+)
+_read_telemetry = threading.local()
+
+
+def _read_phase_started() -> float | None:
+    """Start timing only when a canary wrapper installed a thread-local collector."""
+    if getattr(_read_telemetry, "phases", None) is None:
+        return None
+    return time.perf_counter()
+
+
+def _record_read_phase(phase: str, started: float | None) -> None:
+    """Accumulate a fixed-name phase without accepting keys, IDs, or other labels."""
+    if started is None:
+        return
+    if phase not in _READ_PHASES:
+        raise ValueError("Unsupported Pumbility read telemetry phase.")
+    phases = getattr(_read_telemetry, "phases", None)
+    if phases is None:
+        return
+    _record_read_phase_ms(phase, (time.perf_counter() - started) * 1000)
+
+
+def _record_read_phase_ms(phase: str, elapsed_ms: float) -> None:
+    """Accumulate an already-measured fixed-name phase."""
+    if phase not in _READ_PHASES:
+        raise ValueError("Unsupported Pumbility read telemetry phase.")
+    phases = getattr(_read_telemetry, "phases", None)
+    if phases is None:
+        return
+    phases[phase] = phases.get(phase, 0.0) + elapsed_ms
+
+
 def _checkpoint_player_path(pathname: str, player_id: str) -> str:
     digest = hashlib.sha256(player_id.encode("utf-8")).hexdigest()
     return f"{pathname}.players/{digest}.json"
@@ -229,15 +315,187 @@ def _database_url(explicit: str | None = None) -> str:
 
 
 def _connect(database_url: str):
+    started = _read_phase_started()
+    try:
+        try:
+            import psycopg
+        except ImportError as error:  # pragma: no cover - environment diagnostic
+            raise RuntimeError(
+                "The Supabase backend requires psycopg. Run `uv sync --frozen`."
+            ) from error
+        # Transaction-pooled runtime connections must not create named prepared
+        # statements that can be routed to another server connection.
+        return psycopg.connect(database_url, prepare_threshold=None)
+    finally:
+        _record_read_phase("connect", started)
+
+
+_read_pool_lock = threading.Lock()
+_read_pool: Any | None = None
+_read_pool_key: tuple[str, int, int, int] | None = None
+
+
+def _bounded_read_pool_setting(
+    name: str, default: int, *, minimum: int, maximum: int
+) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer.") from error
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f"{name} must be between {minimum} and {maximum}.")
+    return value
+
+
+def _read_pool_configuration() -> tuple[int, int]:
+    """Return per-process capacity bounds without allowing the role limit to be bypassed."""
+    return (
+        _bounded_read_pool_setting(
+            READ_POOL_MAX_SIZE_ENV,
+            READ_POOL_DEFAULT_MAX_SIZE,
+            minimum=1,
+            maximum=2,
+        ),
+        _bounded_read_pool_setting(
+            READ_POOL_MAX_WAITING_ENV,
+            READ_POOL_DEFAULT_MAX_WAITING,
+            minimum=1,
+            maximum=16,
+        ),
+    )
+
+
+def _check_read_connection(connection: Any) -> None:
+    """Probe only connections old enough to plausibly have gone stale while idle."""
+    last_checked = float(getattr(connection, "_pumbility_last_checked_at", 0.0))
+    if time.monotonic() - last_checked < READ_POOL_HEALTH_CHECK_INTERVAL_SECONDS:
+        return
+    started = _read_phase_started()
+    try:
+        from psycopg_pool import ConnectionPool
+
+        ConnectionPool.check_connection(connection)
+        connection._pumbility_last_checked_at = time.monotonic()
+    finally:
+        _record_read_phase("health", started)
+
+
+def _create_read_pool(database_url: str, *, max_size: int, max_waiting: int) -> Any:
     try:
         import psycopg
+        from psycopg_pool import ConnectionPool
     except ImportError as error:  # pragma: no cover - environment diagnostic
         raise RuntimeError(
-            "The Supabase backend requires psycopg. Run `uv sync --frozen`."
+            "The Supabase read pool requires psycopg with its pool extra. "
+            "Run `uv sync --frozen`."
         ) from error
-    # Transaction-pooled runtime connections must not create named prepared
-    # statements that can be routed to another server connection.
-    return psycopg.connect(database_url, prepare_threshold=None)
+
+    class _TimedReadConnection(psycopg.Connection):
+        @classmethod
+        def connect(cls, conninfo: str = "", **kwargs: Any) -> Any:
+            started = time.perf_counter()
+            connection = super().connect(conninfo, **kwargs)
+            connection._pumbility_connect_ms = (
+                time.perf_counter() - started
+            ) * 1000
+            connection._pumbility_last_checked_at = time.monotonic()
+            return connection
+
+    pool = ConnectionPool(
+        conninfo=database_url,
+        connection_class=_TimedReadConnection,
+        kwargs={
+            "connect_timeout": READ_CONNECT_TIMEOUT_SECONDS,
+            # Supavisor transaction mode cannot safely retain named prepared statements.
+            "prepare_threshold": None,
+        },
+        min_size=0,
+        max_size=max_size,
+        max_waiting=max_waiting,
+        timeout=READ_POOL_ACQUIRE_TIMEOUT_SECONDS,
+        max_idle=60.0,
+        max_lifetime=600.0,
+        reconnect_timeout=float(READ_CONNECT_TIMEOUT_SECONDS),
+        num_workers=max_size,
+        check=_check_read_connection,
+        name="pumbility-read",
+        open=False,
+    )
+    pool.open(wait=False)
+    return pool
+
+
+def _get_read_pool(database_url: str) -> Any:
+    global _read_pool, _read_pool_key
+    max_size, max_waiting = _read_pool_configuration()
+    key = (database_url, max_size, max_waiting, os.getpid())
+    with _read_pool_lock:
+        if _read_pool is not None and _read_pool_key == key:
+            return _read_pool
+        previous = _read_pool
+        _read_pool = _create_read_pool(
+            database_url, max_size=max_size, max_waiting=max_waiting
+        )
+        _read_pool_key = key
+    if previous is not None:
+        previous.close(timeout=0)
+    return _read_pool
+
+
+@contextmanager
+def _read_connect(database_url: str) -> Iterator[Any]:
+    """Acquire a bounded hot-read connection, or use the direct A/B control path."""
+    if not _enabled(os.getenv(READ_POOL_ENABLED_ENV)):
+        started = _read_phase_started()
+        try:
+            try:
+                import psycopg
+            except ImportError as error:  # pragma: no cover - environment diagnostic
+                raise RuntimeError(
+                    "The Supabase backend requires psycopg. Run `uv sync --frozen`."
+                ) from error
+            connection = psycopg.connect(
+                database_url,
+                connect_timeout=READ_CONNECT_TIMEOUT_SECONDS,
+                prepare_threshold=None,
+            )
+        finally:
+            _record_read_phase("connect", started)
+        with connection:
+            yield connection
+        return
+
+    acquire_started = _read_phase_started()
+    acquired = False
+    try:
+        pool = _get_read_pool(database_url)
+        with pool.connection(timeout=READ_POOL_ACQUIRE_TIMEOUT_SECONDS) as connection:
+            _record_read_phase("acquire", acquire_started)
+            acquired = True
+            connect_ms = getattr(connection, "_pumbility_connect_ms", None)
+            if connect_ms is not None:
+                _record_read_phase_ms("connect", float(connect_ms))
+                connection._pumbility_connect_ms = None
+            yield connection
+    finally:
+        if not acquired:
+            _record_read_phase("acquire", acquire_started)
+
+
+@contextmanager
+def _read_cursor(database_url: str) -> Iterator[Any]:
+    """Create a transaction-scoped hot-read cursor with a per-statement deadline."""
+    with _read_connect(database_url) as connection, connection.cursor() as cursor:
+        # Session settings are not reliable through Supavisor transaction mode.
+        # Pipeline the transaction-local setting with the read to avoid another RTT.
+        with connection.pipeline():
+            cursor.execute(
+                f"set local statement_timeout = '{READ_STATEMENT_TIMEOUT_MILLISECONDS}ms'"
+            )
+            yield cursor
 
 
 def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
@@ -256,11 +514,19 @@ def _json_metadata(value: object, *, pathname: str) -> tuple[str, int]:
 
 
 def _assert_schema(cursor: Any) -> None:
-    cursor.execute(
-        "select value from pumbility.schema_metadata where key = 'migration_version'"
-    )
-    row = cursor.fetchone()
-    actual = str(row[0]) if row else "missing"
+    started = _read_phase_started()
+    try:
+        cursor.execute(
+            "select value from pumbility.schema_metadata where key = 'migration_version'"
+        )
+        row = cursor.fetchone()
+        _validate_schema_value(row[0] if row else None)
+    finally:
+        _record_read_phase("schema", started)
+
+
+def _validate_schema_value(value: object) -> None:
+    actual = str(value) if value is not None else "missing"
     if actual != EXPECTED_PUMBILITY_MIGRATION:
         raise RuntimeError(
             "The Pumbility database schema is not at the application-required migration. "
@@ -284,6 +550,18 @@ def _parse_timestamp(value: object) -> datetime | None:
 class StoredObject:
     pathname: str
     uploaded_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class _ExactJsonRead:
+    """Internal JSON value plus the exact canonical bytes already validated on read."""
+
+    value: dict[str, Any] | None
+    canonical_bytes: bytes | None
+
+    def __post_init__(self) -> None:
+        if (self.value is None) != (self.canonical_bytes is None):
+            raise ValueError("Pumbility exact JSON read evidence is inconsistent.")
 
 
 class PumbilityArtifactIntegrityError(ValueError):
@@ -428,6 +706,20 @@ class PumbilityArtifactStore:
         )
 
     def get_json(self, pathname: str) -> dict[str, Any] | None:
+        result = self._read_json(pathname, exact_evidence=False)
+        if isinstance(result, _ExactJsonRead):  # pragma: no cover - internal invariant
+            raise AssertionError("A public Pumbility JSON read returned internal evidence.")
+        return result
+
+    def _get_json_with_evidence(self, pathname: str) -> _ExactJsonRead:
+        result = self._read_json(pathname, exact_evidence=True)
+        if not isinstance(result, _ExactJsonRead):  # pragma: no cover - internal invariant
+            raise AssertionError("A Pumbility exact JSON read omitted its evidence.")
+        return result
+
+    def _read_json(
+        self, pathname: str, *, exact_evidence: bool
+    ) -> dict[str, Any] | None | _ExactJsonRead:
         snapshot_match = CURRENT_SNAPSHOT_RE.fullmatch(pathname)
         snapshot_mix = snapshot_match.group(1) if snapshot_match else None
         if pathname == FROZEN_PHOENIX1_SNAPSHOT_KEY:
@@ -438,64 +730,124 @@ class PumbilityArtifactStore:
             with _connect(self.database_url) as connection:
                 with connection.cursor() as cursor:
                     _assert_schema(cursor)
-                return _database_snapshot(connection, snapshot_mix)
-        with _connect(self.database_url) as connection, connection.cursor() as cursor:
-            _assert_schema(cursor)
-            cursor.execute(
-                "select payload_json, sha256, byte_size from pumbility.artifacts where object_key = %s and payload_json is not null",
-                (pathname,),
-            )
-            row = cursor.fetchone()
-        if row is None:
-            return None
-        value = row[0]
-        if isinstance(value, str):
-            value = json.loads(value)
-        if not isinstance(value, Mapping):
-            raise ValueError(f"Pumbility artifact {pathname!r} is not a JSON object.")
-        result = dict(value)
-        body = _canonical_json_bytes(result)
-        digest_matches = hashlib.sha256(body).hexdigest() == str(row[1])
-        byte_size_matches = len(body) == int(row[2])
+                fetch_started = _read_phase_started()
+                try:
+                    result = _database_snapshot(connection, snapshot_mix)
+                finally:
+                    _record_read_phase("fetch", fetch_started)
+            if not exact_evidence:
+                return result
+            integrity_started = _read_phase_started()
+            try:
+                body = _canonical_json_bytes(result)
+            finally:
+                _record_read_phase("integrity", integrity_started)
+            return _ExactJsonRead(result, body)
+        with _read_cursor(self.database_url) as cursor:
+            fetch_started = _read_phase_started()
+            try:
+                cursor.execute(
+                    """
+                    select
+                        (
+                            select value
+                            from pumbility.schema_metadata
+                            where key = 'migration_version'
+                        ),
+                        artifact.object_key is not null,
+                        artifact.payload_json,
+                        artifact.sha256,
+                        artifact.byte_size
+                    from (values (1)) as required_row(present)
+                    left join pumbility.artifacts as artifact
+                        on artifact.object_key = %s
+                        and artifact.payload_json is not null
+                    """,
+                    (pathname,),
+                )
+                row = cursor.fetchone()
+            finally:
+                _record_read_phase("fetch", fetch_started)
+        schema_started = _read_phase_started()
+        try:
+            _validate_schema_value(row[0] if row else None)
+        finally:
+            _record_read_phase("schema", schema_started)
+        if not row[1]:
+            return _ExactJsonRead(None, None) if exact_evidence else None
+        decode_started = _read_phase_started()
+        try:
+            value = row[2]
+            if isinstance(value, str):
+                value = json.loads(value)
+            if not isinstance(value, Mapping):
+                raise ValueError(f"Pumbility artifact {pathname!r} is not a JSON object.")
+            result = dict(value)
+        finally:
+            _record_read_phase("decode", decode_started)
+        integrity_started = _read_phase_started()
+        try:
+            body = _canonical_json_bytes(result)
+            digest_matches = hashlib.sha256(body).hexdigest() == str(row[3])
+            byte_size_matches = len(body) == int(row[4])
+        finally:
+            _record_read_phase("integrity", integrity_started)
         if not digest_matches or not byte_size_matches:
             raise PumbilityArtifactIntegrityError(
                 digest_matches=digest_matches,
                 byte_size_matches=byte_size_matches,
             )
-        if STAGING_SNAPSHOT_RE.fullmatch(pathname) and int(
+        reconstructed = STAGING_SNAPSHOT_RE.fullmatch(pathname) and int(
             result.get("storageSchemaVersion") or 0
-        ) >= 2:
+        ) >= 2
+        if reconstructed:
             prefix = f"{pathname}.players/"
             with _connect(self.database_url) as connection, connection.cursor() as cursor:
                 _assert_schema(cursor)
-                cursor.execute(
-                    """
-                    select payload_json, sha256, byte_size
-                    from pumbility.artifacts
-                    where object_key like %s escape '\\' and payload_json is not null
-                    order by object_key
-                    """,
-                    (
-                        prefix.replace("\\", "\\\\")
-                        .replace("%", "\\%")
-                        .replace("_", "\\_")
-                        + "%",
-                    ),
-                )
-                checkpoint_rows = cursor.fetchall()
+                fetch_started = _read_phase_started()
+                try:
+                    cursor.execute(
+                        """
+                        select payload_json, sha256, byte_size
+                        from pumbility.artifacts
+                        where object_key like %s escape '\\' and payload_json is not null
+                        order by object_key
+                        """,
+                        (
+                            prefix.replace("\\", "\\\\")
+                            .replace("%", "\\%")
+                            .replace("_", "\\_")
+                            + "%",
+                        ),
+                    )
+                    checkpoint_rows = cursor.fetchall()
+                finally:
+                    _record_read_phase("fetch", fetch_started)
             player_checkpoints_by_id: dict[str, dict[str, Any]] = {}
             for raw_payload, raw_digest, raw_size in checkpoint_rows:
-                checkpoint = (
-                    json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
-                )
-                if not isinstance(checkpoint, Mapping):
-                    raise ValueError("A Pumbility player checkpoint is not a JSON object.")
-                checkpoint_value = dict(checkpoint)
-                checkpoint_body = _canonical_json_bytes(checkpoint_value)
-                digest_matches = hashlib.sha256(checkpoint_body).hexdigest() == str(
-                    raw_digest
-                )
-                byte_size_matches = len(checkpoint_body) == int(raw_size)
+                decode_started = _read_phase_started()
+                try:
+                    checkpoint = (
+                        json.loads(raw_payload)
+                        if isinstance(raw_payload, str)
+                        else raw_payload
+                    )
+                    if not isinstance(checkpoint, Mapping):
+                        raise ValueError(
+                            "A Pumbility player checkpoint is not a JSON object."
+                        )
+                    checkpoint_value = dict(checkpoint)
+                finally:
+                    _record_read_phase("decode", decode_started)
+                integrity_started = _read_phase_started()
+                try:
+                    checkpoint_body = _canonical_json_bytes(checkpoint_value)
+                    digest_matches = hashlib.sha256(checkpoint_body).hexdigest() == str(
+                        raw_digest
+                    )
+                    byte_size_matches = len(checkpoint_body) == int(raw_size)
+                finally:
+                    _record_read_phase("integrity", integrity_started)
                 if not digest_matches or not byte_size_matches:
                     raise PumbilityArtifactIntegrityError(
                         digest_matches=digest_matches,
@@ -521,7 +873,15 @@ class PumbilityArtifactStore:
                 player_checkpoints_by_id[player_id]
                 for player_id in sorted(completed_ids)
             ]
-        return result
+        if not exact_evidence:
+            return result
+        if reconstructed:
+            integrity_started = _read_phase_started()
+            try:
+                body = _canonical_json_bytes(result)
+            finally:
+                _record_read_phase("integrity", integrity_started)
+        return _ExactJsonRead(result, body)
 
     def put_json(self, pathname: str, payload: Mapping[str, Any]) -> None:
         snapshot_match = CURRENT_SNAPSHOT_RE.fullmatch(pathname)
@@ -615,6 +975,8 @@ class PumbilityArtifactStore:
             list[dict[str, Any]],
         ]
         | None = None,
+        phase: str = "all",
+        analysis_run_id: Any | None = None,
     ) -> tuple[Any, Any | None]:
         """Persist the already-computed runtime generation before pointer publication."""
         from scripts.analyze_pumbility_supabase import (
@@ -626,52 +988,60 @@ class PumbilityArtifactStore:
         from scripts.populate_pumbility_production import _persist_model_generation
         from phoenix2_sync import sanitize_snapshot
 
+        if phase not in {"all", "analysis", "model"}:
+            raise ValueError("Typed runtime persistence received an invalid phase.")
         generated_at = _parse_timestamp(payload.get("generatedAtUtc"))
         if generated_at is None:
             raise ValueError("Typed runtime persistence requires a generation timestamp.")
-        with _connect(self.database_url) as connection:
-            with connection.cursor() as cursor:
-                _assert_schema(cursor)
-                cursor.execute(
-                    "select id from pumbility.jobs where external_key = %s",
-                    (job_external_key,),
+        if phase in {"all", "analysis"}:
+            with _connect(self.database_url) as connection:
+                with connection.cursor() as cursor:
+                    _assert_schema(cursor)
+                    cursor.execute(
+                        "select id from pumbility.jobs where external_key = %s",
+                        (job_external_key,),
+                    )
+                    job_row = cursor.fetchone()
+                if job_row is None:
+                    raise RuntimeError("The typed runtime job row is unavailable.")
+                database_input = _read_database_input(connection, mix_key)
+                runtime_snapshot = sanitize_snapshot(snapshot, mix=mix_key)
+                # Relational reconstruction intentionally has no capture timestamp.
+                # Compare the immutable entity content while retaining every other
+                # canonical snapshot field in the source identity.
+                runtime_snapshot["generatedAtUtc"] = str(
+                    database_input.snapshot.get("generatedAtUtc") or ""
                 )
-                job_row = cursor.fetchone()
-            if job_row is None:
-                raise RuntimeError("The typed runtime job row is unavailable.")
-            database_input = _read_database_input(connection, mix_key)
-            runtime_snapshot = sanitize_snapshot(snapshot, mix=mix_key)
-            # Relational reconstruction intentionally has no capture timestamp.
-            # Compare the immutable entity content while retaining every other
-            # canonical snapshot field in the source identity.
-            runtime_snapshot["generatedAtUtc"] = str(
-                database_input.snapshot.get("generatedAtUtc") or ""
-            )
-            runtime_source_hash = _sha256(runtime_snapshot)
-            database_source_hash = _sha256(database_input.snapshot)
-            if runtime_source_hash != database_source_hash:
-                raise RuntimeError(
-                    "The canonical snapshot changed before typed runtime persistence."
+                runtime_source_hash = _sha256(runtime_snapshot)
+                database_source_hash = _sha256(database_input.snapshot)
+                if runtime_source_hash != database_source_hash:
+                    raise RuntimeError(
+                        "The canonical snapshot changed before typed runtime persistence."
+                    )
+                output = AnalysisOutput(
+                    database_input=database_input,
+                    config=config,
+                    started_at=generated_at,
+                    payload=dict(payload),
+                    baselines=[dict(row) for row in baselines],
+                    contributions=[dict(row) for row in contributions],
+                    chart_results=[dict(row) for row in chart_results],
+                    source_hash=database_source_hash,
+                    output_hash=_sha256(payload),
                 )
-            output = AnalysisOutput(
-                database_input=database_input,
-                config=config,
-                started_at=generated_at,
-                payload=dict(payload),
-                baselines=[dict(row) for row in baselines],
-                contributions=[dict(row) for row in contributions],
-                chart_results=[dict(row) for row in chart_results],
-                source_hash=database_source_hash,
-                output_hash=_sha256(payload),
+                analysis_run_id = _persist_analysis(
+                    connection,
+                    output,
+                    run_key_prefix="runtime-analysis",
+                    job_id=job_row[0],
+                )
+        elif analysis_run_id is None:
+            raise ValueError(
+                "Typed model persistence requires the checkpointed analysis run."
             )
-            analysis_run_id = _persist_analysis(
-                connection,
-                output,
-                run_key_prefix="runtime-analysis",
-                job_id=job_row[0],
-            )
+
         model_generation_id = None
-        if model_artifacts is not None:
+        if phase in {"all", "model"} and model_artifacts is not None:
             with _connect(self.database_url) as connection:
                 inputs = {
                     mix: _read_database_input(connection, mix)
@@ -681,7 +1051,13 @@ class PumbilityArtifactStore:
                     connection,
                     analysis_run_id=analysis_run_id,
                     inputs=inputs,
-                    artifacts=model_artifacts,
+                    artifacts=(
+                        model_artifacts[0],
+                        model_artifacts[1],
+                        model_artifacts[2],
+                        len(model_artifacts[3]),
+                        len(model_artifacts[4]),
+                    ),
                 )
         return analysis_run_id, model_generation_id
 
@@ -693,31 +1069,62 @@ class PumbilityArtifactStore:
                 self._put_json_row(cursor, pathname, payload)
 
     def get_bytes(self, pathname: str) -> bytes | None:
-        with _connect(self.database_url) as connection, connection.cursor() as cursor:
-            _assert_schema(cursor)
-            cursor.execute(
-                """
-                select sha256, byte_size, storage_object_path
-                from pumbility.artifacts
-                where object_key = %s and storage_object_path is not null
-                """,
-                (pathname,),
-            )
-            metadata = cursor.fetchone()
-        if metadata is None:
+        with _read_cursor(self.database_url) as cursor:
+            fetch_started = _read_phase_started()
+            try:
+                cursor.execute(
+                    """
+                    select
+                        (
+                            select value
+                            from pumbility.schema_metadata
+                            where key = 'migration_version'
+                        ),
+                        artifact.object_key is not null,
+                        artifact.sha256,
+                        artifact.byte_size,
+                        artifact.storage_object_path
+                    from (values (1)) as required_row(present)
+                    left join pumbility.artifacts as artifact
+                        on artifact.object_key = %s
+                        and artifact.storage_object_path is not null
+                    """,
+                    (pathname,),
+                )
+                metadata = cursor.fetchone()
+            finally:
+                _record_read_phase("fetch", fetch_started)
+        schema_started = _read_phase_started()
+        try:
+            _validate_schema_value(metadata[0] if metadata else None)
+        finally:
+            _record_read_phase("schema", schema_started)
+        if not metadata[1]:
             return None
         url = (
             f"{self.supabase_url}/storage/v1/object/authenticated/"
-            f"{quote(self.bucket, safe='')}/{quote(str(metadata[2]), safe='/')}"
+            f"{quote(self.bucket, safe='')}/{quote(str(metadata[4]), safe='/')}"
         )
-        response = requests.get(
-            url, headers=self._storage_headers(), timeout=self.timeout_seconds
-        )
-        if response.status_code == 404:
-            raise ValueError(f"Pumbility binary artifact {pathname!r} is missing from Storage.")
-        response.raise_for_status()
-        value = bytes(response.content)
-        if hashlib.sha256(value).hexdigest() != str(metadata[0]) or len(value) != int(metadata[1]):
+        fetch_started = _read_phase_started()
+        try:
+            response = requests.get(
+                url, headers=self._storage_headers(), timeout=self.timeout_seconds
+            )
+            if response.status_code == 404:
+                raise ValueError(
+                    f"Pumbility binary artifact {pathname!r} is missing from Storage."
+                )
+            response.raise_for_status()
+            value = bytes(response.content)
+        finally:
+            _record_read_phase("fetch", fetch_started)
+        integrity_started = _read_phase_started()
+        try:
+            digest_matches = hashlib.sha256(value).hexdigest() == str(metadata[2])
+            byte_size_matches = len(value) == int(metadata[3])
+        finally:
+            _record_read_phase("integrity", integrity_started)
+        if not digest_matches or not byte_size_matches:
             raise ValueError(f"Pumbility binary artifact {pathname!r} failed checksum validation.")
         return value
 
@@ -950,16 +1357,40 @@ class PumbilityJobStore:
         return _ContinuousLeaseHeartbeat(lambda: self.heartbeat(job_id)).start()
 
     def get(self, job_id: str) -> dict[str, Any] | None:
-        with _connect(self.database_url) as connection, connection.cursor() as cursor:
-            _assert_schema(cursor)
-            cursor.execute(
-                "select payload from pumbility.jobs where external_key = %s", (job_id,)
-            )
-            row = cursor.fetchone()
-        if row is None:
+        with _read_cursor(self.database_url) as cursor:
+            fetch_started = _read_phase_started()
+            try:
+                cursor.execute(
+                    """
+                    select
+                        (
+                            select value
+                            from pumbility.schema_metadata
+                            where key = 'migration_version'
+                        ),
+                        job.external_key is not null,
+                        job.payload
+                    from (values (1)) as required_row(present)
+                    left join pumbility.jobs as job on job.external_key = %s
+                    """,
+                    (job_id,),
+                )
+                row = cursor.fetchone()
+            finally:
+                _record_read_phase("fetch", fetch_started)
+        schema_started = _read_phase_started()
+        try:
+            _validate_schema_value(row[0] if row else None)
+        finally:
+            _record_read_phase("schema", schema_started)
+        if not row[1]:
             return None
-        value = row[0] if not isinstance(row[0], str) else json.loads(row[0])
-        return dict(value) if isinstance(value, Mapping) else None
+        decode_started = _read_phase_started()
+        try:
+            value = row[2] if not isinstance(row[2], str) else json.loads(row[2])
+            return dict(value) if isinstance(value, Mapping) else None
+        finally:
+            _record_read_phase("decode", decode_started)
 
     def save(self, job: Mapping[str, Any]) -> dict[str, Any]:
         from psycopg.types.json import Jsonb
@@ -1278,12 +1709,22 @@ class ShadowJobStore:
 
 def _timed_read(
     reader: Callable[..., Any], *args: Any
-) -> tuple[Any, Exception | None, float]:
+) -> tuple[Any, Exception | None, float, dict[str, float]]:
+    previous_phases = getattr(_read_telemetry, "phases", None)
+    phases: dict[str, float] = {}
+    _read_telemetry.phases = phases
     started = time.perf_counter()
     try:
-        return reader(*args), None, (time.perf_counter() - started) * 1000
-    except Exception as error:
-        return None, error, (time.perf_counter() - started) * 1000
+        try:
+            value, error = reader(*args), None
+        except Exception as caught:
+            value, error = None, caught
+        return value, error, (time.perf_counter() - started) * 1000, dict(phases)
+    finally:
+        if previous_phases is None:
+            del _read_telemetry.phases
+        else:
+            _read_telemetry.phases = previous_phases
 
 
 class CanaryJsonStore:
@@ -1295,58 +1736,75 @@ class CanaryJsonStore:
         self.domain = domain
 
     def _read(self, method: str, *args: Any) -> Any:
+        overall_started = time.perf_counter()
+        candidate_reader = getattr(self.candidate, method)
+        if method == "get_json" and getattr(
+            type(self.candidate), "_get_json_with_evidence", None
+        ) is not None:
+            candidate_reader = self.candidate._get_json_with_evidence
         with ThreadPoolExecutor(max_workers=2) as executor:
             authoritative_future = executor.submit(
                 _timed_read, getattr(self.authoritative, method), *args
             )
             candidate_future = executor.submit(
-                _timed_read, getattr(self.candidate, method), *args
+                _timed_read, candidate_reader, *args
             )
-            authoritative, authoritative_error, authoritative_ms = (
+            authoritative, authoritative_error, authoritative_ms, authoritative_phases = (
                 authoritative_future.result()
             )
-            candidate, candidate_error, candidate_ms = candidate_future.result()
+            candidate, candidate_error, candidate_ms, candidate_phases = (
+                candidate_future.result()
+            )
+
+        def emit(
+            outcome: str,
+            *,
+            comparison_ms: float | None = None,
+            error: Exception | None = None,
+            authority_error: Exception | None = None,
+        ) -> None:
+            _safe_rollout_event(
+                operation=method,
+                domain=self.domain,
+                outcome=outcome,
+                authoritative_ms=authoritative_ms,
+                candidate_ms=candidate_ms,
+                authoritative_phases=authoritative_phases,
+                candidate_phases=candidate_phases,
+                comparison_ms=comparison_ms,
+                overall_ms=(time.perf_counter() - overall_started) * 1000,
+                authoritative_error=authority_error,
+                candidate_error=error,
+            )
 
         if authoritative_error is not None:
+            emit("authority-error", authority_error=authoritative_error)
             raise authoritative_error
         if candidate_error is not None:
-            _safe_rollout_event(
-                operation=method,
-                domain=self.domain,
-                outcome="candidate-error-fallback",
-                authoritative_ms=authoritative_ms,
-                candidate_ms=candidate_ms,
-                candidate_error=candidate_error,
-            )
+            emit("candidate-error-fallback", error=candidate_error)
             return authoritative
-        try:
-            matches = _equivalent(authoritative, candidate)
-        except Exception:
-            _safe_rollout_event(
-                operation=method,
-                domain=self.domain,
-                outcome="comparison-error-fallback",
-                authoritative_ms=authoritative_ms,
-                candidate_ms=candidate_ms,
-            )
-            return authoritative
-        if not matches:
-            _safe_rollout_event(
-                operation=method,
-                domain=self.domain,
-                outcome="mismatch-fallback",
-                authoritative_ms=authoritative_ms,
-                candidate_ms=candidate_ms,
-            )
-            return authoritative
-        _safe_rollout_event(
-            operation=method,
-            domain=self.domain,
-            outcome="candidate-served",
-            authoritative_ms=authoritative_ms,
-            candidate_ms=candidate_ms,
+        candidate_value = (
+            candidate.value if isinstance(candidate, _ExactJsonRead) else candidate
         )
-        return candidate
+        comparison_started = time.perf_counter()
+        try:
+            matches = (
+                _equivalent_to_exact_json(authoritative, candidate)
+                if isinstance(candidate, _ExactJsonRead)
+                else _equivalent(authoritative, candidate)
+            )
+        except Exception:
+            emit(
+                "comparison-error-fallback",
+                comparison_ms=(time.perf_counter() - comparison_started) * 1000,
+            )
+            return authoritative
+        comparison_ms = (time.perf_counter() - comparison_started) * 1000
+        if not matches:
+            emit("mismatch-fallback", comparison_ms=comparison_ms)
+            return authoritative
+        emit("candidate-served", comparison_ms=comparison_ms)
+        return candidate_value
 
     def get_json(self, pathname: str) -> dict[str, Any] | None:
         return self._read("get_json", pathname)
@@ -1384,55 +1842,60 @@ class CanaryJobStore:
         self.domain = domain
 
     def get(self, job_id: str) -> dict[str, Any] | None:
+        overall_started = time.perf_counter()
         with ThreadPoolExecutor(max_workers=2) as executor:
             authoritative_future = executor.submit(
                 _timed_read, self.authoritative.get, job_id
             )
             candidate_future = executor.submit(_timed_read, self.candidate.get, job_id)
-            authoritative, authoritative_error, authoritative_ms = (
+            authoritative, authoritative_error, authoritative_ms, authoritative_phases = (
                 authoritative_future.result()
             )
-            candidate, candidate_error, candidate_ms = candidate_future.result()
+            candidate, candidate_error, candidate_ms, candidate_phases = (
+                candidate_future.result()
+            )
 
-        if authoritative_error is not None:
-            raise authoritative_error
-        if candidate_error is not None:
+        def emit(
+            outcome: str,
+            *,
+            comparison_ms: float | None = None,
+            error: Exception | None = None,
+            authority_error: Exception | None = None,
+        ) -> None:
             _safe_rollout_event(
                 operation="get-job",
                 domain=self.domain,
-                outcome="candidate-error-fallback",
+                outcome=outcome,
                 authoritative_ms=authoritative_ms,
                 candidate_ms=candidate_ms,
-                candidate_error=candidate_error,
+                authoritative_phases=authoritative_phases,
+                candidate_phases=candidate_phases,
+                comparison_ms=comparison_ms,
+                overall_ms=(time.perf_counter() - overall_started) * 1000,
+                authoritative_error=authority_error,
+                candidate_error=error,
             )
+
+        if authoritative_error is not None:
+            emit("authority-error", authority_error=authoritative_error)
+            raise authoritative_error
+        if candidate_error is not None:
+            emit("candidate-error-fallback", error=candidate_error)
             return authoritative
+        comparison_started = time.perf_counter()
         try:
             matches = _equivalent(authoritative, candidate)
         except Exception:
-            _safe_rollout_event(
-                operation="get-job",
-                domain=self.domain,
-                outcome="comparison-error-fallback",
-                authoritative_ms=authoritative_ms,
-                candidate_ms=candidate_ms,
+            emit(
+                "comparison-error-fallback",
+                comparison_ms=(time.perf_counter() - comparison_started) * 1000,
             )
             return authoritative
+        comparison_ms = (time.perf_counter() - comparison_started) * 1000
         if not matches:
-            _safe_rollout_event(
-                operation="get-job",
-                domain=self.domain,
-                outcome="mismatch-fallback",
-                authoritative_ms=authoritative_ms,
-                candidate_ms=candidate_ms,
-            )
+            emit("mismatch-fallback", comparison_ms=comparison_ms)
             return authoritative
-        _safe_rollout_event(
-            operation="get-job",
-            domain=self.domain,
-            outcome="candidate-served",
-            authoritative_ms=authoritative_ms,
-            candidate_ms=candidate_ms,
-        )
+        emit("candidate-served", comparison_ms=comparison_ms)
         return candidate
 
     def save(self, job: Mapping[str, Any]) -> dict[str, Any]:

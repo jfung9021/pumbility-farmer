@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
+import json
 import unittest
+from contextlib import redirect_stdout
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -31,6 +34,30 @@ class ProductionReconciliationTargetTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 _assert_reconciliation_state(environment)
 
+    def test_pre_canary_reconciliation_explicitly_accepts_canonical_shadow_writes(
+        self,
+    ) -> None:
+        environment = {
+            "PUMBILITY_DATA_BACKEND": "shadow",
+            "PUMBILITY_SHADOW_STRICT": "false",
+            "PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED": "true",
+        }
+        self.assertEqual(
+            _assert_reconciliation_state(
+                environment,
+                allow_canonical_shadow_writes=True,
+            ),
+            "shadow",
+        )
+        with self.assertRaises(RuntimeError):
+            _assert_reconciliation_state(
+                {
+                    **environment,
+                    "PUMBILITY_DATA_BACKEND": "vercel",
+                },
+                allow_canonical_shadow_writes=True,
+            )
+
     def test_converts_only_the_approved_transaction_pooler(self) -> None:
         runtime = (
             "postgresql://pumbility_runtime_login.gsiyqhkcgegjrvqcqioc:secret@"
@@ -44,6 +71,29 @@ class ProductionReconciliationTargetTests(unittest.TestCase):
                 "postgresql://pumbility_runtime_login.gsiyqhkcgegjrvqcqioc:secret@"
                 "aws-1-us-east-2.pooler.supabase.com:5432/postgres?sslmode=require"
             )
+
+    @patch(
+        "scripts.reconcile_pumbility_production._required_production_json",
+        return_value={"source": True},
+    )
+    @patch(
+        "scripts.reconcile_pumbility_production._recommendation_paths",
+        return_value=(["model.json"], "model.npz"),
+    )
+    def test_reconciliation_rejects_changed_json_payload(
+        self, _paths: Mock, _json: Mock
+    ) -> None:
+        source = Mock()
+        target = Mock()
+        pointers = {
+            "phoenix2Analysis": {"same": True},
+            "combinedTier": {"same": True},
+            "recommendations": {"same": True},
+        }
+        target.get_json.return_value = {"source": False}
+
+        with self.assertRaisesRegex(RuntimeError, "exact reconciliation"):
+            _verify_artifacts(source, target, pointers)
 
     @patch("scripts.reconcile_pumbility_production._required_production_bytes", return_value=b"model")
     @patch("scripts.reconcile_pumbility_production._recommendation_paths", return_value=([], "model.npz"))
@@ -66,8 +116,24 @@ class ProductionReconciliationTargetTests(unittest.TestCase):
         target.get_json.return_value = {"same": True}
         target.get_bytes.return_value = b"model"
 
-        with self.assertRaisesRegex(RuntimeError, "exact reconciliation"):
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaisesRegex(
+            RuntimeError, "exact reconciliation"
+        ):
             _verify_artifacts(source, target, pointers)
+        failure = json.loads(output.getvalue().splitlines()[-1])
+        self.assertEqual(
+            failure,
+            {
+                "cacheIndex": 1,
+                "sourceCount": 0,
+                "sourceOnlyCount": 0,
+                "stage": "player-caches",
+                "status": "mismatch",
+                "targetCount": 1,
+                "targetOnlyCount": 1,
+            },
+        )
 
 
 if __name__ == "__main__":

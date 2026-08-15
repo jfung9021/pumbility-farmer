@@ -11,12 +11,19 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from analysis_runtime import (
+    ANALYSIS_CONTINUATION_FIELD,
     CURRENT_SNAPSHOT_PATH,
     FAILED_RETRY_DELAY,
     LATEST_BLOB_PATH,
     PrivateBlobStore,
     RUNS_PREFIX,
     STAGING_PREFIX,
+    TYPED_CHECKPOINT_ANALYSIS_PHASE,
+    TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+    TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+    TYPED_CHECKPOINT_MODEL_PHASE,
+    TYPED_CHECKPOINT_SCHEMA_VERSION,
+    TYPED_CHECKPOINT_SNAPSHOT_PHASE,
     MemoryBlobStore,
     MemoryJobStore,
     cleanup_abandoned_staging,
@@ -972,6 +979,14 @@ class WorkerClient:
 
 
 class WorkerTests(unittest.TestCase):
+    def test_queue_visibility_covers_the_full_worker_duration(self) -> None:
+        from worker.celery import app
+
+        options = app.conf.broker_transport_options
+        self.assertEqual(options["visibility_timeout_seconds"], 800)
+        self.assertEqual(options["visibility_refresh_interval_seconds"], 240)
+        self.assertNotIn("lease_duration", options)
+
     def test_player_queue_has_a_conservative_four_worker_cap(self) -> None:
         with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as source:
             project = tomllib.load(source)
@@ -980,6 +995,13 @@ class WorkerTests(unittest.TestCase):
             row for row in subscribers if row["topics"] == ["player-recommendations"]
         )
         self.assertEqual(player["max_concurrency"], 4)
+
+    def test_analysis_queue_has_a_conservative_four_worker_cap(self) -> None:
+        with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as source:
+            project = tomllib.load(source)
+        subscribers = project["tool"]["vercel"]["subscribers"]
+        analysis = next(row for row in subscribers if row["topics"] == ["analysis"])
+        self.assertEqual(analysis["max_concurrency"], 4)
 
     def test_player_refresh_task_uses_the_dedicated_lightweight_path(self) -> None:
         jobs = MemoryJobStore()
@@ -1379,9 +1401,166 @@ class WorkerTests(unittest.TestCase):
             )
 
         self.assertEqual(second["status"], "completed")
-        self.assertEqual(blobs.persist_attempts, 2)
+        self.assertEqual(blobs.persist_attempts, 3)
         self.assertIsNone(blobs.get_json(typed_checkpoint_path(job["id"])))
         self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
+
+    def test_typed_queue_execution_yields_at_bounded_checkpoint_phases(self) -> None:
+        class TypedMemoryStore(MemoryBlobStore):
+            typed_persistence_enabled = True
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.persist_phases = []
+
+            def persist_typed_generation(self, **kwargs):
+                phase = kwargs["phase"]
+                self.persist_phases.append(phase)
+                if phase == "analysis":
+                    return "analysis-run", None
+                self.assertEqual(kwargs["analysis_run_id"], "analysis-run")
+                return "analysis-run", "model-generation"
+
+            def assertEqual(self, first, second):
+                if first != second:
+                    raise AssertionError(f"{first!r} != {second!r}")
+
+        blobs = TypedMemoryStore()
+        jobs = MemoryJobStore()
+        job = new_job("typed-bounded-phases", NOW)
+        jobs.save(job)
+        jobs.set_latest_job_id(job["id"])
+        jobs.set_active_job_id(job["id"])
+        blobs.put_json(
+            "analysis/private/phoenix1.json",
+            {"mix": "Phoenix", "players": [], "charts": [], "scores": []},
+        )
+        generation = "typed-bounded-phases"
+        model_artifacts = (
+            {
+                "storageSchemaVersion": 3,
+                "generationKey": generation,
+                "generatedAtUtc": isoformat_utc(NOW),
+                "players": [],
+            },
+            {"generationKey": generation},
+            b"model",
+            [],
+            [],
+        )
+
+        first = execute_analysis_job(
+            job["id"],
+            blobs=blobs,
+            jobs=jobs,
+            client=WorkerClient(),
+            now=lambda: NOW,
+            yield_after_typed_checkpoint=True,
+        )
+
+        checkpoint = blobs.get_json(typed_checkpoint_path(job["id"]))
+        self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "model")
+        self.assertEqual(checkpoint["phase"], TYPED_CHECKPOINT_ANALYSIS_PHASE)
+        self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
+
+        with (
+            patch(
+                "analysis_runtime.analyze_snapshot",
+                side_effect=AssertionError("base analysis must not repeat"),
+            ),
+            patch("analysis_runtime.build_combined_chart_results", return_value=([], {}, {})),
+            patch("analysis_runtime.build_combined_tier_payload", return_value={}),
+            patch(
+                "analysis_runtime.build_recommendation_model_artifacts",
+                return_value=model_artifacts,
+            ) as build_model,
+        ):
+            second = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+            second_phase = blobs.get_json(typed_checkpoint_path(job["id"]))["phase"]
+            third = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+            third_phase = blobs.get_json(typed_checkpoint_path(job["id"]))["phase"]
+            fourth = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+            fourth_phase = blobs.get_json(typed_checkpoint_path(job["id"]))["phase"]
+            fifth = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+            fifth_phase = blobs.get_json(typed_checkpoint_path(job["id"]))["phase"]
+            sixth = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+
+        self.assertEqual(second[ANALYSIS_CONTINUATION_FIELD], "snapshot")
+        self.assertEqual(third[ANALYSIS_CONTINUATION_FIELD], "database-analysis")
+        self.assertEqual(fourth[ANALYSIS_CONTINUATION_FIELD], "database-model")
+        self.assertEqual(fifth[ANALYSIS_CONTINUATION_FIELD], "publish")
+        self.assertEqual(sixth["status"], "completed")
+        self.assertEqual(
+            [second_phase, third_phase, fourth_phase, fifth_phase],
+            [
+                TYPED_CHECKPOINT_MODEL_PHASE,
+                TYPED_CHECKPOINT_SNAPSHOT_PHASE,
+                TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+                TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+            ],
+        )
+        self.assertEqual(build_model.call_count, 1)
+        self.assertEqual(blobs.persist_phases, ["analysis", "model"])
+        self.assertIsNone(blobs.get_json(typed_checkpoint_path(job["id"])))
+        self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
+
+    def test_analysis_worker_queues_checkpoint_continuation_once(self) -> None:
+        from worker.tasks import refresh_analysis
+
+        result = {
+            "status": "running",
+            ANALYSIS_CONTINUATION_FIELD: "model",
+        }
+        with (
+            patch("worker.tasks.execute_analysis_job", return_value=result.copy()),
+            patch.object(refresh_analysis, "apply_async") as enqueue,
+        ):
+            returned = refresh_analysis.run("bounded-worker")
+
+        self.assertEqual(returned, {"status": "running"})
+        enqueue.assert_called_once_with(
+            args=["bounded-worker"],
+            task_id=(
+                "bounded-worker-model-checkpoint-"
+                f"v{TYPED_CHECKPOINT_SCHEMA_VERSION}"
+            ),
+            queue="analysis",
+        )
 
     def test_supabase_capable_store_heartbeats_through_every_heavy_phase(self) -> None:
         class HeartbeatHandle:

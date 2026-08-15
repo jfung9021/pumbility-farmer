@@ -8,6 +8,7 @@
     "backend": {
       "root": ".",
       "entrypoint": "pyproject.toml",
+      "buildCommand": "python scripts/stage_pumbility_reference_inputs.py",
       "functions": {
         "**/*.py": {
           "maxDuration": 800,

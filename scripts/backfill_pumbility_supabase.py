@@ -29,17 +29,33 @@ from scripts.capture_private_score_snapshot import validate_snapshot_directory  
 
 
 DEFAULT_SOURCE_ROOT = PROJECT_ROOT / ".local-data" / "piu-scores"
+RUNTIME_REFERENCE_ROOT = PROJECT_ROOT / "runtime_reference_data"
 COMPATIBILITY_JSON_ARTIFACTS = {
     "analysis/phoenix1/latest.json": Path("phoenix1/analysis/web_results.json"),
     "analysis/phoenix2/latest.json": Path("phoenix2/analysis/web_results.json"),
     "analysis/combined/latest.json": Path("combined/analysis/web_results.json"),
 }
+
+
+def _reference_path(relative_path: str, *, project_root: Path = PROJECT_ROOT) -> Path:
+    primary = project_root / relative_path
+    if primary.is_file():
+        return primary
+    return project_root / RUNTIME_REFERENCE_ROOT.name / Path(relative_path).name
+
+
 REFERENCE_JSON_ARTIFACTS = {
-    "reference/phoenix1/public.json": PROJECT_ROOT / "public/data/phoenix1.json",
-    "reference/phoenix1/manifest.json": PROJECT_ROOT / "public/data/phoenix1.manifest.json",
-    "reference/phoenix1/rerates.json": PROJECT_ROOT / "public/data/phoenix1-rerates.json",
-    "reference/nevsister/videos.json": PROJECT_ROOT / "lib/data/nevsister-chart-videos.json",
-    "reference/nevsister/overrides.json": PROJECT_ROOT / "lib/data/nevsister-chart-video-overrides.json",
+    "reference/phoenix1/public.json": _reference_path("public/data/phoenix1.json"),
+    "reference/phoenix1/manifest.json": _reference_path(
+        "public/data/phoenix1.manifest.json"
+    ),
+    "reference/phoenix1/rerates.json": _reference_path(
+        "public/data/phoenix1-rerates.json"
+    ),
+    "reference/nevsister/videos.json": PROJECT_ROOT
+    / "lib/data/nevsister-chart-videos.json",
+    "reference/nevsister/overrides.json": PROJECT_ROOT
+    / "lib/data/nevsister-chart-video-overrides.json",
 }
 
 
@@ -122,11 +138,13 @@ def _import_reference_rows(connection: Any) -> tuple[Any, dict[str, int]]:
     """Import immutable archive/reference provenance separately from live analysis."""
     from psycopg.types.json import Jsonb
 
-    archive_path = PROJECT_ROOT / "public/data/phoenix1.json"
-    archive_manifest_path = PROJECT_ROOT / "public/data/phoenix1.manifest.json"
-    rerates_path = PROJECT_ROOT / "public/data/phoenix1-rerates.json"
-    videos_path = PROJECT_ROOT / "lib/data/nevsister-chart-videos.json"
-    overrides_path = PROJECT_ROOT / "lib/data/nevsister-chart-video-overrides.json"
+    archive_path = REFERENCE_JSON_ARTIFACTS["reference/phoenix1/public.json"]
+    archive_manifest_path = REFERENCE_JSON_ARTIFACTS[
+        "reference/phoenix1/manifest.json"
+    ]
+    rerates_path = REFERENCE_JSON_ARTIFACTS["reference/phoenix1/rerates.json"]
+    videos_path = REFERENCE_JSON_ARTIFACTS["reference/nevsister/videos.json"]
+    overrides_path = REFERENCE_JSON_ARTIFACTS["reference/nevsister/overrides.json"]
     archive = json.loads(archive_path.read_text(encoding="utf-8"))
     archive_manifest = json.loads(archive_manifest_path.read_text(encoding="utf-8"))
     rerates = json.loads(rerates_path.read_text(encoding="utf-8"))["rerates"]
