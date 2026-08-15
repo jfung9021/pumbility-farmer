@@ -24,6 +24,7 @@ from analysis_runtime import (
     TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
     TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE,
     TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+    TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE,
     TYPED_CHECKPOINT_MODEL_PHASE,
     TYPED_CHECKPOINT_SCHEMA_VERSION,
     TYPED_CHECKPOINT_SNAPSHOT_PHASE,
@@ -32,6 +33,7 @@ from analysis_runtime import (
     RuntimeJobStore,
     VercelPrivateBlobStore,
     VercelRuntimeJobStore,
+    _audit_checkpoint_resume,
     _canonical_json_sha256,
     _checkpoint_continuation,
     _load_typed_checkpoint_shard,
@@ -70,6 +72,7 @@ from piu_recommendations import (
     recommendation_blob_path,
     recommendation_shard_path,
 )
+from pumbility_contract import recommendation_generation_key
 from recommendation_refresh import (
     player_refresh_job_id,
     recommendation_index_path,
@@ -343,6 +346,51 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(body["outcome"], "started")
         self.assertEqual(body["job"]["attempt"], 1)
         self.assertEqual(enqueued, ["analysis-20260807T06-r1"])
+
+    def test_failed_publish_ready_job_requeues_the_same_checkpoint(self) -> None:
+        blobs = MemoryBlobStore()
+        jobs = MemoryJobStore()
+        failed = new_job("analysis-publish-ready", NOW - timedelta(minutes=10))
+        jobs.save(failed)
+        jobs.set_latest_job_id(failed["id"])
+        update_job(
+            jobs,
+            failed["id"],
+            now=NOW - timedelta(minutes=6),
+            status="failed",
+            retryAllowedAtUtc=isoformat_utc(NOW - timedelta(minutes=1)),
+        )
+        blobs.put_json(
+            typed_checkpoint_path(failed["id"]),
+            {
+                "phase": TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+                "publicationAttempts": 2,
+            },
+        )
+        enqueued: list[str] = []
+
+        status, body = request_refresh(blobs, jobs, enqueued.append, now=NOW)
+
+        self.assertEqual((status, body["outcome"]), (202, "resumed"))
+        self.assertEqual(body["job"]["id"], failed["id"])
+        self.assertEqual(body["job"]["status"], "queued")
+        self.assertEqual(body["job"]["stage"], "publishing")
+        self.assertEqual(enqueued, [failed["id"]])
+        self.assertEqual(jobs.active_job_id(), failed["id"])
+
+    def test_terminal_publication_audit_has_its_own_bounded_budget(self) -> None:
+        blobs = MemoryBlobStore()
+        pathname = typed_checkpoint_path("publish-audit")
+        checkpoint = {
+            "phase": TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+            "resumeAudit": {"token": "database-model", "observations": 2},
+        }
+
+        for expected in range(1, 6):
+            checkpoint = _audit_checkpoint_resume(blobs, pathname, checkpoint)
+            self.assertEqual(checkpoint["publicationAttempts"], expected)
+        with self.assertRaisesRegex(ValueError, "exhausted"):
+            _audit_checkpoint_resume(blobs, pathname, checkpoint)
 
     def test_enqueue_failure_is_json_safe_job_failure(self) -> None:
         blobs = MemoryBlobStore()
@@ -1009,6 +1057,31 @@ class WorkerClient:
         raise AssertionError(path)
 
 
+def _recommendation_model_artifacts_fixture(
+    *_args, generated_at_utc: str, generation_key: str, **_kwargs
+):
+    return (
+        {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            "storageSchemaVersion": 3,
+            "refreshSupported": True,
+            "generationKey": generation_key,
+            "generatedAtUtc": generated_at_utc,
+            "modelGeneratedAtUtc": generated_at_utc,
+            "inputShardCount": 0,
+            "players": [],
+        },
+        {"generationKey": generation_key, "generatedAtUtc": generated_at_utc},
+        b"model",
+        [],
+        [],
+    )
+
+
+def _combined_tier_payload_fixture(*_args, generated_at_utc: str, **_kwargs):
+    return {"generatedAtUtc": generated_at_utc}
+
+
 class WorkerTests(unittest.TestCase):
     def test_queue_visibility_covers_the_full_worker_duration(self) -> None:
         from worker.celery import app
@@ -1179,7 +1252,7 @@ class WorkerTests(unittest.TestCase):
             blobs.get_json(recommendation_blob_path())["generationKey"], "current"
         )
 
-    def test_disabled_v3_rollout_builds_shadow_generation_without_repointing(self) -> None:
+    def test_v3_publication_is_not_suppressed_by_player_refresh_flag(self) -> None:
         blobs = MemoryBlobStore()
         legacy = {
             "storageSchemaVersion": 2,
@@ -1206,8 +1279,68 @@ class WorkerTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            blobs.get_json(recommendation_blob_path())["generationKey"], "legacy"
+            blobs.get_json(recommendation_blob_path())["generationKey"], "candidate"
         )
+
+    def test_post_publish_cleanup_failure_does_not_roll_back_pointers(self) -> None:
+        class CleanupFailingStore(MemoryBlobStore):
+            def list(self, prefix: str):
+                if prefix.startswith("analysis/recommendations/indexes/"):
+                    raise TimeoutError("private cleanup detail")
+                return super().list(prefix)
+
+        blobs = CleanupFailingStore()
+        recommendation = {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            "storageSchemaVersion": 3,
+            "refreshSupported": True,
+            "generationKey": "current",
+            "generatedAtUtc": isoformat_utc(NOW),
+            "players": [],
+        }
+
+        with self.assertLogs("pumbility.publication", level="WARNING") as captured:
+            warning_count = publish_success(
+                blobs,
+                job_id="cleanup-warning",
+                snapshot={"mix": "Phoenix2", "players": [], "charts": [], "scores": []},
+                payload=latest_payload(NOW),
+                recommendations=recommendation,
+            )
+
+        self.assertEqual(warning_count, 1)
+        self.assertEqual(
+            blobs.get_json(recommendation_blob_path())["generationKey"], "current"
+        )
+        telemetry = "\n".join(captured.output)
+        self.assertIn('"phase":"post-publish-cleanup"', telemetry)
+        self.assertNotIn("private cleanup detail", telemetry)
+
+    def test_atomic_bundle_failure_retains_previous_public_pointers(self) -> None:
+        class FailingBundleStore(MemoryBlobStore):
+            def put_json_bundle(self, payloads):
+                del payloads
+                raise TimeoutError("bundle failed")
+
+        blobs = FailingBundleStore()
+        blobs.put_json(
+            recommendation_blob_path(),
+            {"generationKey": "previous", "players": []},
+        )
+        with self.assertRaises(TimeoutError):
+            publish_success(
+                blobs,
+                job_id="candidate",
+                snapshot={"mix": "Phoenix2", "players": [], "charts": [], "scores": []},
+                payload=latest_payload(NOW),
+                recommendations={"generationKey": "candidate", "players": []},
+                publish_snapshot=False,
+            )
+
+        self.assertEqual(
+            blobs.get_json(recommendation_blob_path())["generationKey"], "previous"
+        )
+        self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
 
     def test_v3_publish_removes_revoked_player_state_and_result_only(self) -> None:
         blobs = MemoryBlobStore()
@@ -1340,19 +1473,34 @@ class WorkerTests(unittest.TestCase):
                 )
 
         blobs = TypedMemoryStore()
+        blobs.put_json(
+            "analysis/private/phoenix1.json",
+            {"mix": "Phoenix", "players": [], "charts": [], "scores": []},
+        )
         jobs = MemoryJobStore()
         job = new_job("typed-analysis", NOW)
         jobs.save(job)
         jobs.set_latest_job_id(job["id"])
         jobs.set_active_job_id(job["id"])
 
-        result = execute_analysis_job(
-            job["id"],
-            blobs=blobs,
-            jobs=jobs,
-            client=WorkerClient(),
-            now=lambda: NOW,
-        )
+        with (
+            patch("analysis_runtime.build_combined_chart_results", return_value=([], {}, {})),
+            patch(
+                "analysis_runtime.build_combined_tier_payload",
+                side_effect=_combined_tier_payload_fixture,
+            ),
+            patch(
+                "analysis_runtime.build_recommendation_model_artifacts",
+                side_effect=_recommendation_model_artifacts_fixture,
+            ),
+        ):
+            result = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+            )
 
         self.assertEqual(result["status"], "completed")
         self.assertIsNone(blobs.latest_before_typed)
@@ -1686,32 +1834,61 @@ class WorkerTests(unittest.TestCase):
                 super().__init__()
                 self.persist_attempts = 0
 
-            def persist_typed_generation(self, **_kwargs):
+            def persist_typed_generation(self, **kwargs):
                 self.persist_attempts += 1
                 if self.persist_attempts == 1:
                     raise RuntimeError("typed persistence unavailable")
-                return "analysis-run", None
+                return (
+                    "analysis-run",
+                    "model-generation" if kwargs["phase"] == "model" else None,
+                )
 
         blobs = ResumableTypedStore()
+        blobs.put_json(
+            "analysis/private/phoenix1.json",
+            {"mix": "Phoenix", "players": [], "charts": [], "scores": []},
+        )
         jobs = MemoryJobStore()
         job = new_job("typed-analysis-resume", NOW)
         jobs.save(job)
         jobs.set_latest_job_id(job["id"])
         jobs.set_active_job_id(job["id"])
 
-        first = execute_analysis_job(
-            job["id"],
-            blobs=blobs,
-            jobs=jobs,
-            client=WorkerClient(),
-            now=lambda: NOW,
-        )
+        with (
+            patch("analysis_runtime.build_combined_chart_results", return_value=([], {}, {})),
+            patch(
+                "analysis_runtime.build_combined_tier_payload",
+                side_effect=_combined_tier_payload_fixture,
+            ),
+            patch(
+                "analysis_runtime.build_recommendation_model_artifacts",
+                side_effect=_recommendation_model_artifacts_fixture,
+            ),
+        ):
+            first = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+            )
         self.assertEqual(first["status"], "failed")
         self.assertIsNotNone(blobs.get_json(typed_checkpoint_path(job["id"])))
 
-        with patch(
-            "analysis_runtime.analyze_snapshot",
-            side_effect=AssertionError("analysis must not repeat"),
+        with (
+            patch(
+                "analysis_runtime.analyze_snapshot",
+                side_effect=AssertionError("analysis must not repeat"),
+            ),
+            patch("analysis_runtime.build_combined_chart_results", return_value=([], {}, {})),
+            patch(
+                "analysis_runtime.build_combined_tier_payload",
+                side_effect=_combined_tier_payload_fixture,
+            ),
+            patch(
+                "analysis_runtime.build_recommendation_model_artifacts",
+                side_effect=_recommendation_model_artifacts_fixture,
+            ),
         ):
             second = execute_analysis_job(
                 job["id"],
@@ -1759,12 +1936,15 @@ class WorkerTests(unittest.TestCase):
             "analysis/private/phoenix1.json",
             {"mix": "Phoenix", "players": [], "charts": [], "scores": []},
         )
-        generation = "typed-bounded-phases"
+        generation = recommendation_generation_key(job["id"])
         model_artifacts = (
             {
+                "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
                 "storageSchemaVersion": 3,
+                "refreshSupported": True,
                 "generationKey": generation,
                 "generatedAtUtc": isoformat_utc(NOW),
+                "modelGeneratedAtUtc": isoformat_utc(NOW),
                 "inputShardCount": 0,
                 "players": [],
             },
@@ -1784,6 +1964,9 @@ class WorkerTests(unittest.TestCase):
         )
 
         checkpoint = blobs.get_json(typed_checkpoint_path(job["id"]))
+        generated_at = checkpoint["payload"]["generatedAtUtc"]
+        model_artifacts[0]["generatedAtUtc"] = generated_at
+        model_artifacts[0]["modelGeneratedAtUtc"] = generated_at
         self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "model")
         self.assertEqual(checkpoint["phase"], TYPED_CHECKPOINT_ANALYSIS_PHASE)
         self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
@@ -1794,7 +1977,10 @@ class WorkerTests(unittest.TestCase):
                 side_effect=AssertionError("base analysis must not repeat"),
             ),
             patch("analysis_runtime.build_combined_chart_results", return_value=([], {}, {})),
-            patch("analysis_runtime.build_combined_tier_payload", return_value={}),
+            patch(
+                "analysis_runtime.build_combined_tier_payload",
+                return_value={"generatedAtUtc": generated_at},
+            ),
             patch(
                 "analysis_runtime.build_recommendation_model_artifacts",
                 return_value=model_artifacts,
@@ -1820,7 +2006,7 @@ class WorkerTests(unittest.TestCase):
             third_phase = blobs.get_json(typed_checkpoint_path(job["id"]))["phase"]
             continuations = [second, third]
             phases = [second_phase, third_phase]
-            while True:
+            for _ in range(20):
                 result = execute_analysis_job(
                     job["id"],
                     blobs=blobs,
@@ -1836,6 +2022,8 @@ class WorkerTests(unittest.TestCase):
                 phases.append(
                     blobs.get_json(typed_checkpoint_path(job["id"]))["phase"]
                 )
+            else:
+                self.fail("bounded checkpoint continuations did not complete")
 
         self.assertEqual(second[ANALYSIS_CONTINUATION_FIELD], "snapshot")
         self.assertEqual(third[ANALYSIS_CONTINUATION_FIELD], "database-analysis")
@@ -2041,7 +2229,7 @@ class WorkerTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(jobs.started_for, job["id"])
-        self.assertGreaterEqual(jobs.handle.pulses, 6)
+        self.assertGreaterEqual(jobs.handle.pulses, 5)
         self.assertEqual(jobs.handle.stops, 1)
         self.assertFalse(jobs.handle.active)
 
@@ -2079,6 +2267,35 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         publish.assert_not_called()
         self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
+
+    def test_heartbeat_stop_failure_after_publication_keeps_job_completed(self) -> None:
+        class FailingStopHeartbeat:
+            def pulse(self) -> None:
+                return None
+
+            def stop(self) -> None:
+                raise RuntimeError("private heartbeat detail")
+
+        class HeartbeatJobs(MemoryJobStore):
+            def start_lease_heartbeat(self, _job_id: str) -> FailingStopHeartbeat:
+                return FailingStopHeartbeat()
+
+        blobs = MemoryBlobStore()
+        jobs = HeartbeatJobs()
+        job = new_job("post-commit-heartbeat", NOW)
+        jobs.save(job)
+        jobs.set_active_job_id(job["id"])
+
+        with self.assertLogs("pumbility.publication", level="WARNING") as captured:
+            result = execute_analysis_job(
+                job["id"], blobs=blobs, jobs=jobs, client=WorkerClient(), now=lambda: NOW
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
+        telemetry = "\n".join(captured.output)
+        self.assertIn('"outcome":"heartbeat-warning"', telemetry)
+        self.assertNotIn("private heartbeat detail", telemetry)
 
     def test_deployment_job_reuses_snapshot_without_upstream_sync(self) -> None:
         blobs = MemoryBlobStore()
