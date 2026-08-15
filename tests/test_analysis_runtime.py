@@ -1562,6 +1562,91 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("no progress", result["error"])
         self.assertIsNone(jobs.active_job_id())
 
+    def test_model_resume_recovers_a_committed_generation_before_stuck_audit(self) -> None:
+        from pumbility_contract import (
+            recommendation_generation_key,
+            recommendation_index_path,
+            recommendation_model_path,
+            recommendation_score_model_path,
+        )
+
+        class TypedMemoryStore(MemoryBlobStore):
+            typed_persistence_enabled = True
+
+        blobs = TypedMemoryStore()
+        jobs = MemoryJobStore()
+        job = new_job("typed-model-commit-redelivery", NOW)
+        jobs.save(job)
+        jobs.set_active_job_id(job["id"])
+        blobs.put_json(
+            "analysis/private/phoenix1.json",
+            {"mix": "Phoenix", "players": [], "charts": [], "scores": []},
+        )
+        first = execute_analysis_job(
+            job["id"],
+            blobs=blobs,
+            jobs=jobs,
+            client=WorkerClient(),
+            now=lambda: NOW,
+            yield_after_typed_checkpoint=True,
+        )
+        self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "model")
+
+        pathname = typed_checkpoint_path(job["id"])
+        checkpoint = blobs.get_json(pathname)
+        checkpoint["resumeAudit"] = {"token": "analysis", "observations": 2}
+        blobs.put_json(pathname, checkpoint)
+        generated_at = checkpoint["payload"]["generatedAtUtc"]
+        generation = recommendation_generation_key(job["id"])
+        model = {
+            "generationKey": generation,
+            "generatedAtUtc": generated_at,
+        }
+        index = {
+            "generationKey": generation,
+            "modelGeneratedAtUtc": generated_at,
+            "modelPath": recommendation_model_path(generation),
+            "inputShardCount": 0,
+            "players": [],
+        }
+        blobs.put_json(recommendation_model_path(generation), model)
+        blobs.put_bytes(
+            recommendation_score_model_path(generation),
+            b"durable-model",
+            content_type="application/x-npz",
+        )
+        blobs.put_json(recommendation_index_path(generation), index)
+
+        with (
+            patch(
+                "analysis_runtime.build_recommendation_model_artifacts",
+                side_effect=AssertionError("the committed model must not rebuild"),
+            ),
+            patch(
+                "analysis_runtime.build_combined_chart_results",
+                return_value=([], {}, {}),
+            ),
+            patch(
+                "analysis_runtime.build_combined_tier_payload",
+                return_value={"generatedAtUtc": generated_at},
+            ),
+        ):
+            result = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+
+        recovered = blobs.get_json(pathname)
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(result[ANALYSIS_CONTINUATION_FIELD], "snapshot")
+        self.assertEqual(recovered["phase"], TYPED_CHECKPOINT_MODEL_PHASE)
+        self.assertEqual(recovered["model"]["generationKey"], generation)
+        self.assertEqual(recovered["resumeAudit"]["observations"], 2)
+
     def test_typed_persistence_retry_resumes_the_private_checkpoint(self) -> None:
         class ResumableTypedStore(MemoryBlobStore):
             typed_persistence_enabled = True
