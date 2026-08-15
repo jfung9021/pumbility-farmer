@@ -246,11 +246,12 @@ test("chart video links are accessible external links on every requested surface
     tierList,
     /className="chart-dialog-art-rail"[\s\S]*<ChartVideoLink[\s\S]*chartId=\{chart\.chartId\}[\s\S]*variant="dialog"/,
   );
-  assert.match(
-    tierList,
-    /function CompactChartCard[\s\S]*<ChartVideoLink[\s\S]*chartId=\{chart\.chartId\}[\s\S]*variant="compact-tier"/,
+  const compactChartCard = tierList.slice(
+    tierList.indexOf("function CompactChartCard"),
+    tierList.indexOf("function CompactChartGrid"),
   );
-  assert.match(component, /"compact-tier"/);
+  assert.doesNotMatch(compactChartCard, /ChartVideoLink/);
+  assert.doesNotMatch(component, /"compact-tier"/);
 });
 
 test("NEVSISTER catalog has the complete validated chart inventory", async () => {
@@ -284,7 +285,8 @@ test("chart video controls use existing card tracks and out-of-flow positioning"
   assert.match(css, /\.chart-card \{[^}]*grid-template-columns: 58px minmax\(0, 1fr\) 104px;[^}]*min-height: 86px;/);
   assert.match(css, /\.chart-art-rail \{[^}]*height: 58px;[^}]*position: relative;[^}]*width: 58px;/);
   assert.match(css, /\.chart-video-link \{[^}]*position: absolute;/);
-  assert.match(css, /\.chart-video-link-compact-tier \{[^}]*align-self: center;[^}]*position: static;/);
+  assert.doesNotMatch(css, /\.chart-video-link-compact-tier/);
+  assert.match(css, /\.chart-video-link-dialog \{[^}]*left: 50%;[^}]*transform: translateX\(-50%\);/);
   assert.match(css, /\.chart-video-link-recommendation \{[^}]*left: 50%;[^}]*transform: translateX\(-50%\);/);
   assert.match(css, /\.recommendation-rank \{[^}]*text-align: center;[^}]*width: 100%;/);
 
@@ -426,7 +428,7 @@ test("tier list uses compact segmented controls for grouping and layout", async 
   assert.match(page, /aria-label="Chart layout" className="view-switcher" role="group"/);
   assert.match(page, /aria-pressed=\{groupingView === "estimated"\}/);
   assert.match(css, /\.results-switchers \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
-  assert.match(css, /font-size: clamp\(6px, 2vw, 8px\)/);
+  assert.match(css, /\.view-switcher button \{[^}]*font-size: clamp\(6px, 2vw, 8px\);/);
   assert.match(css, /\.view-switcher button \{[^}]*line-height: 1\.15;[^}]*min-height: 42px;[^}]*white-space: normal;/);
   assert.match(css, /max-width: calc\(100vw - 24px\)/);
   assert.match(page, /truncateEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
@@ -462,12 +464,15 @@ test("tier list compact layout uses art-only buttons and a details dialog", asyn
   assert.match(page, /chart-difficulty-badge/);
   assert.match(page, /compact=\{layoutView === "compact"\}/);
   assert.match(page, /<TierDivider[\s\S]*headingId=\{sectionId\}[\s\S]*label=\{label\}/);
+  assert.doesNotMatch(page, /<TierDivider[^>]*(?:count|detail)=/);
+  const tierDivider = page.slice(page.indexOf("function TierDivider"), page.indexOf("function ChartDetailDialog"));
+  assert.doesNotMatch(tierDivider, /tier-divider-detail|tier-count|\{count\}|\{detail\}/);
   assert.doesNotMatch(css, /\.tier, \.unrated-section \{[^}]*background:/);
   assert.doesNotMatch(css, /\.tier, \.unrated-section \{[^}]*border:/);
   assert.doesNotMatch(css, /\.unrated-section header/);
   assert.match(css, /\.tier-divider-leading \{[^}]*flex: 0 0 24px;/);
   assert.match(css, /\.tier-divider-trailing \{[^}]*flex: 1 1 auto;/);
-  assert.match(css, /\.tier-divider h2 \{[^}]*font-size: 8px;[^}]*font-weight: 800;[^}]*letter-spacing: 0\.03em;[^}]*text-transform: uppercase;/);
+  assert.match(css, /\.tier-divider h2 \{[^}]*font-size: 10px;[^}]*font-weight: 800;[^}]*letter-spacing: 0\.03em;[^}]*text-transform: uppercase;/);
   assert.match(css, /\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(84px, 96px\)\);/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\);/);
   assert.match(css, /@media \(max-width: 389px\)[\s\S]*\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
@@ -504,7 +509,7 @@ test("tier list chart details provide local mode-specific what-if estimates", as
   assert.match(css, /\.chart-dialog-body \{[^}]*grid-template-columns: 96px minmax\(0, 1fr\);/);
   assert.match(css, /\.chart-dialog-body \.delta \{[^}]*grid-column: 2;[^}]*min-height: 0;[^}]*padding: 13px 0 0;/);
   assert.match(css, /\.what-if-control \{[^}]*font-size: 8px;[^}]*position: absolute;[^}]*right: calc\(100% \+ 19px\);[^}]*white-space: nowrap;/);
-  assert.match(css, /\.what-if-control select \{[^}]*width: calc\(4ch \+ 16px\);/);
+  assert.match(css, /\.what-if-control select \{[^}]*width: calc\(6ch \+ 16px\);/);
   assert.match(css, /\.chart-dialog-body \.what-if-control \{[^}]*bottom: 0;[^}]*right: 0;/);
 });
 
