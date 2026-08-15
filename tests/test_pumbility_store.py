@@ -103,6 +103,49 @@ class BackendConfigurationTests(unittest.TestCase):
         )
 
 
+class PumbilityArtifactWriteTests(unittest.TestCase):
+    def test_canonical_snapshot_write_needs_no_retired_rollout_flag(self) -> None:
+        cursor = Mock()
+        cursor.__enter__ = Mock(return_value=cursor)
+        cursor.__exit__ = Mock(return_value=False)
+        transaction = Mock()
+        transaction.__enter__ = Mock(return_value=transaction)
+        transaction.__exit__ = Mock(return_value=False)
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.cursor.return_value = cursor
+        connection.transaction.return_value = transaction
+        snapshot = {
+            "schemaVersion": 1,
+            "mix": "Phoenix2",
+            "generatedAtUtc": "2026-08-16T00:00:00Z",
+            "players": [],
+            "charts": [],
+            "scores": [],
+        }
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("pumbility_store._connect", return_value=connection),
+            patch("pumbility_store._assert_schema") as assert_schema,
+            patch("scripts.backfill_pumbility_supabase._import_mix") as import_mix,
+        ):
+            PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).put_json("analysis/private/phoenix2-current.json", snapshot)
+
+        assert_schema.assert_called_once_with(cursor)
+        import_mix.assert_called_once()
+        imported_connection, imported_mix, imported_manifest, imported_snapshot = (
+            import_mix.call_args.args
+        )
+        self.assertIs(imported_connection, connection)
+        self.assertEqual(imported_mix, "phoenix2")
+        self.assertEqual(imported_manifest["source"], "runtime-shadow-checkpoint")
+        self.assertIs(imported_snapshot, snapshot)
+
+
 class ShadowStoreTests(unittest.TestCase):
     def test_json_reads_primary_and_mirrors_writes(self) -> None:
         primary = Mock()
