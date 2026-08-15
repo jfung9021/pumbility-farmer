@@ -1382,6 +1382,89 @@ def _audit_checkpoint_resume(
     return value
 
 
+def _recover_published_model_checkpoint(
+    blobs: JsonBlobStore,
+    *,
+    job_id: str,
+    snapshot: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
+    """Recover model output whose generation commit marker preceded a redelivery."""
+    generation = recommendation_generation_key(job_id)
+    index = blobs.get_json(recommendation_index_path(generation))
+    if index is None:
+        return None
+    generated_at = payload.get("generatedAtUtc")
+    raw_shard_count = index.get("inputShardCount")
+    if (
+        index.get("generationKey") != generation
+        or index.get("modelGeneratedAtUtc") != generated_at
+        or index.get("modelPath") != recommendation_model_path(generation)
+        or not isinstance(raw_shard_count, int)
+        or isinstance(raw_shard_count, bool)
+        or raw_shard_count < 0
+    ):
+        raise ValueError("The durable recommendation model commit marker is invalid.")
+
+    model = blobs.get_json(recommendation_model_path(generation))
+    score_model = blobs.get_bytes(recommendation_score_model_path(generation))
+    if (
+        model is None
+        or score_model is None
+        or model.get("generationKey") != generation
+        or model.get("generatedAtUtc") != generated_at
+    ):
+        raise RuntimeError("The durable recommendation model generation is incomplete.")
+
+    phoenix1_hashes: list[str] = []
+    phoenix2_hashes: list[str] = []
+    for shard in range(raw_shard_count):
+        phoenix1 = blobs.get_json(
+            recommendation_phoenix1_shard_path(generation, shard)
+        )
+        phoenix2 = blobs.get_json(
+            recommendation_phoenix2_shard_path(generation, shard)
+        )
+        if (
+            phoenix1 is None
+            or phoenix2 is None
+            or phoenix1.get("generationKey") != generation
+            or phoenix2.get("generationKey") != generation
+        ):
+            raise RuntimeError(
+                "The durable recommendation model input generation is incomplete."
+            )
+        phoenix1_hashes.append(_canonical_json_sha256(phoenix1))
+        phoenix2_hashes.append(_canonical_json_sha256(phoenix2))
+        del phoenix1, phoenix2
+
+    frozen_phoenix1 = blobs.get_json(phoenix1_snapshot_path())
+    if frozen_phoenix1 is None:
+        raise RuntimeError(
+            "The Phoenix 1 snapshot for the durable recommendation model is unavailable."
+        )
+    phoenix1_snapshot = sanitize_snapshot(frozen_phoenix1, mix="phoenix1")
+    combined_charts, _, combined_metadata = build_combined_chart_results(
+        phoenix1_snapshot, snapshot
+    )
+    combined_tier = build_combined_tier_payload(
+        combined_charts,
+        combined_metadata,
+        generated_at_utc=generated_at,
+    )
+    metadata = {
+        "generationKey": generation,
+        "phoenix1ShardCount": raw_shard_count,
+        "phoenix2ShardCount": raw_shard_count,
+        "indexSha256": _canonical_json_sha256(index),
+        "modelSha256": _canonical_json_sha256(model),
+        "scoreModelSha256": hashlib.sha256(score_model).hexdigest(),
+        "phoenix1ShardsSha256": _canonical_json_sha256(phoenix1_hashes),
+        "phoenix2ShardsSha256": _canonical_json_sha256(phoenix2_hashes),
+    }
+    return dict(combined_tier), dict(index), metadata
+
+
 def _load_checkpoint_model_artifacts(
     blobs: JsonBlobStore, metadata: Mapping[str, Any] | None
 ) -> tuple[
@@ -1639,9 +1722,44 @@ def _resume_typed_analysis_checkpoint(
     if parse_utc(payload.get("generatedAtUtc")) is None:
         raise ValueError("The typed analysis checkpoint timestamp is invalid.")
     manifest = _typed_manifest(checkpoint)
-    checkpoint = _audit_checkpoint_resume(
-        blob_store, checkpoint_path, checkpoint
-    )
+    recovered_model_checkpoint = False
+    if checkpoint_phase == TYPED_CHECKPOINT_ANALYSIS_PHASE and raw_model is None:
+        recovered_model = _recover_published_model_checkpoint(
+            blob_store,
+            job_id=job_id,
+            snapshot=snapshot,
+            payload=payload,
+        )
+        if recovered_model is not None:
+            recovered_combined_tier, _, recovered_metadata = recovered_model
+            checkpoint = {
+                **checkpoint,
+                "phase": TYPED_CHECKPOINT_MODEL_PHASE,
+                "combinedTier": recovered_combined_tier,
+                "model": recovered_metadata,
+            }
+            blob_store.put_json(checkpoint_path, checkpoint)
+            _pulse_job_lease(lease_heartbeat)
+            checkpoint_phase = TYPED_CHECKPOINT_MODEL_PHASE
+            raw_combined_tier = recovered_combined_tier
+            raw_model = recovered_metadata
+            recovered_model_checkpoint = True
+    if not recovered_model_checkpoint:
+        checkpoint = _audit_checkpoint_resume(
+            blob_store, checkpoint_path, checkpoint
+        )
+    elif yield_after_checkpoint:
+        return _checkpoint_continuation(
+            job_store=job_store,
+            job_id=job_id,
+            continuation="snapshot",
+            stage="publishing",
+            message=(
+                "Recovered the durable recommendation model; queued for snapshot "
+                "persistence."
+            ),
+            lease_heartbeat=lease_heartbeat,
+        )
 
     if checkpoint_phase == TYPED_CHECKPOINT_ANALYSIS_PHASE:
         (
