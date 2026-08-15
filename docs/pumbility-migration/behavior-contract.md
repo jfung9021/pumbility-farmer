@@ -95,6 +95,7 @@ The backend production player list is 30 seconds; the standalone local list is f
 - Polls selected-player jobs every second for at most 30 seconds.
 - A refresh error does not replace an already displayed cache with an error state.
 - Official-level options derive from the complete mode-specific candidate pool; unfiltered mode shows at most the top 20.
+- Each player mode exposes `topScores`: the exact retained Phoenix 2 Pumbility rows used by that mode's `currentTop50Pumbility`, ordered by Pumbility, raw score, and chart ID and capped at 50. Single and Double use independent pools; Overall uses the shared S+D pool. These public rows contain allowlisted chart/display metadata, authoritative Pumbility, and server-derived grade and normalized plate only; raw score, player ID, timestamps, broken-score state, and full score history remain private.
 - Overall progress uses rank emblems; Single/Double use title ladders.
 - Arrow/Home/End tab navigation and current accessibility labels remain.
 
@@ -111,7 +112,7 @@ The backend production player list is 30 seconds; the standalone local list is f
 
 - The demo payload fixes seven effect bands, the 0.4 scale, level-16 display floor, and controlled mode rows.
 - Local analysis validation rejects credential-shaped values and private keys including player ID, username, game tag, authorization, API key, and token.
-- Local recommendations require schema 21 and reject private fields/full score arrays.
+- Local recommendations require schema 22 and reject private fields/full score arrays.
 - A legacy Phoenix 2 disk aggregate without mix metadata is normalized only for the default Phoenix 2 read.
 - Current React source does not render the README-described “Local snapshot” badge or “Reload local results” button. Those are not migration acceptance requirements unless implemented in a separately approved product change.
 

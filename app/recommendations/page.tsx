@@ -2,6 +2,7 @@
 
 import { track } from "@vercel/analytics";
 import {
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -33,6 +34,7 @@ import type {
   RecommendationPlayerSummary,
   RecommendationPlayersResponse,
   RecommendationScoreProgress,
+  RecommendationTopScore,
 } from "../../lib/types";
 
 
@@ -48,6 +50,7 @@ const INITIAL_DIFFICULTY_FILTERS: Record<RecommendationModeKey, string> = {
 };
 const DEFAULT_RECOMMENDATION_SCORE_TARGET = 30;
 const MODEL_DELAY_THRESHOLD_MS = 26 * 60 * 60 * 1000;
+type RecommendationView = "recommendations" | "top50";
 
 
 function signed(value: number, digits = 2): string {
@@ -350,6 +353,245 @@ function RecommendationCard({
   );
 }
 
+function TopScoreCard({
+  rank,
+  score,
+  onSelect,
+}: {
+  rank: number;
+  score: RecommendationTopScore;
+  onSelect: (score: RecommendationTopScore, rank: number) => void;
+}) {
+  const limitedData = score.nContributors !== null
+    && hasLimitedData(score.nContributors);
+  const result = [score.grade, score.plateCode].filter(Boolean).join(" ") || "Result unavailable";
+  return (
+    <article className="top-score-card">
+      <button
+        aria-label={`View details for rank ${rank}, ${score.songName}, ${score.difficulty}, ${result}`}
+        className="top-score-card-button"
+        onClick={() => onSelect(score, rank)}
+        type="button"
+      >
+        <span className="chart-art top-score-jacket" data-chart-type={score.type}>
+          {score.imageUrl
+            ? <img alt="" loading="lazy" src={score.imageUrl} />
+            : <b>{score.difficulty}</b>}
+          <span aria-hidden="true" className="top-score-rank">#{rank}</span>
+          {limitedData ? (
+            <span
+              aria-label={`Limited data: ${score.nContributors} unique player observations`}
+              className="limited-data-warning compact-warning top-score-warning"
+              role="img"
+              title="Limited data"
+            ><b aria-hidden="true">!</b></span>
+          ) : null}
+          <span
+            aria-hidden="true"
+            className={`chart-difficulty-badge chart-difficulty-${score.type.toLowerCase()}`}
+          >
+            {score.level}
+          </span>
+        </span>
+        <span className="top-score-copy">
+          <strong title={score.songName}>{score.songName}</strong>
+          <small title={score.stepArtist || "Unknown step artist"}>
+            {score.stepArtist || "Unknown step artist"}
+          </small>
+        </span>
+        <span className="top-score-result">
+          <span>
+            <b>{score.grade || "—"}</b>
+            <small>{score.plateCode || "—"}</small>
+          </span>
+          <strong>{pumbilityLabel(score.pumbility)}</strong>
+        </span>
+      </button>
+    </article>
+  );
+}
+
+function TopScoreDetailDialog({
+  rank,
+  score,
+  onClose,
+}: {
+  rank: number;
+  score: RecommendationTopScore;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const headingId = useId();
+  const descriptionId = useId();
+  const bpm = formatBpm(score.bpmMin, score.bpmMax);
+  const limitedData = score.nContributors !== null
+    && hasLimitedData(score.nContributors);
+  const prefix = score.type === "Single" ? "S" : "D";
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable?.length) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="chart-dialog-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        aria-describedby={descriptionId}
+        aria-labelledby={headingId}
+        aria-modal="true"
+        className="chart-dialog top-score-dialog"
+        ref={dialogRef}
+        role="dialog"
+      >
+        <button
+          aria-label="Close score details"
+          className="chart-dialog-close"
+          onClick={onClose}
+          ref={closeButtonRef}
+          type="button"
+        ><span aria-hidden="true">&times;</span></button>
+        <div className="top-score-dialog-body">
+          <div className="chart-dialog-art-rail top-score-dialog-art-rail">
+            <div className="chart-art jacket chart-dialog-jacket" data-chart-type={score.type} aria-hidden="true">
+              {score.imageUrl ? <img alt="" src={score.imageUrl} /> : <span>{score.difficulty}</span>}
+            </div>
+            <ChartVideoLink
+              chartId={score.chartId}
+              difficulty={score.difficulty}
+              songName={score.songName}
+              variant="dialog"
+            />
+          </div>
+          <div className="chart-copy top-score-dialog-copy">
+            <div className="chart-heading">
+              <h3 id={headingId}>{score.songName}</h3>
+              {limitedData ? (
+                <span
+                  aria-label={`Limited data: ${score.nContributors} unique player observations`}
+                  className="limited-data-warning"
+                  role="img"
+                  title="Limited data"
+                ><b aria-hidden="true">!</b><span>Limited data</span></span>
+              ) : null}
+            </div>
+            <p id={descriptionId}>
+              {score.stepArtist || "Unknown step artist"}
+              {score.noteCount !== null ? ` · ${score.noteCount.toLocaleString()} notes` : ""}
+              {bpm ? ` · ${bpm}` : ""}
+            </p>
+            <div className="chart-meta">
+              <span><b>{score.difficulty}</b> official</span>
+              <span><b>{score.estimatedDifficulty === null
+                ? "Unavailable"
+                : `${prefix}${formatEstimatedDifficulty(score.estimatedDifficulty)}`}</b> estimated</span>
+              {score.difficultyDelta !== null ? (
+                <span><b>{signed(score.difficultyDelta)}</b> difference</span>
+              ) : null}
+              {score.difficultyCi95Low !== null && score.difficultyCi95High !== null ? (
+                <span><b>{formatEstimatedDifficulty(score.difficultyCi95Low)}–{formatEstimatedDifficulty(score.difficultyCi95High)}</b> CI</span>
+              ) : null}
+              {score.nContributors !== null ? (
+                <span><b>{score.nContributors}</b> contributors</span>
+              ) : null}
+              {score.phoenix1Contributors !== null && score.phoenix2Contributors !== null ? (
+                <span><b>{score.phoenix1Contributors}/{score.phoenix2Contributors}</b> P1/P2</span>
+              ) : null}
+              {score.evidenceStatus ? <span><b>{score.evidenceStatus}</b> evidence</span> : null}
+            </div>
+          </div>
+          <div className="top-score-dialog-result">
+            <span><small>Rank</small><strong>#{rank}</strong></span>
+            <span><small>Pumbility</small><strong>{pumbilityLabel(score.pumbility)}</strong></span>
+            <span><small>Grade</small><strong>{score.grade || "Unavailable"}</strong></span>
+            <span><small>Plate</small><strong>{score.plate
+              ? `${score.plate}${score.plateCode ? ` (${score.plateCode})` : ""}`
+              : score.plateCode || "Unavailable"}</strong></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TopScoresSection({
+  mode,
+  scores,
+  onSelect,
+}: {
+  mode: RecommendationModeKey;
+  scores: RecommendationTopScore[];
+  onSelect: (score: RecommendationTopScore, rank: number) => void;
+}) {
+  const modeLabel = mode === "overall" ? "Overall" : mode === "singles" ? "Singles" : "Doubles";
+  return (
+    <section className="top-scores" aria-labelledby="top-scores-title">
+      <div className="recommendation-section-heading top-scores-heading">
+        <h2 id="top-scores-title">TOP 50 PUMBILITY SCORES</h2>
+        <span>Showing {scores.length} of up to 50</span>
+      </div>
+      {scores.length ? (
+        <div className="top-score-grid">
+          {scores.map((score, index) => (
+            <TopScoreCard
+              key={`${score.type}-${score.chartId}`}
+              onSelect={onSelect}
+              rank={index + 1}
+              score={score}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="top-score-empty">
+          <h3>No Top 50 scores yet</h3>
+          <p>{modeLabel} Phoenix 2 Pumbility scores will appear here after score sync.</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function RecommendationsPage() {
   const [playersPayload, setPlayersPayload] = useState<RecommendationPlayersResponse | null>(null);
   const [playerPayload, setPlayerPayload] = useState<PlayerRecommendationsResponse | null>(null);
@@ -357,6 +599,11 @@ export default function RecommendationsPage() {
   const [playerQuery, setPlayerQuery] = useState("");
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
   const [activeMode, setActiveMode] = useState<RecommendationModeKey>("overall");
+  const [recommendationView, setRecommendationView] = useState<RecommendationView>("recommendations");
+  const [selectedTopScore, setSelectedTopScore] = useState<{
+    score: RecommendationTopScore;
+    rank: number;
+  } | null>(null);
   const [difficultyFilters, setDifficultyFilters] = useState<
     Record<RecommendationModeKey, string>
   >({ ...INITIAL_DIFFICULTY_FILTERS });
@@ -492,6 +739,7 @@ export default function RecommendationsPage() {
     setSelectedKey(playerKey);
     setPlayerQuery(inputValue);
     setPlayerMenuOpen(false);
+    setSelectedTopScore(null);
     const url = new URL(window.location.href);
     if (playerKey) url.searchParams.set("player", playerKey);
     else url.searchParams.delete("player");
@@ -533,6 +781,7 @@ export default function RecommendationsPage() {
     }
     event.preventDefault();
     const nextMode = RECOMMENDATION_MODES[nextIndex];
+    setSelectedTopScore(null);
     setActiveMode(nextMode);
     window.requestAnimationFrame(() => {
       document.getElementById(`recommendation-tab-${nextMode}`)?.focus();
@@ -541,6 +790,7 @@ export default function RecommendationsPage() {
   const handlePlayerInput = (value: string) => {
     setPlayerQuery(value);
     setPlayerMenuOpen(true);
+    setSelectedTopScore(null);
     if (!selectedKey) return;
     setDifficultyFilters({ ...INITIAL_DIFFICULTY_FILTERS });
     setSelectedKey("");
@@ -574,6 +824,7 @@ export default function RecommendationsPage() {
     () => recommendationsForDifficulty(activeMode, mode, effectiveDifficulty),
     [activeMode, effectiveDifficulty, mode],
   );
+  const closeTopScoreDialog = useCallback(() => setSelectedTopScore(null), []);
 
   useEffect(() => {
     if (!playerPayload || !mode || selectedDifficulty === ALL_DIFFICULTIES) return;
@@ -624,6 +875,7 @@ export default function RecommendationsPage() {
       <section className="recommendations-hero">
         <div className="player-picker">
           <label htmlFor="player-select">Phoenix 2 username</label>
+          <span className="player-picker-view-label" id="recommendation-view-label">View</span>
           <div className="player-combobox">
             <input
               aria-controls="player-options"
@@ -662,6 +914,20 @@ export default function RecommendationsPage() {
               </div>
             ) : null}
           </div>
+          <button
+            aria-checked={recommendationView === "top50"}
+            aria-labelledby="recommendation-view-label"
+            className={`recommendation-view-switch ${recommendationView === "top50" ? "top50-active" : "recommendations-active"}`}
+            onClick={() => {
+              setSelectedTopScore(null);
+              setRecommendationView((current) => current === "recommendations" ? "top50" : "recommendations");
+            }}
+            role="switch"
+            type="button"
+          >
+            <span>Recommendations</span>
+            <span>Top 50</span>
+          </button>
           <div className="player-picker-meta">
             <ScoreSyncLink className="player-score-sync-link" />
           </div>
@@ -695,7 +961,10 @@ export default function RecommendationsPage() {
                     className={activeMode === modeKey ? "active" : ""}
                     id={`recommendation-tab-${modeKey}`}
                     key={modeKey}
-                    onClick={() => setActiveMode(modeKey)}
+                    onClick={() => {
+                      setSelectedTopScore(null);
+                      setActiveMode(modeKey);
+                    }}
                     onKeyDown={(event) => handleTabKeyDown(event, index)}
                     role="tab"
                     tabIndex={activeMode === modeKey ? 0 : -1}
@@ -713,11 +982,11 @@ export default function RecommendationsPage() {
               id="recommendation-panel"
               role="tabpanel"
             >
-              {mode?.eligible ? (
+              {mode && (mode.eligible || recommendationView === "top50") ? (
                 <ProgressStat mode={activeMode} value={modePumbility} />
               ) : null}
 
-              {unavailableOverallModes.map((modeKey) => {
+              {recommendationView === "recommendations" ? unavailableOverallModes.map((modeKey) => {
                 const label = modeKey === "singles" ? "Singles" : "Doubles";
                 const remaining = Math.max(
                   0,
@@ -734,7 +1003,7 @@ export default function RecommendationsPage() {
                     </span>
                   </div>
                 );
-              })}
+              }) : null}
 
               {activeMode === "overall" && !mode ? (
                 <div className="recommendation-empty insufficient-state">
@@ -745,6 +1014,12 @@ export default function RecommendationsPage() {
                     remain available while the latest analysis is published.
                   </p>
                 </div>
+              ) : recommendationView === "top50" ? (
+                <TopScoresSection
+                  mode={activeMode}
+                  onSelect={(score, rank) => setSelectedTopScore({ score, rank })}
+                  scores={mode?.topScores ?? []}
+                />
               ) : !mode?.eligible ? (
                 <RecommendationReadiness
                   detail={mode?.reason || "This mode cannot be rated yet."}
@@ -790,6 +1065,14 @@ export default function RecommendationsPage() {
           <RecommendationReadiness progress={scoreReadiness} />
         ) : null}
       </section>
+
+      {selectedTopScore ? (
+        <TopScoreDetailDialog
+          onClose={closeTopScoreDialog}
+          rank={selectedTopScore.rank}
+          score={selectedTopScore.score}
+        />
+      ) : null}
 
       <footer>
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>

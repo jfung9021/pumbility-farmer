@@ -188,7 +188,7 @@ test("Pumbility progress uses the Phoenix 2 title and rank boundaries", () => {
   assert.equal(phoenix.nextThreshold, null);
 });
 
-test("recommendation page shows one filterable top-20 list in every mode", async () => {
+test("recommendation page keeps the filterable recommendation list beside the Top 50 view", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
@@ -199,7 +199,10 @@ test("recommendation page shows one filterable top-20 list in every mode", async
   assert.match(page, /aria-label="Official difficulty"/);
   assert.match(page, /recommendationDifficultyOptions/);
   assert.match(page, /recommendationsForDifficulty\(activeMode, mode, effectiveDifficulty\)/);
-  assert.doesNotMatch(page, /Top 50|Top 20 Pumbility opportunities|Top 20 farmable charts/);
+  assert.match(page, /type RecommendationView = "recommendations" \| "top50"/);
+  assert.match(page, /<h2 id="top-scores-title">TOP 50 PUMBILITY SCORES<\/h2>/);
+  assert.match(page, /scores=\{mode\?\.topScores \?\? \[\]\}/);
+  assert.doesNotMatch(page, /Top 20 Pumbility opportunities|Top 20 farmable charts/);
   assert.doesNotMatch(page, /FULL MATCHING SET|function CandidateRow|scoreProjectionEvidenceLabel/);
   assert.doesNotMatch(page, /chart\.projectedScore\.toLocaleString/);
   assert.doesNotMatch(css, /\.all-candidates|\.candidate-(?:row|list|copy|jacket|metric|search|heading)/);
@@ -327,8 +330,8 @@ test("legacy local player responses carry a complete generation timestamp contra
       username: "PLAYER",
       displayName: "PLAYER",
       modes: {
-        singles: { eligible: false, validScoreCount: 0, topRecommendations: [] },
-        doubles: { eligible: false, validScoreCount: 0, topRecommendations: [] },
+        singles: { eligible: false, validScoreCount: 0, topScores: [], topRecommendations: [] },
+        doubles: { eligible: false, validScoreCount: 0, topScores: [], topRecommendations: [] },
       },
     }],
   }, "opaque");
@@ -352,7 +355,67 @@ test("local recommendations reject stale schemas before rendering", () => {
   assert.throws(
     () => validateLocalRecommendationIndex(payload),
     (error: unknown) => error instanceof LocalRecommendationsValidationError
-      && /Regenerate schema 21 recommendations/.test(error.message),
+      && /Regenerate schema 22 recommendations/.test(error.message),
+  );
+});
+
+test("local recommendation schema validates privacy-safe Top 50 rows", () => {
+  const topScore = {
+    mode: "Singles",
+    songName: "Test Song",
+    difficulty: "S21",
+    type: "Single",
+    level: 21,
+    chartId: "test-song-s21",
+    imageUrl: null,
+    noteCount: null,
+    stepArtist: null,
+    bpmMin: null,
+    bpmMax: null,
+    estimatedDifficulty: null,
+    difficultyDelta: null,
+    difficultyCi95Low: null,
+    difficultyCi95High: null,
+    nContributors: null,
+    phoenix1Contributors: null,
+    phoenix2Contributors: null,
+    evidenceStatus: null,
+    pumbility: 350.25,
+    grade: "SSS+",
+    plate: "Perfect Game",
+    plateCode: "PG",
+  };
+  const payload = {
+    schemaVersion: 22,
+    generatedAtUtc: "2026-08-08T00:00:00Z",
+    method: {},
+    charts: [],
+    players: [{
+      playerKey: "opaque",
+      username: "PLAYER",
+      displayName: "PLAYER",
+      modes: {
+        singles: { topScores: [topScore] },
+        doubles: { topScores: [] },
+      },
+    }],
+  };
+
+  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 22);
+  const privatePayload = structuredClone(payload);
+  Object.assign(privatePayload.players[0].modes.singles.topScores[0], { rawScore: 1_000_000 });
+  assert.throws(
+    () => validateLocalRecommendationIndex(privatePayload),
+    LocalRecommendationsValidationError,
+  );
+  const oversizedPayload = structuredClone(payload);
+  oversizedPayload.players[0].modes.singles.topScores = Array.from(
+    { length: 51 },
+    () => structuredClone(topScore),
+  );
+  assert.throws(
+    () => validateLocalRecommendationIndex(oversizedPayload),
+    LocalRecommendationsValidationError,
   );
 });
 
@@ -472,7 +535,8 @@ test("tier list compact layout uses art-only buttons and a details dialog", asyn
   assert.doesNotMatch(css, /\.unrated-section header/);
   assert.match(css, /\.tier-divider-leading \{[^}]*flex: 0 0 24px;/);
   assert.match(css, /\.tier-divider-trailing \{[^}]*flex: 1 1 auto;/);
-  assert.match(css, /\.tier-divider h2 \{[^}]*font-size: 10px;[^}]*font-weight: 800;[^}]*letter-spacing: 0\.03em;[^}]*text-transform: uppercase;/);
+  assert.match(css, /\.tier-divider h2 \{[^}]*font-size: 14px;[^}]*font-weight: 800;[^}]*letter-spacing: 0\.03em;[^}]*text-transform: uppercase;/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.tier-divider h2 \{ font-size: 14px;/);
   assert.match(css, /\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(84px, 96px\)\);/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\);/);
   assert.match(css, /@media \(max-width: 389px\)[\s\S]*\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
@@ -593,7 +657,7 @@ test("mobile recommendation cards keep gain on the right and show estimated diff
   assert.match(css, /\.recommendation-tags \{[^}]*flex-wrap: nowrap;[^}]*margin-top: auto;/);
 });
 
-test("recommendation player picker leads directly into the mode tabs", async () => {
+test("recommendation player picker shares a 2-to-1 row with the view switch", async () => {
   const [page, css] = await Promise.all([
     readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
@@ -607,9 +671,38 @@ test("recommendation player picker leads directly into the mode tabs", async () 
   assert.match(css, /\.recommendations-hero \{[^}]*padding: 0 24px var\(--recommendations-stack-gap\);/);
   assert.match(css, /\.recommendation-mode-row \{[^}]*margin-bottom: var\(--recommendations-stack-gap\);/);
   assert.match(css, /\.top-recommendations \{[^}]*margin-top: var\(--recommendations-stack-gap\);/);
-  assert.match(css, /\.player-picker \{[^}]*grid-template-columns: minmax\(260px, 430px\) 1fr;[^}]*width: 100%;/);
+  assert.match(page, /role="switch"/);
+  assert.match(page, /aria-checked=\{recommendationView === "top50"\}/);
+  assert.match(page, /<span>Recommendations<\/span>[\s\S]*<span>Top 50<\/span>/);
+  assert.match(css, /\.player-picker \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(0, 1fr\);[^}]*width: 100%;/);
+  assert.match(css, /\.player-picker-meta \{[^}]*grid-column: 1 \/ -1;/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendations-page \{ --recommendations-stack-gap: 14px; \}/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendations-hero \{[^}]*padding: 0 12px var\(--recommendations-stack-gap\);/);
+});
+
+test("Top 50 cards expose PIU result data and open an accessible detail dialog", async () => {
+  const [page, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(page, /function TopScoreCard/);
+  assert.match(page, /className="top-score-rank">#\{rank\}/);
+  assert.match(page, /\{score\.songName\}/);
+  assert.match(page, /\{score\.stepArtist \|\| "Unknown step artist"\}/);
+  assert.match(page, /\{score\.grade \|\| "—"\}/);
+  assert.match(page, /\{score\.plateCode \|\| "—"\}/);
+  assert.match(page, /pumbilityLabel\(score\.pumbility\)/);
+  assert.match(page, /className="chart-dialog top-score-dialog"/);
+  assert.match(page, /aria-modal="true"/);
+  assert.match(page, /document\.body\.style\.overflow = "hidden"/);
+  assert.match(page, /previouslyFocused\?\.focus\(\)/);
+  assert.match(page, /event\.key === "Escape"/);
+  assert.match(page, /event\.key !== "Tab"/);
+  assert.match(page, /event\.target === event\.currentTarget/);
+  assert.match(page, /<ChartVideoLink[\s\S]*variant="dialog"/);
+  assert.match(css, /\.top-score-grid \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(165px, 1fr\)\);/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.top-score-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
 });
 
 test("limited-data presentation uses the shared 20-player boundary", async () => {
@@ -886,18 +979,21 @@ test("recommendation player list exposes names and eligibility without mode payl
             eligible: true,
             validScoreCount: 30,
             filterCandidates: [],
+            topScores: [],
             topRecommendations: [],
           },
           singles: {
             eligible: true,
             validScoreCount: 30,
             filterCandidates: [],
+            topScores: [],
             topRecommendations: [],
           },
           doubles: {
             eligible: false,
             validScoreCount: 4,
             filterCandidates: [],
+            topScores: [],
             topRecommendations: [],
           },
         },

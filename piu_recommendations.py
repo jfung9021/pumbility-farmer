@@ -113,6 +113,7 @@ RECOMMENDATION_CHART_FIELDS = (
     "phoenix2Contributors",
     "evidenceStatus",
 )
+TOP_SCORE_CHART_FIELDS = RECOMMENDATION_CHART_FIELDS
 
 
 def _weighted_quantile(
@@ -1665,6 +1666,72 @@ def _recommendation_chart_rows(
     ]
 
 
+def _json_safe_scalar(value: Any) -> Any:
+    """Return one public payload scalar with missing pandas values normalized."""
+    if value is None:
+        return None
+    try:
+        if bool(pd.isna(value)):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value.item() if isinstance(value, np.generic) else value
+
+
+def _public_top_scores(
+    ordered_scores: pd.DataFrame,
+    catalog_by_id: Mapping[str, Mapping[str, Any]],
+    chart_analysis_by_id: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Serialize the exact retained score rows without exposing private score data."""
+    output: list[dict[str, Any]] = []
+    for score in ordered_scores.iloc[:TOP_PUMBILITY_COUNT].to_dict(orient="records"):
+        chart_id = str(score["chartId"])
+        catalog_chart = catalog_by_id.get(chart_id, {})
+        analysis_chart = chart_analysis_by_id.get(chart_id, {})
+        chart_type = str(
+            analysis_chart.get("type") or catalog_chart.get("type") or ""
+        )
+        level_value = analysis_chart.get("level") or catalog_chart.get("level")
+        try:
+            level = int(level_value)
+        except (TypeError, ValueError, OverflowError):
+            level = 0
+        difficulty = analysis_chart.get("difficulty") or catalog_chart.get(
+            "difficulty"
+        )
+        if not difficulty and chart_type in MODE_TYPES and level > 0:
+            difficulty = _folder(chart_type, level)
+        normalized_plate = normalize_plate(score.get("plate"))
+
+        def chart_value(field: str) -> Any:
+            if field in analysis_chart:
+                return _json_safe_scalar(analysis_chart.get(field))
+            return _json_safe_scalar(catalog_chart.get(field))
+
+        row = {field: chart_value(field) for field in TOP_SCORE_CHART_FIELDS}
+        row.update(
+            {
+                "mode": chart_value("mode") or MODE_LABELS.get(chart_type),
+                "songName": chart_value("songName") or "Unknown chart",
+                "difficulty": _json_safe_scalar(difficulty),
+                "type": chart_type,
+                "level": level,
+                "chartId": chart_id,
+                "pumbility": float(score["pumbility"]),
+                "grade": grade_for_score(score.get("score")),
+                "plate": normalized_plate,
+                "plateCode": (
+                    PLATE_CODES[normalized_plate]
+                    if normalized_plate is not None
+                    else None
+                ),
+            }
+        )
+        output.append(row)
+    return output
+
+
 def build_manual_recommendation_mode(
     charts: Sequence[Mapping[str, Any]],
     chart_type: str,
@@ -1729,6 +1796,7 @@ def build_manual_recommendation_mode(
         "filterCandidateCount": len(ranked_candidates),
         "projectionAvailable": False,
         "scoreProjectionModel": None,
+        "topScores": [],
         "filterCandidates": ranked_candidates,
         "topRecommendations": top_recommendations,
     }
@@ -2575,6 +2643,14 @@ def build_player_recommendation(
         phoenix1_scores["playerId"] == str(player_id)
     ].copy()
     modes: dict[str, Any] = {}
+    catalog_by_id = {
+        str(row["chartId"]): row for row in catalog.to_dict(orient="records")
+    }
+    chart_analysis_by_id = {
+        str(row["chartId"]): dict(row)
+        for row in combined_charts
+        if row.get("chartId") is not None
+    }
     overall_source_rows: dict[str, list[dict[str, Any]]] = {
         "singles": [],
         "doubles": [],
@@ -2599,6 +2675,11 @@ def build_player_recommendation(
     )
     overall_values = [float(value) for value in overall_scores["pumbility"]]
     overall_current_total = _top_total(overall_values)
+    overall_top_scores = _public_top_scores(
+        overall_scores,
+        catalog_by_id,
+        chart_analysis_by_id,
+    )
     overall_existing_by_chart = {
         str(row["chartId"]): float(row["pumbility"])
         for row in overall_scores.to_dict(orient="records")
@@ -2648,6 +2729,11 @@ def build_player_recommendation(
         phoenix2_score_count = len(mode_scores)
         current_values = [float(value) for value in mode_scores["pumbility"]]
         current_total = _top_total(current_values)
+        top_scores = _public_top_scores(
+            mode_scores,
+            catalog_by_id,
+            chart_analysis_by_id,
+        )
         existing_by_chart = {
             str(row["chartId"]): float(row["pumbility"])
             for row in mode_scores.to_dict(orient="records")
@@ -2685,6 +2771,7 @@ def build_player_recommendation(
                 "currentTop50Count": min(
                     int(phoenix2_score_count), TOP_PUMBILITY_COUNT
                 ),
+                "topScores": top_scores,
                 **({"filterCandidates": []} if include_candidates else {}),
                 "topRecommendations": [],
             }
@@ -2894,6 +2981,7 @@ def build_player_recommendation(
             "currentTop50Count": min(
                 int(phoenix2_score_count), TOP_PUMBILITY_COUNT
             ),
+            "topScores": top_scores,
             "candidateRange": [
                 None,
                 round(scoring_rating + RECOMMENDATION_RADIUS, 3),
@@ -2983,6 +3071,7 @@ def build_player_recommendation(
             else None
         ),
         "currentTop50Count": min(len(overall_scores), TOP_PUMBILITY_COUNT),
+        "topScores": overall_top_scores,
         "top50ModeCounts": overall_top50_mode_counts,
         "sourceModeEligibility": source_mode_eligibility,
         "sourceRecommendationCounts": source_recommendation_counts,

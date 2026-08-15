@@ -1245,6 +1245,15 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertEqual(response["modelGeneration"], "daily-generation")
         self.assertTrue(cached_player_is_fresh(response, index, now=now))
+        refreshed_top_scores = response["player"]["modes"]["singles"]["topScores"]
+        self.assertEqual(refreshed_top_scores[0]["chartId"], "chart-00")
+        self.assertEqual(refreshed_top_scores[0]["pumbility"], 999.0)
+        self.assertNotIn("score", refreshed_top_scores[0])
+        self.assertNotIn("playerId", refreshed_top_scores[0])
+        self.assertAlmostEqual(
+            sum(row["pumbility"] for row in refreshed_top_scores),
+            response["player"]["modes"]["singles"]["currentTop50Pumbility"],
+        )
         incompatible = {**response, "schemaVersion": RECOMMENDATION_SCHEMA_VERSION - 1}
         self.assertFalse(cached_player_is_fresh(incompatible, index, now=now))
         self.assertTrue(with_staleness(incompatible, index)["stale"])
@@ -1592,23 +1601,214 @@ class PlayerRecommendationTests(unittest.TestCase):
             sum(sorted((float(row["pumbility"]) for row in scores), reverse=True)[:50]),
         )
 
+    def test_top_scores_are_ordered_allowlisted_and_optional_metadata_safe(self) -> None:
+        scores = [dict(row) for row in self.snapshot["scores"]]
+        scores[0]["plate"] = "TG"
+        combined = [dict(row) for row in self.combined]
+        combined[0].update(
+            {
+                "estimatedDifficulty": None,
+                "difficultyDelta": None,
+                "difficultyCi95Low": None,
+                "difficultyCi95High": None,
+                "nContributors": None,
+                "phoenix1Contributors": None,
+                "phoenix2Contributors": None,
+                "evidenceStatus": None,
+            }
+        )
+
+        mode = build_player_recommendation(
+            "player",
+            {**self.snapshot, "scores": scores},
+            combined,
+            {"singles": 10.0},
+            self._fixed_score_model(),
+        )["modes"]["singles"]
+        top_scores = mode["topScores"]
+
+        self.assertEqual(
+            [row["chartId"] for row in top_scores],
+            [f"chart-{index:02d}" for index in range(30)],
+        )
+        self.assertAlmostEqual(
+            sum(row["pumbility"] for row in top_scores),
+            mode["currentTop50Pumbility"],
+        )
+        first = top_scores[0]
+        self.assertEqual(
+            set(first),
+            {
+                "mode",
+                "songName",
+                "difficulty",
+                "type",
+                "level",
+                "chartId",
+                "imageUrl",
+                "noteCount",
+                "stepArtist",
+                "bpmMin",
+                "bpmMax",
+                "estimatedDifficulty",
+                "difficultyDelta",
+                "difficultyCi95Low",
+                "difficultyCi95High",
+                "nContributors",
+                "phoenix1Contributors",
+                "phoenix2Contributors",
+                "evidenceStatus",
+                "pumbility",
+                "grade",
+                "plate",
+                "plateCode",
+            },
+        )
+        self.assertEqual(first["grade"], "SSS")
+        self.assertEqual(first["plate"], "Talented Game")
+        self.assertEqual(first["plateCode"], "TG")
+        for field in (
+            "estimatedDifficulty",
+            "difficultyDelta",
+            "difficultyCi95Low",
+            "difficultyCi95High",
+            "nContributors",
+            "phoenix1Contributors",
+            "phoenix2Contributors",
+            "evidenceStatus",
+        ):
+            self.assertIsNone(first[field])
+        for private_field in (
+            "score",
+            "playerId",
+            "recordedAt",
+            "isBroken",
+            "scores",
+        ):
+            self.assertNotIn(private_field, first)
+
+    def test_top_scores_cap_at_fifty_with_deterministic_tie_breaks(self) -> None:
+        charts = []
+        scores = []
+        combined = []
+        for index in reversed(range(55)):
+            chart_id = f"tie-{index:02d}"
+            chart = {
+                "id": chart_id,
+                "songName": f"Tie {index}",
+                "type": "Single",
+                "level": 20,
+                "difficulty": "S20",
+            }
+            charts.append(chart)
+            scores.append(
+                {
+                    "playerId": "player",
+                    "chartId": chart_id,
+                    "pumbility": 300.0,
+                    "score": 990_000 - index // 2,
+                    "plate": "FG",
+                    "recordedAt": "2026-08-08T00:00:00Z",
+                    "isBroken": False,
+                }
+            )
+            combined.append(
+                {
+                    "mode": "Singles",
+                    "songName": f"Tie {index}",
+                    "difficulty": "S20",
+                    "type": "Single",
+                    "level": 20,
+                    "chartId": chart_id,
+                    "estimatedDifficulty": 20.5,
+                    "difficultyDelta": 0.0,
+                }
+            )
+        snapshot = {
+            "players": [{"playerId": "player", "username": "PLAYER"}],
+            "charts": charts,
+            "scores": scores,
+        }
+
+        modes = build_player_recommendation(
+            "player",
+            snapshot,
+            combined,
+            {"singles": 10.0},
+            self._fixed_score_model(),
+        )["modes"]
+        expected = sorted(
+            scores,
+            key=lambda row: (
+                -float(row["pumbility"]),
+                -int(row["score"]),
+                str(row["chartId"]),
+            ),
+        )[:50]
+
+        self.assertEqual(len(modes["singles"]["topScores"]), 50)
+        self.assertEqual(len(modes["overall"]["topScores"]), 50)
+        self.assertEqual(
+            [row["chartId"] for row in modes["singles"]["topScores"]],
+            [row["chartId"] for row in expected],
+        )
+        self.assertEqual(
+            [row["chartId"] for row in modes["overall"]["topScores"]],
+            [row["chartId"] for row in expected],
+        )
+        self.assertEqual(modes["singles"]["currentTop50Pumbility"], 15_000.0)
+        self.assertEqual(modes["overall"]["currentTop50Pumbility"], 15_000.0)
+
     def test_current_top_fifty_includes_scores_below_level_sixteen(self) -> None:
         low_level_score = {
             **self.snapshot["scores"][0],
             "chartId": "chart-34",
             "pumbility": 123.456,
         }
+        unrated_score = {
+            **self.snapshot["scores"][0],
+            "chartId": "chart-33",
+            "pumbility": 122.123,
+        }
+        combined = [dict(row) for row in self.combined]
+        combined[33].update(
+            {
+                "estimatedDifficulty": None,
+                "difficultyDelta": None,
+                "difficultyCi95Low": None,
+                "difficultyCi95High": None,
+            }
+        )
         modes = build_player_recommendation(
             "player",
-            {**self.snapshot, "scores": [*self.snapshot["scores"], low_level_score]},
-            self.combined,
+            {
+                **self.snapshot,
+                "scores": [
+                    *self.snapshot["scores"],
+                    low_level_score,
+                    unrated_score,
+                ],
+            },
+            combined,
             {"singles": 10.0},
             self._fixed_score_model(),
         )["modes"]
 
-        expected = 30 * 344.85 + 123.456
+        expected = 30 * 344.85 + 123.456 + 122.123
         self.assertAlmostEqual(modes["singles"]["currentTop50Pumbility"], expected)
         self.assertAlmostEqual(modes["overall"]["currentTop50Pumbility"], expected)
+        low_level_top_score = next(
+            row
+            for row in modes["singles"]["topScores"]
+            if row["chartId"] == "chart-34"
+        )
+        self.assertEqual(low_level_top_score["level"], 15)
+        unrated_top_score = next(
+            row
+            for row in modes["singles"]["topScores"]
+            if row["chartId"] == "chart-33"
+        )
+        self.assertIsNone(unrated_top_score["estimatedDifficulty"])
         self.assertIn(
             "chart-34",
             {row["chartId"] for row in modes["singles"]["filterCandidates"]},
@@ -1677,6 +1877,22 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertAlmostEqual(overall["currentTop50Pumbility"], expected_total)
         self.assertEqual(overall["currentTop50Count"], 50)
         self.assertEqual(overall["top50ModeCounts"], {"singles": 20, "doubles": 30})
+        self.assertEqual(len(modes["singles"]["topScores"]), 30)
+        self.assertEqual(len(modes["doubles"]["topScores"]), 30)
+        self.assertEqual(len(overall["topScores"]), 50)
+        self.assertEqual(
+            [row["chartId"] for row in overall["topScores"][:30]],
+            [f"double-{index:02d}" for index in range(30)],
+        )
+        self.assertEqual(
+            {row["type"] for row in overall["topScores"]},
+            {"Single", "Double"},
+        )
+        for mode in modes.values():
+            self.assertAlmostEqual(
+                sum(row["pumbility"] for row in mode["topScores"]),
+                mode["currentTop50Pumbility"],
+            )
         self.assertEqual(
             overall["sourceRecommendationCounts"],
             {
@@ -2122,6 +2338,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(mode["ratingSource"], "phoenix1")
         self.assertFalse(mode["projectionAvailable"])
         self.assertEqual(mode["currentTop50Pumbility"], 0.0)
+        self.assertEqual(mode["topScores"], [])
         self.assertTrue(all(not row["played"] for row in mode["filterCandidates"]))
         self.assertTrue(all(row["projectedGain"] is None for row in mode["filterCandidates"]))
 

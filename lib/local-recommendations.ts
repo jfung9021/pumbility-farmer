@@ -10,6 +10,7 @@ import type {
   RecommendationPlayer,
   RecommendationPlayersResponse,
   RecommendationScoreProgress,
+  RecommendationTopScore,
 } from "./types";
 
 
@@ -30,10 +31,38 @@ const FORBIDDEN_KEYS = new Set([
   "apiKey",
   "token",
   "scores",
+  "rawScore",
+  "scoreId",
+  "scoreDate",
+]);
+const TOP_SCORE_KEYS = new Set([
+  "mode",
+  "songName",
+  "difficulty",
+  "type",
+  "level",
+  "chartId",
+  "imageUrl",
+  "noteCount",
+  "stepArtist",
+  "bpmMin",
+  "bpmMax",
+  "estimatedDifficulty",
+  "difficultyDelta",
+  "difficultyCi95Low",
+  "difficultyCi95High",
+  "nContributors",
+  "phoenix1Contributors",
+  "phoenix2Contributors",
+  "evidenceStatus",
+  "pumbility",
+  "grade",
+  "plate",
+  "plateCode",
 ]);
 const DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL = 16;
 const RECOMMENDATION_UPPER_RADIUS = 0.5;
-const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 21;
+const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 22;
 
 export type LocalRecommendationIndex = {
   schemaVersion?: number;
@@ -62,6 +91,69 @@ function containsForbiddenKey(value: unknown): boolean {
   return Object.entries(value).some(
     ([key, child]) => FORBIDDEN_KEYS.has(key) || containsForbiddenKey(child),
   );
+}
+
+function isNullableFiniteNumber(value: unknown): boolean {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isNullableNonnegativeInteger(value: unknown): boolean {
+  return value === null
+    || (typeof value === "number" && Number.isInteger(value) && value >= 0);
+}
+
+function isRecommendationTopScore(value: unknown): value is RecommendationTopScore {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const score = value as Record<string, unknown>;
+  return Object.keys(score).length === TOP_SCORE_KEYS.size
+    && Object.keys(score).every((key) => TOP_SCORE_KEYS.has(key))
+    && (score.mode === "Singles" || score.mode === "Doubles")
+    && (score.type === "Single" || score.type === "Double")
+    && (score.mode === "Singles") === (score.type === "Single")
+    && typeof score.songName === "string"
+    && typeof score.difficulty === "string"
+    && typeof score.level === "number"
+    && Number.isInteger(score.level)
+    && score.level > 0
+    && typeof score.chartId === "string"
+    && (score.imageUrl === null || typeof score.imageUrl === "string")
+    && isNullableNonnegativeInteger(score.noteCount)
+    && (score.stepArtist === null || typeof score.stepArtist === "string")
+    && isNullableFiniteNumber(score.bpmMin)
+    && isNullableFiniteNumber(score.bpmMax)
+    && isNullableFiniteNumber(score.estimatedDifficulty)
+    && isNullableFiniteNumber(score.difficultyDelta)
+    && isNullableFiniteNumber(score.difficultyCi95Low)
+    && isNullableFiniteNumber(score.difficultyCi95High)
+    && isNullableNonnegativeInteger(score.nContributors)
+    && isNullableNonnegativeInteger(score.phoenix1Contributors)
+    && isNullableNonnegativeInteger(score.phoenix2Contributors)
+    && (
+      score.evidenceStatus === null
+      || score.evidenceStatus === "Published"
+      || score.evidenceStatus === "Provisional"
+      || score.evidenceStatus === "Insufficient"
+      || score.evidenceStatus === "Unrated"
+    )
+    && typeof score.pumbility === "number"
+    && Number.isFinite(score.pumbility)
+    && score.pumbility >= 0
+    && (score.grade === null || typeof score.grade === "string")
+    && (score.plate === null || typeof score.plate === "string")
+    && (score.plateCode === null || typeof score.plateCode === "string");
+}
+
+function hasValidTopScores(modes: unknown): boolean {
+  if (!modes || typeof modes !== "object" || Array.isArray(modes)) return false;
+  return Object.entries(modes).every(([modeKey, value]) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const topScores = (value as Record<string, unknown>).topScores;
+    return Array.isArray(topScores)
+      && topScores.length <= 50
+      && topScores.every((score) => isRecommendationTopScore(score)
+        && (modeKey !== "singles" || score.type === "Single")
+        && (modeKey !== "doubles" || score.type === "Double"));
+  });
 }
 
 export function validateLocalRecommendationIndex(value: unknown): LocalRecommendationIndex {
@@ -119,7 +211,7 @@ export function validateLocalRecommendationIndex(value: unknown): LocalRecommend
       || typeof record.username !== "string"
       || typeof record.displayName !== "string"
       || (
-        (!record.modes || typeof record.modes !== "object")
+        (!record.modes || typeof record.modes !== "object" || !hasValidTopScores(record.modes))
         && (
           !record.eligibility
           || typeof record.eligibility !== "object"
@@ -227,6 +319,11 @@ export async function readLocalRecommendationPlayer(
       "The selected local recommendation is missing from its shard.",
     );
   }
+  if (!hasValidTopScores(player.modes)) {
+    throw new LocalRecommendationsValidationError(
+      "The selected local recommendation contains invalid top scores.",
+    );
+  }
   return player;
 }
 
@@ -296,6 +393,7 @@ function manualMode(
     candidateCount: defaultCandidates.length,
     filterCandidateCount: filterCandidates.length,
     filterCandidates,
+    topScores: [],
     topRecommendations,
   };
 }
@@ -342,6 +440,7 @@ function manualOverallMode(
     candidateCount: sourceRecommendations.length,
     filterCandidateCount: filterCandidates.length,
     filterCandidates,
+    topScores: [],
     topRecommendations,
   };
 }
