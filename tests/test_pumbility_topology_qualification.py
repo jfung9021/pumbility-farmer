@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -62,49 +63,141 @@ def _manifest() -> dict[str, object]:
             "firstBoundarySha256": "c" * 64,
             "secondBoundarySha256": "c" * 64,
         },
+        adopted_label="iad1",
     )
 
 
 def _api(*, latency_passed: bool) -> dict[str, object]:
-    result = {
-        "analysis": {
+    def metric() -> dict[str, float]:
+        return {"p50": 10.0, "p95": 10.0, "p99": 10.0, "max": 10.0}
+
+    def domain_result() -> dict[str, object]:
+        return {
             "scoredAttempts": 100,
             "scoredSuccesses": 100,
             "scoredErrors": 0,
+            "warmupAttempts": 3,
             "warmupErrors": 0,
             "cacheHits": 0,
+            "gzipResponses": 100,
             "p99Scored": True,
-            "expectedCandidateReadEvents": 100,
+            "expectedCandidateReadEvents": 103,
+            "telemetryCountGate": "pending-server-log-reconciliation",
+            "endToEndMs": metric(),
+            "ttfbMs": metric(),
+            "downloadMs": metric(),
+            "jsonParseMs": metric(),
         }
+
+    parity_domain = {
+        "comparedResponses": 103,
+        "exactMatches": 103,
+        "mismatches": 0,
+        "missingPairs": 0,
+        "passed": True,
     }
     return {
-        "responseParity": {"passed": True},
+        "schemaVersion": 1,
+        "generatedAtUtc": "2026-08-15T00:00:00+00:00",
+        "status": "passed" if latency_passed else "failed",
+        "comparisonKind": "authenticated-protected-preview",
+        "probeConfiguration": {
+            "domains": ["analysis", "tier-list"],
+            "samples": 100,
+            "warmupSamples": 3,
+            "windowMinutes": 15,
+            "p99Scored": True,
+            "canaryTelemetryExpected": True,
+            "authenticatedWithVercelCli": True,
+            "bypassTokenUsed": False,
+            "timingSemantics": {
+                "ttfbAndDownload": "curl request timing after authenticated CLI setup",
+                "jsonParse": "local decoded-body JSON parse timing",
+                "endToEnd": "curl network total plus local JSON parse",
+                "cliStartupIncluded": False,
+            },
+        },
+        "responseParity": {
+            "passed": True,
+            "domains": {
+                "analysis": dict(parity_domain),
+                "tier-list": dict(parity_domain),
+            },
+        },
         "identityDisclosure": {
-            "urlsPrinted": False,
-            "hostsPrinted": False,
-            "responseHashesPrinted": False,
-            "responseBodiesPrinted": False,
+            "deploymentReferencesPrintedOrStored": False,
+            "urlsOrHostsPrintedOrStored": False,
+            "responseHashesPrintedOrStored": False,
+            "responseBodiesPrintedOrStored": False,
+            "requestPathsOrQueryValuesPrintedOrStored": False,
+            "commandOutputOrErrorsPrintedOrStored": False,
+            "secretsPrintedOrStored": False,
         },
         "deployments": [
             {
-                "deploymentRegionLabel": label,
-                "telemetry": {"expected": True},
-                "results": result,
+                "deploymentLabel": label,
+                "domains": ["analysis", "tier-list"],
+                "scoredSamplesPerDomain": 100,
+                "warmupSamplesPerDomain": 3,
+                "requestedWindowMinutes": 15,
+                "elapsedScoredMinutes": 15,
+                "compressionRequested": True,
+                "cacheBypass": {
+                    "requested": True,
+                    "mechanisms": [
+                        "unique-query-nonce",
+                        "cache-control-no-cache-no-store",
+                        "pragma-no-cache",
+                    ],
+                    "gate": "zero-x-vercel-cache-HIT",
+                },
+                "telemetry": {
+                    "expected": True,
+                    "countGateComplete": False,
+                    "expectedCandidateReadEventsTotal": 206,
+                    "requirement": "pending server-log reconciliation",
+                },
+                "results": {
+                    "analysis": domain_result(),
+                    "tier-list": domain_result(),
+                },
             }
             for label in ("iad1", "cle1")
         ],
+        "latencyComparison": {},
         "latencyGate": {
             "status": "passed" if latency_passed else "failed",
             "passed": latency_passed,
             "complete": True,
+            "target": {
+                "p95MaximumIncreasePercent": 10.0,
+                "p99MaximumIncreasePercent": 20.0,
+            },
+            "domains": {},
+            "ownerLatencyWaiver": {"acceptedHere": False},
         },
+        "cacheBypassGatePassed": True,
+        "telemetryCountGateComplete": False,
+        "adoptionDecision": "pending",
     }
 
 
 def _blob(label: str, latency: float) -> dict[str, object]:
+    artifact = {
+        "scoredAttempts": 100,
+        "warmupAttempts": 3,
+        "warmupErrors": 0,
+        "successes": 100,
+        "errors": 0,
+        "exactExpectedMatches": 100,
+        "unauthenticatedReadDenied": True,
+        "latencyMs": {"p95": latency, "p99": latency},
+        "passed": True,
+    }
     return {
         "schemaVersion": 1,
         "status": "passed",
+        "evidenceKind": "private-blob-region-read",
         "execution": {
             "deploymentRegionLabel": label,
             "regionAttestedByEnvironment": True,
@@ -112,6 +205,7 @@ def _blob(label: str, latency: float) -> dict[str, object]:
         },
         "configuration": {
             "scoredSamplesPerArtifact": 100,
+            "warmupSamplesPerArtifact": 3,
             "p99Scored": True,
         },
         "identityDisclosure": {
@@ -121,17 +215,13 @@ def _blob(label: str, latency: float) -> dict[str, object]:
             "tokensPrinted": False,
         },
         "artifacts": {
-            "analysis": {
-                "scoredAttempts": 100,
-                "warmupAttempts": 3,
-                "warmupErrors": 0,
-                "successes": 100,
-                "errors": 0,
-                "exactExpectedMatches": 100,
-                "unauthenticatedReadDenied": True,
-                "latencyMs": {"p95": latency, "p99": latency},
-                "passed": True,
-            }
+            name: dict(artifact)
+            for name in (
+                "analysis-pointer",
+                "tier-pointer",
+                "recommendation-pointer",
+                "numeric-model",
+            )
         },
     }
 
@@ -139,15 +229,16 @@ def _blob(label: str, latency: float) -> dict[str, object]:
 def _events(*, latency: float) -> list[dict[str, object]]:
     events: list[dict[str, object]] = []
     for label in ("iad1", "cle1"):
-        events.append(
-            {
-                "kind": "telemetry",
-                "label": label,
-                "domain": "analysis",
-                "outcome": "candidate-served",
-                "count": 100,
-            }
-        )
+        for domain in ("analysis", "tier-list"):
+            events.append(
+                {
+                    "kind": "telemetry",
+                    "label": label,
+                    "domain": domain,
+                    "outcome": "candidate-served",
+                    "count": 103,
+                }
+            )
         for component in ("analysis", "player-recommendations"):
             events.append(
                 {
@@ -159,18 +250,19 @@ def _events(*, latency: float) -> list[dict[str, object]]:
                     "isolatedDiagnostic": True,
                 }
             )
-        correlation = ("d" if label == "iad1" else "e") * 64
-        for source in ("platform-scheduler", "route"):
-            events.append(
-                {
-                    "kind": "cron",
-                    "label": label,
-                    "source": source,
-                    "correlationSha256": correlation,
-                    "count": 1,
-                    "authorized": True,
-                }
-            )
+        if label == "iad1":
+            correlation = "d" * 64
+            for source in ("platform-scheduler", "route"):
+                events.append(
+                    {
+                        "kind": "cron",
+                        "label": label,
+                        "source": source,
+                        "correlationSha256": correlation,
+                        "count": 1,
+                        "authorized": True,
+                    }
+                )
         for topic in ("analysis", "player-recommendations"):
             for index in range(100):
                 identity = hashlib.sha256(
@@ -293,6 +385,7 @@ class TopologyQualificationTests(unittest.TestCase):
         manifest = _manifest()
         encoded = json.dumps(manifest)
         self.assertEqual(manifest["status"], "passed")
+        self.assertEqual(manifest["adoptedLabel"], "iad1")
         self.assertNotIn("a" * 64, encoded)
         self.assertNotIn("c" * 64, encoded)
 
@@ -303,6 +396,21 @@ class TopologyQualificationTests(unittest.TestCase):
                 _deployment("iad1", "iad1"),
                 second,
                 topology_kind="region",
+                boundary={
+                    "schemaVersion": 1,
+                    "publicationFrozen": True,
+                    "exactReconciliationPassed": True,
+                    "firstBoundarySha256": "c" * 64,
+                    "secondBoundarySha256": "c" * 64,
+                },
+            )
+
+        with self.assertRaises(ManifestError):
+            create_manifest(
+                _deployment("iad1", "iad1"),
+                _deployment("cle1", "cle1"),
+                topology_kind="region",
+                adopted_label="other",
                 boundary={
                     "schemaVersion": 1,
                     "publicationFrozen": True,
@@ -476,6 +584,96 @@ class TopologyQualificationTests(unittest.TestCase):
             )["status"],
             "failed",
         )
+
+    def test_protected_api_and_blob_scope_fail_closed_when_evidence_is_omitted(self) -> None:
+        common = {
+            "manifest": _manifest(),
+            "events": _events(latency=100),
+            "checklist": _checklist(),
+            "owner_latency_waiver": False,
+        }
+        protected_api = _api(latency_passed=True)
+        self.assertEqual(
+            qualify(
+                api=protected_api,
+                blobs=[_blob("iad1", 100), _blob("cle1", 100)],
+                **common,
+            )["status"],
+            "passed",
+        )
+
+        missing_domain = copy.deepcopy(protected_api)
+        del missing_domain["deployments"][0]["results"]["tier-list"]
+        with self.assertRaises(QualificationError):
+            qualify(
+                api=missing_domain,
+                blobs=[_blob("iad1", 100), _blob("cle1", 100)],
+                **common,
+            )
+
+        insufficient_api_warmups = copy.deepcopy(protected_api)
+        insufficient_api_warmups["probeConfiguration"]["warmupSamples"] = 2
+        with self.assertRaises(QualificationError):
+            qualify(
+                api=insufficient_api_warmups,
+                blobs=[_blob("iad1", 100), _blob("cle1", 100)],
+                **common,
+            )
+
+        missing_artifact = [_blob("iad1", 100), _blob("cle1", 100)]
+        for report in missing_artifact:
+            del report["artifacts"]["numeric-model"]
+        self.assertEqual(
+            qualify(api=protected_api, blobs=missing_artifact, **common)["status"],
+            "failed",
+        )
+
+        insufficient_blob_warmups = [_blob("iad1", 100), _blob("cle1", 100)]
+        for report in insufficient_blob_warmups:
+            report["configuration"]["warmupSamplesPerArtifact"] = 2
+            for artifact in report["artifacts"].values():
+                artifact["warmupAttempts"] = 2
+        self.assertEqual(
+            qualify(
+                api=protected_api,
+                blobs=insufficient_blob_warmups,
+                **common,
+            )["status"],
+            "failed",
+        )
+
+    def test_cron_is_required_only_for_the_adopted_topology(self) -> None:
+        common = {
+            "manifest": _manifest(),
+            "api": _api(latency_passed=True),
+            "blobs": [_blob("iad1", 100), _blob("cle1", 100)],
+            "checklist": _checklist(),
+            "owner_latency_waiver": False,
+        }
+        adopted_only = _events(latency=100)
+        self.assertEqual(qualify(events=adopted_only, **common)["status"], "passed")
+
+        missing_adopted = [
+            event for event in adopted_only if event["kind"] != "cron"
+        ]
+        self.assertEqual(
+            qualify(events=missing_adopted, **common)["status"],
+            "failed",
+        )
+
+        wrong_topology = copy.deepcopy(adopted_only)
+        wrong_topology.append(
+            {
+                "kind": "cron",
+                "label": "cle1",
+                "source": "route",
+                "correlationSha256": "e" * 64,
+                "count": 1,
+                "authorized": True,
+            }
+        )
+        with self.assertRaises(QualificationError):
+            qualify(events=wrong_topology, **common)
 
 
 if __name__ == "__main__":

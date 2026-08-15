@@ -27,7 +27,15 @@ P95_MAX_INCREASE_PERCENT = 10.0
 P99_MAX_INCREASE_PERCENT = 20.0
 REQUIRED_TOPICS = frozenset({"analysis", "player-recommendations"})
 REQUIRED_WORKER_COMPONENTS = frozenset({"analysis", "player-recommendations"})
-QUALIFICATION_CANARY_DOMAINS = ["analysis", "tier-list"]
+QUALIFICATION_CANARY_DOMAINS = ("analysis", "tier-list")
+REQUIRED_BLOB_ARTIFACTS = frozenset(
+    {
+        "analysis-pointer",
+        "tier-pointer",
+        "recommendation-pointer",
+        "numeric-model",
+    }
+)
 REQUIRED_FAULT_SCENARIOS = frozenset(
     {
         "supabase-timeout",
@@ -130,6 +138,7 @@ def verify_topology(
             "status",
             "topologyKind",
             "controlledDifference",
+            "adoptedLabel",
             "deployments",
             "identities",
             "stableDataBoundary",
@@ -194,7 +203,7 @@ def verify_topology(
             and flags.get("blobMirrorEnabled") is False
             and flags.get("blobReadFallbackEnabled") is False
             and flags.get("readCanaryDomains")
-            in ([], QUALIFICATION_CANARY_DOMAINS)
+            in ([], list(QUALIFICATION_CANARY_DOMAINS))
             and flags.get("selectedPlayerRefreshEnabled") is False
             and (
                 flags.get("backend") == "shadow"
@@ -219,6 +228,9 @@ def verify_topology(
         )
     if len(set(labels)) != 2:
         raise QualificationError("Topology labels must be distinct.")
+    adopted_label = _label(manifest.get("adoptedLabel"))
+    if adopted_label not in labels:
+        raise QualificationError("The adopted topology label is not in the manifest.")
     stable = _mapping(
         manifest.get("stableDataBoundary"), "Stable-boundary evidence is missing."
     )
@@ -269,7 +281,11 @@ def verify_topology(
         and only_controlled_difference
     )
     return (
-        {"status": "passed" if passed else "failed", "passed": passed},
+        {
+            "status": "passed" if passed else "failed",
+            "passed": passed,
+            "adoptedLabel": adopted_label,
+        },
         labels,
         concurrency,
         connection_limits,
@@ -279,53 +295,222 @@ def verify_topology(
 def verify_api(
     report: Mapping[str, Any], *, labels: Sequence[str]
 ) -> tuple[dict[str, object], dict[str, object], dict[tuple[str, str], int]]:
+    _exact_keys(
+        report,
+        {
+            "schemaVersion",
+            "generatedAtUtc",
+            "status",
+            "comparisonKind",
+            "probeConfiguration",
+            "deployments",
+            "responseParity",
+            "latencyComparison",
+            "latencyGate",
+            "cacheBypassGatePassed",
+            "telemetryCountGateComplete",
+            "identityDisclosure",
+            "adoptionDecision",
+        },
+        "The protected-preview API report contains unexpected fields.",
+    )
+    configuration = _mapping(
+        report.get("probeConfiguration"), "API probe configuration is missing."
+    )
+    _exact_keys(
+        configuration,
+        {
+            "domains",
+            "samples",
+            "warmupSamples",
+            "windowMinutes",
+            "p99Scored",
+            "canaryTelemetryExpected",
+            "authenticatedWithVercelCli",
+            "bypassTokenUsed",
+            "timingSemantics",
+        },
+        "The protected-preview probe configuration contains unexpected fields.",
+    )
+    required_domains = list(QUALIFICATION_CANARY_DOMAINS)
+    scored_samples = _int(configuration.get("samples"), minimum=100)
+    warmup_samples = _int(configuration.get("warmupSamples"), minimum=0)
+    if (
+        report.get("schemaVersion") != 1
+        or report.get("comparisonKind") != "authenticated-protected-preview"
+        or not isinstance(report.get("generatedAtUtc"), str)
+        or not report.get("generatedAtUtc")
+        or report.get("status") not in {"passed", "failed"}
+        or configuration.get("domains") != required_domains
+        or warmup_samples != 3
+        or configuration.get("p99Scored") is not True
+        or configuration.get("canaryTelemetryExpected") is not True
+        or configuration.get("authenticatedWithVercelCli") is not True
+        or configuration.get("bypassTokenUsed") is not False
+        or not isinstance(configuration.get("timingSemantics"), Mapping)
+        or report.get("cacheBypassGatePassed") is not True
+        or report.get("telemetryCountGateComplete") is not False
+        or report.get("adoptionDecision") != "pending"
+    ):
+        raise QualificationError("The protected-preview API configuration is invalid.")
+
     parity = _mapping(report.get("responseParity"), "API parity evidence is missing.")
+    _exact_keys(parity, {"passed", "domains"}, "API parity evidence is malformed.")
+    parity_domains = _mapping(parity.get("domains"), "API parity domains are missing.")
+    if set(parity_domains) != set(required_domains):
+        raise QualificationError("The required API parity domains are incomplete.")
+    parity_passed = parity.get("passed") is True
+    for domain in required_domains:
+        value = _mapping(parity_domains.get(domain), "API parity evidence is malformed.")
+        _exact_keys(
+            value,
+            {"comparedResponses", "exactMatches", "mismatches", "missingPairs", "passed"},
+            "API parity evidence contains unexpected fields.",
+        )
+        compared = _int(value.get("comparedResponses"), minimum=1)
+        parity_passed = parity_passed and bool(
+            compared == scored_samples + warmup_samples
+            and _int(value.get("exactMatches")) == compared
+            and _int(value.get("mismatches")) == 0
+            and _int(value.get("missingPairs")) == 0
+            and value.get("passed") is True
+        )
     disclosure = _mapping(
         report.get("identityDisclosure"), "API identity-disclosure evidence is missing."
+    )
+    disclosure_keys = {
+        "deploymentReferencesPrintedOrStored",
+        "urlsOrHostsPrintedOrStored",
+        "responseHashesPrintedOrStored",
+        "responseBodiesPrintedOrStored",
+        "requestPathsOrQueryValuesPrintedOrStored",
+        "commandOutputOrErrorsPrintedOrStored",
+        "secretsPrintedOrStored",
+    }
+    _exact_keys(
+        disclosure,
+        disclosure_keys,
+        "API identity-disclosure evidence contains unexpected fields.",
     )
     deployments = report.get("deployments")
     if not isinstance(deployments, list) or len(deployments) != 2:
         raise QualificationError("API deployment evidence is incomplete.")
     expected: dict[tuple[str, str], int] = {}
     correctness_passed = bool(
-        parity.get("passed") is True
-        and disclosure.get("urlsPrinted") is False
-        and disclosure.get("hostsPrinted") is False
-        and disclosure.get("responseHashesPrinted") is False
-        and disclosure.get("responseBodiesPrinted") is False
+        parity_passed
+        and all(disclosure.get(key) is False for key in disclosure_keys)
     )
     seen_labels: list[str] = []
     for deployment in deployments:
         value = _mapping(deployment, "API deployment evidence is malformed.")
-        label = _label(value.get("deploymentRegionLabel"))
+        _exact_keys(
+            value,
+            {
+                "deploymentLabel",
+                "domains",
+                "scoredSamplesPerDomain",
+                "warmupSamplesPerDomain",
+                "requestedWindowMinutes",
+                "elapsedScoredMinutes",
+                "compressionRequested",
+                "cacheBypass",
+                "telemetry",
+                "results",
+            },
+            "API deployment evidence contains unexpected fields.",
+        )
+        label = _label(value.get("deploymentLabel"))
         seen_labels.append(label)
+        if (
+            value.get("domains") != required_domains
+            or _int(value.get("scoredSamplesPerDomain"), minimum=100) != scored_samples
+            or _int(value.get("warmupSamplesPerDomain")) != warmup_samples
+            or value.get("compressionRequested") is not True
+        ):
+            raise QualificationError("API deployment probe settings are inconsistent.")
+        cache_bypass = _mapping(
+            value.get("cacheBypass"), "Cache-bypass evidence is missing."
+        )
+        _exact_keys(
+            cache_bypass,
+            {"requested", "mechanisms", "gate"},
+            "Cache-bypass evidence contains unexpected fields.",
+        )
+        if cache_bypass.get("requested") is not True:
+            correctness_passed = False
         telemetry = _mapping(value.get("telemetry"), "Telemetry mode is missing.")
-        if telemetry.get("expected") is not True:
+        _exact_keys(
+            telemetry,
+            {"expected", "countGateComplete", "expectedCandidateReadEventsTotal", "requirement"},
+            "Telemetry mode contains unexpected fields.",
+        )
+        if (
+            telemetry.get("expected") is not True
+            or telemetry.get("countGateComplete") is not False
+        ):
             correctness_passed = False
         results = _mapping(value.get("results"), "API domain results are missing.")
-        for domain, raw_domain in results.items():
-            if not isinstance(domain, str) or not domain:
-                raise QualificationError("An API domain is malformed.")
-            domain_result = _mapping(raw_domain, "An API domain result is malformed.")
+        if set(results) != set(required_domains):
+            raise QualificationError("The required API domain results are incomplete.")
+        expected_total = 0
+        for domain in required_domains:
+            domain_result = _mapping(
+                results.get(domain), "An API domain result is malformed."
+            )
+            _exact_keys(
+                domain_result,
+                {
+                    "scoredAttempts",
+                    "scoredSuccesses",
+                    "scoredErrors",
+                    "warmupAttempts",
+                    "warmupErrors",
+                    "cacheHits",
+                    "gzipResponses",
+                    "p99Scored",
+                    "expectedCandidateReadEvents",
+                    "telemetryCountGate",
+                    "endToEndMs",
+                    "ttfbMs",
+                    "downloadMs",
+                    "jsonParseMs",
+                },
+                "An API domain result contains unexpected fields.",
+            )
             attempts = _int(domain_result.get("scoredAttempts"), minimum=1)
             successes = _int(domain_result.get("scoredSuccesses"), minimum=0)
             errors = _int(domain_result.get("scoredErrors"), minimum=0)
+            warmups = _int(domain_result.get("warmupAttempts"), minimum=0)
             warmup_errors = _int(domain_result.get("warmupErrors"), minimum=0)
             cache_hits = _int(domain_result.get("cacheHits"), minimum=0)
             event_count = _int(
                 domain_result.get("expectedCandidateReadEvents"), minimum=1
             )
             expected[(label, domain)] = event_count
+            expected_total += event_count
             correctness_passed = correctness_passed and bool(
-                attempts >= 100
+                attempts == scored_samples
                 and successes == attempts
                 and errors == 0
+                and warmups == warmup_samples
                 and warmup_errors == 0
                 and cache_hits == 0
                 and domain_result.get("p99Scored") is True
+                and event_count == attempts + warmups
+                and domain_result.get("telemetryCountGate")
+                == "pending-server-log-reconciliation"
             )
+        correctness_passed = correctness_passed and bool(
+            _int(telemetry.get("expectedCandidateReadEventsTotal"), minimum=1)
+            == expected_total
+        )
     correctness_passed = correctness_passed and list(labels) == seen_labels
     latency = _mapping(report.get("latencyGate"), "API latency gate is missing.")
+    _exact_keys(
+        latency,
+        {"status", "passed", "complete", "target", "domains", "ownerLatencyWaiver"},
+        "API latency gate contains unexpected fields.",
+    )
     latency_complete = latency.get("complete") is True
     latency_passed = latency.get("status") == "passed" and latency.get("passed") is True
     return (
@@ -375,22 +560,25 @@ def verify_blob(
             artifact_names = current_names
         correctness = correctness and bool(
             report.get("schemaVersion") == 1
+            and report.get("status") == "passed"
+            and report.get("evidenceKind") == "private-blob-region-read"
             and execution.get("regionAttestedByEnvironment") is True
             and execution.get("isolatedDiagnosticTaskRequired") is True
             and _int(configuration.get("scoredSamplesPerArtifact"), minimum=100) >= 100
+            and _int(configuration.get("warmupSamplesPerArtifact"), minimum=0) >= 3
             and configuration.get("p99Scored") is True
             and disclosure.get("urlsPrinted") is False
             and disclosure.get("digestsPrinted") is False
             and disclosure.get("bodiesPrinted") is False
             and disclosure.get("tokensPrinted") is False
-            and current_names
+            and current_names == REQUIRED_BLOB_ARTIFACTS
             and current_names == artifact_names
         )
         for raw_artifact in artifacts.values():
             artifact = _mapping(raw_artifact, "Blob artifact evidence is malformed.")
             attempts = _int(artifact.get("scoredAttempts"), minimum=100)
             correctness = correctness and bool(
-                _int(artifact.get("warmupAttempts"), minimum=0) >= 0
+                _int(artifact.get("warmupAttempts"), minimum=0) >= 3
                 and _int(artifact.get("warmupErrors"), minimum=0) == 0
                 and _int(artifact.get("successes")) == attempts
                 and _int(artifact.get("exactExpectedMatches")) == attempts
@@ -519,10 +707,18 @@ def verify_workers(records: Sequence[Mapping[str, Any]], labels: Sequence[str]) 
     }
 
 
-def verify_cron(records: Sequence[Mapping[str, Any]], labels: Sequence[str]) -> dict[str, object]:
-    evidence: dict[str, dict[str, Counter[str]]] = {
-        label: {"platform-scheduler": Counter(), "route": Counter(), "manual": Counter()}
-        for label in labels
+def verify_cron(
+    records: Sequence[Mapping[str, Any]],
+    labels: Sequence[str],
+    *,
+    adopted_label: str,
+) -> dict[str, object]:
+    if adopted_label not in labels:
+        raise QualificationError("The adopted cron topology is outside the manifest.")
+    evidence: dict[str, Counter[str]] = {
+        "platform-scheduler": Counter(),
+        "route": Counter(),
+        "manual": Counter(),
     }
     authorized = True
     for record in records:
@@ -530,31 +726,38 @@ def verify_cron(records: Sequence[Mapping[str, Any]], labels: Sequence[str]) -> 
         label = _label(record.get("label"))
         source = str(record.get("source") or "")
         digest = str(record.get("correlationSha256") or "").casefold()
-        if label not in labels or source not in {"platform-scheduler", "route", "manual"} or not SHA256_RE.fullmatch(digest):
+        if (
+            label != adopted_label
+            or source not in {"platform-scheduler", "route", "manual"}
+            or not SHA256_RE.fullmatch(digest)
+        ):
             raise QualificationError("Cron evidence is malformed.")
-        evidence[label][source][digest] += _int(record.get("count"), minimum=1)
+        evidence[source][digest] += _int(record.get("count"), minimum=1)
         authorized = authorized and record.get("authorized") is True
-    label_results: dict[str, dict[str, object]] = {}
-    passed = authorized
-    for label in labels:
-        platform = evidence[label]["platform-scheduler"]
-        route = evidence[label]["route"]
-        manual = evidence[label]["manual"]
-        genuine = bool(
-            not manual
-            and len(platform) == 1
-            and len(route) == 1
-            and platform == route
-            and next(iter(platform.values()), 0) == 1
-        )
-        passed = passed and genuine
-        label_results[label] = {
-            "controlPlaneDeliveries": sum(platform.values()),
-            "correlatedRouteDeliveries": sum(route.values()),
-            "manualInvocations": sum(manual.values()),
-            "genuineScheduledDelivery": genuine,
-        }
-    return {"status": "passed" if passed else "failed", "passed": passed, "labels": label_results}
+    platform = evidence["platform-scheduler"]
+    route = evidence["route"]
+    manual = evidence["manual"]
+    genuine = bool(
+        not manual
+        and len(platform) == 1
+        and len(route) == 1
+        and platform == route
+        and next(iter(platform.values()), 0) == 1
+    )
+    passed = authorized and genuine
+    return {
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "adoptedLabel": adopted_label,
+        "labels": {
+            adopted_label: {
+                "controlPlaneDeliveries": sum(platform.values()),
+                "correlatedRouteDeliveries": sum(route.values()),
+                "manualInvocations": sum(manual.values()),
+                "genuineScheduledDelivery": genuine,
+            }
+        },
+    }
 
 
 def verify_queue(
@@ -813,7 +1016,11 @@ def qualify(
     partitions = _partition_events(events)
     telemetry = verify_telemetry(partitions["telemetry"], expected_telemetry)
     worker = verify_workers(partitions["worker"], labels)
-    cron = verify_cron(partitions["cron"], labels)
+    cron = verify_cron(
+        partitions["cron"],
+        labels,
+        adopted_label=str(topology["adoptedLabel"]),
+    )
     queue = verify_queue(partitions["queue"], labels)
     cold_correctness, cold_latency = verify_cold_starts(partitions["cold-start"], labels)
     capacity = verify_capacity(

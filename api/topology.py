@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import time
 from typing import Mapping
@@ -11,18 +12,25 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from topology_diagnostics import (
+    SHA256_RE,
     TOPOLOGY_ALLOWED_TOPICS,
+    action_result_path,
+    cold_marker_path,
     diagnostic_enabled,
     diagnostic_prefix,
     emit_event,
+    identity_digest,
     new_identity,
+    require_action,
     require_diagnostic_environment,
+    require_runtime_database_url,
     require_topic,
 )
 
 
 router = APIRouter()
 _API_IMPORT_STARTED = time.perf_counter()
+_API_BOOT_DIGEST = identity_digest(new_identity())
 _API_COLD_REPORTED = False
 
 
@@ -49,7 +57,18 @@ def record_api_cold_start(
         duration_ms = round((time.perf_counter() - _API_IMPORT_STARTED) * 1000, 3)
         if _API_COLD_REPORTED or duration_ms > 30_000:
             return JSONResponse(status_code=409, content={"cold": False})
-        _API_COLD_REPORTED = True
+        from analysis_runtime import VercelPrivateBlobStore
+
+        VercelPrivateBlobStore().put_json(
+            cold_marker_path(label, "api", _API_BOOT_DIGEST),
+            {
+                "schemaVersion": 1,
+                "component": "api",
+                "durationMs": duration_ms,
+                "success": True,
+                "cold": True,
+            },
+        )
         emit_event(
             {
                 "kind": "cold-start",
@@ -60,9 +79,42 @@ def record_api_cold_start(
                 "cold": True,
             }
         )
+        _API_COLD_REPORTED = True
         if isinstance(hold_seconds, (int, float)) and hold_seconds > 0:
             time.sleep(float(hold_seconds))
         return JSONResponse(content={"cold": True, "success": True})
+    except Exception:
+        return _safe_error()
+
+
+@router.get("/api/internal/pumbility-topology/cold-start/status")
+def cold_start_diagnostic_status() -> JSONResponse:
+    if not diagnostic_enabled(os.environ):
+        return _not_found()
+    try:
+        from analysis_runtime import VercelPrivateBlobStore
+
+        label, _connection_limit = require_diagnostic_environment(os.environ)
+        store = VercelPrivateBlobStore()
+        counts = {
+            component: len(
+                store.list(f"{diagnostic_prefix(label)}cold/{component}/")
+            )
+            for component in (
+                "api",
+                "analysis-worker",
+                "player-recommendations-worker",
+            )
+        }
+        return JSONResponse(
+            content={
+                "status": "complete"
+                if all(count >= 30 for count in counts.values())
+                else "incomplete",
+                "requiredPerComponent": 30,
+                "counts": counts,
+            }
+        )
     except Exception:
         return _safe_error()
 
@@ -134,6 +186,51 @@ def publish_capacity_diagnostics(
         return _safe_error()
 
 
+def _publish_worker_action(*, action: str, topic: str) -> JSONResponse:
+    from worker.tasks import topology_action_probe
+
+    label, _connection_limit = require_diagnostic_environment(os.environ)
+    normalized_action = require_action(action)
+    normalized_topic = require_topic(topic)
+    digest = identity_digest(new_identity())
+    topology_action_probe.apply_async(
+        args=[label, normalized_topic, digest, normalized_action],
+        queue=normalized_topic,
+        task_id=f"topology-action-{digest}",
+    )
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "accepted",
+            "action": normalized_action,
+            "topic": normalized_topic,
+            "identitySha256": digest,
+        },
+    )
+
+
+@router.get("/api/internal/pumbility-topology/action")
+def worker_action_status(identity_sha256: str = Query(...)) -> JSONResponse:
+    if not diagnostic_enabled(os.environ):
+        return _not_found()
+    try:
+        from analysis_runtime import VercelPrivateBlobStore
+
+        label, _connection_limit = require_diagnostic_environment(os.environ)
+        digest = str(identity_sha256 or "").strip().casefold()
+        if not SHA256_RE.fullmatch(digest):
+            return JSONResponse(status_code=400, content={"error": "Invalid identity."})
+        result = VercelPrivateBlobStore().get_json(action_result_path(label, digest))
+        if result is None:
+            return JSONResponse(status_code=202, content={"status": "pending"})
+        return JSONResponse(
+            status_code=200 if result.get("status") == "passed" else 503,
+            content=result,
+        )
+    except Exception:
+        return _safe_error()
+
+
 @router.get("/api/internal/pumbility-topology/queue")
 def queue_diagnostic_status() -> JSONResponse:
     if not diagnostic_enabled(os.environ):
@@ -174,16 +271,13 @@ def cleanup_topology_diagnostics() -> JSONResponse:
     try:
         from analysis_runtime import VercelPrivateBlobStore
         from pumbility_store import PumbilityArtifactStore
-        from scripts.reconcile_pumbility_production import session_url_from_runtime
 
         label, _connection_limit = require_diagnostic_environment(os.environ)
         store = VercelPrivateBlobStore()
         objects = store.list(diagnostic_prefix(label))
         store.delete([item.pathname for item in objects])
         database = PumbilityArtifactStore(
-            database_url=session_url_from_runtime(
-                os.environ.get("PUMBILITY_DATABASE_URL", "")
-            )
+            database_url=require_runtime_database_url(os.environ)
         )
         database_objects = database.list(diagnostic_prefix(label))
         database.delete([item.pathname for item in database_objects])
@@ -233,33 +327,37 @@ def _blob_benchmark_targets() -> list[dict[str, str]]:
     return targets
 
 
+def _run_private_blob_benchmark() -> dict[str, object]:
+    from scripts.benchmark_pumbility_blob_region import run_benchmark
+
+    label, _connection_limit = require_diagnostic_environment(os.environ)
+    report = run_benchmark(
+        label=label,
+        targets=_blob_benchmark_targets(),
+        token=os.environ.get("BLOB_READ_WRITE_TOKEN", ""),
+        samples=100,
+        warmups=3,
+        timeout_seconds=30,
+        attested_region=os.environ.get("VERCEL_REGION", ""),
+    )
+    if report.get("status") != "passed":
+        raise RuntimeError("The hosted private Blob benchmark failed.") from None
+    return report
+
+
 @router.post("/api/internal/pumbility-topology/blob/read")
-def benchmark_private_blob() -> JSONResponse:
+def benchmark_private_blob(
+    topic: str = Query(default="analysis"),
+) -> JSONResponse:
     if not diagnostic_enabled(os.environ):
         return _not_found()
     try:
-        from scripts.benchmark_pumbility_blob_region import run_benchmark
-
-        label, _connection_limit = require_diagnostic_environment(os.environ)
-        report = run_benchmark(
-            label=label,
-            targets=_blob_benchmark_targets(),
-            token=os.environ.get("BLOB_READ_WRITE_TOKEN", ""),
-            samples=100,
-            warmups=3,
-            timeout_seconds=30,
-            attested_region=os.environ.get("VERCEL_REGION", ""),
-        )
-        return JSONResponse(
-            status_code=200 if report["status"] == "passed" else 503,
-            content=report,
-        )
+        return _publish_worker_action(action="blob-read", topic=topic)
     except Exception:
         return _safe_error()
 
 
-@router.post("/api/internal/pumbility-topology/blob/mutation")
-def mutate_private_blob_isolated() -> JSONResponse:
+def _execute_private_blob_mutation() -> JSONResponse:
     if not diagnostic_enabled(os.environ):
         return _not_found()
     try:
@@ -267,7 +365,7 @@ def mutate_private_blob_isolated() -> JSONResponse:
 
         from analysis_runtime import VercelPrivateBlobStore
         from pumbility_store import PumbilityArtifactStore, _assert_schema
-        from scripts.reconcile_pumbility_production import session_url_from_runtime
+        from scripts.backfill_pumbility_production import _assert_database_target
 
         label, _connection_limit = require_diagnostic_environment(os.environ)
         raw_identity = new_identity()
@@ -278,9 +376,7 @@ def mutate_private_blob_isolated() -> JSONResponse:
         pointer_path = f"{prefix}-pointer.json"
         partial_path = f"{prefix}-partial.json"
         blob = VercelPrivateBlobStore()
-        database_url = session_url_from_runtime(
-            os.environ.get("PUMBILITY_DATABASE_URL", "")
-        )
+        database_url = require_runtime_database_url(os.environ)
         target = PumbilityArtifactStore(database_url=database_url)
         try:
             json_value = {"schemaVersion": 1, "value": "exact"}
@@ -298,6 +394,7 @@ def mutate_private_blob_isolated() -> JSONResponse:
                 with psycopg.connect(database_url, prepare_threshold=None) as connection:
                     with connection.transaction(), connection.cursor() as cursor:
                         _assert_schema(cursor)
+                        _assert_database_target(cursor)
                         target._put_json_row(
                             cursor,
                             pointer_path,
@@ -339,14 +436,38 @@ def mutate_private_blob_isolated() -> JSONResponse:
         return _safe_error()
 
 
+def _run_private_blob_mutation() -> dict[str, object]:
+    response = _execute_private_blob_mutation()
+    if response.status_code != 200:
+        raise RuntimeError("The hosted private Blob mutation failed.") from None
+    return json.loads(bytes(response.body))
+
+
+@router.post("/api/internal/pumbility-topology/blob/mutation")
+def mutate_private_blob_isolated(
+    topic: str = Query(default="analysis"),
+) -> JSONResponse:
+    if not diagnostic_enabled(os.environ):
+        return _not_found()
+    try:
+        return _publish_worker_action(action="blob-mutation", topic=topic)
+    except Exception:
+        return _safe_error()
+
+
 def _inject_supabase_timeout(database_url: str) -> bool:
     import psycopg
+
+    from pumbility_store import _assert_schema
+    from scripts.backfill_pumbility_production import _assert_database_target
 
     timed_out = False
     with psycopg.connect(database_url, prepare_threshold=None) as connection:
         try:
-            with connection.cursor() as cursor:
-                cursor.execute("set statement_timeout = '1ms'")
+            with connection.transaction(), connection.cursor() as cursor:
+                _assert_schema(cursor)
+                _assert_database_target(cursor)
+                cursor.execute("set local statement_timeout = '1ms'")
                 cursor.execute("select pg_sleep(0.1)")
         except psycopg.errors.QueryCanceled:
             timed_out = True
@@ -376,17 +497,12 @@ def _inject_blob_timeout() -> bool:
     return False
 
 
-@router.post("/api/internal/pumbility-topology/faults")
-def inject_topology_timeout_faults() -> JSONResponse:
+def _execute_timeout_faults() -> JSONResponse:
     if not diagnostic_enabled(os.environ):
         return _not_found()
     try:
-        from scripts.reconcile_pumbility_production import session_url_from_runtime
-
         require_diagnostic_environment(os.environ)
-        database_url = session_url_from_runtime(
-            os.environ.get("PUMBILITY_DATABASE_URL", "")
-        )
+        database_url = require_runtime_database_url(os.environ)
         supabase_timeout = _inject_supabase_timeout(database_url)
         blob_timeout = _inject_blob_timeout()
         passed = supabase_timeout and blob_timeout
@@ -407,5 +523,29 @@ def inject_topology_timeout_faults() -> JSONResponse:
                 },
             },
         )
+    except Exception:
+        return _safe_error()
+
+
+def _run_timeout_faults() -> dict[str, object]:
+    response = _execute_timeout_faults()
+    if response.status_code != 200:
+        raise RuntimeError("The hosted topology timeout faults failed.") from None
+    return json.loads(bytes(response.body))
+
+
+@router.post("/api/internal/pumbility-topology/faults")
+def inject_topology_timeout_faults(
+    scenario: str = Query(default="timeouts"),
+    topic: str = Query(default="analysis"),
+) -> JSONResponse:
+    if not diagnostic_enabled(os.environ):
+        return _not_found()
+    try:
+        normalized = str(scenario or "").strip().casefold()
+        action = "timeout-faults" if normalized == "timeouts" else "worker-crash"
+        if normalized not in {"timeouts", "worker-crash"}:
+            return JSONResponse(status_code=400, content={"error": "Invalid scenario."})
+        return _publish_worker_action(action=action, topic=topic)
     except Exception:
         return _safe_error()

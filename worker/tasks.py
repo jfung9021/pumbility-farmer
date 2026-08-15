@@ -35,15 +35,15 @@ def _create_topology_effect_once(marker_path: str) -> bool:
     import psycopg
 
     from pumbility_store import PumbilityArtifactStore, _assert_schema
-    from scripts.reconcile_pumbility_production import session_url_from_runtime
+    from scripts.backfill_pumbility_production import _assert_database_target
+    from topology_diagnostics import require_runtime_database_url
 
-    database_url = session_url_from_runtime(
-        os.environ.get("PUMBILITY_DATABASE_URL", "")
-    )
+    database_url = require_runtime_database_url(os.environ)
     effect_path = f"{marker_path}.effect"
     with psycopg.connect(database_url, prepare_threshold=None) as connection:
         with connection.transaction(), connection.cursor() as cursor:
             _assert_schema(cursor)
+            _assert_database_target(cursor)
             cursor.execute(
                 "select pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (effect_path,),
@@ -62,6 +62,79 @@ def _create_topology_effect_once(marker_path: str) -> bool:
     return True
 
 
+def _begin_topology_worker_invocation(topic: str) -> Any | None:
+    """Claim a real process-first invocation only in an enabled Preview topology."""
+    import os
+
+    from topology_diagnostics import diagnostic_enabled
+    from worker.bootstrap import claim_first_worker_invocation
+
+    if not diagnostic_enabled(os.environ):
+        return None
+    return claim_first_worker_invocation(_topology_worker_component(topic))
+
+
+def _complete_topology_worker_invocation(
+    claim: Any | None, *, label: str | None = None
+) -> None:
+    if claim is None:
+        return
+    import os
+
+    from analysis_runtime import VercelPrivateBlobStore
+    from topology_diagnostics import (
+        cold_marker_path,
+        emit_cold_start,
+        require_diagnostic_environment,
+    )
+
+    if label is None:
+        label, _connection_limit = require_diagnostic_environment(os.environ)
+
+    duration_ms = round((perf_counter() - float(claim.started_at)) * 1000, 3)
+    VercelPrivateBlobStore().put_json(
+        cold_marker_path(label, str(claim.component), str(claim.identity_sha256)),
+        {
+            "schemaVersion": 1,
+            "component": str(claim.component),
+            "durationMs": duration_ms,
+            "success": True,
+            "cold": True,
+        },
+    )
+    emit_cold_start(
+        label=label,
+        component=str(claim.component),
+        duration_ms=duration_ms,
+    )
+
+
+def _complete_topology_worker_invocation_best_effort(claim: Any | None) -> None:
+    """Never let optional diagnostic timing change an ordinary worker outcome."""
+    try:
+        _complete_topology_worker_invocation(claim)
+    except Exception:
+        # No marker means the aggregate remains below 30 and fails closed.
+        pass
+
+
+def _emit_topology_worker_event(*, label: str, topic: str, outcome: str) -> None:
+    from topology_diagnostics import emit_event
+
+    emit_event(
+        {
+            "kind": "worker",
+            "label": label,
+            "component": (
+                "analysis" if topic == QUEUE_NAME else "player-recommendations"
+            ),
+            "outcome": outcome,
+            "count": 1,
+            "isolatedDiagnostic": True,
+        }
+    )
+
+
 def PiuScoresClient(*args: Any, **kwargs: Any) -> Any:  # noqa: N802 - test seam
     from piu_misgrade_analyzer import PiuScoresClient as implementation
 
@@ -76,6 +149,7 @@ def refresh_one_player(*args: Any, **kwargs: Any) -> Any:
 
 @app.task(queue=QUEUE_NAME, name="worker.tasks.refresh_analysis")
 def refresh_analysis(job_id: str) -> dict[str, Any]:
+    cold_claim = _begin_topology_worker_invocation(QUEUE_NAME)
     result = execute_analysis_job(job_id, yield_after_typed_checkpoint=True)
     continuation = result.pop(ANALYSIS_CONTINUATION_FIELD, None)
     if continuation in {
@@ -93,6 +167,7 @@ def refresh_analysis(job_id: str) -> dict[str, Any]:
             ),
             queue=QUEUE_NAME,
         )
+    _complete_topology_worker_invocation_best_effort(cold_claim)
     return result
 
 
@@ -103,11 +178,13 @@ def refresh_analysis(job_id: str) -> dict[str, Any]:
 def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
     from piu_misgrade_analyzer import ApiError
 
+    cold_claim = _begin_topology_worker_invocation(PLAYER_QUEUE_NAME)
     jobs = RuntimeJobStore()
     job = jobs.get(job_id)
     if job is None:
         raise RuntimeError("The queued player refresh status was not found.")
     if job.get("status") == "completed":
+        _complete_topology_worker_invocation_best_effort(cold_claim)
         return job
     started = perf_counter()
     started_at = utc_now()
@@ -170,6 +247,7 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
             "phaseDurationsMs": timings,
             "durationMs": completed.get("durationMs"),
         }, separators=(",", ":"), sort_keys=True))
+        _complete_topology_worker_invocation_best_effort(cold_claim)
         return completed
     except Exception as exc:
         failed = update_job(
@@ -197,9 +275,7 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
         return failed
 
 
-@app.task(bind=True, name="worker.tasks.topology_queue_probe")
-def topology_queue_probe(
-    self: Any,
+def _run_topology_queue_probe(
     label: str,
     topic: str,
     identity_sha256: str,
@@ -212,7 +288,6 @@ def topology_queue_probe(
 
     from topology_diagnostics import (
         emit_event,
-        emit_worker_cold_start_once,
         queue_marker_path,
         require_diagnostic_environment,
         require_topic,
@@ -272,25 +347,49 @@ def topology_queue_probe(
         marker_path,
         {"schemaVersion": 1, "attempts": attempts, "effect": True},
     )
-    emit_event(
-        {
-            "kind": "worker",
-            "label": label,
-            "component": (
-                "analysis"
-                if normalized_topic == QUEUE_NAME
-                else "player-recommendations"
-            ),
-            "outcome": "succeeded",
-            "count": 1,
-            "isolatedDiagnostic": True,
-        }
-    )
-    emit_worker_cold_start_once(
-        label=label,
-        component=_topology_worker_component(normalized_topic),
+    _emit_topology_worker_event(
+        label=label, topic=normalized_topic, outcome="succeeded"
     )
     return {"status": "completed", "effectCreated": effect_created}
+
+
+@app.task(bind=True, name="worker.tasks.topology_queue_probe")
+def topology_queue_probe(
+    self: Any,
+    label: str,
+    topic: str,
+    identity_sha256: str,
+    force_redelivery: bool = False,
+) -> dict[str, Any]:
+    del self
+    from celery.exceptions import Reject
+
+    cold_claim = _begin_topology_worker_invocation(topic)
+    try:
+        result = _run_topology_queue_probe(
+            label, topic, identity_sha256, force_redelivery
+        )
+        _complete_topology_worker_invocation(cold_claim, label=label)
+        return result
+    except Reject:
+        raise
+    except Exception:
+        try:
+            import os
+
+            from topology_diagnostics import (
+                require_diagnostic_environment,
+                require_topic,
+            )
+
+            expected_label, _connection_limit = require_diagnostic_environment(os.environ)
+            if label == expected_label:
+                _emit_topology_worker_event(
+                    label=label, topic=require_topic(topic), outcome="failed"
+                )
+        except Exception:
+            pass
+        raise RuntimeError("The hosted topology queue diagnostic failed.") from None
 
 
 @app.task(bind=True, name="worker.tasks.topology_capacity_probe")
@@ -302,21 +401,26 @@ def topology_capacity_probe(
     """Measure dedicated-role database usage under real queue concurrency."""
     del self
     import os
-    import psycopg
 
-    from topology_diagnostics import emit_event, require_diagnostic_environment
-
-    from scripts.reconcile_pumbility_production import session_url_from_runtime
+    from pumbility_store import _assert_schema, _read_connect
+    from scripts.backfill_pumbility_production import _assert_database_target
+    from topology_diagnostics import (
+        emit_event,
+        require_diagnostic_environment,
+        require_runtime_database_url,
+    )
 
     expected_label, expected_limit = require_diagnostic_environment(os.environ)
     if label != expected_label or connection_limit != expected_limit:
-        raise RuntimeError("The diagnostic capacity scope is invalid.")
+        raise RuntimeError("The hosted topology capacity diagnostic failed.") from None
+    cold_claim = _begin_topology_worker_invocation(QUEUE_NAME)
     try:
-        with psycopg.connect(
-            session_url_from_runtime(os.environ.get("PUMBILITY_DATABASE_URL", "")),
-            prepare_threshold=None,
-        ) as connection:
-            with connection.cursor() as cursor:
+        database_url = require_runtime_database_url(os.environ)
+        with _read_connect(database_url) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                _assert_schema(cursor)
+                _assert_database_target(cursor)
+                cursor.execute("set local statement_timeout = '10s'")
                 cursor.execute("select pg_sleep(1)")
                 cursor.execute(
                     "select count(*) from pg_stat_activity where usename = current_user"
@@ -333,6 +437,7 @@ def topology_capacity_probe(
                 "deadlineErrors": 0,
             }
         )
+        _complete_topology_worker_invocation(cold_claim, label=label)
         return {"status": "completed", "sampled": True}
     except Exception:
         emit_event(
@@ -345,4 +450,126 @@ def topology_capacity_probe(
                 "deadlineErrors": 0,
             }
         )
-        raise
+        _emit_topology_worker_event(label=label, topic=QUEUE_NAME, outcome="failed")
+        raise RuntimeError("The hosted topology capacity diagnostic failed.") from None
+
+
+def _terminate_topology_worker_process(exit_code: int) -> None:
+    """Terminate before queue acknowledgement to prove genuine crash redelivery."""
+    import os
+
+    os._exit(exit_code)
+
+
+@app.task(bind=True, name="worker.tasks.topology_action_probe")
+def topology_action_probe(
+    self: Any,
+    label: str,
+    topic: str,
+    identity_sha256: str,
+    action: str,
+) -> dict[str, Any]:
+    """Execute one default-off diagnostic inside the selected worker topology."""
+    del self
+    import os
+
+    from analysis_runtime import VercelPrivateBlobStore
+    from topology_diagnostics import (
+        SHA256_RE,
+        action_result_path,
+        require_action,
+        require_diagnostic_environment,
+        require_topic,
+    )
+
+    cold_claim = _begin_topology_worker_invocation(topic)
+    try:
+        expected_label, _connection_limit = require_diagnostic_environment(os.environ)
+        normalized_topic = require_topic(topic)
+        normalized_action = require_action(action)
+        digest = str(identity_sha256 or "").strip().casefold()
+        if label != expected_label or not SHA256_RE.fullmatch(digest):
+            raise RuntimeError("The topology action scope is invalid.")
+        result_path = action_result_path(label, digest)
+        store = VercelPrivateBlobStore()
+        prior = store.get_json(result_path) or {}
+        if prior.get("status") == "passed":
+            return {"status": "completed", "effectCreated": False}
+
+        if normalized_action == "worker-crash":
+            if prior.get("status") != "crash-injected":
+                store.put_json(
+                    result_path,
+                    {
+                        "schemaVersion": 1,
+                        "action": normalized_action,
+                        "status": "crash-injected",
+                        "attempts": 1,
+                    },
+                )
+                _terminate_topology_worker_process(75)
+                raise RuntimeError("The topology worker termination returned unexpectedly.")
+            effect_created = _create_topology_effect_once(result_path)
+            result: dict[str, Any] = {
+                "schemaVersion": 1,
+                "action": normalized_action,
+                "status": "passed",
+                "attempts": 2,
+                "crashObserved": True,
+                "redeliveryRecovered": True,
+                "exactlyOnceEffect": True,
+            }
+        else:
+            from api.topology import (
+                _run_private_blob_benchmark,
+                _run_private_blob_mutation,
+                _run_timeout_faults,
+            )
+
+            runners = {
+                "blob-read": _run_private_blob_benchmark,
+                "blob-mutation": _run_private_blob_mutation,
+                "timeout-faults": _run_timeout_faults,
+            }
+            result = dict(runners[normalized_action]())
+            effect_created = _create_topology_effect_once(result_path)
+            result = {
+                "schemaVersion": 1,
+                "action": normalized_action,
+                "status": "passed",
+                "result": result,
+                "exactlyOnceEffect": True,
+            }
+
+        store.put_json(result_path, result)
+        _emit_topology_worker_event(
+            label=label, topic=normalized_topic, outcome="succeeded"
+        )
+        _complete_topology_worker_invocation(cold_claim, label=label)
+        return {"status": "completed", "effectCreated": effect_created}
+    except BaseException as error:
+        # A real os._exit() never returns and cannot be caught. Tests substitute a
+        # BaseException sentinel to verify that the crash branch does not sanitize
+        # away the intentional process termination.
+        if not isinstance(error, Exception):
+            raise
+        try:
+            normalized_topic = require_topic(topic)
+            normalized_action = require_action(action)
+            digest = str(identity_sha256 or "").strip().casefold()
+            if label == expected_label and SHA256_RE.fullmatch(digest):
+                VercelPrivateBlobStore().put_json(
+                    action_result_path(label, digest),
+                    {
+                        "schemaVersion": 1,
+                        "action": normalized_action,
+                        "status": "failed",
+                        "error": "diagnostic-failed",
+                    },
+                )
+                _emit_topology_worker_event(
+                    label=label, topic=normalized_topic, outcome="failed"
+                )
+        except Exception:
+            pass
+        raise RuntimeError("The hosted topology action diagnostic failed.") from None

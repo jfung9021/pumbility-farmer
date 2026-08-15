@@ -189,11 +189,18 @@ def create_manifest(
     *,
     topology_kind: str,
     boundary: Mapping[str, Any],
+    adopted_label: str | None = None,
 ) -> dict[str, object]:
     first_value = _validated_metadata(first)
     second_value = _validated_metadata(second)
     if first_value["label"] == second_value["label"]:
         raise ManifestError("Deployment labels must be different.")
+    normalized_adopted_label = _label(adopted_label or first_value["label"])
+    if normalized_adopted_label not in {
+        first_value["label"],
+        second_value["label"],
+    }:
+        raise ManifestError("The adopted topology label is not one of the deployments.")
     if boundary.get("schemaVersion") != 1:
         raise ManifestError("Unsupported stable-boundary evidence schema.")
     boundary_keys = {
@@ -256,6 +263,7 @@ def create_manifest(
         "status": "passed",
         "topologyKind": topology_kind,
         "controlledDifference": controlled_field,
+        "adoptedLabel": normalized_adopted_label,
         "deployments": [sanitized(first_value), sanitized(second_value)],
         "identities": {
             "gitCommitMatch": True,
@@ -287,6 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--second", type=Path, required=True)
     parser.add_argument("--stable-boundary", type=Path, required=True)
     parser.add_argument("--topology-kind", choices=("region", "connection"), required=True)
+    parser.add_argument("--adopted-label", required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -298,6 +307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _mapping(args.second),
         topology_kind=args.topology_kind,
         boundary=_mapping(args.stable_boundary, allowed_keys=None),
+        adopted_label=args.adopted_label,
     )
     output = _local_output(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
