@@ -29,6 +29,9 @@ from analysis_runtime import (
     TYPED_CHECKPOINT_SNAPSHOT_PHASE,
     MemoryBlobStore,
     MemoryJobStore,
+    RuntimeJobStore,
+    VercelPrivateBlobStore,
+    VercelRuntimeJobStore,
     _canonical_json_sha256,
     _checkpoint_continuation,
     _load_typed_checkpoint_shard,
@@ -113,12 +116,30 @@ def latest_payload(generated: datetime, mix: str = "phoenix2") -> dict:
 
 
 class PrivateBlobStoreTests(unittest.TestCase):
+    def test_live_factories_construct_only_supabase_stores(self) -> None:
+        artifact_store = object()
+        job_store = object()
+        with (
+            patch(
+                "pumbility_store.PumbilityArtifactStore",
+                return_value=artifact_store,
+            ),
+            patch("pumbility_store.PumbilityJobStore", return_value=job_store),
+            patch.object(VercelPrivateBlobStore, "__init__", return_value=None) as blob,
+            patch.object(VercelRuntimeJobStore, "__init__", return_value=None) as cache,
+        ):
+            self.assertIs(PrivateBlobStore(), artifact_store)
+            self.assertIs(RuntimeJobStore(), job_store)
+
+        blob.assert_not_called()
+        cache.assert_not_called()
+
     def test_delete_batches_large_retention_sets(self) -> None:
         paths = [f"analysis/stale/{index:04d}.json" for index in range(205)]
         RecordingBlobClient.delete_calls = []
 
         with patch("vercel.blob.BlobClient", RecordingBlobClient):
-            PrivateBlobStore(token="test-token").delete(paths)
+            VercelPrivateBlobStore(token="test-token").delete(paths)
 
         self.assertEqual(
             [len(batch) for batch in RecordingBlobClient.delete_calls],
