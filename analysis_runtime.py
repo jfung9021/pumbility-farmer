@@ -1382,6 +1382,44 @@ def _audit_checkpoint_resume(
     return value
 
 
+def _committed_model_shard_paths(
+    blobs: JsonBlobStore,
+    *,
+    generation: str,
+    phoenix1_count: int,
+    phoenix2_count: int,
+) -> tuple[list[str], list[str]]:
+    """Validate a committed generation without downloading its private shards."""
+    expected_phoenix1_paths = {
+        recommendation_phoenix1_shard_path(generation, shard)
+        for shard in range(phoenix1_count)
+    }
+    expected_phoenix2_paths = {
+        recommendation_phoenix2_shard_path(generation, shard)
+        for shard in range(phoenix2_count)
+    }
+    phoenix1_prefix = recommendation_phoenix1_shard_path(generation, 0).rsplit(
+        "/", 1
+    )[0] + "/"
+    phoenix2_prefix = recommendation_phoenix2_shard_path(generation, 0).rsplit(
+        "/", 1
+    )[0] + "/"
+    actual_phoenix1_paths = {
+        item.pathname for item in blobs.list(phoenix1_prefix)
+    }
+    actual_phoenix2_paths = {
+        item.pathname for item in blobs.list(phoenix2_prefix)
+    }
+    if (
+        actual_phoenix1_paths != expected_phoenix1_paths
+        or actual_phoenix2_paths != expected_phoenix2_paths
+    ):
+        raise RuntimeError(
+            "A typed analysis checkpoint model input generation is incomplete."
+        )
+    return sorted(actual_phoenix1_paths), sorted(actual_phoenix2_paths)
+
+
 def _recover_published_model_checkpoint(
     blobs: JsonBlobStore,
     *,
@@ -1416,27 +1454,12 @@ def _recover_published_model_checkpoint(
     ):
         raise RuntimeError("The durable recommendation model generation is incomplete.")
 
-    phoenix1_hashes: list[str] = []
-    phoenix2_hashes: list[str] = []
-    for shard in range(raw_shard_count):
-        phoenix1 = blobs.get_json(
-            recommendation_phoenix1_shard_path(generation, shard)
-        )
-        phoenix2 = blobs.get_json(
-            recommendation_phoenix2_shard_path(generation, shard)
-        )
-        if (
-            phoenix1 is None
-            or phoenix2 is None
-            or phoenix1.get("generationKey") != generation
-            or phoenix2.get("generationKey") != generation
-        ):
-            raise RuntimeError(
-                "The durable recommendation model input generation is incomplete."
-            )
-        phoenix1_hashes.append(_canonical_json_sha256(phoenix1))
-        phoenix2_hashes.append(_canonical_json_sha256(phoenix2))
-        del phoenix1, phoenix2
+    phoenix1_paths, phoenix2_paths = _committed_model_shard_paths(
+        blobs,
+        generation=generation,
+        phoenix1_count=raw_shard_count,
+        phoenix2_count=raw_shard_count,
+    )
 
     frozen_phoenix1 = blobs.get_json(phoenix1_snapshot_path())
     if frozen_phoenix1 is None:
@@ -1459,8 +1482,8 @@ def _recover_published_model_checkpoint(
         "indexSha256": _canonical_json_sha256(index),
         "modelSha256": _canonical_json_sha256(model),
         "scoreModelSha256": hashlib.sha256(score_model).hexdigest(),
-        "phoenix1ShardsSha256": _canonical_json_sha256(phoenix1_hashes),
-        "phoenix2ShardsSha256": _canonical_json_sha256(phoenix2_hashes),
+        "phoenix1ShardsSha256": _canonical_json_sha256(phoenix1_paths),
+        "phoenix2ShardsSha256": _canonical_json_sha256(phoenix2_paths),
     }
     return dict(combined_tier), dict(index), metadata
 
@@ -1494,33 +1517,31 @@ def _load_checkpoint_model_artifacts(
         or score_model is None
     ):
         raise RuntimeError("A typed analysis checkpoint model artifact is unavailable.")
-    phoenix1_hashes: list[str] = []
-    for shard in range(phoenix1_count):
-        value = blobs.get_json(recommendation_phoenix1_shard_path(generation, shard))
-        if value is None:
-            raise RuntimeError(
-                "A typed analysis checkpoint Phoenix 1 input shard is unavailable."
-            )
-        phoenix1_hashes.append(_canonical_json_sha256(value))
-        del value
-    phoenix2_hashes: list[str] = []
-    for shard in range(phoenix2_count):
-        value = blobs.get_json(recommendation_phoenix2_shard_path(generation, shard))
-        if value is None:
-            raise RuntimeError(
-                "A typed analysis checkpoint Phoenix 2 input shard is unavailable."
-            )
-        phoenix2_hashes.append(_canonical_json_sha256(value))
-        del value
+    raw_index_shard_count = index.get("inputShardCount")
+    if (
+        raw_index_shard_count != phoenix1_count
+        or raw_index_shard_count != phoenix2_count
+    ):
+        raise RuntimeError(
+            "A typed analysis checkpoint model input generation is incomplete."
+        )
+    _committed_model_shard_paths(
+        blobs,
+        generation=generation,
+        phoenix1_count=phoenix1_count,
+        phoenix2_count=phoenix2_count,
+    )
     if (
         metadata.get("indexSha256") != _canonical_json_sha256(index)
         or metadata.get("modelSha256") != _canonical_json_sha256(model)
         or metadata.get("scoreModelSha256")
         != hashlib.sha256(score_model).hexdigest()
-        or metadata.get("phoenix1ShardsSha256")
-        != _canonical_json_sha256(phoenix1_hashes)
-        or metadata.get("phoenix2ShardsSha256")
-        != _canonical_json_sha256(phoenix2_hashes)
+        or not re.fullmatch(
+            r"[0-9a-f]{64}", str(metadata.get("phoenix1ShardsSha256") or "")
+        )
+        or not re.fullmatch(
+            r"[0-9a-f]{64}", str(metadata.get("phoenix2ShardsSha256") or "")
+        )
     ):
         raise ValueError("A typed analysis checkpoint model artifact failed validation.")
     return dict(index), (

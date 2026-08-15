@@ -1439,15 +1439,20 @@ class WorkerTests(unittest.TestCase):
                 descriptor=first_descriptor,
             )
 
-    def test_typed_model_resume_validates_input_shards_sequentially(self) -> None:
+    def test_typed_model_resume_validates_committed_input_shard_paths(self) -> None:
         class RecordingStore(MemoryBlobStore):
             def __init__(self) -> None:
                 super().__init__()
                 self.json_reads = []
+                self.list_prefixes = []
 
             def get_json(self, pathname):
                 self.json_reads.append(pathname)
                 return super().get_json(pathname)
+
+            def list(self, prefix):
+                self.list_prefixes.append(prefix)
+                return super().list(prefix)
 
         from pumbility_contract import (
             recommendation_index_path,
@@ -1459,7 +1464,11 @@ class WorkerTests(unittest.TestCase):
 
         blobs = RecordingStore()
         generation = "compact-model-resume"
-        index = {"generationKey": generation, "players": []}
+        index = {
+            "generationKey": generation,
+            "inputShardCount": 1,
+            "players": [],
+        }
         model = {"generationKey": generation, "method": {}}
         score_model = b"numeric-model"
         blobs.put_json(recommendation_index_path(generation), index)
@@ -1498,16 +1507,17 @@ class WorkerTests(unittest.TestCase):
 
         self.assertEqual(loaded_index, index)
         self.assertEqual(artifacts[3:], (1, 1))
-        self.assertIn(
+        self.assertNotIn(
             recommendation_phoenix1_shard_path(generation, 0), blobs.json_reads
         )
-        self.assertIn(
+        self.assertNotIn(
             recommendation_phoenix2_shard_path(generation, 0), blobs.json_reads
         )
-        blobs.put_json(
-            recommendation_phoenix2_shard_path(generation, 0), {"rows": [999]}
+        self.assertEqual(len(blobs.list_prefixes), 2)
+        blobs.delete(
+            recommendation_phoenix2_shard_path(generation, 0)
         )
-        with self.assertRaisesRegex(ValueError, "model artifact failed validation"):
+        with self.assertRaisesRegex(RuntimeError, "input generation is incomplete"):
             _load_checkpoint_model_artifacts(
                 blobs,
                 {
@@ -1734,6 +1744,7 @@ class WorkerTests(unittest.TestCase):
                 "storageSchemaVersion": 3,
                 "generationKey": generation,
                 "generatedAtUtc": isoformat_utc(NOW),
+                "inputShardCount": 0,
                 "players": [],
             },
             {"generationKey": generation},
