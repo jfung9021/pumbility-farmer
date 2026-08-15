@@ -702,7 +702,8 @@ test("Top 50 cards expose PIU result data and open an accessible detail dialog",
   assert.match(page, /event\.target === event\.currentTarget/);
   assert.match(page, /<ChartVideoLink[\s\S]*variant="dialog"/);
   assert.match(css, /\.top-score-grid \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(165px, 1fr\)\);/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.top-score-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(css, /\.top-score-card \{[^}]*border-radius: 0;/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.top-score-grid \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
 });
 
 test("limited-data presentation uses the shared 20-player boundary", async () => {

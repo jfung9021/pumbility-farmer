@@ -654,7 +654,7 @@ footer b { color: #929b93; }
 .top-scores { margin-top: var(--recommendations-stack-gap); }
 .top-scores-heading > span { color: #747d75; font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
 .top-score-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); }
-.top-score-card { background: rgba(13, 18, 14, 0.86); border: 1px solid var(--line); border-radius: 9px; min-width: 0; overflow: hidden; }
+.top-score-card { background: rgba(13, 18, 14, 0.86); border: 1px solid var(--line); border-radius: 0; min-width: 0; overflow: hidden; }
 .top-score-card-button { background: transparent; border: 0; color: inherit; cursor: pointer; display: flex; flex-direction: column; height: 100%; padding: 0; text-align: left; width: 100%; }
 .top-score-card-button:hover { background: rgba(200, 255, 46, 0.035); }
 .top-score-card-button:focus-visible { outline: 2px solid white; outline-offset: -2px; }
@@ -752,7 +752,7 @@ footer b { color: #929b93; }
   .recommendation-pumbility-popup strong { font-size: 15px; }
   .recommendation-goal b { overflow-wrap: anywhere; }
   .recommendation-jacket .chart-difficulty-badge { bottom: 3px; font-size: 8px; height: 20px; right: 3px; width: 20px; }
-  .top-score-grid { gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .top-score-grid { gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .top-score-copy { padding: 7px 7px 6px; }
   .top-score-copy > strong { font-size: 10px; }
   .top-score-result { padding: 7px; }
