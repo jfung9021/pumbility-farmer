@@ -1,4 +1,4 @@
-"""Durable analysis job coordination, status caching, and private Blob storage."""
+"""Durable analysis coordination and private artifact persistence."""
 
 from __future__ import annotations
 
@@ -420,22 +420,26 @@ class VercelPrivateBlobStore:
 
 
 class PrivateBlobStore:
-    """Select the configured private persistence backend.
+    """Construct the private Supabase artifact store used by the live runtime.
 
-    ``PUMBILITY_DATA_BACKEND`` defaults to ``vercel``.  ``shadow`` keeps all
-    reads on Vercel and mirrors writes to Supabase; ``supabase`` selects the
-    new store directly.  Keeping selection at the existing constructor makes
-    this migration transparent to every current route, worker, and test seam.
+    The historical name remains as an internal compatibility seam for the
+    analysis coordinator. Provider selection is intentionally no longer
+    configurable: production artifacts are always read from and written to
+    Supabase/PostgreSQL or private Supabase Storage.
     """
 
     def __new__(
         cls, token: str | None = None, *, canary_domain: str | None = None
     ) -> JsonBlobStore:
-        from pumbility_store import select_json_store
+        if token is not None:
+            raise RuntimeError(
+                "PrivateBlobStore no longer accepts a Vercel Blob token; "
+                "use the explicit legacy adapter only from archived tooling."
+            )
+        del canary_domain
+        from pumbility_store import PumbilityArtifactStore
 
-        return select_json_store(
-            lambda: VercelPrivateBlobStore(token=token), canary_domain=canary_domain
-        )
+        return PumbilityArtifactStore()
 
 
 class MemoryBlobStore:
@@ -570,12 +574,13 @@ class VercelRuntimeJobStore:
 
 
 class RuntimeJobStore:
-    """Select Vercel Runtime Cache, Supabase, or legacy-primary shadow jobs."""
+    """Construct the Supabase-backed durable job store for the live runtime."""
 
     def __new__(cls, *, canary_domain: str | None = None) -> JobStore:
-        from pumbility_store import select_job_store
+        del canary_domain
+        from pumbility_store import PumbilityJobStore
 
-        return select_job_store(VercelRuntimeJobStore, canary_domain=canary_domain)
+        return PumbilityJobStore()
 
 
 class MemoryJobStore:

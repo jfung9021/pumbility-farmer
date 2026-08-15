@@ -137,10 +137,9 @@ npm run dev:local
 ```
 
 This mode serves privacy-checked aggregate and recommendation files from `.local-data`; live player
-refresh remains disabled. It is the unchanged UI/API baseline. The Python FastAPI/worker adapter
-uses `PUMBILITY_DATA_BACKEND=supabase` for database reads after reconciliation, or `shadow` for
-legacy-primary mirroring. The default remains `vercel`. Database variables must remain unprefixed;
-never add a Supabase service-role key under `NEXT_PUBLIC_*`.
+refresh remains disabled. It is the unchanged UI/API baseline. The Python FastAPI/worker runtime
+uses Supabase exclusively when it is started. Database variables must remain unprefixed; never add
+a Supabase service-role key under `NEXT_PUBLIC_*`.
 
 After the local stack has been backfilled and reconciled, the guarded launcher starts both the
 existing UI and a separate Supabase-backed FastAPI surface without writing credentials to disk:
@@ -159,8 +158,8 @@ the current Vercel multi-service development launcher emits invalid unescaped Py
 does not affect deployed Vercel services or the application code.
 
 To exercise the Python API against Supabase after reconciliation, set the server-only variables
-from `.env.supabase-local.example`, set `PUMBILITY_DATA_BACKEND=supabase`, and use `vercel dev`
-instead of `npm run dev:local`. Verify these unchanged routes before trying the UI:
+from `.env.supabase-local.example` and use `vercel dev` instead of `npm run dev:local`. Verify these
+unchanged routes before trying the UI:
 
 ```text
 /api/analyze?mix=phoenix1

@@ -1,8 +1,7 @@
-"""Opt-in PostgreSQL and Supabase Storage persistence adapters.
+"""PostgreSQL and private Supabase Storage persistence adapters.
 
-The default backend remains the existing Vercel stores.  This module is kept
-free of imports from ``analysis_runtime`` so the runtime can select it lazily
-without creating a circular dependency.
+The live runtime is Supabase-only. Legacy Vercel selectors remain in this
+module solely for archived migration and rollback tooling.
 """
 
 from __future__ import annotations
@@ -49,6 +48,14 @@ VALID_READ_CANARIES = frozenset(
         "recommendation-player",
         "job-status",
     }
+)
+RETIRED_RUNTIME_ENV_VARS = (
+    BACKEND_ENV,
+    SHADOW_STRICT_ENV,
+    CANONICAL_SNAPSHOT_WRITE_ENV,
+    READ_CANARY_ENV,
+    BLOB_MIRROR_ENV,
+    BLOB_READ_FALLBACK_ENV,
 )
 CURRENT_SNAPSHOT_RE = re.compile(r"^analysis/private/(phoenix1|phoenix2)-current\.json$")
 STAGING_SNAPSHOT_RE = re.compile(
@@ -99,46 +106,32 @@ def configured_read_canaries(
     return frozenset(configured)
 
 
+def validate_persistence_configuration(
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    """Fail startup if a retired provider-selection control is still configured.
+
+    Supabase is the sole live persistence backend. The older selectors remain
+    below only for archived migration and rollback tooling; ordinary API and
+    worker startup must never be able to activate them.
+    """
+    env = environment if environment is not None else os.environ
+    configured = [
+        name for name in RETIRED_RUNTIME_ENV_VARS if str(env.get(name, "")).strip()
+    ]
+    if configured:
+        raise RuntimeError(
+            "Supabase-only persistence requires retired runtime controls to be removed: "
+            + ", ".join(configured)
+            + "."
+        )
+
+
 def validate_rollout_configuration(
     environment: Mapping[str, str] | None = None,
 ) -> None:
-    """Fail application startup on unsafe or internally inconsistent flag sets."""
-    env = environment if environment is not None else os.environ
-    backend = configured_backend(env)
-    canaries = configured_read_canaries(env)
-    canonical_writes = _enabled(env.get(CANONICAL_SNAPSHOT_WRITE_ENV))
-    blob_mirror = _enabled(env.get(BLOB_MIRROR_ENV))
-    blob_fallback = _enabled(env.get(BLOB_READ_FALLBACK_ENV))
-
-    if backend == "supabase":
-        if canaries:
-            raise RuntimeError(
-                f"{READ_CANARY_ENV} must be empty when {BACKEND_ENV}=supabase."
-            )
-        required = [
-            name
-            for name, enabled in (
-                (CANONICAL_SNAPSHOT_WRITE_ENV, canonical_writes),
-                (BLOB_MIRROR_ENV, blob_mirror),
-                (BLOB_READ_FALLBACK_ENV, blob_fallback),
-            )
-            if not enabled
-        ]
-        if required:
-            raise RuntimeError(
-                "Supabase authority requires enabled rollback controls: "
-                + ", ".join(required)
-                + "."
-            )
-    elif blob_mirror or blob_fallback:
-        raise RuntimeError(
-            f"{BLOB_MIRROR_ENV} and {BLOB_READ_FALLBACK_ENV} are valid only when "
-            f"{BACKEND_ENV}=supabase."
-        )
-    if backend == "vercel" and canonical_writes:
-        raise RuntimeError(
-            f"{CANONICAL_SNAPSHOT_WRITE_ENV} cannot be enabled while Vercel-only mode is active."
-        )
+    """Compatibility alias for archived rollout tooling and tests."""
+    validate_persistence_configuration(environment)
 
 
 def _read_canary_enabled(domain: str | None, configured: frozenset[str]) -> bool:
