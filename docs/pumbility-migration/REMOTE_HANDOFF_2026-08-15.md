@@ -390,6 +390,15 @@ registered schedule and READY host. Require worker completion and post-run recon
 
 Run `verify_pumbility_topology_qualification.py`. Stop on any non-latency failure.
 
+The owner approved one narrowly bounded transport retry on 2026-08-15 for the protected API
+comparison. An individual request may be retried once only when the first attempt receives no HTTP
+response. Retain the original and retry as separate sanitized attempt records, and still require
+exactly 100 successful scored responses per domain and deployment plus all three successful warmups.
+Do not retry any HTTP status, application or contract error, cache hit, parity mismatch, candidate or
+authority error, fallback, or missing timing boundary. A second no-response result or any ordinary
+gate failure fails the comparison; no recursive retry is permitted. The detailed evidence and
+redaction requirements remain canonical in `production-rollout.md`.
+
 Exit: all candidate-topology non-latency gates pass.
 
 ### Phase 6 — Apply the latency decision

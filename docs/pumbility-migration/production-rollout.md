@@ -242,6 +242,18 @@ preview must produce exactly 103 expected `candidate-served` events per domain. 
 counts in server logs before treating the telemetry gate as complete; the runner never marks that
 external gate complete itself.
 
+The owner approved one bounded transport exception on 2026-08-15: an individual request that ends
+before receiving any HTTP response may be retried once immediately against the same deployment,
+domain, and probe phase. The original attempt and retry must both be retained as separate sanitized
+attempt records; neither may expose a deployment reference, origin, request path or query, body,
+digest, credential, or raw error text. A no-response scored attempt does not count toward the sample
+set, so each deployment must still complete exactly 100 successful scored responses per domain in
+addition to the three successful warmups. There is no retry for an HTTP response of any status, an
+application or JSON-contract error, a cache hit, a parity mismatch, a candidate or authority error,
+a fallback, or a missing timing boundary. If the one retry also receives no HTTP response or fails
+any ordinary gate, the comparison fails immediately; the rule must not become a recursive retry or
+an excuse to omit the failed attempt from evidence.
+
 The comparison report applies the original diagnostic target directly to end-to-end latency:
 second-deployment p95 may be at most 10% above the first deployment and p99 at most 20% above it.
 The report is `failed` when either target misses. A `-SkipP99` run is reported as `smoke-passed`, not

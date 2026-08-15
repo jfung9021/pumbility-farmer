@@ -328,6 +328,7 @@ def verify_api(
             "canaryTelemetryExpected",
             "authenticatedWithVercelCli",
             "bypassTokenUsed",
+            "maxPreResponseTransportRetriesPerRequest",
             "timingSemantics",
         },
         "The protected-preview probe configuration contains unexpected fields.",
@@ -347,6 +348,11 @@ def verify_api(
         or configuration.get("canaryTelemetryExpected") is not True
         or configuration.get("authenticatedWithVercelCli") is not True
         or configuration.get("bypassTokenUsed") is not False
+        or _int(
+            configuration.get("maxPreResponseTransportRetriesPerRequest"),
+            minimum=0,
+        )
+        != 1
         or not isinstance(configuration.get("timingSemantics"), Mapping)
         or report.get("cacheBypassGatePassed") is not True
         or report.get("telemetryCountGateComplete") is not False
@@ -385,6 +391,7 @@ def verify_api(
         "responseBodiesPrintedOrStored",
         "requestPathsOrQueryValuesPrintedOrStored",
         "commandOutputOrErrorsPrintedOrStored",
+        "rawTransportErrorsPrintedOrStored",
         "secretsPrintedOrStored",
     }
     _exact_keys(
@@ -463,8 +470,13 @@ def verify_api(
                     "scoredAttempts",
                     "scoredSuccesses",
                     "scoredErrors",
+                    "scoredTransportFailures",
+                    "scoredTransportRetries",
                     "warmupAttempts",
+                    "warmupSuccesses",
                     "warmupErrors",
+                    "warmupTransportFailures",
+                    "warmupTransportRetries",
                     "cacheHits",
                     "gzipResponses",
                     "p99Scored",
@@ -480,8 +492,23 @@ def verify_api(
             attempts = _int(domain_result.get("scoredAttempts"), minimum=1)
             successes = _int(domain_result.get("scoredSuccesses"), minimum=0)
             errors = _int(domain_result.get("scoredErrors"), minimum=0)
+            transport_failures = _int(
+                domain_result.get("scoredTransportFailures"), minimum=0
+            )
+            transport_retries = _int(
+                domain_result.get("scoredTransportRetries"), minimum=0
+            )
             warmups = _int(domain_result.get("warmupAttempts"), minimum=0)
+            warmup_successes = _int(
+                domain_result.get("warmupSuccesses"), minimum=0
+            )
             warmup_errors = _int(domain_result.get("warmupErrors"), minimum=0)
+            warmup_transport_failures = _int(
+                domain_result.get("warmupTransportFailures"), minimum=0
+            )
+            warmup_transport_retries = _int(
+                domain_result.get("warmupTransportRetries"), minimum=0
+            )
             cache_hits = _int(domain_result.get("cacheHits"), minimum=0)
             event_count = _int(
                 domain_result.get("expectedCandidateReadEvents"), minimum=1
@@ -489,11 +516,16 @@ def verify_api(
             expected[(label, domain)] = event_count
             expected_total += event_count
             correctness_passed = correctness_passed and bool(
-                attempts == scored_samples
-                and successes == attempts
+                successes == scored_samples
+                and attempts == successes + transport_failures
                 and errors == 0
-                and warmups == warmup_samples
+                and transport_retries == transport_failures
+                and transport_failures <= successes
+                and warmup_successes == warmup_samples
+                and warmups == warmup_successes + warmup_transport_failures
                 and warmup_errors == 0
+                and warmup_transport_retries == warmup_transport_failures
+                and warmup_transport_failures <= warmup_successes
                 and cache_hits == 0
                 and domain_result.get("p99Scored") is True
                 and event_count == attempts + warmups

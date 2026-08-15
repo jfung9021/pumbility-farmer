@@ -76,8 +76,13 @@ def _api(*, latency_passed: bool) -> dict[str, object]:
             "scoredAttempts": 100,
             "scoredSuccesses": 100,
             "scoredErrors": 0,
+            "scoredTransportFailures": 0,
+            "scoredTransportRetries": 0,
             "warmupAttempts": 3,
+            "warmupSuccesses": 3,
             "warmupErrors": 0,
+            "warmupTransportFailures": 0,
+            "warmupTransportRetries": 0,
             "cacheHits": 0,
             "gzipResponses": 100,
             "p99Scored": True,
@@ -110,6 +115,7 @@ def _api(*, latency_passed: bool) -> dict[str, object]:
             "canaryTelemetryExpected": True,
             "authenticatedWithVercelCli": True,
             "bypassTokenUsed": False,
+            "maxPreResponseTransportRetriesPerRequest": 1,
             "timingSemantics": {
                 "ttfbAndDownload": "curl request timing after authenticated CLI setup",
                 "jsonParse": "local decoded-body JSON parse timing",
@@ -131,6 +137,7 @@ def _api(*, latency_passed: bool) -> dict[str, object]:
             "responseBodiesPrintedOrStored": False,
             "requestPathsOrQueryValuesPrintedOrStored": False,
             "commandOutputOrErrorsPrintedOrStored": False,
+            "rawTransportErrorsPrintedOrStored": False,
             "secretsPrintedOrStored": False,
         },
         "deployments": [
@@ -641,6 +648,102 @@ class TopologyQualificationTests(unittest.TestCase):
             )["status"],
             "failed",
         )
+
+    def test_protected_api_allows_one_pre_response_transport_retry(self) -> None:
+        api = _api(latency_passed=True)
+        result = api["deployments"][0]["results"]["analysis"]
+        result["scoredAttempts"] = 101
+        result["scoredTransportFailures"] = 1
+        result["scoredTransportRetries"] = 1
+        result["warmupAttempts"] = 4
+        result["warmupTransportFailures"] = 1
+        result["warmupTransportRetries"] = 1
+        result["expectedCandidateReadEvents"] = 105
+        api["deployments"][0]["telemetry"]["expectedCandidateReadEventsTotal"] = 208
+        events = _events(latency=100)
+        next(
+            event
+            for event in events
+            if event["kind"] == "telemetry"
+            and event["label"] == "iad1"
+            and event["domain"] == "analysis"
+        )["count"] = 105
+
+        report = qualify(
+            manifest=_manifest(),
+            api=api,
+            blobs=[_blob("iad1", 100), _blob("cle1", 100)],
+            events=events,
+            checklist=_checklist(),
+            owner_latency_waiver=False,
+        )
+
+        self.assertEqual(report["status"], "passed")
+        self.assertTrue(
+            report["nonLatencyGates"]["apiCorrectnessAndExactParity"]["passed"]
+        )
+
+    def test_protected_api_retry_contract_fails_closed(self) -> None:
+        common = {
+            "manifest": _manifest(),
+            "blobs": [_blob("iad1", 100), _blob("cle1", 100)],
+            "events": _events(latency=100),
+            "checklist": _checklist(),
+            "owner_latency_waiver": False,
+        }
+
+        scenarios: dict[str, dict[str, object]] = {}
+
+        insufficient_successes = _api(latency_passed=True)
+        insufficient_result = insufficient_successes["deployments"][0]["results"]["analysis"]
+        insufficient_result["scoredAttempts"] = 99
+        insufficient_result["scoredSuccesses"] = 99
+        scenarios["fewer than 100 successful scored samples"] = insufficient_successes
+
+        application_error = _api(latency_passed=True)
+        error_result = application_error["deployments"][0]["results"]["analysis"]
+        error_result["scoredAttempts"] = 101
+        error_result["scoredErrors"] = 1
+        scenarios["HTTP or application error"] = application_error
+
+        exhausted_retry = _api(latency_passed=True)
+        exhausted_result = exhausted_retry["deployments"][0]["results"]["analysis"]
+        exhausted_result["scoredAttempts"] = 102
+        exhausted_result["scoredTransportFailures"] = 2
+        exhausted_result["scoredTransportRetries"] = 1
+        scenarios["exhausted pre-response retry"] = exhausted_retry
+
+        missing_attempt = _api(latency_passed=True)
+        missing_attempt_result = missing_attempt["deployments"][0]["results"]["analysis"]
+        missing_attempt_result["scoredTransportFailures"] = 1
+        missing_attempt_result["scoredTransportRetries"] = 1
+        scenarios["transport failure omitted from attempt count"] = missing_attempt
+
+        unsafe_transport_details = _api(latency_passed=True)
+        unsafe_transport_details["identityDisclosure"][
+            "rawTransportErrorsPrintedOrStored"
+        ] = True
+        scenarios["raw transport error disclosure"] = unsafe_transport_details
+
+        for name, api in scenarios.items():
+            with self.subTest(name=name):
+                report = qualify(api=api, **common)
+                self.assertEqual(report["status"], "failed")
+                self.assertFalse(
+                    report["nonLatencyGates"]["apiCorrectnessAndExactParity"]["passed"]
+                )
+
+        excessive_retry_policy = _api(latency_passed=True)
+        excessive_retry_policy["probeConfiguration"][
+            "maxPreResponseTransportRetriesPerRequest"
+        ] = 2
+        with self.assertRaises(QualificationError):
+            qualify(api=excessive_retry_policy, **common)
+
+        retained_raw_detail = _api(latency_passed=True)
+        retained_raw_detail["identityDisclosure"]["lastTransportError"] = "private"
+        with self.assertRaises(QualificationError):
+            qualify(api=retained_raw_detail, **common)
 
     def test_cron_is_required_only_for_the_adopted_topology(self) -> None:
         common = {
