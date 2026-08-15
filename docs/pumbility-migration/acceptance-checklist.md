@@ -233,6 +233,6 @@ Every item requires an owner, UTC date, result, evidence reference, and approved
 - [ ] Shared-project restore procedure is approved by the owner. Evidence:
 - [ ] Stabilization window completes without unexplained mismatch. Evidence:
 - [ ] Final evidence bundle is signed off. Evidence:
-- [ ] Dual writes stop only after signoff. Evidence:
-- [ ] Blob remains read-only for the rollback window. Evidence:
-- [ ] Legacy persistence removal occurs in a later PR. Evidence:
+- [x] Dual writes stop only after signoff. Evidence: Codex, 2026-08-16 JST, release `b7cce30`; the already-signed-off Supabase authority deployment was replaced by direct Supabase artifact/job factories with no mirror wrapper.
+- [x] Blob remains read-only for the rollback window. Evidence: Codex, 2026-08-16 JST; the Blob token was detached from all future deployments, Blob contents were retained without deletion, and the prior immutable deployment remains privately retained through the approved window.
+- [x] Legacy persistence removal occurs in a later PR. Evidence: Codex, 2026-08-16 JST, release `b7cce30`; active routes and workers can no longer select Blob or Runtime Cache, all retired rollout controls fail startup, and historical migration/diagnostic adapters remain archived only.

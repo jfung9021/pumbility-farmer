@@ -1,11 +1,39 @@
 # Pumbility Supabase rollout — continuation handoff
 
-Updated: 2026-08-15 JST / 2026-08-15 UTC
+Updated: 2026-08-16 JST / 2026-08-15 UTC
 
 This document is the current sanitized continuation record for a future Codex conversation. It
 supersedes `REMOTE_HANDOFF_2026-08-14.md` for live-state decisions while retaining that file as
 historical evidence. It contains no passwords, tokens, database locations, private deployment
 references, player identifiers, artifact identifiers, or private digests.
+
+## 2026-08-16 Supabase-only persistence closeout
+
+This section supersedes the Blob mirror/read-fallback retention instructions below for live-state
+decisions. Production now runs release commit `b7cce30` with Supabase/PostgreSQL and private
+Supabase Storage as the only ordinary artifact and job persistence implementations. Vercel remains
+the application host, Cron scheduler, and queue transport; it is no longer a data source or sink.
+
+The live runtime constructs `PumbilityArtifactStore` and `PumbilityJobStore` directly. Startup
+rejects every retired backend, shadow, canary, canonical-write, Blob-mirror, and Blob-fallback
+variable. Those variables and `BLOB_READ_WRITE_TOKEN` were removed from all future Vercel
+deployment environments before the unaliased Production candidate was built. The private Blob
+contents were not deleted, and the prior immutable deployment remains privately retained. The
+provider-side Blob credential is scheduled for revocation on or after `2026-08-29`; no replacement
+credential should be installed.
+
+The candidate passed the production build and protected-deployment checks for analysis, tier list,
+recommendation discovery, missing job status, cron authorization, and disabled internal routes.
+After atomic promotion, an approximately ten-minute active watch completed at
+`2026-08-16T02:13:38+09:00` with stable response sizes, HTTP 200 for all three public data surfaces,
+the expected job 404 and cron 401, zero server-error logs, and zero fallback, outbox, or mirror
+events. The registered daily cron remains `/api/cron/phoenix2` at `0 6 * * *`.
+
+Focused verification comprised 136 store/runtime/API/cold-start tests, 15 final
+configuration/factory checks, Python compilation, `git diff --check`, and the Vercel production
+build. The accepted exact source boundary remains the passing post-watch hosted reconciliation
+recorded immediately below; the Windows CLI could not safely inject Production secrets into a
+fresh local reconciler during this cleanup, so no secret-bearing local substitute was used.
 
 ## 2026-08-15 live rollout completion
 
