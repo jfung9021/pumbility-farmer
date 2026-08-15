@@ -4,11 +4,7 @@ import os
 
 from celery import Celery
 
-
-QUEUE_NAME = os.getenv("CELERY_QUEUE_NAME", "analysis")
-PLAYER_QUEUE_NAME = os.getenv(
-    "CELERY_PLAYER_QUEUE_NAME", "player-recommendations"
-)
+from worker.constants import PLAYER_QUEUE_NAME, QUEUE_NAME
 
 app = Celery(
     "pumbility-analysis-worker",
@@ -19,7 +15,8 @@ app.conf.update(
     broker_transport_options={
         "use_task_id_as_idempotency_key": True,
         "retention": 24 * 60 * 60,
-        "lease_duration": 800,
+        "visibility_timeout_seconds": 800,
+        "visibility_refresh_interval_seconds": 240,
     },
     result_backend=None,
     result_serializer="json",

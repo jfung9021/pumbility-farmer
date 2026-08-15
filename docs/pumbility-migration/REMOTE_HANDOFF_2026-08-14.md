@@ -8,8 +8,61 @@ private artifact paths.
 
 ## Current live handoff (supersedes the historical pause sections below)
 
-- Rollout code is at `4fa8e9a` after PR #67, `Parallelize Pumbility canary reads`.
-- Production deployment `dpl_5sSxQezmjvXopWzHwEJJF3m6XC3M` is READY and aliased to the real
+Continuation update, 2026-08-14 UTC / 2026-08-15 JST: rollout commit `119fc11` was deployed with
+Vercel authority and the read pool enabled. A new adjacent production group-1 retest produced
+103/103 unique `candidate-served` events per domain with zero non-latency failures, but analysis
+p95/p99 and tier-list p95 still failed the fixed latency diagnostic. The alias was returned to the
+READY no-canary deployment. An authenticated immediate Vercel Cron smoke then returned 202, its
+queue subscriber returned 200, and the public Phoenix 2 generation advanced. Because that smoke ran
+in the stricter Vercel-only state, a subsequent hosted reconciliation correctly stopped after
+`source-boundary`; the Supabase shadow is now stale and must be restored through the guarded
+backfill/population path before another canary. This immediate-run smoke is not the missing genuine
+time-scheduled topology evidence. See `evidence/PUM-S10-PRODUCTION-GROUP1-RETEST-01.md`.
+
+- Rollout code is at `1ca5399`, `Instrument and optimize Pumbility read canaries`.
+- The rollout candidate is pushed on `agent/pumbility-rollout-latency-qualification` through
+  `9fc7c64` and is tracked by draft PR #69. Runtime optimization begins at `38857ac`; the later
+  commits add the protected-Preview operator harness and its Windows entrypoint fixes. Production
+  remains on the live commit and deployment recorded below.
+- Candidate `38857ac` adds an opt-in, default-off bounded Psycopg read pool for hot artifact/job
+  reads only; direct large-JSON responses; token-isolated Vercel Blob client reuse; lazy Celery
+  imports; fixed sanitized pool telemetry/deadlines; and fail-closed topology qualification tools.
+  Writes, worker snapshot reconstruction, statistical algorithms, API data, and rollout flags are
+  unchanged.
+- The candidate passed 303 Python tests, 45 frontend tests, TypeScript typecheck, dependency-lock
+  and frozen-sync checks, Python compilation, Phoenix 1 archive verification, the Next production
+  build, PowerShell parsing, and `git diff --check` on 2026-08-14 JST.
+- The original p95 +10% / p99 +20% targets remain reported honestly. The owner now permits a
+  distinct latency-only waiver after deep optimization if and only if every correctness, exact
+  parity, integrity, privacy, capacity, fallback, failure, rollback, and evidence gate passes. A
+  latency miss must never be relabeled as a pass or waive a non-latency failure.
+- The sensitive database variable is now scoped to Preview through Vercel without exposing its
+  value. All qualification deployments are isolated Preview targets with no production alias.
+- The same-source IAD pool-off/pool-on comparison completed two independent 3-warmup plus
+  100-scored-sample runs per domain. Both runs had exact response parity, 400/400 scored HTTP
+  successes, gzip throughout, and zero cache hits. In the accepted repeat, pool-on improved
+  analysis p95/p99 from `927.397/1114.606 ms` to `858.336/1072.641 ms` and tier-list from
+  `1010.346/1216.471 ms` to `977.592/1139.716 ms`. Both deployments reconciled exactly at 206/206
+  `candidate-served` events (103 analysis and 103 tier-list) with zero other outcomes or conflicting
+  duplicates. The bounded read pool is therefore the accepted connection candidate, still default
+  off and not enabled in production.
+- The accepted pool-on build was then compared between independently response-attested `iad1` and
+  `cle1` execution regions, again with 3 warmups plus 100 scored samples per domain. Exact response
+  parity, 400/400 scored successes, gzip, and zero cache hits held. CLE improved analysis p95/p99
+  from `989.563/1153.432 ms` to `788.082/884.863 ms` and tier-list from
+  `911.686/1134.544 ms` to `882.896/1037.418 ms`. Each region reconciled exactly at 206/206
+  `candidate-served` events with zero other outcomes. CLE is a measured latency candidate, not an
+  adopted topology.
+- A same-IAD Vercel-only versus pool-on-canary smoke returned semantically identical JSON for both
+  domains but different raw response bytes because the candidate-served PostgreSQL object has a
+  different JSON representation/order. The raw-byte diagnostic remains failed and was not weakened;
+  no full baseline/canary qualification was claimed from that smoke.
+- A read-only design audit found that compressed canonical artifact bytes could plausibly save
+  another 100--250 ms for analysis and 70--180 ms for tier-list, but it remains conditional. Do not
+  implement its additive schema/publication migration unless the lower-risk preview still shows
+  candidate fetch plus integrity as a material residual bottleneck; it is not a prerequisite for an
+  otherwise evidence-complete owner latency waiver.
+- Production deployment `dpl_GMs4LwAMcvZKu76t7FPLDx45MFZp` is READY in `iad1` and aliased to the real
   `https://pumbility-farmer.vercel.app` site.
 - Vercel remains authoritative for every read and publication. Production is `shadow`, strict
   shadowing is false, canonical Supabase shadow writes are enabled, Blob mirror/read fallback are
@@ -22,19 +75,39 @@ private artifact paths.
   173 JSON artifacts, one binary artifact, 56 cached-player artifacts, privacy scan passed.
 - The dedicated runtime credential was rotated after a stale credential was detected. The new
   credential was installed in Vercel only after the exact reconciliation above passed.
-- Canary group 1 (`analysis,tier-list`) then produced 60/60 exact `candidate-served` comparisons and
-  zero HTTP errors, mismatches, candidate errors, or fallbacks. It nevertheless failed the latency
-  gate: analysis p95/p99 was `3098.320/5695.727 ms` versus `2531.782/2570.183 ms` baseline, and
-  tier-list p95/p99 was `2584.942/14273.838 ms` versus `1967.591/1985.784 ms` baseline.
-- Because the permitted increases are 10% at p95 and 20% at p99, the read canary was removed and
-  groups 2/3 plus Supabase authority were not attempted. A post-rollback smoke test returned valid
-  JSON and HTTP 200 for analysis, tier-list, and recommendation-player-list routes.
+- The optimized commit passed 281 Python tests, 45 frontend tests, TypeScript typecheck, the Next
+  production build, and a fresh remote pre-canary gate. That gate again proved exact relational and
+  artifact parity, a stable boundary, privacy, Phoenix 1 `582301`, Phoenix 2 `15238`, 173 JSON
+  artifacts, one binary artifact, and 56 cached-player artifacts.
+- A protected, same-commit region experiment sent 100 compressed scored analysis requests to each
+  of `iad1` and `cle1`; every decoded response was identical and all 200 sampled server events were
+  `candidate-served`. `cle1` reduced client p50/p95/p99 TTFB from
+  `931.612/998.508/1036.324 ms` to `801.525/903.262/930.232 ms`. Median Supabase connect/fetch fell
+  from `86.663/229.780 ms` to `21.203/106.051 ms`, but median authoritative Blob read rose from
+  `153.219 ms` to `283.816 ms`. Do not move production to `cle1` until its worker, private Blob,
+  cron, queue, cold-start, connection-capacity, failure, and rollback topology gates pass.
+- The corrected adjacent Vercel-only baseline completed 100/100 scored requests per domain with
+  zero errors or cache hits: analysis p95/p99 was `1189.065/1271.094 ms`; tier-list was
+  `977.721/1104.796 ms`.
+- The optimized production group-1 canary then completed 103/103 exact `candidate-served` events per
+  domain, including warmups, with zero HTTP errors, cache hits, mismatches, authority errors,
+  candidate errors, or fallbacks. It still failed the fixed latency gate: analysis p95/p99 was
+  `1599.077/1752.292 ms` (+34.5%/+37.9%), and tier-list p95/p99 was
+  `1254.527/1323.056 ms` (+28.3%/+19.8%).
+- The real alias was immediately rolled back to the optimized Vercel-only deployment above. Warm
+  post-rollback checks returned HTTP 200 for analysis, tier-list, and recommendation-player-list;
+  canary telemetry is absent. Groups 2/3 and Supabase authority were not attempted.
 
-The current proven blocker is Supabase candidate-read latency under production canary load, not
-correctness or parity. Do not re-enable any read canary until a focused change has direct evidence
-that it can meet the existing p95/p99 gate. After such a fix is ready, the shortest remaining live
-test path is three 15-minute grouped canaries followed by the owner-approved 45-minute active
-post-cutover watch. Allow additional time for deployment and rollback checks.
+The current operational blocker is topology qualification, not read-path parity. The tooling is
+fail-closed and intentionally has no hosted diagnostic route/task, so worker execution, private Blob
+behavior and mutation atomicity, genuine control-plane cron delivery, both queues with redelivery,
+30 cold starts per component, connection capacity, injected failures, and rollback evidence do not
+yet exist for the candidate topology. Do not manufacture those records from an operator laptop or
+move production to CLE. Do not re-enable a production read canary until the relevant topology has
+complete non-latency evidence. The original latency targets remain reported; if latency is the only
+remaining miss after that work, the owner may use the distinct latency-only waiver. The shortest
+remaining live test path after qualification is the three 15-minute grouped canaries followed by the
+owner-approved 45-minute active post-cutover watch.
 
 ## Resume instruction
 

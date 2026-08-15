@@ -13,8 +13,7 @@ from fastapi.responses import JSONResponse
 from analysis_runtime import PrivateBlobStore, RuntimeJobStore, update_job
 from api.cron import cron_authorized
 from phoenix2_sync import isoformat_utc, parse_utc, utc_now
-from piu_recommendations import recommendation_blob_path, recommendation_shard_path
-from recommendation_refresh import (
+from pumbility_contract import (
     PLAYER_REFRESH_FRESHNESS,
     cached_player_is_fresh,
     find_player_metadata,
@@ -26,10 +25,11 @@ from recommendation_refresh import (
     recommendation_phoenix2_shard_path,
     recommendation_player_path,
     recommendation_score_model_path,
+    recommendation_blob_path,
+    recommendation_shard_path,
     with_staleness,
 )
-from worker.celery import PLAYER_QUEUE_NAME
-from worker.tasks import refresh_player_recommendations
+from worker.constants import PLAYER_QUEUE_NAME
 
 
 router = APIRouter()
@@ -62,6 +62,42 @@ def _player_eligibility(player: Mapping) -> dict[str, bool]:
     }
 
 
+def _player_score_progress(player: Mapping) -> dict[str, dict[str, int]]:
+    stored = player.get("scoreProgress")
+    modes = player.get("modes")
+    result: dict[str, dict[str, int]] = {}
+    for mode in ("singles", "doubles"):
+        details = stored.get(mode) if isinstance(stored, Mapping) else None
+        if not isinstance(details, Mapping) and isinstance(modes, Mapping):
+            details = modes.get(mode)
+        if not isinstance(details, Mapping):
+            continue
+        projection_ready = bool(details.get("projectionAvailable"))
+        valid = (
+            details.get("projectionRatingSourceScoreCount")
+            if projection_ready
+            else details.get("phoenix2ScoreCount", details.get("validScoreCount"))
+        )
+        required = details.get(
+            "projectionRatingRequiredScoreCount",
+            details.get("requiredScoreCount"),
+        )
+        if (
+            isinstance(valid, bool)
+            or not isinstance(valid, int)
+            or valid < 0
+            or isinstance(required, bool)
+            or not isinstance(required, int)
+            or required <= 0
+        ):
+            continue
+        result[mode] = {
+            "validScoreCount": valid,
+            "requiredScoreCount": required,
+        }
+    return result
+
+
 def _read_player(store: PrivateBlobStore, payload: dict, player_key: str) -> dict | None:
     metadata = next(
         (row for row in payload.get("players", []) if row.get("playerKey") == player_key),
@@ -89,6 +125,8 @@ def _read_player(store: PrivateBlobStore, payload: dict, player_key: str) -> dic
 
 
 def _enqueue_player_refresh(job_id: str) -> None:
+    from worker.tasks import refresh_player_recommendations
+
     refresh_player_recommendations.apply_async(
         args=[job_id],
         task_id=job_id,
@@ -114,6 +152,7 @@ def get_recommendation_players():
                     "username": player.get("username"),
                     "displayName": player.get("displayName"),
                     "eligibility": _player_eligibility(player),
+                    "scoreProgress": _player_score_progress(player),
                 }
             )
         return JSONResponse(

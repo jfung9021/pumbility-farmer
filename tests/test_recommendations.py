@@ -35,12 +35,16 @@ from piu_recommendations import (
     _PeerScoreCohort,
     _ScoreSurface,
     _apply_phoenix1_score_overrides,
+    _build_score_surface,
+    _effective_sample_size,
+    _observation_weight,
     _peer_cohort_key,
     _prepare_phoenix1_rating_frames,
     _projected_gain_sort_key,
     _rating_lookup,
     _recommendation_chart_rows,
     _top50_marginal_gain,
+    _weighted_residual_statistics,
     _what_if_residual_shift,
     build_chart_what_if_estimates,
     build_combined_tier_payload,
@@ -79,6 +83,28 @@ except ModuleNotFoundError as exc:
 
 
 class CombinedEvidenceTests(unittest.TestCase):
+    def test_source_and_ability_weights_use_strict_midpoint_boundaries(self) -> None:
+        self.assertEqual(_observation_weight("phoenix1", 23.5, 24), 1.0)
+        self.assertEqual(_observation_weight("phoenix2", 25.5, 24), 2.0)
+        self.assertEqual(_observation_weight("phoenix1", 23.499, 24), 0.5)
+        self.assertEqual(_observation_weight("phoenix2", 25.501, 24), 1.0)
+        self.assertEqual(_observation_weight("phoenix2", None, 24), 2.0)
+
+    def test_weighted_chart_statistics_favor_phoenix2_and_keep_effective_support(self) -> None:
+        statistics = _weighted_residual_statistics(
+            np.asarray([0.0, 2.0]),
+            np.asarray([1.0, 2.0]),
+        )
+
+        self.assertAlmostEqual(statistics["mean"], 4.0 / 3.0)
+        self.assertAlmostEqual(statistics["location"], 4.0 / 3.0)
+        self.assertEqual(statistics["median"], 2.0)
+        self.assertAlmostEqual(statistics["effectiveSupport"], 9.0 / 5.0)
+        self.assertAlmostEqual(
+            statistics["effectiveSupport"],
+            _effective_sample_size(np.asarray([1.0, 2.0])),
+        )
+
     def test_solve_my_hurt_shortcut_converts_only_phoenix1_score_rows(self) -> None:
         chart_id = SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID
         self.assertAlmostEqual(
@@ -447,6 +473,8 @@ class ScoreProjectionFitTests(unittest.TestCase):
             coverage["populationFallbackModel"], SCORE_RESPONSE_MODEL_NAME
         )
         self.assertFalse(coverage["personalRawScoreInput"])
+        self.assertEqual(coverage["sourceWeights"], {"phoenix1": 1, "phoenix2": 2})
+        self.assertFalse(coverage["abilityDistanceWeighting"])
         self.assertEqual(coverage["phoenix2OverlapRowsRemovedFromPhoenix1"], 1)
         self.assertEqual(coverage["peerProjection"]["minimumUsablePeers"], 5)
         self.assertEqual(
@@ -456,7 +484,8 @@ class ScoreProjectionFitTests(unittest.TestCase):
         self.assertEqual(coverage["peerProjection"]["maximumRatingRadius"], 0.5)
         self.assertEqual(coverage["peerProjection"]["ratingRadiusStep"], 0.1)
         self.assertEqual(
-            coverage["peerProjection"]["percentileWeighting"], "unweighted"
+            coverage["peerProjection"]["percentileWeighting"],
+            "Phoenix 1 = 1; Phoenix 2 = 2",
         )
         self.assertEqual(
             coverage["modes"]["singles"]["sourceRows"],
@@ -469,6 +498,14 @@ class ScoreProjectionFitTests(unittest.TestCase):
         self.assertEqual(
             len(model.peer_cohorts[_peer_cohort_key("singles", "joined-00")].scores),
             10,
+        )
+        self.assertEqual(
+            sorted(
+                model.peer_cohorts[
+                    _peer_cohort_key("singles", "joined-00")
+                ].weights.tolist()
+            ),
+            [1.0] * 9 + [2.0],
         )
         self.assertIn("player-00", model.training_player_ids)
 
@@ -569,6 +606,37 @@ class ScoreProjectionFitTests(unittest.TestCase):
 
 
 class PopulationScoreResponseTests(unittest.TestCase):
+    def test_population_surface_applies_double_phoenix2_source_weight(self) -> None:
+        rows = pd.DataFrame(
+            [
+                {
+                    "playerId": f"p1-{index}",
+                    "chartId": f"p1-chart-{index}",
+                    "source": "phoenix1",
+                    "scoringRating": 20.0,
+                    "estimatedDifficulty": 20.0,
+                    "calibratedScore": 100_000.0,
+                }
+                for index in range(5)
+            ]
+            + [
+                {
+                    "playerId": "p2",
+                    "chartId": "p2-chart",
+                    "source": "phoenix2",
+                    "scoringRating": 20.0,
+                    "estimatedDifficulty": 20.0,
+                    "calibratedScore": 800_000.0,
+                }
+            ]
+        )
+
+        surface = _build_score_surface(rows)
+
+        self.assertIsNotNone(surface)
+        center = len(surface.rating_axis) // 2
+        self.assertAlmostEqual(surface.score_grid[center, center], 300_000.0)
+
     @staticmethod
     def _fixture() -> tuple[dict, list[dict]]:
         difficulties = [17.0 + 0.5 * index for index in range(31)]
@@ -719,6 +787,24 @@ class PopulationScoreResponseTests(unittest.TestCase):
         )
         self.assertAlmostEqual(leave_one_out["chart-30"], full)
 
+    def test_projection_rating_lookup_requires_rank_thirty_one_for_leave_one_out(self) -> None:
+        rows = pd.DataFrame(
+            [
+                {
+                    "chartId": f"chart-{index:02d}",
+                    "pumbility": 400 - index,
+                    "score": 990_000 - index,
+                }
+                for index in range(30)
+            ]
+        )
+
+        full, leave_one_out = _rating_lookup(rows, "Single")
+
+        self.assertIsNotNone(full)
+        self.assertEqual(set(leave_one_out), set(rows["chartId"]))
+        self.assertTrue(all(value is None for value in leave_one_out.values()))
+
 
 class PeerScoreProjectionTests(unittest.TestCase):
     @staticmethod
@@ -728,6 +814,7 @@ class PeerScoreProjectionTests(unittest.TestCase):
         *,
         player_ids: list[str] | None = None,
         ranks: list[int] | None = None,
+        weights: list[float] | None = None,
     ) -> ScoreResponseModel:
         surface = _ScoreSurface(
             np.asarray([19.0, 21.0]),
@@ -741,6 +828,7 @@ class PeerScoreProjectionTests(unittest.TestCase):
             np.asarray(ratings, dtype=float),
             np.asarray(scores, dtype=float),
             np.asarray(ranks or [1] * len(ratings), dtype=np.int64),
+            np.asarray(weights, dtype=float) if weights is not None else None,
         )
         return ScoreResponseModel(
             {"singles": surface},
@@ -803,7 +891,7 @@ class PeerScoreProjectionTests(unittest.TestCase):
         self.assertEqual(result.source, "peer-all-q50")
         self.assertEqual(result.support_count, 20)
         self.assertEqual(result.confidence, "high")
-        self.assertEqual(result.score, 909_500)
+        self.assertEqual(result.score, 909_000)
 
     def test_ten_peer_pass_restarts_at_the_narrowest_radius(self) -> None:
         model = self._model(
@@ -819,7 +907,7 @@ class PeerScoreProjectionTests(unittest.TestCase):
         self.assertEqual(result.source, "peer-all-q50")
         self.assertEqual(result.support_count, 12)
         self.assertEqual(result.confidence, "medium")
-        self.assertEqual(result.score, 905_500)
+        self.assertEqual(result.score, 905_000)
 
     def test_five_peer_pass_restarts_at_the_narrowest_radius(self) -> None:
         model = self._model(
@@ -837,10 +925,11 @@ class PeerScoreProjectionTests(unittest.TestCase):
         self.assertEqual(result.confidence, "low")
         self.assertEqual(result.score, 902_000)
 
-    def test_percentile_is_unweighted_and_includes_the_half_rating_boundary(self) -> None:
+    def test_weighted_percentile_includes_the_half_rating_boundary(self) -> None:
         model = self._model(
             [20.0, 20.5, 20.5, 20.5, 20.5],
             [100_000, 200_000, 300_000, 400_000, 1_000_000],
+            weights=[1, 1, 1, 2, 2],
         )
 
         result = model.predict(
@@ -849,7 +938,7 @@ class PeerScoreProjectionTests(unittest.TestCase):
 
         self.assertEqual(result.source, "peer-all-q50")
         self.assertEqual(result.support_count, 5)
-        self.assertEqual(result.score, 300_000)
+        self.assertEqual(result.score, 400_000)
 
     def test_peer_search_excludes_the_selected_player(self) -> None:
         model = self._model(
@@ -1114,6 +1203,13 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertEqual(index["method"]["candidateUpperRadius"], 0.5)
         self.assertEqual(model["method"]["candidateUpperRadius"], 0.5)
+        self.assertEqual(
+            index["players"][0]["scoreProgress"],
+            {
+                "singles": {"validScoreCount": 30, "requiredScoreCount": 30},
+                "doubles": {"validScoreCount": 0, "requiredScoreCount": 30},
+            },
+        )
         store = MemoryBlobStore()
         publish_recommendation_model_artifacts(
             store,
@@ -1177,6 +1273,35 @@ class PlayerRecommendationTests(unittest.TestCase):
 
         self.assertEqual(restored.to_payload(), model.to_payload())
         self.assertLess(len(binary), len(json.dumps(model.to_payload()).encode("utf-8")))
+
+    def test_legacy_binary_without_peer_weights_defaults_to_equal_weight(self) -> None:
+        snapshot = {
+            **self.snapshot,
+            "scores": [
+                {**row, "plate": "Fair Game"} for row in self.snapshot["scores"]
+            ],
+        }
+        model, _ = fit_score_response_model(
+            snapshot, snapshot, _recommendation_chart_rows(self.combined)
+        )
+        with np.load(io.BytesIO(model.to_npz_bytes()), allow_pickle=False) as arrays:
+            legacy_arrays = {
+                name: arrays[name]
+                for name in arrays.files
+                if name != "peer_weights"
+            }
+        buffer = io.BytesIO()
+        np.savez_compressed(buffer, **legacy_arrays)
+
+        restored = ScoreResponseModel.from_npz_bytes(buffer.getvalue())
+
+        self.assertTrue(restored.peer_cohorts)
+        self.assertTrue(
+            all(
+                np.allclose(cohort.weights, 1.0)
+                for cohort in restored.peer_cohorts.values()
+            )
+        )
 
     def test_legacy_binary_without_peer_arrays_uses_population_fallback(self) -> None:
         model, _ = fit_score_response_model(
@@ -2107,6 +2232,53 @@ class WhatIfDifficultyTests(unittest.TestCase):
         # its compression is 0.75, and the subject reliability remains 0.8.
         self.assertEqual(target["estimatedDifficulty"], 20.44)
 
+    def test_estimate_reweights_ability_and_reliability_for_target_level(self) -> None:
+        result = pd.DataFrame(
+            [
+                {
+                    "chartId": "subject",
+                    "level": 19,
+                    "levelReferenceResidualPb": 0.0,
+                    "folderRangeCompression": 1.0,
+                    "reliabilityWeight": 0.9,
+                    "shrinkageK": 2.0,
+                },
+                {
+                    "chartId": "target-folder-chart",
+                    "level": 20,
+                    "levelReferenceResidualPb": 0.0,
+                    "folderRangeCompression": 1.0,
+                    "reliabilityWeight": 1.0,
+                    "shrinkageK": 2.0,
+                },
+            ]
+        )
+        observations = pd.DataFrame(
+            [
+                {
+                    "chartId": "subject",
+                    "source": "phoenix1",
+                    "normalizedResidual": -1.0,
+                    "chartLevel": 19,
+                    "playerAbility": 20.5,
+                },
+                {
+                    "chartId": "subject",
+                    "source": "phoenix2",
+                    "normalizedResidual": 1.0,
+                    "chartLevel": 19,
+                    "playerAbility": 19.4,
+                },
+            ]
+        )
+
+        estimates = build_chart_what_if_estimates(result, observations).iloc[0]
+        target = next(item for item in estimates if item["level"] == 20)
+
+        # At D20 the P1 row is full weight and the P2 row is 2 * 0.5, so the
+        # shifted residuals [0, 2] have location 1 and effective support 2.
+        self.assertEqual(target["estimatedDifficulty"], 20.3)
+
     def test_missing_target_model_and_no_observations_are_unavailable(self) -> None:
         result = pd.DataFrame(
             [
@@ -2336,8 +2508,16 @@ class RecommendationPlayerListRouteTests(unittest.TestCase):
                     "username": "PLAYER",
                     "displayName": "PLAYER",
                     "modes": {
-                        "singles": {"eligible": True},
-                        "doubles": {"eligible": False},
+                        "singles": {
+                            "eligible": True,
+                            "validScoreCount": 30,
+                            "projectionRatingRequiredScoreCount": 30,
+                        },
+                        "doubles": {
+                            "eligible": False,
+                            "validScoreCount": 10,
+                            "requiredScoreCount": 30,
+                        },
                     },
                 }
             ],
@@ -2350,6 +2530,13 @@ class RecommendationPlayerListRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], PLAYER_LIST_CACHE_CONTROL)
         content = json.loads(response.body)
         self.assertEqual(content["players"][0]["playerKey"], "public-key")
+        self.assertEqual(
+            content["players"][0]["scoreProgress"],
+            {
+                "singles": {"validScoreCount": 30, "requiredScoreCount": 30},
+                "doubles": {"validScoreCount": 10, "requiredScoreCount": 30},
+            },
+        )
 
     def test_errors_are_not_cacheable(self) -> None:
         with patch("api.recommendations._read_index", return_value=None):

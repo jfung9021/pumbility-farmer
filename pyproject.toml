@@ -9,7 +9,7 @@ dependencies = [
     "fastapi==0.117.1",
     "numpy==2.3.5",
     "pandas==2.3.3",
-    "psycopg[binary]>=3.2,<4",
+    "psycopg[binary,pool]>=3.2,<4",
     "requests==2.32.4",
     "vercel==0.8.1",
     "vercel-workers==0.0.25",
@@ -21,6 +21,7 @@ entrypoint = "api_service:app"
 [[tool.vercel.subscribers]]
 entrypoint = "worker.run:app"
 topics = ["analysis"]
+max_concurrency = 4
 
 [[tool.vercel.subscribers]]
 entrypoint = "worker.player_run:app"

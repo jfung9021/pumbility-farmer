@@ -4,7 +4,7 @@ type ChartVideoLinkProps = {
   chartId: string;
   difficulty: string;
   songName: string;
-  variant: "recommendation" | "tier" | "dialog";
+  variant: "recommendation" | "tier" | "compact-tier" | "dialog";
 };
 
 export function ChartVideoLink({

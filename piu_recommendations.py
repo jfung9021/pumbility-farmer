@@ -20,6 +20,16 @@ from typing import Any, Callable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from pumbility_contract import (
+    RECOMMENDATION_SCHEMA_VERSION,
+    combined_tier_blob_path,
+    phoenix1_snapshot_path,
+    recommendation_blob_path,
+    recommendation_generation_key,
+    recommendation_shard_path,
+    recommendation_shard_prefix,
+)
+
 from phoenix1_score_overrides import (
     convert_phoenix1_pumbility,
     convert_phoenix1_score,
@@ -36,7 +46,6 @@ from piu_misgrade_analyzer import (
     RELATIVE_GROUPS,
     SCRIPT_VERSION,
     _fit_level_calibration,
-    _robust_location,
     apply_within_level_difficulty,
 )
 from phoenix2_pumbility import (
@@ -52,7 +61,6 @@ from phoenix2_pumbility import (
 )
 
 
-RECOMMENDATION_SCHEMA_VERSION = 21
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
 COMBINED_TIER_SCHEMA_VERSION = 3
@@ -68,8 +76,8 @@ PROJECTION_RATING_SCORE_THRESHOLD = PROJECTION_RATING_END_RANK
 TOP_PUMBILITY_COUNT = 50
 TOP_RECOMMENDATION_COUNT = 20
 MAX_RAW_SCORE = 1_000_000
-SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v2"
-SCORE_PROJECTION_MODEL_NAME = "similar-skill-pumbility-11-30-q50-v7"
+SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v3"
+SCORE_PROJECTION_MODEL_NAME = "similar-skill-pumbility-11-30-weighted-q50-v8"
 SCORE_RESPONSE_FOLDS = 5
 SCORE_RESPONSE_GRID_STEP = 0.1
 SCORE_RESPONSE_SMOOTHING_RADIUS = 8
@@ -81,6 +89,9 @@ PEER_SCORE_INITIAL_RADIUS = 0.2
 PEER_SCORE_MAX_RADIUS = 0.5
 PEER_SCORE_RADIUS_STEP = 0.1
 PLAYER_KEY_NAMESPACE = "pumbility-farmer-recommendations-v1"
+SOURCE_WEIGHTS = {"phoenix1": 1.0, "phoenix2": 2.0}
+ABILITY_FULL_WEIGHT_RADIUS = 1.0
+ABILITY_OUTSIDE_WEIGHT = 0.5
 RECOMMENDATION_CHART_FIELDS = (
     "mode",
     "songName",
@@ -104,6 +115,71 @@ RECOMMENDATION_CHART_FIELDS = (
 )
 
 
+def _weighted_quantile(
+    values: np.ndarray,
+    weights: np.ndarray,
+    quantile: float,
+) -> float:
+    """Return the lowest value whose positive cumulative weight reaches q."""
+    values = np.asarray(values, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    valid = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+    values = values[valid]
+    weights = weights[valid]
+    if not len(values):
+        return math.nan
+    order = np.argsort(values, kind="mergesort")
+    values = values[order]
+    weights = weights[order]
+    threshold = min(1.0, max(0.0, float(quantile))) * float(weights.sum())
+    index = int(np.searchsorted(np.cumsum(weights), threshold, side="left"))
+    return float(values[min(index, len(values) - 1)])
+
+
+def _weighted_robust_location(values: np.ndarray, weights: np.ndarray) -> float:
+    """Return the existing Huber-style location with weighted pooling."""
+    values = np.asarray(values, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    valid = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+    values = values[valid]
+    weights = weights[valid]
+    if not len(values):
+        return math.nan
+    if len(values) < 3:
+        return float(np.average(values, weights=weights))
+    median = _weighted_quantile(values, weights, 0.5)
+    mad = _weighted_quantile(np.abs(values - median), weights, 0.5)
+    if not math.isfinite(mad) or mad <= 0:
+        return float(np.average(values, weights=weights))
+    limit = 2.5 * 1.4826 * mad
+    return float(np.average(np.clip(values, median - limit, median + limit), weights=weights))
+
+
+def _effective_sample_size(weights: np.ndarray) -> float:
+    weights = np.asarray(weights, dtype=float)
+    weights = weights[np.isfinite(weights) & (weights > 0)]
+    if not len(weights):
+        return 0.0
+    weight_sum = float(weights.sum())
+    square_sum = float(np.dot(weights, weights))
+    return weight_sum * weight_sum / square_sum if square_sum > 0 else 0.0
+
+
+def _observation_weight(source: object, player_ability: object, level: int) -> float:
+    source_weight = SOURCE_WEIGHTS.get(str(source), 1.0)
+    try:
+        ability = float(player_ability)
+    except (TypeError, ValueError):
+        ability = math.nan
+    ability_weight = (
+        ABILITY_OUTSIDE_WEIGHT
+        if math.isfinite(ability)
+        and abs(ability - (float(level) + 0.5)) > ABILITY_FULL_WEIGHT_RADIUS
+        else 1.0
+    )
+    return source_weight * ability_weight
+
+
 @dataclass(frozen=True)
 class ScoreProjectionResult:
     score: int | None
@@ -118,15 +194,25 @@ class _PeerScoreCohort:
     ratings: np.ndarray
     scores: np.ndarray
     ranks: np.ndarray
+    weights: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         size = len(self.player_keys)
+        weights = (
+            np.ones(size, dtype=float)
+            if self.weights is None
+            else np.asarray(self.weights, dtype=float)
+        )
         if (
             len(self.ratings) != size
             or len(self.scores) != size
             or len(self.ranks) != size
+            or len(weights) != size
+            or np.any(~np.isfinite(weights))
+            or np.any(weights <= 0)
         ):
             raise ValueError("A peer score cohort has inconsistent array lengths.")
+        object.__setattr__(self, "weights", weights)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -134,6 +220,7 @@ class _PeerScoreCohort:
             "ratings": self.ratings.tolist(),
             "scores": self.scores.tolist(),
             "ranks": self.ranks.tolist(),
+            "weights": self.weights.tolist(),
         }
 
     @classmethod
@@ -152,6 +239,7 @@ class _PeerScoreCohort:
             np.asarray(payload.get("ratings", []), dtype=float),
             np.asarray(payload.get("scores", []), dtype=float),
             np.asarray(raw_ranks if raw_ranks is not None else [], dtype=np.int64),
+            np.asarray(payload.get("weights", np.ones(len(player_keys))), dtype=float),
         )
 
     def predict(
@@ -185,7 +273,10 @@ class _PeerScoreCohort:
         if support < PEER_SCORE_MIN_USABLE_SUPPORT:
             return None
         selected_scores = self.scores[selected]
-        score = float(np.quantile(selected_scores, PEER_SCORE_QUANTILE))
+        selected_weights = self.weights[selected]
+        score = _weighted_quantile(
+            selected_scores, selected_weights, PEER_SCORE_QUANTILE
+        )
         return (score, support, "peer-all-q50") if math.isfinite(score) else None
 
 
@@ -335,12 +426,14 @@ class ScoreResponseModel:
         peer_ratings: list[np.ndarray] = []
         peer_scores: list[np.ndarray] = []
         peer_ranks: list[np.ndarray] = []
+        peer_weights: list[np.ndarray] = []
         for key in cohort_keys:
             cohort = self.peer_cohorts[key]
             peer_player_keys.append(np.asarray(cohort.player_keys, dtype=np.str_))
             peer_ratings.append(np.asarray(cohort.ratings, dtype=float))
             peer_scores.append(np.asarray(cohort.scores, dtype=float))
             peer_ranks.append(np.asarray(cohort.ranks, dtype=np.int64))
+            peer_weights.append(np.asarray(cohort.weights, dtype=float))
             cohort_offsets.append(cohort_offsets[-1] + len(cohort.ratings))
         arrays.update(
             {
@@ -365,6 +458,11 @@ class ScoreResponseModel:
                     np.concatenate(peer_ranks)
                     if peer_ranks
                     else np.asarray([], dtype=np.int64)
+                ),
+                "peer_weights": (
+                    np.concatenate(peer_weights)
+                    if peer_weights
+                    else np.asarray([], dtype=float)
                 ),
             }
         )
@@ -403,6 +501,7 @@ class ScoreResponseModel:
                     "peer_scores",
                 }
                 peer_rank_name = "peer_ranks"
+                peer_weight_name = "peer_weights"
                 peer_cohorts: dict[str, _PeerScoreCohort] = {}
                 present_peer_names = names & peer_names
                 if present_peer_names and present_peer_names != peer_names:
@@ -418,6 +517,11 @@ class ScoreResponseModel:
                     ratings = np.asarray(arrays["peer_ratings"], dtype=float)
                     scores = np.asarray(arrays["peer_scores"], dtype=float)
                     ranks = np.asarray(arrays[peer_rank_name], dtype=np.int64)
+                    weights = (
+                        np.asarray(arrays[peer_weight_name], dtype=float)
+                        if peer_weight_name in names
+                        else np.ones(len(player_keys), dtype=float)
+                    )
                     if (
                         len(offsets) != len(cohort_keys) + 1
                         or not len(offsets)
@@ -427,7 +531,10 @@ class ScoreResponseModel:
                         or len(ratings) != len(player_keys)
                         or len(scores) != len(player_keys)
                         or len(ranks) != len(player_keys)
+                        or len(weights) != len(player_keys)
                         or np.any(ranks < 1)
+                        or np.any(~np.isfinite(weights))
+                        or np.any(weights <= 0)
                     ):
                         raise ValueError("A stored peer score model is invalid.")
                     for index, key in enumerate(cohort_keys):
@@ -438,6 +545,7 @@ class ScoreResponseModel:
                             ratings[start:end],
                             scores[start:end],
                             ranks[start:end],
+                            weights[start:end],
                         )
                 surfaces: dict[str, dict[str, _ScoreSurface]] = {}
                 for name in sorted(names):
@@ -538,31 +646,6 @@ class ScoreResponseModel:
 def _score_response_fold(player_id: object) -> int:
     digest = hashlib.sha256(str(player_id).encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big") % SCORE_RESPONSE_FOLDS
-
-
-def recommendation_blob_path() -> str:
-    return "analysis/recommendations/latest.json"
-
-
-def recommendation_generation_key(job_id: object) -> str:
-    return hashlib.sha256(str(job_id).encode("utf-8")).hexdigest()[:20]
-
-
-def recommendation_shard_prefix(generation_key: object | None = None) -> str:
-    base = "analysis/recommendations/generations/"
-    return base if generation_key is None else f"{base}{generation_key}/shards/"
-
-
-def recommendation_shard_path(generation_key: object, shard: int) -> str:
-    return f"{recommendation_shard_prefix(generation_key)}{int(shard):04d}.json"
-
-
-def combined_tier_blob_path() -> str:
-    return "analysis/combined/latest.json"
-
-
-def phoenix1_snapshot_path() -> str:
-    return "analysis/private/phoenix1.json"
 
 
 def public_player_key(player_id: object) -> str:
@@ -895,6 +978,125 @@ def _source_contributions(
     )
 
 
+def _attach_contribution_weights(
+    contributions: pd.DataFrame,
+    phoenix1_snapshot: Mapping[str, Any],
+    phoenix2_scores: pd.DataFrame,
+    phoenix2_catalog: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach source and leave-one-chart-out ability weights to observations."""
+    weighted = contributions.copy()
+    if weighted.empty:
+        weighted["playerAbility"] = pd.Series(dtype=float)
+        weighted["sourceWeight"] = pd.Series(dtype=float)
+        weighted["abilityWeight"] = pd.Series(dtype=float)
+        weighted["observationWeight"] = pd.Series(dtype=float)
+        return weighted
+
+    _, phoenix1_rating_scores = _prepare_phoenix1_rating_frames(
+        phoenix1_snapshot, phoenix2_catalog
+    )
+
+    def attach_mode(scores: pd.DataFrame) -> pd.DataFrame:
+        return scores.merge(
+            phoenix2_catalog[["chartId", "type"]],
+            on="chartId",
+            how="inner",
+            validate="many_to_one",
+        )
+
+    source_frames = {
+        "phoenix1": attach_mode(phoenix1_rating_scores),
+        "phoenix2": attach_mode(phoenix2_scores),
+    }
+    lookups: dict[
+        tuple[str, str, str], tuple[float | None, dict[str, float | None]]
+    ] = {}
+    for source, frame in source_frames.items():
+        for (player_id, chart_type), group in frame.groupby(
+            ["playerId", "type"], sort=False
+        ):
+            lookups[(source, str(player_id), str(chart_type))] = _rating_lookup(
+                group, str(chart_type)
+            )
+
+    abilities: list[float | None] = []
+    for row in weighted[
+        ["source", "playerId", "chartType", "chartId"]
+    ].itertuples(index=False):
+        full, leave_one_out = lookups.get(
+            (str(row.source), str(row.playerId), str(row.chartType)),
+            (None, {}),
+        )
+        abilities.append(leave_one_out.get(str(row.chartId), full))
+    weighted["playerAbility"] = pd.to_numeric(
+        pd.Series(abilities, index=weighted.index), errors="coerce"
+    )
+    weighted["sourceWeight"] = weighted["source"].map(SOURCE_WEIGHTS).fillna(1.0)
+    weighted["abilityWeight"] = np.where(
+        weighted["playerAbility"].notna()
+        & (
+            (
+                weighted["playerAbility"]
+                - (weighted["chartLevel"].astype(float) + 0.5)
+            ).abs()
+            > ABILITY_FULL_WEIGHT_RADIUS
+        ),
+        ABILITY_OUTSIDE_WEIGHT,
+        1.0,
+    )
+    weighted["observationWeight"] = (
+        weighted["sourceWeight"] * weighted["abilityWeight"]
+    )
+    return weighted
+
+
+def _weighted_residual_statistics(
+    values: np.ndarray,
+    weights: np.ndarray,
+) -> dict[str, float]:
+    values = np.asarray(values, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    valid = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+    values = values[valid]
+    weights = weights[valid]
+    if not len(values):
+        return {
+            "mean": math.nan,
+            "location": math.nan,
+            "median": math.nan,
+            "std": math.nan,
+            "ciLow": math.nan,
+            "ciHigh": math.nan,
+            "effectiveSupport": 0.0,
+        }
+    mean = float(np.average(values, weights=weights))
+    location = _weighted_robust_location(values, weights)
+    effective_support = _effective_sample_size(weights)
+    weight_sum = float(weights.sum())
+    variance_denominator = weight_sum - float(np.dot(weights, weights)) / weight_sum
+    variance = (
+        float(np.dot(weights, (values - mean) ** 2) / variance_denominator)
+        if variance_denominator > 0
+        else 0.0
+    )
+    std = math.sqrt(max(0.0, variance))
+    margin = (
+        1.96 * std / math.sqrt(effective_support)
+        if effective_support > 1.0
+        else 0.0
+    )
+    return {
+        "mean": mean,
+        "location": location,
+        "median": _weighted_quantile(values, weights, 0.5),
+        "std": std,
+        "ciLow": location - margin,
+        "ciHigh": location + margin,
+        "effectiveSupport": effective_support,
+    }
+
+
 def what_if_levels(level: int) -> list[int]:
     """Return the bounded alternative official levels shown for one chart."""
     current = int(level)
@@ -977,12 +1179,13 @@ def build_chart_what_if_estimates(
     for row in result.to_dict(orient="records"):
         current_level = int(row["level"])
         chart_observations = observations_by_chart.get(str(row["chartId"]), [])
-        reliability = float(row.get("reliabilityWeight") or math.nan)
+        frozen_reliability = float(row.get("reliabilityWeight") or math.nan)
+        shrinkage_k = float(row.get("shrinkageK") or math.nan)
         chart_estimates: list[dict[str, Any]] = []
         for target_level in what_if_levels(current_level):
             estimated_difficulty: float | None = None
             folder_model = folder_models.get(target_level)
-            if chart_observations and folder_model and math.isfinite(reliability):
+            if chart_observations and folder_model:
                 hypothetical_residuals = np.asarray(
                     [
                         float(observation["normalizedResidual"])
@@ -991,7 +1194,26 @@ def build_chart_what_if_estimates(
                     ],
                     dtype=float,
                 )
-                chart_location = _robust_location(hypothetical_residuals)
+                hypothetical_weights = np.asarray(
+                    [
+                        _observation_weight(
+                            observation.get("source"),
+                            observation.get("playerAbility"),
+                            target_level,
+                        )
+                        for observation in chart_observations
+                    ],
+                    dtype=float,
+                )
+                chart_location = _weighted_robust_location(
+                    hypothetical_residuals, hypothetical_weights
+                )
+                effective_support = _effective_sample_size(hypothetical_weights)
+                reliability = (
+                    effective_support / (effective_support + shrinkage_k)
+                    if math.isfinite(shrinkage_k) and shrinkage_k > 0
+                    else frozen_reliability
+                )
                 reference, compression = folder_model
                 estimate = (
                     target_level
@@ -1079,6 +1301,12 @@ def build_combined_chart_results(
 
     catalog = phoenix2_catalog
     combined = retain_phoenix2_catalog_contributions(combined, catalog)
+    combined = _attach_contribution_weights(
+        combined,
+        phoenix1_snapshot,
+        phoenix2_scores,
+        catalog,
+    )
     rows: list[pd.DataFrame] = []
     config = AnalysisConfig(
         mix="phoenix2",
@@ -1109,21 +1337,21 @@ def build_combined_chart_results(
         stat_rows: list[dict[str, Any]] = []
         for chart_id, group in mode_observations.groupby("chartId", sort=False):
             values = group["normalizedResidual"].to_numpy(dtype=float)
-            location = _robust_location(values)
-            std = float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
-            margin = 1.96 * std / math.sqrt(len(values)) if len(values) > 1 else 0.0
+            weights = group["observationWeight"].to_numpy(dtype=float)
+            statistics = _weighted_residual_statistics(values, weights)
             counts = Counter(group["source"])
             stat_rows.append(
                 {
                     "chartId": str(chart_id),
                     "nContributors": int(group["playerId"].nunique()),
                     "nPlayersScored": int(group["playerId"].nunique()),
-                    "meanResidualPb": float(np.mean(values)),
-                    "chartResidualPb": location,
-                    "medianResidualPb": float(np.median(values)),
-                    "residualStdPb": std,
-                    "residualCi95LowPb": location - margin,
-                    "residualCi95HighPb": location + margin,
+                    "effectiveContributors": statistics["effectiveSupport"],
+                    "meanResidualPb": statistics["mean"],
+                    "chartResidualPb": statistics["location"],
+                    "medianResidualPb": statistics["median"],
+                    "residualStdPb": statistics["std"],
+                    "residualCi95LowPb": statistics["ciLow"],
+                    "residualCi95HighPb": statistics["ciHigh"],
                     "meanContributorBaselinePb": 0.0,
                     "phoenix1Contributors": int(counts.get("phoenix1", 0)),
                     "phoenix2Contributors": int(counts.get("phoenix2", 0)),
@@ -1136,6 +1364,7 @@ def build_combined_chart_results(
                     "chartId",
                     "nContributors",
                     "nPlayersScored",
+                    "effectiveContributors",
                     "meanResidualPb",
                     "chartResidualPb",
                     "medianResidualPb",
@@ -1149,6 +1378,7 @@ def build_combined_chart_results(
             )
         result = mode_catalog.merge(stats, on="chartId", how="left")
         result["mode"] = mode_name
+        result["effectiveContributors"] = result["effectiveContributors"].fillna(0.0)
         for column in (
             "nContributors",
             "nPlayersScored",
@@ -1310,6 +1540,7 @@ def build_combined_tier_payload(
             "sources": {
                 "phoenix1Observations": int(mode_meta.get("phoenix1Observations", 0)),
                 "phoenix2Observations": int(mode_meta.get("phoenix2Observations", 0)),
+                "weights": {"phoenix1": 1, "phoenix2": 2},
             },
             "folders": folders,
         }
@@ -1325,6 +1556,14 @@ def build_combined_tier_payload(
             "catalog": "Phoenix 2 authoritative catalog",
             "overlapRule": "Phoenix 2 replaces Phoenix 1 for the same player and chart",
             "crossVersionNormalization": "version- and mode-specific Pumbility residuals converted to level units",
+            "observationWeighting": {
+                "sourceWeights": {"phoenix1": 1, "phoenix2": 2},
+                "playerAbility": "per-mode S+FG-equivalent rating from Pumbility ranks 11-30, leave-one-chart-out",
+                "fullWeightRadius": ABILITY_FULL_WEIGHT_RADIUS,
+                "outsideRadiusWeight": ABILITY_OUTSIDE_WEIGHT,
+                "midpoint": "official chart level + 0.5",
+                "missingAbilityWeight": 1,
+            },
             "levelReference": "median measured chart residual within the exact mode and Phoenix 2 official level",
             "modeSeparation": "Singles and Doubles use independent baselines, calibration, and ranks",
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
@@ -1338,15 +1577,19 @@ def build_combined_tier_payload(
             "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(),
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
             "whatIfEstimates": {
-                "calculation": "chart-only contribution revaluation against frozen target-folder models",
+                "calculation": "chart-only weighted contribution revaluation against frozen target-folder models",
                 "levelRadius": WHAT_IF_LEVEL_RADIUS,
                 "minimumOfficialLevel": MIN_TARGET_LEVEL,
                 "frozen": [
                     "player baselines",
                     "contribution selection",
                     "target-folder reference and range compression",
-                    "reliability shrinkage",
                     "ranks and tier membership",
+                ],
+                "recalculated": [
+                    "ability distance weights against the hypothetical midpoint",
+                    "weighted robust location",
+                    "effective support and reliability shrinkage",
                 ],
                 "missingTargetReference": "unavailable",
             },
@@ -1529,7 +1772,10 @@ def _rating_lookup(
 
     def window_rating(count: int, removed: int | None = None) -> float | None:
         end = min(stop, count)
-        if end <= start:
+        expected_window_size = (
+            PROJECTION_RATING_END_RANK - PROJECTION_RATING_START_RANK + 1
+        )
+        if end - start != expected_window_size:
             return None
         if removed is None:
             total = prefix[end] - prefix[start]
@@ -1734,23 +1980,16 @@ def _build_score_surface(rows: pd.DataFrame) -> _ScoreSurface | None:
     if len(rating_axis) < 2 or len(difficulty_axis) < 2:
         return None
 
-    # Each player has equal total influence within a mode.  A single prolific
-    # player therefore cannot determine a region of the population surface.
+    # Balance prolific players first, then give each retained Phoenix 2 score
+    # twice the influence of a Phoenix 1 score.
     balanced = rows.copy()
     player_counts = balanced.groupby("playerId", sort=False)["chartId"].transform(
         "count"
     )
-    balanced["modelWeight"] = 1.0 / player_counts.clip(lower=1).astype(float)
-    p1_weight = float(
-        balanced.loc[balanced["source"] == "phoenix1", "modelWeight"].sum()
+    balanced["modelWeight"] = (
+        balanced["source"].map(SOURCE_WEIGHTS).fillna(1.0)
+        / player_counts.clip(lower=1).astype(float)
     )
-    p2_weight = float(
-        balanced.loc[balanced["source"] == "phoenix2", "modelWeight"].sum()
-    )
-    if p1_weight > 0 and p2_weight > 0 and p1_weight > p2_weight:
-        balanced.loc[balanced["source"] == "phoenix1", "modelWeight"] *= (
-            p2_weight / p1_weight
-        )
 
     numerator = np.zeros((len(rating_axis), len(difficulty_axis)), dtype=float)
     denominator = np.zeros_like(numerator)
@@ -1905,7 +2144,11 @@ def fit_score_response_model(
         full, leave_one_out = rating_lookups.get(
             (str(row.playerId), str(row.type)), (None, {})
         )
-        ratings.append(leave_one_out.get(str(row.chartId), full))
+        leave_one_out_rating = leave_one_out.get(str(row.chartId), full)
+        # Exactly 30 scores cannot form a complete leave-one-out ranks 11-30
+        # window. Keep the established score-projection threshold by using the
+        # complete full window; difficulty weighting treats this LOO as missing.
+        ratings.append(full if leave_one_out_rating is None else leave_one_out_rating)
     merged["scoringRating"] = pd.to_numeric(
         np.asarray(ratings, dtype=float), errors="coerce"
     )
@@ -1974,6 +2217,7 @@ def fit_score_response_model(
                 ordered["scoringRating"].to_numpy(float),
                 ordered["calibratedScore"].to_numpy(float),
                 ordered["normalizedPumbilityRank"].to_numpy(np.int64),
+                ordered["source"].map(SOURCE_WEIGHTS).fillna(1.0).to_numpy(float),
             )
         fold_rows: dict[str, int] = {}
         for fold in range(SCORE_RESPONSE_FOLDS):
@@ -2014,6 +2258,8 @@ def fit_score_response_model(
         "crossfitFolds": SCORE_RESPONSE_FOLDS,
         "personalRawScoreInput": False,
         "playerBalanced": True,
+        "sourceWeights": {"phoenix1": 1, "phoenix2": 2},
+        "abilityDistanceWeighting": False,
         "minimumLocalSupport": SCORE_RESPONSE_MIN_SUPPORT,
         "supportNeighborhood": "plus or minus 0.5 rating and difficulty",
         "projectionRating": {
@@ -2035,7 +2281,7 @@ def fit_score_response_model(
             "ratingRadiusStep": PEER_SCORE_RADIUS_STEP,
             "radiusSearch": "repeat plus or minus 0.2 through 0.5 for support targets 20, 10, then 5; use the narrowest successful radius within each pass",
             "scoreNormalization": "joined Phoenix 1 + Phoenix 2 observations recomputed with the Phoenix 2 chart catalog and grade-and-plate Pumbility formula; Phoenix 2 replaces overlaps",
-            "percentileWeighting": "unweighted",
+            "percentileWeighting": "Phoenix 1 = 1; Phoenix 2 = 2",
             "confidenceThresholds": {
                 "high": 20,
                 "medium": 10,
@@ -2491,6 +2737,8 @@ def build_player_recommendation(
             candidate_projection_rating = projection_rating_leave_one_out.get(
                 chart_id, projection_rating
             )
+            if candidate_projection_rating is None:
+                candidate_projection_rating = projection_rating
             projection = (
                 score_response_model.predict(
                     str(player_id),
@@ -2932,7 +3180,7 @@ def build_recommendation_index(
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-            "scoreProjection": "using each player's S+FG-equivalent ranks 11-30 Pumbility rating, take the unweighted median raw score from all other players with a normalized result on the exact chart; search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back to the player-balanced population response surface below five peers",
+            "scoreProjection": "using each player's S+FG-equivalent ranks 11-30 Pumbility rating, take the Phoenix-source-weighted median raw score from all other players with a normalized result on the exact chart (Phoenix 1 = 1, Phoenix 2 = 2); search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back below five peers to the player-balanced population response surface with the same source weights",
             "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
         },
         "players": output_players,

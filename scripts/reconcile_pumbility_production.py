@@ -159,14 +159,28 @@ def _verify_artifacts(
     print(json.dumps({"status": "stage-completed", "stage": "numeric-model"}, sort_keys=True))
 
     cached_count = 0
-    for prefix in (
+    for cache_index, prefix in enumerate((
         "analysis/private/recommendation-player-state/",
         "analysis/recommendations/players/",
-    ):
+    )):
         source_objects = list(source.list(prefix))
         source_paths = {item.pathname for item in source_objects}
         target_paths = {item.pathname for item in target.list(prefix)}
         if target_paths != source_paths:
+            print(
+                json.dumps(
+                    {
+                        "status": "mismatch",
+                        "stage": "player-caches",
+                        "cacheIndex": cache_index,
+                        "sourceCount": len(source_paths),
+                        "targetCount": len(target_paths),
+                        "sourceOnlyCount": len(source_paths - target_paths),
+                        "targetOnlyCount": len(target_paths - source_paths),
+                    },
+                    sort_keys=True,
+                )
+            )
             raise RuntimeError("Hosted cached player artifact paths failed exact reconciliation.")
         for artifact_index, item in enumerate(source_objects):
             source_value = _required_production_json(source, item.pathname, "source cached player")
@@ -177,6 +191,19 @@ def _verify_artifacts(
                 artifact_index=artifact_index,
             )
             if target_value is None or _exact_json_bytes(source_value) != _exact_json_bytes(target_value):
+                print(
+                    json.dumps(
+                        {
+                            "status": "mismatch",
+                            "stage": "player-caches",
+                            "cacheIndex": cache_index,
+                            "artifactIndex": artifact_index,
+                            "sourceType": type(source_value).__name__,
+                            "targetType": type(target_value).__name__,
+                        },
+                        sort_keys=True,
+                    )
+                )
                 raise RuntimeError("A hosted cached player artifact failed exact reconciliation.")
             cached_count += 1
     print(json.dumps({"status": "stage-completed", "stage": "player-caches"}, sort_keys=True))
@@ -187,20 +214,30 @@ def _verify_artifacts(
     }
 
 
-def _assert_reconciliation_state(environment: Mapping[str, str]) -> str:
+def _assert_reconciliation_state(
+    environment: Mapping[str, str],
+    *,
+    allow_canonical_shadow_writes: bool = False,
+) -> str:
     backend = str(environment.get("PUMBILITY_DATA_BACKEND", "vercel")).strip().casefold()
     backend = backend or "vercel"
     if backend not in {"vercel", "shadow"}:
         raise RuntimeError("Production reconciliation requires Vercel-authoritative reads.")
     if _enabled(environment.get(SHADOW_STRICT_ENV)):
         raise RuntimeError("Production reconciliation requires fail-open shadow mode.")
-    if _enabled(environment.get(CANONICAL_SNAPSHOT_WRITE_ENV)):
+    canonical_writes = _enabled(environment.get(CANONICAL_SNAPSHOT_WRITE_ENV))
+    if canonical_writes and not (
+        allow_canonical_shadow_writes and backend == "shadow"
+    ):
         raise RuntimeError("Production reconciliation requires canonical snapshot writes off.")
     return backend
 
 
-def main() -> int:
-    backend = _assert_reconciliation_state(os.environ)
+def main(*, allow_canonical_shadow_writes: bool = False) -> int:
+    backend = _assert_reconciliation_state(
+        os.environ,
+        allow_canonical_shadow_writes=allow_canonical_shadow_writes,
+    )
     runtime_url = os.getenv("PUMBILITY_DATABASE_URL", "").strip()
     private_key = os.getenv("BLOB_READ_WRITE_TOKEN", "").encode("utf-8")
     if not runtime_url or len(private_key) < 32:
