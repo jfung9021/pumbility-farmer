@@ -1478,6 +1478,7 @@ class PumbilityJobHeartbeatTests(unittest.TestCase):
         self.assertIn("retry_at = null", query)
         self.assertIn("completed_at = null", query)
         self.assertIn("lease_owner = null", query)
+        self.assertNotIn("error = null", query)
         self.assertIn("status = 'failed'", query)
 
     def test_continuation_handoff_allows_a_distinct_owner_to_reclaim(self) -> None:
