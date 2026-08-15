@@ -174,6 +174,32 @@ export interface RecommendationChart extends RecommendationChartEstimate {
   played: boolean;
 }
 
+export interface RecommendationTopScore {
+  mode: "Singles" | "Doubles";
+  songName: string;
+  difficulty: string;
+  type: "Single" | "Double";
+  level: number;
+  chartId: string;
+  imageUrl: string | null;
+  noteCount: number | null;
+  stepArtist: string | null;
+  bpmMin: number | null;
+  bpmMax: number | null;
+  estimatedDifficulty: number | null;
+  difficultyDelta: number | null;
+  difficultyCi95Low: number | null;
+  difficultyCi95High: number | null;
+  nContributors: number | null;
+  phoenix1Contributors: number | null;
+  phoenix2Contributors: number | null;
+  evidenceStatus: EvidenceStatus | null;
+  pumbility: number;
+  grade: string | null;
+  plate: string | null;
+  plateCode: string | null;
+}
+
 export interface RecommendationModeResult {
   eligible: boolean;
   manual?: boolean;
@@ -221,6 +247,7 @@ export interface RecommendationModeResult {
   candidateCount?: number;
   filterCandidateCount?: number;
   filterCandidates?: RecommendationChart[];
+  topScores: RecommendationTopScore[];
   topRecommendations: RecommendationChart[];
 }
 
