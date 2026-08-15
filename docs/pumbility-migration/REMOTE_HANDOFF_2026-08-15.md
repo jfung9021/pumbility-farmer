@@ -14,7 +14,8 @@ in this file as historical context. Supabase authority is live on the public Pro
 release commit `3e0b52c`. The prior READY Production deployment remains privately retained for
 rollback; its identity is intentionally not recorded here.
 
-The guarded cutover completed after all non-latency gates passed. Hosted qualification proved both
+The guarded cutover completed after every gate retained by the owner-approved compressed runbook
+passed. Hosted qualification proved both
 queues at 100/100 durable effects with one real redelivery each, 30/30 capacity tasks with a peak of
 6 connections against a limit of 12 and zero connection/deadline errors, exact private reads for all
 four required Blob targets, isolated Blob mutation safety, Supabase and Blob timeout recovery, and
