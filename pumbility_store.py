@@ -2115,7 +2115,6 @@ class PumbilityJobStore:
                     completed_at = null,
                     lease_owner = null,
                     lease_expires_at = null,
-                    error = null,
                     updated_at = coalesce(%s::timestamptz, clock_timestamp())
                 where external_key = %s
                   and status = 'failed'
