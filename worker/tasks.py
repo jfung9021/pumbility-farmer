@@ -284,8 +284,6 @@ def _run_topology_queue_probe(
     """Produce one isolated, idempotent queue effect for hosted qualification."""
     import os
 
-    from celery.exceptions import Reject
-
     from topology_diagnostics import (
         emit_event,
         queue_marker_path,
@@ -329,7 +327,11 @@ def _run_topology_queue_probe(
             marker_path,
             {"schemaVersion": 1, "attempts": attempts, "effect": False},
         )
-        raise Reject("Injected diagnostic redelivery.", requeue=True)
+        # The hosted Vercel Celery adapter acknowledges ``Reject(requeue=True)``
+        # instead of returning the lease to the queue. Terminating before the
+        # acknowledgement exercises the platform's real lease-redelivery path.
+        _terminate_topology_worker_process(76)
+        raise RuntimeError("The topology queue termination returned unexpectedly.")
 
     effect_created = _create_topology_effect_once(marker_path)
     if effect_created:
@@ -362,8 +364,6 @@ def topology_queue_probe(
     force_redelivery: bool = False,
 ) -> dict[str, Any]:
     del self
-    from celery.exceptions import Reject
-
     cold_claim = _begin_topology_worker_invocation(topic)
     try:
         result = _run_topology_queue_probe(
@@ -371,8 +371,6 @@ def topology_queue_probe(
         )
         _complete_topology_worker_invocation(cold_claim, label=label)
         return result
-    except Reject:
-        raise
     except Exception:
         try:
             import os

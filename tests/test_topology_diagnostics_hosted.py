@@ -7,7 +7,6 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import MagicMock, patch
 
-from celery.exceptions import Reject
 from starlette.requests import Request
 
 from analysis_runtime import MemoryBlobStore
@@ -134,18 +133,25 @@ class HostedTopologyDiagnosticTests(unittest.TestCase):
         )
 
     def test_queue_probe_forces_one_redelivery_and_one_durable_effect(self) -> None:
+        class ProcessTerminated(BaseException):
+            pass
+
         store = MemoryBlobStore()
         captured = io.StringIO()
         with (
             patch.dict(os.environ, _environment(), clear=False),
             patch("analysis_runtime.VercelPrivateBlobStore", return_value=store),
             patch(
+                "worker.tasks._terminate_topology_worker_process",
+                side_effect=ProcessTerminated,
+            ),
+            patch(
                 "worker.tasks._create_topology_effect_once",
                 side_effect=[True, False],
             ),
             redirect_stdout(captured),
         ):
-            with self.assertRaises(Reject):
+            with self.assertRaises(ProcessTerminated):
                 topology_queue_probe.run("iad1", "analysis", "a" * 64, True)
             result = topology_queue_probe.run(
                 "iad1", "analysis", "a" * 64, True
