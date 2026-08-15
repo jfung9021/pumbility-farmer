@@ -37,16 +37,6 @@ function signed(value: number, digits = 2): string {
   return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
 }
 
-function signedBoundary(value: number): string {
-  return signed(value, Number.isInteger(value * 100) ? 2 : 3);
-}
-
-function effectRange(low: number | null, high: number | null): string {
-  if (low === null) return `difference < ${signedBoundary(high ?? -0.5)}`;
-  if (high === null) return `difference > ${signedBoundary(low)}`;
-  return `${signedBoundary(low)} to ${signedBoundary(high)}`;
-}
-
 function chartGrade(chart: ChartResult): string {
   if (chart.estimatedDifficulty === null) return "-";
   const prefix = chart.type === "Single" ? "S" : "D";
@@ -184,12 +174,6 @@ function CompactChartCard({ chart, onSelect }: { chart: ChartResult; onSelect: (
           </span>
         </span>
       </button>
-      <ChartVideoLink
-        chartId={chart.chartId}
-        difficulty={chart.difficulty}
-        songName={chart.songName}
-        variant="compact-tier"
-      />
     </article>
   );
 }
@@ -204,24 +188,12 @@ function CompactChartGrid({ charts, onSelect }: { charts: ChartResult[]; onSelec
   );
 }
 
-function TierDivider({
-  count,
-  detail,
-  headingId,
-  label,
-}: {
-  count: number;
-  detail?: string;
-  headingId: string;
-  label: string;
-}) {
+function TierDivider({ headingId, label }: { headingId: string; label: string }) {
   return (
     <header className="tier-divider">
       <span aria-hidden="true" className="tier-divider-leading" />
       <h2 id={headingId}>{label}</h2>
-      {detail ? <span className="tier-divider-detail">{detail}</span> : null}
       <span aria-hidden="true" className="tier-divider-trailing" />
-      <span className="tier-count">{count} chart{count === 1 ? "" : "s"}</span>
     </header>
   );
 }
@@ -308,17 +280,16 @@ function ChartDetailDialog({ chart, onClose }: { chart: ChartResult; onClose: ()
   );
 }
 
-function TierSection({ rank, name, range, charts, compact, onSelect }: {
+function TierSection({ rank, name, charts, compact, onSelect }: {
   rank: number;
   name: string;
-  range: string;
   charts: ChartResult[];
   compact: boolean;
   onSelect: (chart: ChartResult) => void;
 }) {
   return (
     <section className={`tier tier-${groupTone[rank - 1]}${compact ? " tier-compact" : ""}`} aria-labelledby={`tier-${rank}`}>
-      <TierDivider count={charts.length} detail={range} headingId={`tier-${rank}`} label={name} />
+      <TierDivider headingId={`tier-${rank}`} label={name} />
       {compact ? (
         <CompactChartGrid charts={charts} onSelect={onSelect} />
       ) : (
@@ -345,8 +316,6 @@ function EstimatedDifficultySection({ charts, compact, mode, value, onSelect }: 
   return (
     <section className={`tier tier-sky estimated-tier${compact ? " tier-compact" : ""}`} aria-labelledby={sectionId}>
       <TierDivider
-        count={charts.length}
-        detail="Estimated scoring difficulty"
         headingId={sectionId}
         label={label}
       />
@@ -556,7 +525,6 @@ export default function TierListPage() {
                   name={group.name}
                   onSelect={setSelectedChart}
                   rank={group.rank}
-                  range={effectRange(group.low, group.high)}
                 />
               ))
             : estimatedGroups.map((group) => (
@@ -570,12 +538,10 @@ export default function TierListPage() {
                 />
               ))}
           {groupingView === "estimated" && estimatedGroups.length === 0 ? (
-            <section className="unrated-section">
-              <TierDivider count={0} detail="Current filters" headingId="no-estimated-charts" label="No estimated charts" />
-            </section>
+            <p className="empty-tier">No estimated charts match the current filters.</p>
           ) : null}
           <section className={`tier unrated-section${layoutView === "compact" ? " tier-compact" : ""}`} aria-labelledby="unrated-charts">
-            <TierDivider count={unratedCharts.length} detail="No estimate" headingId="unrated-charts" label="Unrated" />
+            <TierDivider headingId="unrated-charts" label="Unrated" />
             {layoutView === "compact" ? (
               <CompactChartGrid charts={unratedCharts} onSelect={setSelectedChart} />
             ) : (

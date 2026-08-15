@@ -384,9 +384,7 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 .tier-divider-leading, .tier-divider-trailing { border-top: 1px solid color-mix(in srgb, var(--tone) 42%, var(--line)); height: 0; }
 .tier-divider-leading { flex: 0 0 24px; }
 .tier-divider-trailing { flex: 1 1 auto; }
-.tier-divider h2 { color: var(--tone); flex: 0 0 auto; font-size: 8px; font-weight: 800; letter-spacing: 0.03em; line-height: 1.15; margin: 0; text-transform: uppercase; }
-.tier-divider-detail { color: #687169; flex: 0 1 auto; font-size: 8px; font-weight: 800; letter-spacing: 0.03em; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
-.tier-count { color: #707970; flex: 0 0 auto; font-size: 8px; font-weight: 800; letter-spacing: 0.03em; text-transform: uppercase; }
+.tier-divider h2 { color: var(--tone); flex: 0 0 auto; font-size: 10px; font-weight: 800; letter-spacing: 0.03em; line-height: 1.15; margin: 0; text-transform: uppercase; }
 
 .tier-list { display: grid; margin-top: 8px; }
 .chart-card {
@@ -466,7 +464,7 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 .delta-easy > strong { color: var(--tone); }
 .delta-hard > strong { color: #ff7575; }
 .what-if-control { align-items: center; bottom: 0; color: #626b63; display: flex; font-size: 8px; gap: 4px; letter-spacing: 0; line-height: 1; position: absolute; right: calc(100% + 19px); text-transform: none; white-space: nowrap; }
-.what-if-control select { background: #0b100c; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 4px; color: #aeb7af; font: inherit; height: 19px; padding: 0 2px; width: calc(4ch + 16px); }
+.what-if-control select { background: #0b100c; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 4px; color: #aeb7af; font: inherit; height: 19px; padding: 0 2px; width: calc(6ch + 16px); }
 .what-if-control select:focus-visible { border-color: rgba(200, 255, 46, 0.5); outline: 2px solid white; outline-offset: 1px; }
 .what-if-control option:disabled { color: #626b63; }
 .what-if-control .what-if-result { color: #aeb7af; display: inline-block; font-size: 8px; font-weight: 800; letter-spacing: 0; min-width: 26px; text-transform: none; }
@@ -621,8 +619,7 @@ footer b { color: #929b93; }
 .chart-video-link:focus-visible { background: rgba(255, 23, 68, 0.14); outline: 2px solid white; outline-offset: 2px; }
 .chart-video-link-recommendation { --video-glyph-width: 14px; bottom: -3px; height: 32px; left: 50%; transform: translateX(-50%); width: 32px; }
 .chart-video-link-tier { --video-glyph-width: 16px; bottom: -15px; height: 30px; left: 0; width: 32px; }
-.chart-video-link-compact-tier { --video-glyph-width: 16px; align-self: center; flex: 0 0 26px; height: 26px; position: static; width: 32px; }
-.chart-video-link-dialog { --video-glyph-width: 24px; height: 38px; left: 0; top: calc(100% + 3px); width: 42px; }
+.chart-video-link-dialog { --video-glyph-width: 24px; height: 38px; left: 50%; top: calc(100% + 3px); transform: translateX(-50%); width: 42px; }
 .recommendation-jacket { align-items: center; background: linear-gradient(135deg, #293723, #111612); border: 1px solid var(--line); border-radius: 7px; display: flex; height: 62px; justify-content: center; overflow: hidden; position: relative; width: 62px; }
 .recommendation-jacket img { height: 100%; object-fit: cover; width: 100%; }
 .recommendation-jacket b { color: var(--acid); font-size: 10px; }
@@ -732,8 +729,8 @@ footer b { color: #929b93; }
   .results-switchers { gap: 6px; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
   .results-legend { flex-wrap: wrap; }
   .view-switcher { width: 100%; }
-  .view-switcher button, .tier-divider h2 { font-size: clamp(6px, 2vw, 8px); letter-spacing: 0.01em; }
-  .view-switcher button { padding-inline: 2px; }
+  .view-switcher button { font-size: clamp(6px, 2vw, 8px); letter-spacing: 0.01em; padding-inline: 2px; }
+  .tier-divider h2 { font-size: clamp(8px, 2.4vw, 10px); letter-spacing: 0.01em; }
   .tier-divider-leading { flex-basis: 16px; }
   .compact-chart-grid { gap: 6px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .chart-card { align-items: start; gap: 11px; grid-template-columns: 48px minmax(0, 1fr); padding: 12px 11px; }
@@ -750,7 +747,7 @@ footer b { color: #929b93; }
   .chart-dialog-body { gap: 13px; grid-template-columns: 62px minmax(0, 1fr); }
   .chart-dialog-art-rail { height: 102px; width: 62px; }
   .chart-dialog-jacket { height: 62px; width: 62px; }
-  .chart-video-link-dialog { --video-glyph-width: 22px; height: 36px; left: 0; top: 64px; width: 40px; }
+  .chart-video-link-dialog { --video-glyph-width: 22px; height: 36px; top: 64px; width: 40px; }
   .chart-dialog-body .delta { grid-column: 1 / -1; }
   footer { display: grid; gap: 12px; padding-inline: 18px; }
 }
