@@ -96,7 +96,14 @@ class CollectorTests(unittest.TestCase):
                 "raw_url=https://private.invalid"
             )
             records = {
-                "a": {"id": f"{label}-a", "message": json.dumps(queue)},
+                "a": {
+                    "id": f"{label}-a",
+                    "message": "request summary",
+                    "logs": [
+                        {"level": "info", "message": json.dumps(queue)},
+                        {"level": "info", "message": json.dumps(queue)},
+                    ],
+                },
                 "b": {"id": f"{label}-b", "message": telemetry},
                 "c": {
                     "id": f"{label}-c",

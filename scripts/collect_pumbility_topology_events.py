@@ -340,6 +340,26 @@ def _merge_records(
         target[platform_id] = record
 
 
+def _record_messages(record: Mapping[str, Any]) -> list[object]:
+    """Return application messages from current and legacy Vercel envelopes."""
+    messages: list[object] = []
+    top_level = record.get("message")
+    if top_level not in (None, ""):
+        messages.append(top_level)
+    nested = record.get("logs")
+    if nested is None:
+        return messages
+    if not isinstance(nested, list):
+        raise CollectionError("A Vercel log envelope contains malformed application logs.")
+    for entry in nested:
+        if not isinstance(entry, Mapping):
+            raise CollectionError("A Vercel application log entry is malformed.")
+        message = entry.get("message")
+        if message not in (None, ""):
+            messages.append(message)
+    return messages
+
+
 def _collect_windows(
     *,
     deployment: str,
@@ -451,9 +471,19 @@ def collect_topology_events(
         )
         label_events: list[dict[str, Any]] = []
         for record in records.values():
-            event = event_from_message(record.get("message"), expected_label=label)
-            if event is not None:
-                label_events.append(event)
+            seen_messages: set[str] = set()
+            for message in _record_messages(record):
+                message_key = (
+                    message
+                    if isinstance(message, str)
+                    else json.dumps(message, separators=(",", ":"), sort_keys=True)
+                )
+                if message_key in seen_messages:
+                    continue
+                seen_messages.add(message_key)
+                event = event_from_message(message, expected_label=label)
+                if event is not None:
+                    label_events.append(event)
         counts[label] = len(label_events)
         events.extend(label_events)
     if not events:
