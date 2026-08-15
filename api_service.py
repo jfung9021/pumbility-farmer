@@ -13,10 +13,10 @@ from api.operator import router as operator_router
 from api.recommendations import router as recommendations_router
 from api.tier_list import router as tier_list_router
 from api.topology import router as topology_router
-from pumbility_store import validate_rollout_configuration
+from pumbility_store import validate_persistence_configuration
 
 
-validate_rollout_configuration()
+validate_persistence_configuration()
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(analyze_router)
 app.include_router(cron_router)

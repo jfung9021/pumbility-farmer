@@ -65,7 +65,6 @@ function Test-ListeningPort {
 $logRoot = Join-Path $repoRoot ".local-data\pumbility-migration\local-self-review"
 New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 
-$env:PUMBILITY_DATA_BACKEND = "supabase"
 $env:PUMBILITY_DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:$port/postgres"
 $env:PUMBILITY_SUPABASE_URL = Get-LocalValue -Name "API_URL"
 $env:PUMBILITY_SUPABASE_SERVICE_ROLE_KEY = Get-LocalValue -Name "SERVICE_ROLE_KEY"

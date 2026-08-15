@@ -21,6 +21,7 @@ from pumbility_store import (
     READ_POOL_ENABLED_ENV,
     READ_POOL_MAX_SIZE_ENV,
     READ_POOL_MAX_WAITING_ENV,
+    RETIRED_RUNTIME_ENV_VARS,
     ShadowJobStore,
     ShadowJsonStore,
     SupabasePrimaryJsonStore,
@@ -39,6 +40,7 @@ from pumbility_store import (
     require_loopback_database_url,
     select_job_store,
     select_json_store,
+    validate_persistence_configuration,
     validate_rollout_configuration,
 )
 
@@ -63,26 +65,17 @@ class BackendConfigurationTests(unittest.TestCase):
                 {"PUMBILITY_SUPABASE_READ_CANARY": "analysis,typo"}
             )
 
-    def test_supabase_authority_requires_all_rollback_controls(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "requires enabled rollback controls"):
-            validate_rollout_configuration({"PUMBILITY_DATA_BACKEND": "supabase"})
-        validate_rollout_configuration(
-            {
-                "PUMBILITY_DATA_BACKEND": "supabase",
-                "PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED": "true",
-                "PUMBILITY_BLOB_MIRROR_ENABLED": "true",
-                "PUMBILITY_BLOB_READ_FALLBACK_ENABLED": "true",
-            }
-        )
+    def test_live_runtime_rejects_every_retired_persistence_control(self) -> None:
+        validate_persistence_configuration({})
+        for name in RETIRED_RUNTIME_ENV_VARS:
+            with self.subTest(name=name), self.assertRaisesRegex(
+                RuntimeError, "retired runtime controls"
+            ):
+                validate_persistence_configuration({name: "configured"})
 
-    def test_pre_cutover_modes_reject_cutover_only_blob_flags(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "valid only"):
-            validate_rollout_configuration(
-                {
-                    "PUMBILITY_DATA_BACKEND": "shadow",
-                    "PUMBILITY_BLOB_READ_FALLBACK_ENABLED": "true",
-                }
-            )
+    def test_archived_rollout_validator_uses_the_supabase_only_contract(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "retired runtime controls"):
+            validate_rollout_configuration({"PUMBILITY_DATA_BACKEND": "vercel"})
 
     def test_local_target_guard_accepts_only_loopback(self) -> None:
         for hostname in ("127.0.0.1", "localhost", "[::1]"):

@@ -251,7 +251,7 @@ The `fresh` response shape remains compatible for when the cooldown is restored,
 
 The browser polls active jobs every two seconds (ten seconds in a hidden tab), displays the synchronization stage and player progress, then reloads the latest rankings after completion. All responses are read as text before conditional JSON parsing so a platform-generated timeout page is shown as a useful message instead of a JSON syntax error.
 
-The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as a private-data backend in Vercel Services; the Next.js UI remains the frontend service. The subscriber uses Vercel Queues through the `vercel://` broker. Vercel Runtime Cache stores job status, and the worker stores only private JSON objects in Vercel Blob:
+The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as a private-data backend in Vercel Services; the Next.js UI remains the frontend service. The subscriber uses Vercel Queues through the `vercel://` broker. PostgreSQL stores durable jobs, snapshots, analysis and recommendation JSON, while private Supabase Storage holds binary model artifacts. The logical artifact keys include:
 
 - `analysis/phoenix2/latest.json` — current Phoenix 2 aggregate.
 - `analysis/combined/latest.json` — current combined tier-list aggregate.
@@ -267,7 +267,7 @@ The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as 
 - `analysis/phoenix2/staging/<job>.json` — resumable 50-player checkpoints.
 - `analysis/phoenix2/runs/*.json` — the latest ten immutable Phoenix 2 aggregate runs.
 
-The old `analysis/latest.json` is a read-only Phoenix 2 fallback and is no longer written.
+The old `analysis/latest.json` key is retained only as a historical compatibility key and is no longer written. The live runtime has no Vercel Blob or Runtime Cache persistence path.
 
 Seed the frozen Phoenix 1 recommendation evidence once, from the verified local archive, before
 the first production recommendation refresh:
@@ -389,7 +389,9 @@ The project is designed for the existing `pumbility-farmer.vercel.app` project u
 Configure these server-side variables:
 
 - `PIU_SCORES_API_KEY` — required for live synchronization.
-- `BLOB_READ_WRITE_TOKEN` — required; automatically provided after connecting a **private** Vercel Blob store.
+- `PUMBILITY_DATABASE_URL` — required transaction-pooler URL for PostgreSQL JSON, job, checkpoint, and publication state.
+- `PUMBILITY_SUPABASE_URL` and `PUMBILITY_SUPABASE_SERVICE_ROLE_KEY` — required server-only access for private model artifacts; never expose either through `NEXT_PUBLIC_*`.
+- `PUMBILITY_STORAGE_BUCKET` — private Supabase Storage bucket, normally `pumbility-artifacts`.
 - `CRON_SECRET` — required; a sensitive random value of at least 16 characters used for the secured daily cron route.
 - `JONATHAN_PASSWORD` — required for the unlinked `/jonathan` operator page. It is validated only by the Python service and must not use a `NEXT_PUBLIC_` prefix.
 - `ANALYSIS_BOOTSTRAP_SAMPLES` — optional; defaults to 500.
@@ -405,7 +407,7 @@ The global fit runs only once per day. Interactive work runs only when the rollo
 is deduplicated for 60 seconds per player, stops browser/server waiting after 30 seconds, and is capped
 at four concurrent queue consumers. Failed player tasks return a cached-safe failure instead of
 requesting queue redelivery. Artifacts use compressed numeric surfaces and bounded generation
-retention to limit Blob storage and transfer.
+retention to limit Supabase Storage and database usage.
 
 Before enabling the interactive switch, review the project under **Dashboard → Usage** and configure
 **Team Settings → Billing → Spend Management**. For a strict $20-plan budget, set a small on-demand
