@@ -30,12 +30,14 @@ class FakeVercelRunner:
         bodies: dict[str, bytes] | None = None,
         metrics: bytes | None = None,
         cache_status: bytes = b"MISS",
+        pre_response_failures: int = 0,
     ) -> None:
         self.bodies = bodies or {}
         self.metrics = metrics or (
             METRIC_MARKER + b"200\t0.100\t0.125\t321\tapplication/json"
         )
         self.cache_status = cache_status
+        self.pre_response_failures = pre_response_failures
         self.commands: list[list[str]] = []
 
     def __call__(self, command: list[str], **_kwargs: object):
@@ -49,6 +51,17 @@ class FakeVercelRunner:
             )
         if command[1] != "curl":
             raise AssertionError("Unexpected command")
+        if self.pre_response_failures:
+            self.pre_response_failures -= 1
+            return subprocess.CompletedProcess(
+                command,
+                28,
+                stdout=(
+                    METRIC_MARKER
+                    + b"000\t0.000\t0.010\t0\tapplication/octet-stream"
+                ),
+                stderr=b"PRIVATE_TRANSPORT_ERROR",
+            )
         deployment = command[command.index("--deployment") + 1]
         body_path = Path(command[command.index("--output") + 1])
         header_path = Path(command[command.index("--dump-header") + 1])
@@ -204,10 +217,123 @@ class ProtectedPreviewComparisonTests(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory(dir=self.local_data) as output_root,
             self.assertRaisesRegex(
-                ProtectedPreviewProbeError, "exact timing decomposition"
+                ProtectedPreviewProbeError, "timing evidence"
             ),
         ):
             self._run_smoke(Path(output_root), runner)
+
+        curl_commands = [command for command in runner.commands if command[1] == "curl"]
+        self.assertEqual(len(curl_commands), 1)
+
+    def test_one_pre_response_transport_failure_retries_and_is_audited(self) -> None:
+        runner = FakeVercelRunner(pre_response_failures=1)
+        with tempfile.TemporaryDirectory(dir=self.local_data) as output_root:
+            status, report, run_directory = self._run_smoke(
+                Path(output_root), runner
+            )
+            records = [
+                json.loads(line)
+                for line in (run_directory / "samples.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            persisted = (run_directory / "samples.jsonl").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            report["probeConfiguration"][
+                "maxPreResponseTransportRetriesPerRequest"
+            ],
+            1,
+        )
+        self.assertFalse(
+            report["identityDisclosure"]["rawTransportErrorsPrintedOrStored"]
+        )
+        analysis = report["deployments"][0]["results"]["analysis"]
+        self.assertEqual(analysis["scoredAttempts"], 2)
+        self.assertEqual(analysis["scoredSuccesses"], 1)
+        self.assertEqual(analysis["scoredErrors"], 0)
+        self.assertEqual(analysis["scoredTransportFailures"], 1)
+        self.assertEqual(analysis["scoredTransportRetries"], 1)
+        self.assertEqual(analysis["expectedCandidateReadEvents"], 2)
+        self.assertEqual(len(records), 5)
+        first_logical_attempts = records[:2]
+        self.assertEqual(
+            [record["attemptIndex"] for record in first_logical_attempts], [1, 2]
+        )
+        self.assertEqual(
+            [record["transportOutcome"] for record in first_logical_attempts],
+            ["no-http-response", "http-response"],
+        )
+        self.assertEqual(
+            [record["retryScheduled"] for record in first_logical_attempts],
+            [True, False],
+        )
+        self.assertNotIn("PRIVATE_TRANSPORT_ERROR", persisted)
+        self.assertNotIn("preview-control-reference", persisted)
+
+    def test_exhausted_transport_retry_fails_with_sanitized_evidence(self) -> None:
+        runner = FakeVercelRunner(pre_response_failures=2)
+        with tempfile.TemporaryDirectory(dir=self.local_data) as output_root:
+            root = Path(output_root)
+            with self.assertRaisesRegex(
+                ProtectedPreviewProbeError, "exhausted its bounded transport retry"
+            ):
+                self._run_smoke(root, runner)
+            run_directories = list(root.iterdir())
+            self.assertEqual(len(run_directories), 1)
+            records = [
+                json.loads(line)
+                for line in (run_directories[0] / "samples.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            failure = json.loads(
+                (run_directories[0] / "failure.json").read_text(encoding="utf-8")
+            )
+            persisted = "\n".join(
+                path.read_text(encoding="utf-8")
+                for path in run_directories[0].iterdir()
+            )
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual([record["attemptIndex"] for record in records], [1, 2])
+        self.assertEqual(
+            [record["retryScheduled"] for record in records], [True, False]
+        )
+        self.assertTrue(
+            all(record["transportOutcome"] == "no-http-response" for record in records)
+        )
+        self.assertEqual(
+            failure["failureKind"], "pre-response-transport-retry-exhausted"
+        )
+        self.assertEqual(
+            failure["attemptCounts"],
+            {
+                "total": 2,
+                "successfulResponses": 0,
+                "preResponseTransportFailures": 2,
+                "retriesScheduled": 1,
+                "terminalFailures": 1,
+            },
+        )
+        self.assertNotIn("PRIVATE_TRANSPORT_ERROR", persisted)
+        self.assertNotIn("preview-control-reference", persisted)
+
+    def test_http_failure_is_not_retried(self) -> None:
+        runner = FakeVercelRunner(
+            metrics=METRIC_MARKER + b"503\t0.100\t0.125\t321\tapplication/json"
+        )
+        with (
+            tempfile.TemporaryDirectory(dir=self.local_data) as output_root,
+            self.assertRaisesRegex(ProtectedPreviewProbeError, "unsuccessful status"),
+        ):
+            self._run_smoke(Path(output_root), runner)
+
+        curl_commands = [command for command in runner.commands if command[1] == "curl"]
+        self.assertEqual(len(curl_commands), 1)
 
     def test_any_cache_hit_fails_the_comparison(self) -> None:
         runner = FakeVercelRunner(cache_status=b"HIT")

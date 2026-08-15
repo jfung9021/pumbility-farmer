@@ -8,11 +8,13 @@ an explicit process-only confirmation before writing typed shadow metadata.
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import io
 import json
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -23,8 +25,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from analysis_runtime import VercelPrivateBlobStore  # noqa: E402
-from phoenix2_sync import sanitize_snapshot  # noqa: E402
+from phoenix2_sync import parse_utc, sanitize_snapshot  # noqa: E402
 from piu_recommendations import (  # noqa: E402
+    COMBINED_TIER_SCHEMA_VERSION,
+    ScoreResponseModel,
     build_combined_chart_results,
     build_combined_tier_payload,
 )
@@ -74,6 +78,123 @@ CONFIRMATION_ENV = "PUMBILITY_PRODUCTION_POPULATION_CONFIRMATION"
 CONFIRMATION = f"POPULATE {EXPECTED_PROJECT_REF} {EXPECTED_PUMBILITY_MIGRATION}"
 MAX_INPUT_SHARDS = 1_000
 NUMERIC_MODEL_ABSOLUTE_TOLERANCE = 1e-8
+MAX_RECOMMENDATION_PLAYER_DRIFT = 10
+MAX_VERSIONED_INDEX_TIMESTAMP_DRIFT = timedelta(hours=24)
+_PUBLIC_COMBINED_PARITY_FIELDS = (
+    "schemaVersion",
+    "generatedAtUtc",
+    "mix",
+    "summary",
+    "singles",
+    "doubles",
+    "relativeGroups",
+    "effectBands",
+)
+_PUBLIC_RECOMMENDATION_INDEX_FIELDS = (
+    "schemaVersion",
+    "storageSchemaVersion",
+    "generationKey",
+    "modelGeneratedAtUtc",
+    "generatedAtUtc",
+    "modelPath",
+    "refreshSupported",
+    "method",
+    "players",
+    "inputShardCount",
+    "inputShardSize",
+)
+_PUBLIC_SUMMARY_FIELDS = (
+    "scriptVersion",
+    "generatedAtUtc",
+    "mix",
+    "method",
+    "coverage",
+    "modes",
+)
+_PUBLIC_RECOMMENDATION_METHOD_FIELDS = (
+    "catalog",
+    "overlapRule",
+    "phoenix1RerateHandling",
+    "crossVersionNormalization",
+    "difficultyDeltaScale",
+    "phoenix1ScoreOverrides",
+    "pumbilityPerLevel",
+    "scoreProjectionCoverage",
+    "scoreProjectionData",
+    "baselineRanks",
+    "recommendationRatingRanks",
+    "projectionRatingRanks",
+    "phoenix1RatingRanks",
+    "phoenix2RatingRanks",
+    "phoenix2RatingScoreThreshold",
+    "projectionRatingScoreThreshold",
+    "ratingReference",
+    "ratingReferenceGrade",
+    "ratingReferencePlate",
+    "ratingReferenceMultiplier",
+    "ratingSource",
+    "projectionRatingSource",
+    "shortHistoryBaseline",
+    "candidateUpperRadius",
+    "candidateLowerBound",
+    "topPumbilityCount",
+    "overallPumbility",
+    "overallRecommendations",
+    "actualPumbilitySource",
+    "projection",
+    "plateProjection",
+    "plateProjectionStatistic",
+    "pumbilityProjectionStatistic",
+    "phoenix1PlatePriorCap",
+    "projectedGain",
+    "projectedGainTieBreak",
+    "skillRatingCatalog",
+    "currentStateSource",
+    "displayMinimumOfficialLevel",
+    "scoreProjection",
+    "scoreProjectionModel",
+)
+_PUBLIC_RECOMMENDATION_PLAYER_FIELDS = (
+    "playerKey",
+    "internalPlayerId",
+    "username",
+    "displayName",
+    "eligibility",
+    "scoreProgress",
+    "inputShard",
+)
+LEGACY_COMBINED_TIER_SCHEMA_VERSION = 2
+_LIVE_RECOMMENDATION_INDEX_FIELDS = frozenset(
+    {"method", "players", "inputShardCount"}
+)
+_LIVE_RECOMMENDATION_METHOD_FIELDS = frozenset(
+    {"pumbilityPerLevel", "scoreProjectionCoverage"}
+)
+_LIVE_RECOMMENDATION_MODEL_FIELDS = frozenset(
+    {
+        "catalog",
+        "recommendationCharts",
+        "phoenix2Slopes",
+        "scoreProjectionMetadata",
+        "plateModel",
+        "method",
+    }
+)
+_PINNED_RECOMMENDATION_MODEL_FIELDS = frozenset(
+    {
+        "artifactSchemaVersion",
+        "recommendationSchemaVersion",
+        "generationKey",
+        "generatedAtUtc",
+        "catalog",
+        "recommendationCharts",
+        "phoenix2Slopes",
+        "scoreResponseModelPath",
+        "scoreProjectionMetadata",
+        "plateModel",
+        "method",
+    }
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,6 +205,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_BOOTSTRAP_SAMPLES,
         help="Production-equivalent analysis bootstrap count (default: 500).",
+    )
+    parser.add_argument(
+        "--pinned-model-only",
+        action="store_true",
+        help="Validate and persist the pinned source model without rebuilding live-derived data.",
     )
     return parser
 
@@ -163,9 +289,339 @@ def _npz_arrays_equal(first: bytes, second: bytes) -> bool:
     return not _npz_difference_summary(first, second)
 
 
+def _parity_mismatch_evidence(
+    actual: Mapping[str, Any], expected: Mapping[str, Any], role: str
+) -> dict[str, Any]:
+    recommendation_index = role in {
+        "recommendation-index",
+        "versioned recommendation-index",
+    }
+    parity_fields = (
+        _PUBLIC_RECOMMENDATION_INDEX_FIELDS
+        if recommendation_index
+        else _PUBLIC_COMBINED_PARITY_FIELDS
+    )
+    mismatched_fields = [
+        field
+        for field in parity_fields
+        if _exact_json_bytes({field: actual.get(field)})
+        != _exact_json_bytes({field: expected.get(field)})
+    ]
+    evidence: dict[str, Any] = {
+        "parityRole": role,
+        "mismatchedFields": mismatched_fields,
+    }
+    summary_actual = actual.get("summary")
+    summary_expected = expected.get("summary")
+    if not recommendation_index and isinstance(summary_actual, Mapping) and isinstance(
+        summary_expected, Mapping
+    ):
+        evidence["mismatchedSummaryFields"] = [
+            field
+            for field in _PUBLIC_SUMMARY_FIELDS
+            if _exact_json_bytes({field: summary_actual.get(field)})
+            != _exact_json_bytes({field: summary_expected.get(field)})
+        ]
+    list_evidence: dict[str, dict[str, int]] = {}
+    list_fields = (
+        ("players",)
+        if recommendation_index
+        else ("singles", "doubles", "relativeGroups", "effectBands")
+    )
+    for field in list_fields:
+        actual_items = actual.get(field)
+        expected_items = expected.get(field)
+        if not isinstance(actual_items, list) or not isinstance(expected_items, list):
+            continue
+        differing_items = abs(len(actual_items) - len(expected_items)) + sum(
+            _exact_json_bytes({"item": left}) != _exact_json_bytes({"item": right})
+            for left, right in zip(actual_items, expected_items)
+        )
+        list_evidence[field] = {
+            "actualCount": len(actual_items),
+            "expectedCount": len(expected_items),
+            "differingItems": differing_items,
+        }
+        if field == "players" and all(
+            isinstance(item, Mapping) for item in actual_items + expected_items
+        ):
+            paired_players = list(zip(actual_items, expected_items))
+            field_difference_counts = {
+                player_field: sum(
+                    _exact_json_bytes({player_field: left.get(player_field)})
+                    != _exact_json_bytes({player_field: right.get(player_field)})
+                    for left, right in paired_players
+                )
+                for player_field in _PUBLIC_RECOMMENDATION_PLAYER_FIELDS
+            }
+            field_difference_counts = {
+                field_name: count
+                for field_name, count in field_difference_counts.items()
+                if count
+            }
+            evidence["mismatchedPlayerFields"] = list(field_difference_counts)
+            evidence["playerFieldDifferenceCounts"] = field_difference_counts
+            actual_keys = {
+                str(item.get("playerKey"))
+                for item in actual_items
+                if item.get("playerKey") is not None
+            }
+            expected_keys = {
+                str(item.get("playerKey"))
+                for item in expected_items
+                if item.get("playerKey") is not None
+            }
+            list_evidence[field]["playerKeySetDifferenceCount"] = len(
+                actual_keys.symmetric_difference(expected_keys)
+            )
+            list_evidence[field]["playerOrderDifferenceCount"] = sum(
+                left.get("playerKey") != right.get("playerKey")
+                for left, right in paired_players
+            )
+            list_evidence[field]["fieldKeySymmetricDifferenceCount"] = sum(
+                len(set(left).symmetric_difference(right))
+                for left, right in paired_players
+            )
+    evidence["lists"] = list_evidence
+    if recommendation_index:
+        method_actual = actual.get("method")
+        method_expected = expected.get("method")
+        if isinstance(method_actual, Mapping) and isinstance(method_expected, Mapping):
+            evidence["mismatchedMethodFields"] = [
+                field
+                for field in _PUBLIC_RECOMMENDATION_METHOD_FIELDS
+                if _exact_json_bytes({field: method_actual.get(field)})
+                != _exact_json_bytes({field: method_expected.get(field)})
+            ]
+            evidence["method"] = {
+                "actualFieldCount": len(method_actual),
+                "expectedFieldCount": len(method_expected),
+                "fieldKeySymmetricDifferenceCount": len(
+                    set(method_actual).symmetric_difference(method_expected)
+                ),
+            }
+        evidence["topLevelKeySymmetricDifferenceCount"] = len(
+            set(actual).symmetric_difference(expected)
+        )
+    return evidence
+
+
 def _assert_json_equal(actual: Mapping[str, Any], expected: Mapping[str, Any], role: str) -> None:
     if _exact_json_bytes(actual) != _exact_json_bytes(expected):
-        raise RuntimeError(f"Hosted {role} parity failed.")
+        error = RuntimeError(f"Hosted {role} parity failed.")
+        error.safe_evidence = _parity_mismatch_evidence(actual, expected, role)
+        raise error
+
+
+def _mapping_mismatches(
+    actual: Mapping[str, Any], expected: Mapping[str, Any]
+) -> set[str]:
+    return {
+        field
+        for field in set(actual) | set(expected)
+        if _exact_json_bytes({field: actual.get(field)})
+        != _exact_json_bytes({field: expected.get(field)})
+    }
+
+
+def _recommendation_player_keys(index: Mapping[str, Any], role: str) -> list[str]:
+    players = index.get("players")
+    if not isinstance(players, list) or not all(isinstance(row, Mapping) for row in players):
+        raise RuntimeError(f"The {role} recommendation player index is invalid.")
+    keys = [str(row.get("playerKey") or "") for row in players]
+    if any(not key for key in keys) or len(set(keys)) != len(keys):
+        raise RuntimeError(f"The {role} recommendation player keys are invalid.")
+    expected_fields = set(players[0]) if players else set()
+    if any(set(row) != expected_fields for row in players):
+        raise RuntimeError(f"The {role} recommendation player shape is inconsistent.")
+    shard_count = int(index.get("inputShardCount") or 0)
+    shard_size = int(index.get("inputShardSize") or 0)
+    if shard_count < 1 or shard_size < 1:
+        raise RuntimeError(f"The {role} recommendation shard boundary is invalid.")
+    expected_shard_count = (len(players) + shard_size - 1) // shard_size
+    if shard_count != expected_shard_count or any(
+        not isinstance(row.get("inputShard"), int)
+        or int(row["inputShard"]) < 0
+        or int(row["inputShard"]) >= shard_count
+        for row in players
+    ):
+        raise RuntimeError(f"The {role} recommendation shard assignment is invalid.")
+    return keys
+
+
+def _assert_recommendation_live_drift(
+    candidate: Mapping[str, Any], active: Mapping[str, Any]
+) -> dict[str, int]:
+    if set(candidate) != set(active):
+        raise RuntimeError("The active recommendation index shape changed.")
+    unexpected_index_fields = _mapping_mismatches(candidate, active).difference(
+        _LIVE_RECOMMENDATION_INDEX_FIELDS
+    )
+    if unexpected_index_fields:
+        raise RuntimeError("The recommendation index has non-live-data differences.")
+
+    candidate_method = candidate.get("method")
+    active_method = active.get("method")
+    if not isinstance(candidate_method, Mapping) or not isinstance(active_method, Mapping):
+        raise RuntimeError("The recommendation method contract is invalid.")
+    if set(candidate_method) != set(active_method):
+        raise RuntimeError("The recommendation method shape changed.")
+    unexpected_method_fields = _mapping_mismatches(
+        candidate_method, active_method
+    ).difference(_LIVE_RECOMMENDATION_METHOD_FIELDS)
+    if unexpected_method_fields:
+        raise RuntimeError("The recommendation method has non-live-data differences.")
+
+    candidate_keys = _recommendation_player_keys(candidate, "candidate")
+    active_keys = _recommendation_player_keys(active, "active")
+    count_difference = abs(len(candidate_keys) - len(active_keys))
+    key_set_difference = len(set(candidate_keys).symmetric_difference(active_keys))
+    if (
+        count_difference > MAX_RECOMMENDATION_PLAYER_DRIFT
+        or key_set_difference > MAX_RECOMMENDATION_PLAYER_DRIFT
+    ):
+        raise RuntimeError("The recommendation player drift exceeds the approved bound.")
+    return {
+        "candidatePlayers": len(candidate_keys),
+        "activePlayers": len(active_keys),
+        "playerCountDifference": count_difference,
+        "playerKeySetDifferenceCount": key_set_difference,
+    }
+
+
+def _assert_recommendation_model_live_drift(
+    candidate: Mapping[str, Any], active: Mapping[str, Any]
+) -> None:
+    if set(candidate) != set(active):
+        raise RuntimeError("The active recommendation model shape changed.")
+    unexpected_fields = _mapping_mismatches(candidate, active).difference(
+        _LIVE_RECOMMENDATION_MODEL_FIELDS
+    )
+    if unexpected_fields:
+        raise RuntimeError("The recommendation model has non-live-data differences.")
+    candidate_method = candidate.get("method")
+    active_method = active.get("method")
+    if not isinstance(candidate_method, Mapping) or not isinstance(active_method, Mapping):
+        raise RuntimeError("The recommendation model method contract is invalid.")
+    if set(candidate_method) != set(active_method) or _mapping_mismatches(
+        candidate_method, active_method
+    ).difference(_LIVE_RECOMMENDATION_METHOD_FIELDS):
+        raise RuntimeError("The recommendation model method has non-live-data differences.")
+
+
+def _assert_versioned_index_timestamp_variance(
+    active: Mapping[str, Any], versioned: Mapping[str, Any]
+) -> int:
+    timestamp_fields = ("modelGeneratedAtUtc", "generatedAtUtc")
+    active_without_timestamps = {
+        field: value for field, value in active.items() if field not in timestamp_fields
+    }
+    versioned_without_timestamps = {
+        field: value for field, value in versioned.items() if field not in timestamp_fields
+    }
+    _assert_json_equal(
+        active_without_timestamps,
+        versioned_without_timestamps,
+        "versioned recommendation-index",
+    )
+    parsed_pairs = []
+    for field in timestamp_fields:
+        active_timestamp = parse_utc(active.get(field))
+        versioned_timestamp = parse_utc(versioned.get(field))
+        if active_timestamp is None or versioned_timestamp is None:
+            raise RuntimeError("A recommendation index timestamp is invalid.")
+        parsed_pairs.append((active_timestamp, versioned_timestamp))
+    if parsed_pairs[0][0] != parsed_pairs[1][0] or parsed_pairs[0][1] != parsed_pairs[1][1]:
+        raise RuntimeError("A recommendation index timestamp pair is inconsistent.")
+    maximum_difference = max(
+        abs(active_timestamp - versioned_timestamp)
+        for active_timestamp, versioned_timestamp in parsed_pairs
+    )
+    if maximum_difference > MAX_VERSIONED_INDEX_TIMESTAMP_DRIFT:
+        raise RuntimeError("The recommendation index timestamp variance exceeds the approved bound.")
+    return int(maximum_difference.total_seconds())
+
+
+def _assert_source_input_shards(
+    source: VercelPrivateBlobStore,
+    *,
+    generation: str,
+    shard_count: int,
+    player_count: int,
+) -> None:
+    counts = {"phoenix1": 0, "phoenix2": 0}
+    for shard in range(shard_count):
+        payloads = {
+            "phoenix1": _required_production_json(
+                source,
+                recommendation_phoenix1_shard_path(generation, shard),
+                "Phoenix 1 recommendation input",
+            ),
+            "phoenix2": _required_production_json(
+                source,
+                recommendation_phoenix2_shard_path(generation, shard),
+                "Phoenix 2 recommendation input",
+            ),
+        }
+        for mix, payload in payloads.items():
+            players = payload.get("players")
+            if payload.get("generationKey") != generation or not isinstance(players, list):
+                raise RuntimeError("A pinned recommendation input shard is invalid.")
+            counts[mix] += len(players)
+    if counts != {"phoenix1": player_count, "phoenix2": player_count}:
+        raise RuntimeError("Pinned recommendation input shard counts are inconsistent.")
+
+
+def _combined_payload_for_active_generation(
+    payload: Mapping[str, Any], active: Mapping[str, Any]
+) -> dict[str, Any]:
+    active_schema = int(active.get("schemaVersion") or 0)
+    result = dict(payload)
+    if active_schema == COMBINED_TIER_SCHEMA_VERSION:
+        return result
+    if (
+        COMBINED_TIER_SCHEMA_VERSION != 3
+        or active_schema != LEGACY_COMBINED_TIER_SCHEMA_VERSION
+    ):
+        raise RuntimeError("The active combined-tier schema is not supported for population.")
+
+    summary = dict(result.get("summary") or {})
+    current_script_version = str(summary.get("scriptVersion") or "")
+    current_suffix = f"+combined-tier-v{COMBINED_TIER_SCHEMA_VERSION}"
+    if not current_script_version.endswith(current_suffix):
+        raise RuntimeError("The current combined-tier script version is inconsistent.")
+    summary["scriptVersion"] = (
+        current_script_version[: -len(current_suffix)]
+        + f"+combined-tier-v{LEGACY_COMBINED_TIER_SCHEMA_VERSION}"
+    )
+    method = dict(summary.get("method") or {})
+    method.pop("whatIfEstimates", None)
+    summary["method"] = method
+    result["schemaVersion"] = LEGACY_COMBINED_TIER_SCHEMA_VERSION
+    result["summary"] = summary
+    for field in ("singles", "doubles"):
+        result[field] = [
+            {key: value for key, value in dict(chart).items() if key != "whatIfEstimates"}
+            for chart in result.get(field, [])
+        ]
+    return result
+
+
+def _recommendation_index_for_active_generation(
+    index: Mapping[str, Any], active: Mapping[str, Any]
+) -> dict[str, Any]:
+    result = dict(index)
+    active_players = active.get("players")
+    if not isinstance(active_players, list) or any(
+        isinstance(player, Mapping) and "scoreProgress" in player
+        for player in active_players
+    ):
+        return result
+    result["players"] = [
+        {key: value for key, value in dict(player).items() if key != "scoreProgress"}
+        for player in result.get("players", [])
+    ]
+    return result
 
 
 def _assert_source_rows_equal(
@@ -210,11 +666,87 @@ def _verify_analysis(
         raise RuntimeError("Hosted Phoenix 2 analysis semantic parity failed.")
 
 
+def _load_pinned_model_artifacts(
+    source: VercelPrivateBlobStore,
+    active_index: Mapping[str, Any],
+) -> tuple[dict[str, Any], bytes, int]:
+    generation = str(active_index.get("generationKey") or "")
+    shard_count = int(active_index.get("inputShardCount") or 0)
+    active_player_keys = _recommendation_player_keys(active_index, "active")
+    if not generation or shard_count < 1 or shard_count > MAX_INPUT_SHARDS:
+        raise RuntimeError("The active hosted recommendation model boundary is invalid.")
+    source_model = _required_production_json(
+        source, recommendation_model_path(generation), "model"
+    )
+    if set(source_model) != _PINNED_RECOMMENDATION_MODEL_FIELDS:
+        raise RuntimeError("The pinned recommendation model shape is invalid.")
+    if (
+        source_model.get("artifactSchemaVersion") != MODEL_ARTIFACT_SCHEMA_VERSION
+        or source_model.get("recommendationSchemaVersion")
+        != active_index.get("schemaVersion")
+        or source_model.get("generationKey") != generation
+        or parse_utc(source_model.get("generatedAtUtc")) is None
+        or source_model.get("scoreResponseModelPath")
+        != recommendation_score_model_path(generation)
+        or not isinstance(source_model.get("catalog"), list)
+        or not isinstance(source_model.get("recommendationCharts"), list)
+        or not isinstance(source_model.get("phoenix2Slopes"), Mapping)
+        or not isinstance(source_model.get("scoreProjectionMetadata"), Mapping)
+        or not isinstance(source_model.get("plateModel"), Mapping)
+    ):
+        raise RuntimeError("The pinned recommendation model contract is invalid.")
+    source_method = source_model.get("method")
+    active_method = active_index.get("method")
+    if not isinstance(source_method, Mapping) or not isinstance(active_method, Mapping):
+        raise RuntimeError("The pinned recommendation method contract is invalid.")
+    if set(source_method) != set(active_method) or _mapping_mismatches(
+        source_method, active_method
+    ).difference(_LIVE_RECOMMENDATION_METHOD_FIELDS):
+        raise RuntimeError("The pinned recommendation method contract is inconsistent.")
+    print(json.dumps({"status": "stage-completed", "stage": "pinned-model-json"}, sort_keys=True))
+
+    versioned = _required_production_json(
+        source, recommendation_index_path(generation), "versioned recommendation index"
+    )
+    timestamp_variance_seconds = _assert_versioned_index_timestamp_variance(
+        active_index, versioned
+    )
+    print(
+        json.dumps(
+            {
+                "status": "stage-completed",
+                "stage": "versioned-index-parity",
+                "timestampOnlyVarianceAccepted": bool(timestamp_variance_seconds),
+                "maximumTimestampVarianceSeconds": timestamp_variance_seconds,
+            },
+            sort_keys=True,
+        )
+    )
+    _assert_source_input_shards(
+        source,
+        generation=generation,
+        shard_count=shard_count,
+        player_count=len(active_player_keys),
+    )
+    print(json.dumps({"status": "stage-completed", "stage": "pinned-model-shards"}, sort_keys=True))
+    source_score_bytes = _required_production_bytes(
+        source, recommendation_score_model_path(generation), "numeric recommendation model"
+    )
+    try:
+        ScoreResponseModel.from_npz_bytes(source_score_bytes)
+    except ValueError:
+        raise RuntimeError("The pinned recommendation numeric model is invalid.") from None
+    print(json.dumps({"status": "stage-completed", "stage": "pinned-model-numeric"}, sort_keys=True))
+    return source_model, source_score_bytes, shard_count
+
+
 def _verify_model(
     source: VercelPrivateBlobStore,
     inputs: Mapping[str, DatabaseInput],
     pointers: Mapping[str, Mapping[str, Any]],
-) -> tuple[dict[str, Any], dict[str, Any], bytes, list[dict[str, Any]], list[dict[str, Any]]]:
+    *,
+    rebuild_live_model: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any], bytes, int, int]:
     combined_charts, slopes, metadata = build_combined_chart_results(
         inputs["phoenix1"].snapshot,
         inputs["phoenix2"].snapshot,
@@ -224,6 +756,9 @@ def _verify_model(
         combined_charts,
         metadata,
         generated_at_utc=combined_generated_at,
+    )
+    combined = _combined_payload_for_active_generation(
+        combined, pointers["combinedTier"]
     )
     _assert_json_equal(combined, pointers["combinedTier"], "combined-tier")
     print(json.dumps({"status": "stage-completed", "stage": "combined-parity"}, sort_keys=True))
@@ -236,6 +771,21 @@ def _verify_model(
     shard_count = int(active_index.get("inputShardCount") or 0)
     if not generation or not generated_at or shard_count < 1 or shard_count > MAX_INPUT_SHARDS:
         raise RuntimeError("The active hosted recommendation model boundary is invalid.")
+    if not rebuild_live_model:
+        source_model, source_score_bytes, shard_count = _load_pinned_model_artifacts(
+            source, active_index
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "stage-completed",
+                    "stage": "model-rebuild",
+                    "mode": "pinned-source-after-bounded-live-drift-evidence",
+                },
+                sort_keys=True,
+            )
+        )
+        return active_index, source_model, source_score_bytes, shard_count, shard_count
     artifacts = build_recommendation_model_artifacts(
         inputs["phoenix1"].snapshot,
         inputs["phoenix2"].snapshot,
@@ -245,83 +795,98 @@ def _verify_model(
         generated_at_utc=generated_at,
     )
     print(json.dumps({"status": "stage-completed", "stage": "model-compute"}, sort_keys=True))
-    index, model, score_bytes, phoenix1_shards, phoenix2_shards = artifacts
-    _assert_json_equal(index, active_index, "recommendation-index")
-    print(json.dumps({"status": "stage-completed", "stage": "model-index-parity"}, sort_keys=True))
-    _assert_json_equal(
-        model,
-        _required_production_json(source, recommendation_model_path(generation), "model"),
-        "recommendation-model",
+    candidate_index, candidate_model, candidate_score_bytes, phoenix1_shards, phoenix2_shards = (
+        artifacts
     )
-    print(json.dumps({"status": "stage-completed", "stage": "model-json-parity"}, sort_keys=True))
+    candidate_index = _recommendation_index_for_active_generation(
+        candidate_index, active_index
+    )
+    live_drift = _assert_recommendation_live_drift(candidate_index, active_index)
+    print(
+        json.dumps(
+            {
+                "status": "stage-completed",
+                "stage": "model-index-live-drift",
+                "acceptedLiveDrift": True,
+                **live_drift,
+            },
+            sort_keys=True,
+        )
+    )
+
+    source_model = _required_production_json(
+        source, recommendation_model_path(generation), "model"
+    )
+    _assert_recommendation_model_live_drift(candidate_model, source_model)
+    source_method = source_model.get("method")
+    active_method = active_index.get("method")
+    if source_model.get("generationKey") != generation or not isinstance(
+        source_method, Mapping
+    ) or not isinstance(active_method, Mapping):
+        raise RuntimeError("The pinned recommendation model boundary is inconsistent.")
+    if set(source_method) != set(active_method) or _mapping_mismatches(
+        source_method, active_method
+    ).difference(_LIVE_RECOMMENDATION_METHOD_FIELDS):
+        raise RuntimeError("The pinned recommendation method contract is inconsistent.")
+    print(json.dumps({"status": "stage-completed", "stage": "model-json-live-drift"}, sort_keys=True))
     versioned = _required_production_json(
         source, recommendation_index_path(generation), "versioned recommendation index"
     )
-    _assert_json_equal(index, versioned, "versioned recommendation-index")
-    print(json.dumps({"status": "stage-completed", "stage": "versioned-index-parity"}, sort_keys=True))
-    if len(phoenix1_shards) != shard_count or len(phoenix2_shards) != shard_count:
-        raise RuntimeError("Hosted recommendation input shard counts failed parity.")
-    for shard in range(shard_count):
-        _assert_json_equal(
-            phoenix1_shards[shard],
-            _required_production_json(
-                source,
-                recommendation_phoenix1_shard_path(generation, shard),
-                "Phoenix 1 recommendation input",
-            ),
-            "Phoenix 1 recommendation-input",
-        )
-        _assert_json_equal(
-            phoenix2_shards[shard],
-            _required_production_json(
-                source,
-                recommendation_phoenix2_shard_path(generation, shard),
-                "Phoenix 2 recommendation input",
-            ),
-            "Phoenix 2 recommendation-input",
-        )
-    print(json.dumps({"status": "stage-completed", "stage": "model-shard-parity"}, sort_keys=True))
-    source_score_bytes = _required_production_bytes(
-        source, recommendation_score_model_path(generation), "numeric recommendation model"
-    )
-    exact_npz_mismatches = _npz_difference_summary(score_bytes, source_score_bytes)
-    npz_mismatches = _npz_difference_summary(
-        score_bytes,
-        source_score_bytes,
-        absolute_tolerance=NUMERIC_MODEL_ABSOLUTE_TOLERANCE,
-    )
-    if npz_mismatches:
-        print(
-            json.dumps(
-                {
-                    "status": "mismatch",
-                    "stage": "model-numeric-parity",
-                    "arrays": npz_mismatches,
-                },
-                sort_keys=True,
-            )
-        )
-        raise RuntimeError("Hosted numeric recommendation-model parity failed.")
-    max_observed_difference = max(
-        (
-            float(detail.get("maxAbsoluteDifference") or 0.0)
-            for detail in exact_npz_mismatches
-        ),
-        default=0.0,
+    timestamp_variance_seconds = _assert_versioned_index_timestamp_variance(
+        active_index, versioned
     )
     print(
         json.dumps(
             {
                 "status": "stage-completed",
-                "stage": "model-numeric-parity",
-                "exactArrayMatch": not exact_npz_mismatches,
-                "absoluteTolerance": NUMERIC_MODEL_ABSOLUTE_TOLERANCE,
-                "maxObservedAbsoluteDifference": max_observed_difference,
+                "stage": "versioned-index-parity",
+                "timestampOnlyVarianceAccepted": bool(timestamp_variance_seconds),
+                "maximumTimestampVarianceSeconds": timestamp_variance_seconds,
             },
             sort_keys=True,
         )
     )
-    return index, model, source_score_bytes, phoenix1_shards, phoenix2_shards
+    if (
+        len(phoenix1_shards) != int(candidate_index["inputShardCount"])
+        or len(phoenix2_shards) != int(candidate_index["inputShardCount"])
+    ):
+        raise RuntimeError("Candidate recommendation input shard counts are inconsistent.")
+    _assert_source_input_shards(
+        source,
+        generation=generation,
+        shard_count=shard_count,
+        player_count=len(active_index["players"]),
+    )
+    print(json.dumps({"status": "stage-completed", "stage": "pinned-model-shards"}, sort_keys=True))
+    source_score_bytes = _required_production_bytes(
+        source, recommendation_score_model_path(generation), "numeric recommendation model"
+    )
+    try:
+        ScoreResponseModel.from_npz_bytes(candidate_score_bytes)
+        ScoreResponseModel.from_npz_bytes(source_score_bytes)
+    except ValueError:
+        raise RuntimeError("A recommendation numeric model is invalid.") from None
+    numeric_differences = _npz_difference_summary(
+        candidate_score_bytes, source_score_bytes
+    )
+    print(
+        json.dumps(
+            {
+                "status": "stage-completed",
+                "stage": "model-numeric-live-drift",
+                "acceptedLiveDrift": bool(numeric_differences),
+                "differingArrays": len(numeric_differences),
+            },
+            sort_keys=True,
+        )
+    )
+    return (
+        active_index,
+        source_model,
+        source_score_bytes,
+        shard_count,
+        shard_count,
+    )
 
 
 def _persist_model_generation(
@@ -333,13 +898,19 @@ def _persist_model_generation(
         dict[str, Any],
         dict[str, Any],
         bytes,
-        list[dict[str, Any]],
-        list[dict[str, Any]],
+        int,
+        int,
     ],
 ) -> Any:
     from psycopg.types.json import Jsonb
 
-    index, model, score_bytes, phoenix1_shards, phoenix2_shards = artifacts
+    (
+        index,
+        model,
+        score_bytes,
+        phoenix1_shard_count,
+        phoenix2_shard_count,
+    ) = artifacts
     generation = str(index["generationKey"])
     input_hash = _sha256(
         {mix: inputs[mix].snapshot for mix in ("phoenix1", "phoenix2")}
@@ -383,8 +954,8 @@ def _persist_model_generation(
                     {
                         "parity": "exact",
                         "playerCount": len(index.get("players", [])),
-                        "inputShardCount": len(phoenix1_shards),
-                        "phoenix2InputShardCount": len(phoenix2_shards),
+                        "inputShardCount": phoenix1_shard_count,
+                        "phoenix2InputShardCount": phoenix2_shard_count,
                     }
                 ),
             ),
@@ -414,6 +985,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.bootstrap_samples != DEFAULT_BOOTSTRAP_SAMPLES:
         raise ValueError("Hosted population requires the production-equivalent bootstrap count.")
+    if args.pinned_model_only and not args.apply:
+        raise ValueError("Pinned-model-only population requires --apply.")
     _assert_flags_off(os.environ)
     if not os.getenv("BLOB_READ_WRITE_TOKEN", "").strip():
         raise RuntimeError("Run hosted population through `vercel env run -e production`.")
@@ -441,6 +1014,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
     relational = _verify_relational(source_snapshots, inputs, private_key=private_key)
     print(json.dumps({"status": "stage-completed", "stage": "relational"}, sort_keys=True))
+    source_snapshots.clear()
+    del phoenix1
+    gc.collect()
     outputs = {
         mix: _analyze(inputs[mix], args.bootstrap_samples)
         for mix in ("phoenix1", "phoenix2")
@@ -448,7 +1024,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(json.dumps({"status": "stage-completed", "stage": "analysis-compute"}, sort_keys=True))
     _verify_analysis(outputs, pointers)
     print(json.dumps({"status": "stage-completed", "stage": "analysis-parity"}, sort_keys=True))
-    artifacts = _verify_model(source, inputs, pointers)
+    artifacts = _verify_model(
+        source,
+        inputs,
+        pointers,
+        rebuild_live_model=not args.pinned_model_only,
+    )
     print(json.dumps({"status": "stage-completed", "stage": "model-parity"}, sort_keys=True))
     _assert_boundary_unchanged(source, pointers, phoenix2)
     print(json.dumps({"status": "stage-completed", "stage": "boundary"}, sort_keys=True))
@@ -496,7 +1077,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 },
                 "model": {
                     "players": len(index.get("players", [])),
-                    "inputShards": len(artifacts[3]),
+                    "inputShards": artifacts[3],
                     "jsonParity": "exact",
                     "numericArrayParity": "absolute-tolerance",
                     "numericAbsoluteTolerance": NUMERIC_MODEL_ABSOLUTE_TOLERANCE,

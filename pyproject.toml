@@ -21,6 +21,7 @@ entrypoint = "api_service:app"
 [[tool.vercel.subscribers]]
 entrypoint = "worker.run:app"
 topics = ["analysis"]
+max_concurrency = 4
 
 [[tool.vercel.subscribers]]
 entrypoint = "worker.player_run:app"

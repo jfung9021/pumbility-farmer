@@ -15,7 +15,8 @@ app.conf.update(
     broker_transport_options={
         "use_task_id_as_idempotency_key": True,
         "retention": 24 * 60 * 60,
-        "lease_duration": 800,
+        "visibility_timeout_seconds": 800,
+        "visibility_refresh_interval_seconds": 240,
     },
     result_backend=None,
     result_serializer="json",

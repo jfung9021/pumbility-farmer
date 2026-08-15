@@ -1079,6 +1079,189 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         self.assertEqual(persisted_output.payload, payload)
         self.assertEqual(persist_analysis.call_args.kwargs["job_id"], "job-uuid")
 
+    def test_runtime_typed_model_phase_resumes_from_analysis_generation(self) -> None:
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        artifacts = (
+            {"generationKey": "generation"},
+            {"generationKey": "generation"},
+            b"model",
+            [],
+            [],
+        )
+        database_input = SimpleNamespace(snapshot={})
+
+        with (
+            patch("pumbility_store._connect", return_value=connection),
+            patch(
+                "scripts.analyze_pumbility_supabase._read_database_input",
+                return_value=database_input,
+            ) as read_input,
+            patch(
+                "scripts.analyze_pumbility_supabase._persist_analysis"
+            ) as persist_analysis,
+            patch(
+                "scripts.populate_pumbility_production._persist_model_generation",
+                return_value="model-generation",
+            ) as persist_model,
+        ):
+            result = PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).persist_typed_generation(
+                job_external_key="external-job",
+                mix_key="phoenix2",
+                snapshot={"generatedAtUtc": "2026-08-13T00:00:00Z"},
+                config=SimpleNamespace(),
+                payload={"generatedAtUtc": "2026-08-13T00:00:00Z"},
+                baselines=[],
+                contributions=[],
+                chart_results=[],
+                model_artifacts=artifacts,
+                phase="model",
+                analysis_run_id="analysis-run",
+            )
+
+        self.assertEqual(result, ("analysis-run", "model-generation"))
+        self.assertEqual(read_input.call_count, 2)
+        persist_analysis.assert_not_called()
+        self.assertEqual(
+            persist_model.call_args.kwargs["analysis_run_id"], "analysis-run"
+        )
+        self.assertEqual(persist_model.call_args.kwargs["artifacts"][3:], (0, 0))
+
+    def test_resumable_typed_chunk_hashes_a_real_row_list(self) -> None:
+        manifest = {
+            "schemaVersion": 1,
+            "sha256": "a" * 64,
+            "datasets": {
+                name: {"rowCount": 0}
+                for name in ("baselines", "contributions", "chartResults")
+            },
+        }
+        rows: list[dict[str, object]] = []
+        digest = hashlib.sha256(_canonical_json_bytes(rows)).hexdigest()
+        cursor = Mock()
+        cursor.__enter__ = Mock(return_value=cursor)
+        cursor.__exit__ = Mock(return_value=False)
+        cursor.fetchone.side_effect = [
+            (EXPECTED_PUMBILITY_MIGRATION,),
+            (
+                "building",
+                {"typedPublishing": {"manifestSha256": "a" * 64}},
+                "mix-id",
+            ),
+        ]
+        cursor.fetchall.side_effect = [[], []]
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.cursor.return_value = cursor
+        transaction = Mock()
+        transaction.__enter__ = Mock(return_value=transaction)
+        transaction.__exit__ = Mock(return_value=False)
+        connection.transaction.return_value = transaction
+
+        with patch("pumbility_store._connect", return_value=connection):
+            result = PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).persist_typed_generation(
+                job_external_key="external-job",
+                mix_key="phoenix2",
+                snapshot={},
+                config=SimpleNamespace(),
+                payload={"generatedAtUtc": "2026-08-13T00:00:00Z"},
+                analysis_manifest=manifest,
+                analysis_dataset="baselines",
+                analysis_rows=rows,
+                analysis_chunk_sha256=digest,
+                phase="analysis-chunk",
+                analysis_run_id="analysis-run",
+            )
+
+        self.assertEqual(result, ("analysis-run", None))
+        self.assertIn("on conflict", cursor.executemany.call_args.args[0].casefold())
+
+    def test_resumable_typed_chunk_rejects_more_than_five_thousand_rows(self) -> None:
+        manifest = {
+            "schemaVersion": 1,
+            "sha256": "a" * 64,
+            "datasets": {
+                name: {"rowCount": 0}
+                for name in ("baselines", "contributions", "chartResults")
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "5,000-row limit"):
+            PumbilityArtifactStore(
+                database_url="postgresql://localhost/local"
+            ).persist_typed_generation(
+                job_external_key="external-job",
+                mix_key="phoenix2",
+                snapshot={},
+                config=SimpleNamespace(),
+                payload={"generatedAtUtc": "2026-08-13T00:00:00Z"},
+                analysis_manifest=manifest,
+                analysis_dataset="baselines",
+                analysis_rows=[{}] * 5_001,
+                analysis_chunk_sha256="0" * 64,
+                phase="analysis-chunk",
+                analysis_run_id="analysis-run",
+            )
+
+
+class PumbilityJobReadTests(unittest.TestCase):
+    @staticmethod
+    def _connection(row: tuple[object, ...]):
+        cursor = Mock()
+        cursor.__enter__ = Mock(return_value=cursor)
+        cursor.__exit__ = Mock(return_value=False)
+        cursor.fetchone.return_value = row
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.cursor.return_value = cursor
+        pipeline = Mock()
+        pipeline.__enter__ = Mock(return_value=pipeline)
+        pipeline.__exit__ = Mock(return_value=False)
+        connection.pipeline.return_value = pipeline
+        return connection, cursor
+
+    def test_hot_job_read_combines_schema_and_payload_fetch(self) -> None:
+        payload = {"id": "job-id", "status": "completed"}
+        connection, cursor = self._connection(
+            (EXPECTED_PUMBILITY_MIGRATION, True, payload)
+        )
+
+        with patch("pumbility_store._read_connect", return_value=connection):
+            result = PumbilityJobStore(
+                database_url="postgresql://localhost/local"
+            ).get("job-id")
+
+        self.assertEqual(result, payload)
+        self.assertEqual(cursor.execute.call_count, 2)
+        self.assertIn("statement_timeout", cursor.execute.call_args_list[0].args[0])
+        query = cursor.execute.call_args_list[1].args[0]
+        self.assertIn("pumbility.schema_metadata", query)
+        self.assertIn("pumbility.jobs", query)
+
+    def test_missing_job_still_fails_closed_on_missing_schema(self) -> None:
+        missing_connection, missing_cursor = self._connection(
+            (EXPECTED_PUMBILITY_MIGRATION, False, None)
+        )
+        invalid_connection, invalid_cursor = self._connection((None, False, None))
+        store = PumbilityJobStore(database_url="postgresql://localhost/local")
+
+        with patch("pumbility_store._read_connect", return_value=missing_connection):
+            self.assertIsNone(store.get("missing-job"))
+        self.assertEqual(missing_cursor.execute.call_count, 2)
+
+        with (
+            patch("pumbility_store._read_connect", return_value=invalid_connection),
+            self.assertRaisesRegex(RuntimeError, "schema is not"),
+        ):
+            store.get("missing-job")
+        self.assertEqual(invalid_cursor.execute.call_count, 2)
+
 
 class PumbilityJobReadTests(unittest.TestCase):
     @staticmethod
@@ -1135,6 +1318,67 @@ class PumbilityJobReadTests(unittest.TestCase):
 
 
 class PumbilityJobHeartbeatTests(unittest.TestCase):
+    def test_continuation_handoff_allows_a_distinct_owner_to_reclaim(self) -> None:
+        first_store = PumbilityJobStore(database_url="postgresql://localhost/local")
+        next_store = PumbilityJobStore(database_url="postgresql://localhost/local")
+        self.assertNotEqual(first_store.lease_owner, next_store.lease_owner)
+
+        handoff_cursor = Mock()
+        handoff_cursor.__enter__ = Mock(return_value=handoff_cursor)
+        handoff_cursor.__exit__ = Mock(return_value=False)
+        handoff_cursor.fetchone.side_effect = [
+            (EXPECTED_PUMBILITY_MIGRATION,),
+            ("job-uuid",),
+        ]
+        handoff_connection = Mock()
+        handoff_connection.__enter__ = Mock(return_value=handoff_connection)
+        handoff_connection.__exit__ = Mock(return_value=False)
+        handoff_connection.cursor.return_value = handoff_cursor
+
+        reclaim_cursor = Mock()
+        reclaim_cursor.__enter__ = Mock(return_value=reclaim_cursor)
+        reclaim_cursor.__exit__ = Mock(return_value=False)
+        reclaim_cursor.fetchone.side_effect = [
+            (EXPECTED_PUMBILITY_MIGRATION,),
+            ("job-uuid", "queued", None),
+            ({"claimed": True, "job": {"id": "job-uuid"}},),
+        ]
+        reclaim_connection = Mock()
+        reclaim_connection.__enter__ = Mock(return_value=reclaim_connection)
+        reclaim_connection.__exit__ = Mock(return_value=False)
+        reclaim_connection.cursor.return_value = reclaim_cursor
+
+        payload = {
+            "id": "external-job",
+            "status": "running",
+            "stage": "publishing",
+            "mix": "phoenix2",
+            "progress": {"current": 1, "total": 1, "percent": 100},
+            "createdAtUtc": "2026-08-15T00:00:00+00:00",
+            "updatedAtUtc": "2026-08-15T00:01:00+00:00",
+        }
+        fake_json_module = SimpleNamespace(Jsonb=lambda value: value)
+
+        with (
+            patch(
+                "pumbility_store._connect",
+                side_effect=[handoff_connection, reclaim_connection],
+            ),
+            patch.dict(sys.modules, {"psycopg.types.json": fake_json_module}),
+        ):
+            first_store.handoff_continuation("external-job", payload)
+            result = next_store.save(payload)
+
+        self.assertEqual(result, payload)
+        handoff_call = handoff_cursor.execute.call_args_list[1]
+        self.assertIn("status = 'queued'", handoff_call.args[0])
+        self.assertIn("lease_owner = %s", handoff_call.args[0])
+        self.assertEqual(handoff_call.args[1][0]["status"], "queued")
+        self.assertEqual(handoff_call.args[1][2], first_store.lease_owner)
+        reclaim_call = reclaim_cursor.execute.call_args_list[2]
+        self.assertIn("pumbility.claim_job", reclaim_call.args[0])
+        self.assertEqual(reclaim_call.args[1][5], next_store.lease_owner)
+
     def test_heartbeat_renews_owned_lease_and_payload_timestamp(self) -> None:
         store = PumbilityJobStore(database_url="postgresql://localhost/local")
         cursor = Mock()

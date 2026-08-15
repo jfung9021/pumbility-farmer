@@ -63,7 +63,10 @@ TELEMETRY_EVENTS_PER_REQUEST = {
     "recommendation-player": 2,
     "job-status": 1,
 }
+MAX_PRE_RESPONSE_TRANSPORT_RETRIES = 1
 CommandRunner = Callable[..., Any]
+AttemptRecorder = Callable[["_Sample"], None]
+FailureRecorder = Callable[[str], None]
 
 
 class ProtectedPreviewProbeError(RuntimeError):
@@ -213,6 +216,16 @@ def _safe_header(header_bytes: bytes, name: str) -> str | None:
     return matches[-1].decode("ascii", errors="ignore").strip()
 
 
+def _response_file_evidence(
+    *, body_path: Path, header_path: Path
+) -> tuple[bool, int | None]:
+    body_present = body_path.is_file() and bool(body_path.read_bytes())
+    headers = header_path.read_bytes() if header_path.is_file() else b""
+    statuses = re.findall(rb"(?im)^HTTP/\S+\s+([1-5][0-9]{2})(?:\s|$)", headers)
+    status = int(statuses[-1]) if statuses else None
+    return bool(body_present or headers), status
+
+
 def _parse_metrics(stdout: bytes) -> tuple[int, float, float, int, str]:
     if stdout.count(METRIC_MARKER) != 1:
         raise ProtectedPreviewProbeError(
@@ -261,116 +274,341 @@ def _invoke_request(
     sample_index: int,
     expect_canary_telemetry: bool,
     command_runner: CommandRunner,
+    attempt_recorder: AttemptRecorder,
+    failure_recorder: FailureRecorder,
 ) -> tuple[_Sample, Mapping[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="pumbility-protected-preview-") as temporary:
         temporary_root = Path(temporary)
         body_path = temporary_root / "body.bin"
         header_path = temporary_root / "headers.txt"
-        command = [
-            vercel_cli,
-            "curl",
-            _nonce_path(path),
-            "--deployment",
-            deployment,
-            "--",
-            "--silent",
-            "--show-error",
-            "--compressed",
-            "--no-progress-meter",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "90",
-            "--header",
-            "Accept: application/json",
-            "--header",
-            "Cache-Control: no-cache, no-store, max-age=0",
-            "--header",
-            "Pragma: no-cache",
-            "--output",
-            str(body_path),
-            "--dump-header",
-            str(header_path),
-            "--write-out",
-            METRIC_FORMAT,
-        ]
-        completed = _run_command(
-            command, command_runner=command_runner, timeout=120.0
-        )
-        if completed.returncode != 0:
-            raise ProtectedPreviewProbeError(
-                "An authenticated preview request failed safely."
-            )
-        status, ttfb_seconds, total_seconds, wire_bytes, content_type = (
-            _parse_metrics(bytes(completed.stdout or b""))
-        )
-        if status != 200:
-            raise ProtectedPreviewProbeError(
-                "An authenticated preview request returned an unsuccessful status."
-            )
-        if not body_path.is_file() or not header_path.is_file():
-            raise ProtectedPreviewProbeError(
-                "An authenticated preview request omitted required evidence."
-            )
-        body = body_path.read_bytes()
-        if not body or not re.match(r"(?i)^application/json(?:;|$)", content_type):
-            raise ProtectedPreviewProbeError(
-                "An authenticated preview request did not return JSON."
-            )
-        try:
-            body_text = body.decode("utf-8")
-        except UnicodeDecodeError:
-            raise ProtectedPreviewProbeError(
-                "An authenticated preview response contained invalid JSON."
-            ) from None
-        parse_started = time.perf_counter()
-        try:
-            parsed = json.loads(body_text)
-        except json.JSONDecodeError:
-            raise ProtectedPreviewProbeError(
-                "An authenticated preview response contained invalid JSON."
-            ) from None
-        parse_ms = (time.perf_counter() - parse_started) * 1000.0
-        if not isinstance(parsed, Mapping):
-            raise ProtectedPreviewProbeError(
-                "An authenticated preview response was not a JSON object."
-            )
-        headers = header_path.read_bytes()
-        content_encoding = (_safe_header(headers, "Content-Encoding") or "none").lower()
-        cache_value = (_safe_header(headers, "x-vercel-cache") or "absent").upper()
-        if cache_value not in {"ABSENT", "BYPASS", "MISS", "HIT", "STALE", "PRERENDER"}:
-            cache_value = "OTHER"
-        ttfb_ms = ttfb_seconds * 1000.0
-        network_total_ms = total_seconds * 1000.0
         expected_events = (
             TELEMETRY_EVENTS_PER_REQUEST[domain] if expect_canary_telemetry else 0
         )
-        record: dict[str, object] = {
+        base_record: dict[str, object] = {
             "deploymentLabel": label,
             "domain": domain,
             "phase": phase,
             "sampleIndex": sample_index,
-            "ok": True,
-            "httpStatus": status,
-            "ttfbMs": round(ttfb_ms, 3),
-            "downloadMs": round(max(0.0, network_total_ms - ttfb_ms), 3),
-            "networkTotalMs": round(network_total_ms, 3),
-            "jsonParseMs": round(parse_ms, 3),
-            "endToEndMs": round(network_total_ms + parse_ms, 3),
-            "wireBytes": wire_bytes,
-            "decodedBodyBytes": len(body),
-            "contentEncoding": content_encoding,
-            "vercelCache": cache_value,
-            "compressionRequested": True,
-            "cacheBypassRequested": True,
-            "cacheBypassSatisfied": cache_value != "HIT",
             "candidateTelemetryExpected": expect_canary_telemetry,
             "expectedCandidateReadEvents": expected_events,
         }
-        return (
-            _Sample(record, hashlib.sha256(body).hexdigest()),
-            parsed,
-        )
+        max_attempts = 1 + MAX_PRE_RESPONSE_TRANSPORT_RETRIES
+        for attempt_index in range(1, max_attempts + 1):
+            body_path.unlink(missing_ok=True)
+            header_path.unlink(missing_ok=True)
+            command = [
+                vercel_cli,
+                "curl",
+                _nonce_path(path),
+                "--deployment",
+                deployment,
+                "--",
+                "--silent",
+                "--show-error",
+                "--compressed",
+                "--no-progress-meter",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                "90",
+                "--header",
+                "Accept: application/json",
+                "--header",
+                "Cache-Control: no-cache, no-store, max-age=0",
+                "--header",
+                "Pragma: no-cache",
+                "--output",
+                str(body_path),
+                "--dump-header",
+                str(header_path),
+                "--write-out",
+                METRIC_FORMAT,
+            ]
+            try:
+                completed = _run_command(
+                    command, command_runner=command_runner, timeout=120.0
+                )
+            except ProtectedPreviewProbeError:
+                response_present, response_status = _response_file_evidence(
+                    body_path=body_path, header_path=header_path
+                )
+                if response_present:
+                    attempt_recorder(
+                        _Sample(
+                            {
+                                **base_record,
+                                "attemptIndex": attempt_index,
+                                "ok": False,
+                                "transportOutcome": "http-response-evidence",
+                                "httpResponseReceived": True,
+                                "httpStatus": response_status,
+                                "retryScheduled": False,
+                                "failureKind": "timing-evidence",
+                            },
+                            "",
+                        )
+                    )
+                    failure_recorder("timing-evidence")
+                    raise ProtectedPreviewProbeError(
+                        "An authenticated preview response omitted valid timing evidence."
+                    ) from None
+                retry_scheduled = attempt_index < max_attempts
+                attempt_recorder(
+                    _Sample(
+                        {
+                            **base_record,
+                            "attemptIndex": attempt_index,
+                            "ok": False,
+                            "transportOutcome": "no-http-response",
+                            "httpResponseReceived": False,
+                            "httpStatus": None,
+                            "retryScheduled": retry_scheduled,
+                            "failureKind": "pre-response-transport",
+                        },
+                        "",
+                    )
+                )
+                if retry_scheduled:
+                    continue
+                failure_recorder("pre-response-transport-retry-exhausted")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview request exhausted its bounded transport retry."
+                ) from None
+
+            try:
+                metrics = _parse_metrics(bytes(completed.stdout or b""))
+            except ProtectedPreviewProbeError:
+                response_present, response_status = _response_file_evidence(
+                    body_path=body_path, header_path=header_path
+                )
+                attempt_recorder(
+                    _Sample(
+                        {
+                            **base_record,
+                            "attemptIndex": attempt_index,
+                            "ok": False,
+                            "transportOutcome": (
+                                "http-response-evidence"
+                                if response_present
+                                else "timing-evidence"
+                            ),
+                            "httpResponseReceived": response_present,
+                            "httpStatus": response_status,
+                            "retryScheduled": False,
+                            "failureKind": "timing-evidence",
+                        },
+                        "",
+                    )
+                )
+                failure_recorder("timing-evidence")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview response omitted valid timing evidence."
+                ) from None
+
+            status, ttfb_seconds, total_seconds, wire_bytes, content_type = metrics
+            if status == 0:
+                response_present, response_status = _response_file_evidence(
+                    body_path=body_path, header_path=header_path
+                )
+                if response_present:
+                    attempt_recorder(
+                        _Sample(
+                            {
+                                **base_record,
+                                "attemptIndex": attempt_index,
+                                "ok": False,
+                                "transportOutcome": "http-response-evidence",
+                                "httpResponseReceived": True,
+                                "httpStatus": response_status,
+                                "retryScheduled": False,
+                                "failureKind": "timing-evidence",
+                            },
+                            "",
+                        )
+                    )
+                    failure_recorder("timing-evidence")
+                    raise ProtectedPreviewProbeError(
+                        "An authenticated preview response had invalid timing evidence."
+                    )
+                retry_scheduled = attempt_index < max_attempts
+                attempt_recorder(
+                    _Sample(
+                        {
+                            **base_record,
+                            "attemptIndex": attempt_index,
+                            "ok": False,
+                            "transportOutcome": "no-http-response",
+                            "httpResponseReceived": False,
+                            "httpStatus": None,
+                            "retryScheduled": retry_scheduled,
+                            "failureKind": "pre-response-transport",
+                        },
+                        "",
+                    )
+                )
+                if retry_scheduled:
+                    continue
+                failure_recorder("pre-response-transport-retry-exhausted")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview request exhausted its bounded transport retry."
+                )
+            if not 100 <= status <= 599:
+                attempt_recorder(
+                    _Sample(
+                        {
+                            **base_record,
+                            "attemptIndex": attempt_index,
+                            "ok": False,
+                            "transportOutcome": "timing-evidence",
+                            "httpResponseReceived": False,
+                            "httpStatus": None,
+                            "retryScheduled": False,
+                            "failureKind": "timing-evidence",
+                        },
+                        "",
+                    )
+                )
+                failure_recorder("timing-evidence")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview response had invalid timing evidence."
+                )
+
+            response_record = {
+                **base_record,
+                "attemptIndex": attempt_index,
+                "transportOutcome": "http-response",
+                "httpResponseReceived": True,
+                "httpStatus": status,
+                "retryScheduled": False,
+            }
+            if completed.returncode != 0:
+                attempt_recorder(
+                    _Sample(
+                        {
+                            **response_record,
+                            "ok": False,
+                            "failureKind": "request-command-after-response",
+                        },
+                        "",
+                    )
+                )
+                failure_recorder("request-command-after-response")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview request failed after receiving a response."
+                )
+            if status != 200:
+                attempt_recorder(
+                    _Sample(
+                        {**response_record, "ok": False, "failureKind": "http-status"},
+                        "",
+                    )
+                )
+                failure_recorder("http-status")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview request returned an unsuccessful status."
+                )
+            if not body_path.is_file() or not header_path.is_file():
+                attempt_recorder(
+                    _Sample(
+                        {
+                            **response_record,
+                            "ok": False,
+                            "failureKind": "response-evidence",
+                        },
+                        "",
+                    )
+                )
+                failure_recorder("response-evidence")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview request omitted required evidence."
+                )
+            body = body_path.read_bytes()
+            if not body or not re.match(r"(?i)^application/json(?:;|$)", content_type):
+                attempt_recorder(
+                    _Sample(
+                        {**response_record, "ok": False, "failureKind": "response-format"},
+                        "",
+                    )
+                )
+                failure_recorder("response-format")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview request did not return JSON."
+                )
+            try:
+                body_text = body.decode("utf-8")
+            except UnicodeDecodeError:
+                attempt_recorder(
+                    _Sample(
+                        {**response_record, "ok": False, "failureKind": "response-format"},
+                        "",
+                    )
+                )
+                failure_recorder("response-format")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview response contained invalid JSON."
+                ) from None
+            parse_started = time.perf_counter()
+            try:
+                parsed = json.loads(body_text)
+            except json.JSONDecodeError:
+                attempt_recorder(
+                    _Sample(
+                        {**response_record, "ok": False, "failureKind": "response-format"},
+                        "",
+                    )
+                )
+                failure_recorder("response-format")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview response contained invalid JSON."
+                ) from None
+            parse_ms = (time.perf_counter() - parse_started) * 1000.0
+            if not isinstance(parsed, Mapping):
+                attempt_recorder(
+                    _Sample(
+                        {**response_record, "ok": False, "failureKind": "response-format"},
+                        "",
+                    )
+                )
+                failure_recorder("response-format")
+                raise ProtectedPreviewProbeError(
+                    "An authenticated preview response was not a JSON object."
+                )
+            headers = header_path.read_bytes()
+            content_encoding = (
+                _safe_header(headers, "Content-Encoding") or "none"
+            ).lower()
+            cache_value = (_safe_header(headers, "x-vercel-cache") or "absent").upper()
+            if cache_value not in {
+                "ABSENT",
+                "BYPASS",
+                "MISS",
+                "HIT",
+                "STALE",
+                "PRERENDER",
+            }:
+                cache_value = "OTHER"
+            ttfb_ms = ttfb_seconds * 1000.0
+            network_total_ms = total_seconds * 1000.0
+            record: dict[str, object] = {
+                **response_record,
+                "ok": True,
+                "ttfbMs": round(ttfb_ms, 3),
+                "downloadMs": round(max(0.0, network_total_ms - ttfb_ms), 3),
+                "networkTotalMs": round(network_total_ms, 3),
+                "jsonParseMs": round(parse_ms, 3),
+                "endToEndMs": round(network_total_ms + parse_ms, 3),
+                "wireBytes": wire_bytes,
+                "decodedBodyBytes": len(body),
+                "contentEncoding": content_encoding,
+                "vercelCache": cache_value,
+                "compressionRequested": True,
+                "cacheBypassRequested": True,
+                "cacheBypassSatisfied": cache_value != "HIT",
+            }
+            sample = _Sample(record, hashlib.sha256(body).hexdigest())
+            attempt_recorder(sample)
+            return sample, parsed
+    raise AssertionError("The bounded request-attempt loop did not terminate.")
 
 
 def _percentile(records: Sequence[_Sample], property_name: str, value: float) -> float:
@@ -410,29 +648,58 @@ def _summary_for_label(
     p99_scored = not skip_p99 and scored_samples >= 100
     results: dict[str, object] = {}
     for domain in domains:
-        domain_samples = [
+        domain_attempts = [
             sample
             for sample in label_samples
             if sample.sanitized["domain"] == domain
         ]
-        scored = [
+        scored_attempts = [
             sample
-            for sample in domain_samples
+            for sample in domain_attempts
             if sample.sanitized["phase"] == "scored"
         ]
-        warmups = [
+        warmup_attempts = [
             sample
-            for sample in domain_samples
+            for sample in domain_attempts
             if sample.sanitized["phase"] == "warmup"
         ]
+        scored = [sample for sample in scored_attempts if sample.sanitized["ok"] is True]
+        warmups = [sample for sample in warmup_attempts if sample.sanitized["ok"] is True]
         if len(scored) != scored_samples or len(warmups) != warmup_samples:
             raise ProtectedPreviewProbeError("A protected preview sample set is incomplete.")
+        scored_transport_failures = sum(
+            sample.sanitized["transportOutcome"] == "no-http-response"
+            for sample in scored_attempts
+        )
+        warmup_transport_failures = sum(
+            sample.sanitized["transportOutcome"] == "no-http-response"
+            for sample in warmup_attempts
+        )
         results[domain] = {
-            "scoredAttempts": len(scored),
+            "scoredAttempts": len(scored_attempts),
             "scoredSuccesses": len(scored),
-            "scoredErrors": 0,
-            "warmupAttempts": len(warmups),
-            "warmupErrors": 0,
+            "scoredErrors": sum(
+                sample.sanitized["ok"] is not True
+                and sample.sanitized["transportOutcome"] != "no-http-response"
+                for sample in scored_attempts
+            ),
+            "scoredTransportFailures": scored_transport_failures,
+            "scoredTransportRetries": sum(
+                sample.sanitized["retryScheduled"] is True
+                for sample in scored_attempts
+            ),
+            "warmupAttempts": len(warmup_attempts),
+            "warmupSuccesses": len(warmups),
+            "warmupErrors": sum(
+                sample.sanitized["ok"] is not True
+                and sample.sanitized["transportOutcome"] != "no-http-response"
+                for sample in warmup_attempts
+            ),
+            "warmupTransportFailures": warmup_transport_failures,
+            "warmupTransportRetries": sum(
+                sample.sanitized["retryScheduled"] is True
+                for sample in warmup_attempts
+            ),
             "cacheHits": sum(
                 sample.sanitized["vercelCache"] == "HIT" for sample in scored
             ),
@@ -442,7 +709,7 @@ def _summary_for_label(
             "p99Scored": p99_scored,
             "expectedCandidateReadEvents": sum(
                 int(sample.sanitized["expectedCandidateReadEvents"])
-                for sample in domain_samples
+                for sample in domain_attempts
             ),
             "telemetryCountGate": (
                 "pending-server-log-reconciliation"
@@ -607,7 +874,63 @@ def run_comparison(
         }
         for label, _ in variants
     }
-    samples: list[_Sample] = []
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    run_directory = output_root / f"protected-preview-comparison-{run_id}"
+    run_directory.mkdir(exist_ok=False)
+    samples_path = run_directory / "samples.jsonl"
+    attempts: list[_Sample] = []
+    successful_samples: list[_Sample] = []
+    forbidden = (first_deployment, second_deployment, job_id)
+
+    def record_attempt(attempt: _Sample) -> None:
+        line = json.dumps(attempt.sanitized, ensure_ascii=False, sort_keys=True) + "\n"
+        _assert_sanitized(line, forbidden_values=forbidden, digests=())
+        with samples_path.open("a", encoding="utf-8") as evidence:
+            evidence.write(line)
+        attempts.append(attempt)
+
+    def record_failure(failure_kind: str) -> None:
+        failure = {
+            "schemaVersion": 1,
+            "status": "failed",
+            "comparisonKind": "authenticated-protected-preview",
+            "failureKind": failure_kind,
+            "attemptCounts": {
+                "total": len(attempts),
+                "successfulResponses": sum(
+                    attempt.sanitized["ok"] is True for attempt in attempts
+                ),
+                "preResponseTransportFailures": sum(
+                    attempt.sanitized["transportOutcome"] == "no-http-response"
+                    for attempt in attempts
+                ),
+                "retriesScheduled": sum(
+                    attempt.sanitized["retryScheduled"] is True
+                    for attempt in attempts
+                ),
+                "terminalFailures": sum(
+                    attempt.sanitized["ok"] is not True
+                    and attempt.sanitized["retryScheduled"] is not True
+                    for attempt in attempts
+                ),
+            },
+            "identityDisclosure": {
+                "deploymentReferencesPrintedOrStored": False,
+                "urlsOrHostsPrintedOrStored": False,
+                "responseBodiesPrintedOrStored": False,
+                "requestPathsOrQueryValuesPrintedOrStored": False,
+                "commandOutputOrErrorsPrintedOrStored": False,
+                "rawTransportErrorsPrintedOrStored": False,
+                "secretsPrintedOrStored": False,
+            },
+        }
+        failure_text = (
+            json.dumps(failure, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        )
+        _assert_sanitized(failure_text, forbidden_values=forbidden, digests=())
+        (run_directory / "failure.json").write_text(failure_text, encoding="utf-8")
+
     if "recommendation-player" in domains:
         for label, deployment in variants:
             discovery, payload = _invoke_request(
@@ -620,6 +943,8 @@ def run_comparison(
                 sample_index=0,
                 expect_canary_telemetry=expect_canary_telemetry,
                 command_runner=command_runner,
+                attempt_recorder=record_attempt,
+                failure_recorder=record_failure,
             )
             players = payload.get("players")
             player_key = (
@@ -636,7 +961,7 @@ def run_comparison(
             paths[label]["recommendation-player"] = (
                 f"/api/recommendations?playerKey={quote(player_key, safe='')}"
             )
-            samples.append(discovery)
+            successful_samples.append(discovery)
 
     for warmup in range(1, warmup_samples + 1):
         for domain in domains:
@@ -651,8 +976,10 @@ def run_comparison(
                     sample_index=warmup,
                     expect_canary_telemetry=expect_canary_telemetry,
                     command_runner=command_runner,
+                    attempt_recorder=record_attempt,
+                    failure_recorder=record_failure,
                 )
-                samples.append(sample)
+                successful_samples.append(sample)
 
     scored_started = clock()
     for index in range(1, scored_samples + 1):
@@ -676,13 +1003,15 @@ def run_comparison(
                     sample_index=index,
                     expect_canary_telemetry=expect_canary_telemetry,
                     command_runner=command_runner,
+                    attempt_recorder=record_attempt,
+                    failure_recorder=record_failure,
                 )
-                samples.append(sample)
+                successful_samples.append(sample)
     elapsed_minutes = (clock() - scored_started) / 60.0
 
     first_summary = _summary_for_label(
         label=first_label,
-        samples=samples,
+        samples=attempts,
         domains=domains,
         scored_samples=scored_samples,
         warmup_samples=warmup_samples,
@@ -693,7 +1022,7 @@ def run_comparison(
     )
     second_summary = _summary_for_label(
         label=second_label,
-        samples=samples,
+        samples=attempts,
         domains=domains,
         scored_samples=scored_samples,
         warmup_samples=warmup_samples,
@@ -703,11 +1032,11 @@ def run_comparison(
         expect_canary_telemetry=expect_canary_telemetry,
     )
     parity = compare_response_hashes(
-        _comparison_records(samples, label=first_label),
-        _comparison_records(samples, label=second_label),
+        _comparison_records(successful_samples, label=first_label),
+        _comparison_records(successful_samples, label=second_label),
     )
     _mark_pair_parity(
-        samples, first_label=first_label, second_label=second_label
+        successful_samples, first_label=first_label, second_label=second_label
     )
     latency = compare_latency(
         first_summary,
@@ -720,7 +1049,7 @@ def run_comparison(
         latency, domains=domains, p99_scored=not skip_p99
     )
     cache_gate = all(
-        sample.sanitized["vercelCache"] != "HIT" for sample in samples
+        sample.sanitized["vercelCache"] != "HIT" for sample in successful_samples
     )
     if not parity["passed"] or not cache_gate:
         status = "failed"
@@ -744,6 +1073,9 @@ def run_comparison(
             "canaryTelemetryExpected": expect_canary_telemetry,
             "authenticatedWithVercelCli": True,
             "bypassTokenUsed": False,
+            "maxPreResponseTransportRetriesPerRequest": (
+                MAX_PRE_RESPONSE_TRANSPORT_RETRIES
+            ),
             "timingSemantics": {
                 "ttfbAndDownload": "curl request timing after authenticated CLI setup",
                 "jsonParse": "local decoded-body JSON parse timing",
@@ -764,25 +1096,21 @@ def run_comparison(
             "responseBodiesPrintedOrStored": False,
             "requestPathsOrQueryValuesPrintedOrStored": False,
             "commandOutputOrErrorsPrintedOrStored": False,
+            "rawTransportErrorsPrintedOrStored": False,
             "secretsPrintedOrStored": False,
         },
         "adoptionDecision": "pending",
     }
-    output_root.mkdir(parents=True, exist_ok=True)
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    run_directory = output_root / f"protected-preview-comparison-{run_id}"
-    run_directory.mkdir(exist_ok=False)
     report_text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     sample_text = "".join(
         json.dumps(sample.sanitized, ensure_ascii=False, sort_keys=True) + "\n"
-        for sample in samples
+        for sample in attempts
     )
-    forbidden = (first_deployment, second_deployment, job_id)
-    digests = tuple(sample.digest for sample in samples)
+    digests = tuple(sample.digest for sample in successful_samples)
     _assert_sanitized(report_text, forbidden_values=forbidden, digests=digests)
     _assert_sanitized(sample_text, forbidden_values=forbidden, digests=digests)
     (run_directory / "comparison.json").write_text(report_text, encoding="utf-8")
-    (run_directory / "samples.jsonl").write_text(sample_text, encoding="utf-8")
+    samples_path.write_text(sample_text, encoding="utf-8")
     return (0 if status in {"passed", "smoke-passed"} else 4), report, run_directory
 
 

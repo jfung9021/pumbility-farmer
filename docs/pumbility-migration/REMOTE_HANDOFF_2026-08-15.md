@@ -1,11 +1,42 @@
 # Pumbility Supabase rollout — continuation handoff
 
-Updated: 2026-08-15 JST / 2026-08-14 UTC
+Updated: 2026-08-15 JST / 2026-08-15 UTC
 
 This document is the current sanitized continuation record for a future Codex conversation. It
 supersedes `REMOTE_HANDOFF_2026-08-14.md` for live-state decisions while retaining that file as
 historical evidence. It contains no passwords, tokens, database locations, private deployment
 references, player identifiers, artifact identifiers, or private digests.
+
+## 2026-08-15 live rollout completion
+
+This section supersedes the older live-state, blocker, and pending-phase descriptions retained later
+in this file as historical context. Supabase authority is live on the public Production alias from
+release commit `3e0b52c`. The prior READY Production deployment remains privately retained for
+rollback; its identity is intentionally not recorded here.
+
+The guarded cutover completed after every gate retained by the owner-approved compressed runbook
+passed. Hosted qualification proved both
+queues at 100/100 durable effects with one real redelivery each, 30/30 capacity tasks with a peak of
+6 connections against a limit of 12 and zero connection/deadline errors, exact private reads for all
+four required Blob targets, isolated Blob mutation safety, Supabase and Blob timeout recovery, and
+real worker-process crash recovery with one exactly-once effect. A Vercel Celery
+`Reject(requeue=True)` was proven to be acknowledged without requeue; release commit `3e0b52c` uses
+process loss for the qualification redelivery path, and the affected hosted gate passed after that
+focused repair.
+
+The unaliased IAD Production-target candidate passed startup, API, both-worker/queue, selected-player
+refresh, zero-outbox, telemetry, and exact reconciliation gates before atomic promotion. The
+owner-approved compressed Production watch ran from `2026-08-15T02:57:14Z` through
+`2026-08-15T03:17:14Z`, with scheduled polls at +10 and +20 minutes. Both polls reported the intended
+READY alias, healthy analysis/tier-list/player-list/recommendation/job-status responses, a completed
+supervised player job, outbox counts `0/0/0`, and zero 5xx, fallback, candidate, or authority errors.
+The registered daily cron remained exactly `/api/cron/phoenix2` at `0 6 * * *`.
+
+Post-watch hosted reconciliation passed with a stable source boundary, privacy scan, exact relational
+and artifact parity, 582,301 Phoenix 1 exact matches, 15,661 Phoenix 2 exact matches, 173 JSON
+artifacts, 1 binary artifact, and 56 cached-player artifacts. Keep Vercel mirror/read fallback and the
+private rollback reference available through at least `2026-08-29T02:57:14Z`; run another exact
+reconciliation before considering their removal.
 
 ## Required startup reading
 
@@ -96,27 +127,27 @@ Public alias:
 
 `https://pumbility-farmer.vercel.app`
 
-The alias is READY in `iad1` and points to the retained safe Production deployment built from code
-commit `119fc11`.
+The alias is READY in `iad1` and points to the promoted Supabase-authority deployment built from code
+commit `3e0b52c`.
 
 Active behavioral state:
 
 ```text
-PUMBILITY_DATA_BACKEND=vercel
+PUMBILITY_DATA_BACKEND=supabase
 PUMBILITY_SHADOW_STRICT=false
-PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED=false
-PUMBILITY_BLOB_MIRROR_ENABLED=false
-PUMBILITY_BLOB_READ_FALLBACK_ENABLED=false
+PUMBILITY_CANONICAL_SNAPSHOT_WRITE_ENABLED=true
+PUMBILITY_BLOB_MIRROR_ENABLED=true
+PUMBILITY_BLOB_READ_FALLBACK_ENABLED=true
 PUMBILITY_SUPABASE_READ_CANARY=
-PLAYER_RECOMMENDATION_REFRESH_ENABLED=false
+PLAYER_RECOMMENDATION_REFRESH_ENABLED=true
 PUMBILITY_SUPABASE_READ_POOL_ENABLED=true
 PUMBILITY_SUPABASE_READ_POOL_MAX_SIZE=2
 PUMBILITY_SUPABASE_READ_POOL_MAX_WAITING=2
 ```
 
-The read pool is harmless while Vercel is authoritative. Supabase primary reads, canonical writes,
-Blob mirroring, Blob fallback, and selected-player refresh are off. Production users cannot receive
-stale Supabase data in this state.
+Supabase is authoritative. Canonical writes retain the Vercel mirror, read fallback is available for
+the rollback window, selected-player refresh is enabled, and the bounded read pool is active. The
+Blob mirror outbox was empty at promotion and at both scheduled watch polls.
 
 The deployed Vercel Cron remains enabled at `/api/cron/phoenix2` with the normal daily schedule:
 
@@ -224,6 +255,11 @@ and player summaries so `scoreProgress` is present. Legacy artifacts otherwise f
 when no selected-player cache exists.
 
 ## Remaining blockers
+
+The numbered list below is superseded by the live completion section above. There is no immediate
+rollout blocker. The remaining scheduled obligation is to retain rollback plus mirror/read fallback
+for 14 days and run another exact reconciliation before considering fallback removal. PR cleanup or
+merging is repository administration, not a live rollout blocker.
 
 1. The deployed commit does not contain current `origin/main` or the recommendation readiness
    feature.
@@ -390,6 +426,15 @@ registered schedule and READY host. Require worker completion and post-run recon
 
 Run `verify_pumbility_topology_qualification.py`. Stop on any non-latency failure.
 
+The owner approved one narrowly bounded transport retry on 2026-08-15 for the protected API
+comparison. An individual request may be retried once only when the first attempt receives no HTTP
+response. Retain the original and retry as separate sanitized attempt records, and still require
+exactly 100 successful scored responses per domain and deployment plus all three successful warmups.
+Do not retry any HTTP status, application or contract error, cache hit, parity mismatch, candidate or
+authority error, fallback, or missing timing boundary. A second no-response result or any ordinary
+gate failure fails the comparison; no recursive retry is permitted. The detailed evidence and
+redaction requirements remain canonical in `production-rollout.md`.
+
 Exit: all candidate-topology non-latency gates pass.
 
 ### Phase 6 — Apply the latency decision
@@ -476,6 +521,10 @@ Deploy unaliased, verify startup interlocks and health, then promote atomically.
 Exit: Supabase authority is live with Vercel mirror and fallback retained.
 
 ### Phase 9 — Complete the active watch and closeout
+
+Completed under the owner-approved compression: 20 minutes with exactly two scheduled polls, 10
+minutes apart, followed by a passing final exact reconciliation. The older 45-minute instructions
+below are retained only as historical plan text.
 
 Actively monitor for 45 minutes:
 

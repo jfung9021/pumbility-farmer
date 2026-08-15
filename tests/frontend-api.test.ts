@@ -102,7 +102,8 @@ test("recommendation methodology separates top-50 Pumbility from top-20 display 
   assert.match(page, /plus or minus 0\.2 through 0\.5 rating in 0\.1 steps seeking 20 peers/);
   assert.match(page, /repeats those radii seeking 10, then repeats seeking five/);
   assert.match(page, /Every peer within the narrowest successful radius is used/);
-  assert.match(page, /below five peers, the player-balanced population model is used/);
+  assert.match(page, /below five peers, the player-balanced population model uses the same Phoenix weighting/);
+  assert.match(page, /giving Phoenix 2 results twice the weight of Phoenix 1/);
   assert.doesNotMatch(page, /top 100 at plus or minus/);
   assert.doesNotMatch(page, /through 1\.0/);
   assert.match(page, /top-20 average Pumbility/);
@@ -245,6 +246,11 @@ test("chart video links are accessible external links on every requested surface
     tierList,
     /className="chart-dialog-art-rail"[\s\S]*<ChartVideoLink[\s\S]*chartId=\{chart\.chartId\}[\s\S]*variant="dialog"/,
   );
+  assert.match(
+    tierList,
+    /function CompactChartCard[\s\S]*<ChartVideoLink[\s\S]*chartId=\{chart\.chartId\}[\s\S]*variant="compact-tier"/,
+  );
+  assert.match(component, /"compact-tier"/);
 });
 
 test("NEVSISTER catalog has the complete validated chart inventory", async () => {
@@ -278,6 +284,9 @@ test("chart video controls use existing card tracks and out-of-flow positioning"
   assert.match(css, /\.chart-card \{[^}]*grid-template-columns: 58px minmax\(0, 1fr\) 104px;[^}]*min-height: 86px;/);
   assert.match(css, /\.chart-art-rail \{[^}]*height: 58px;[^}]*position: relative;[^}]*width: 58px;/);
   assert.match(css, /\.chart-video-link \{[^}]*position: absolute;/);
+  assert.match(css, /\.chart-video-link-compact-tier \{[^}]*align-self: center;[^}]*position: static;/);
+  assert.match(css, /\.chart-video-link-recommendation \{[^}]*left: 50%;[^}]*transform: translateX\(-50%\);/);
+  assert.match(css, /\.recommendation-rank \{[^}]*text-align: center;[^}]*width: 100%;/);
 
   assert.match(mobileStyles, /\.recommendation-card \{[^}]*grid-template-columns: 22px 48px minmax\(0, 1fr\) max-content;[^}]*padding: 14px 10px;/);
   assert.match(mobileStyles, /\.recommendation-leading \{[^}]*height: 48px;[^}]*width: 22px;/);
@@ -296,7 +305,9 @@ test("recommendation page renders cache before a deduplicated player refresh", a
   assert.match(page, /await loadCached\(\);\s*await refresh\(\);/);
   assert.match(page, /\/api\/recommendations\/refresh\?playerKey=/);
   assert.match(page, /\/api\/recommendations\/refresh\?jobId=/);
-  assert.doesNotMatch(page, /Showing cached recommendations|Refreshing this player's Phoenix 2 scores|Showing the cached model/);
+  assert.match(page, /Showing cached recommendations because score refresh failed/);
+  assert.match(page, /if \(cachedLoaded\) \{\s*setRefreshWarning/);
+  assert.match(page, /className="recommendation-notice stale-notice" role="status"/);
   assert.match(page, /playersPayload\?\.refreshSupported === false/);
   assert.match(page, /const deadline = Date\.now\(\) \+ 30_000/);
   assert.doesNotMatch(page, /Legacy snapshot generated/);
@@ -353,7 +364,9 @@ test("global refresh controls live only on the hidden Jonathan page", async () =
 
   assert.doesNotMatch(tierList, /Administrator refresh key|Refresh Rankings|X-Analysis-Run-Secret|Last completed/);
   assert.match(tierList, /<RefreshMeta/);
-  assert.match(refreshMeta, /Refresh age:/);
+  assert.match(refreshMeta, /\{label\}:/);
+  assert.match(refreshMeta, /refresh-meta-delayed/);
+  assert.match(refreshMeta, /refresh-delay-warning/);
   assert.match(refreshMeta, /min-height|loadingLabel/);
   assert.match(controls, /X-Jonathan-Password/);
   assert.match(controls, /\/api\/jonathan\/refresh\?mode=\$\{mode\}/);
@@ -362,6 +375,23 @@ test("global refresh controls live only on the hidden Jonathan page", async () =
   assert.match(controls, /window\.confirm/);
   assert.match(page, /index: false/);
   assert.match(page, /follow: false/);
+});
+
+test("recommendation refresh metadata distinguishes the model from player scores", async () => {
+  const [page, refreshMeta, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "_components", "refresh-meta.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(page, /const MODEL_DELAY_THRESHOLD_MS = 26 \* 60 \* 60 \* 1000/);
+  assert.match(page, /currentModelGeneratedAtUtc[\s\S]*modelGeneratedAtUtc/);
+  assert.match(page, /label="Model updated"/);
+  assert.match(page, /label="Player scores synced"/);
+  assert.match(page, /generatedAtUtc=\{playerSyncedAt\}/);
+  assert.match(refreshMeta, /Math\.max\(0, nowMs - generatedAtMs\) > delayedAfterMs/);
+  assert.match(css, /\.refresh-meta-delayed b, \.refresh-delay-warning \{ color: #f3ce55; \}/);
+  assert.match(css, /\.stale-notice \{[^}]*display: flex;/);
 });
 
 test("estimated difficulties truncate to one decimal place everywhere", async () => {
@@ -406,11 +436,11 @@ test("tier list uses compact segmented controls for grouping and layout", async 
   assert.match(page, /className="search-field"[\s\S]*?className="level-field"/);
   assert.match(page, /<span>Search songs or step artists<\/span>/);
   assert.match(page, /placeholder="Sorceress Elise"/);
-  assert.match(page, /<h2 id="unrated-compact">Unrated<\/h2>/);
+  assert.match(page, /headingId="unrated-charts" label="Unrated"/);
   assert.match(css, /\.filter-bar \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(120px, 1fr\);/);
   assert.match(css, /\.tier-list-page \{ --tier-list-gap: 16px; \}/);
   assert.match(css, /\.results-controls \{[^}]*padding: var\(--tier-list-gap\) 2px;/);
-  assert.match(css, /\.tiers \{[^}]*gap: var\(--tier-list-gap\);/);
+  assert.match(css, /\.tiers \{[^}]*gap: 24px;/);
   assert.match(css, /\.page-title-hero h1 \{[^}]*font-size: clamp\(14px, 4\.8vw, 20px\);[^}]*white-space: nowrap;/);
 });
 
@@ -431,10 +461,51 @@ test("tier list compact layout uses art-only buttons and a details dialog", asyn
   assert.match(page, /aria-modal="true"/);
   assert.match(page, /chart-difficulty-badge/);
   assert.match(page, /compact=\{layoutView === "compact"\}/);
-  assert.match(page, /<h2 id=\{sectionId\}>\{label\}<\/h2>/);
-  assert.match(css, /\.tier-compact \{[^}]*grid-template-columns: 132px minmax\(0, 1fr\);/);
+  assert.match(page, /<TierDivider[\s\S]*headingId=\{sectionId\}[\s\S]*label=\{label\}/);
+  assert.doesNotMatch(css, /\.tier, \.unrated-section \{[^}]*background:/);
+  assert.doesNotMatch(css, /\.tier, \.unrated-section \{[^}]*border:/);
+  assert.doesNotMatch(css, /\.unrated-section header/);
+  assert.match(css, /\.tier-divider-leading \{[^}]*flex: 0 0 24px;/);
+  assert.match(css, /\.tier-divider-trailing \{[^}]*flex: 1 1 auto;/);
+  assert.match(css, /\.tier-divider h2 \{[^}]*font-size: 8px;[^}]*font-weight: 800;[^}]*letter-spacing: 0\.03em;[^}]*text-transform: uppercase;/);
   assert.match(css, /\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(84px, 96px\)\);/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\);/);
+  assert.match(css, /@media \(max-width: 389px\)[\s\S]*\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
+  assert.doesNotMatch(css, /\.compact-chart-card \{[^}]*background:/);
+  assert.doesNotMatch(css, /\.compact-chart-card \{[^}]*border:/);
   assert.match(css, /\.compact-jacket \{[^}]*aspect-ratio: 1;/);
+});
+
+test("tier list chart details provide local mode-specific what-if estimates", async () => {
+  const [page, types, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "lib", "types.ts"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+  const whatIfComponent = page.slice(
+    page.indexOf("function WhatIfDifficulty"),
+    page.indexOf("function ChartDetails"),
+  );
+  const chartDetails = page.slice(
+    page.indexOf("function ChartDetails"),
+    page.indexOf("function ChartCard"),
+  );
+
+  assert.match(types, /whatIfEstimates\?: Array<\{\s*level: number;\s*estimatedDifficulty: number \| null;\s*\}>;/);
+  assert.match(whatIfComponent, /const prefix = chart\.type === "Single" \? "S" : "D";/);
+  assert.match(whatIfComponent, /<option value="">\{prefix\}\?\?<\/option>/);
+  assert.match(whatIfComponent, /disabled=\{estimate\.estimatedDifficulty === null\}/);
+  assert.match(whatIfComponent, /unavailable/);
+  assert.match(whatIfComponent, /formatEstimatedDifficulty\(selectedEstimate\)/);
+  assert.doesNotMatch(whatIfComponent, /fetch\s*\(/);
+  assert.match(chartDetails, /<WhatIfDifficulty chart=\{chart\} \/>/);
+
+  assert.match(css, /\.chart-card \{[^}]*grid-template-columns: 58px minmax\(0, 1fr\) 104px;[^}]*min-height: 86px;[^}]*padding: 13px 18px;/);
+  assert.match(css, /\.chart-dialog-body \{[^}]*grid-template-columns: 96px minmax\(0, 1fr\);/);
+  assert.match(css, /\.chart-dialog-body \.delta \{[^}]*grid-column: 2;[^}]*min-height: 0;[^}]*padding: 13px 0 0;/);
+  assert.match(css, /\.what-if-control \{[^}]*font-size: 8px;[^}]*position: absolute;[^}]*right: calc\(100% \+ 19px\);[^}]*white-space: nowrap;/);
+  assert.match(css, /\.what-if-control select \{[^}]*width: calc\(4ch \+ 16px\);/);
+  assert.match(css, /\.chart-dialog-body \.what-if-control \{[^}]*bottom: 0;[^}]*right: 0;/);
 });
 
 test("chart art uses mode-colored borders in every rendering layout", async () => {
@@ -834,9 +905,27 @@ test("recommendation player list exposes names and eligibility without mode payl
       username: "PLAYER",
       displayName: "PLAYER",
       eligibility: { singles: true, doubles: false },
+      scoreProgress: {
+        singles: { validScoreCount: 30, requiredScoreCount: 30 },
+        doubles: { validScoreCount: 4, requiredScoreCount: 30 },
+      },
     },
   ]);
   assert.equal("modes" in response.players[0], false);
+});
+
+test("recommendation readiness explains missing score history", async () => {
+  const [page, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(page, /Play more charts to unlock recommendations/);
+  assert.match(page, /recommendation-readiness-progress/);
+  assert.match(page, /Need to play \$\{remaining\} more \$\{label\}/);
+  assert.match(page, /recommendation-warning-icon/);
+  assert.match(css, /\.recommendation-readiness-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendation-readiness-grid \{ grid-template-columns: 1fr; \}/);
 });
 
 test("manual recommendations include charts up to 0.5 above the scoring rating", () => {

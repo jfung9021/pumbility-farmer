@@ -69,6 +69,48 @@ function LimitedDataWarning({ chart, compact = false }: { chart: ChartResult; co
   );
 }
 
+function fallbackWhatIfEstimates(chart: ChartResult): NonNullable<ChartResult["whatIfEstimates"]> {
+  const minimumLevel = Math.max(16, chart.level - 3);
+  return Array.from({ length: chart.level + 3 - minimumLevel + 1 }, (_, offset) => minimumLevel + offset)
+    .filter((level) => level !== chart.level)
+    .map((level) => ({ level, estimatedDifficulty: null }));
+}
+
+function WhatIfDifficulty({ chart }: { chart: ChartResult }) {
+  const [selectedLevel, setSelectedLevel] = useState<number | null>(null);
+  const prefix = chart.type === "Single" ? "S" : "D";
+  const estimates = chart.whatIfEstimates ?? fallbackWhatIfEstimates(chart);
+  const selectedEstimate = selectedLevel === null
+    ? null
+    : estimates.find((estimate) => estimate.level === selectedLevel)?.estimatedDifficulty ?? null;
+
+  return (
+    <div className="what-if-control">
+      <span>If</span>
+      <select
+        aria-label={`Hypothetical official difficulty for ${chart.songName}`}
+        onChange={(event) => setSelectedLevel(event.target.value ? Number(event.target.value) : null)}
+        value={selectedLevel ?? ""}
+      >
+        <option value="">{prefix}??</option>
+        {estimates.map((estimate) => (
+          <option
+            disabled={estimate.estimatedDifficulty === null}
+            key={estimate.level}
+            value={estimate.level}
+          >
+            {prefix}{estimate.level}{estimate.estimatedDifficulty === null ? " — unavailable" : ""}
+          </option>
+        ))}
+      </select>
+      <span>then</span>
+      <span className="what-if-result">
+        {selectedEstimate === null ? "—" : `${prefix}${formatEstimatedDifficulty(selectedEstimate)}`}
+      </span>
+    </div>
+  );
+}
+
 function ChartDetails({ chart, headingId }: { chart: ChartResult; headingId?: string }) {
   const delta = chart.difficultyDelta;
   return (
@@ -100,6 +142,7 @@ function ChartDetails({ chart, headingId }: { chart: ChartResult; headingId?: st
         {chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null ? (
           <small>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
         ) : null}
+        <WhatIfDifficulty chart={chart} />
       </div>
     </>
   );
@@ -141,6 +184,12 @@ function CompactChartCard({ chart, onSelect }: { chart: ChartResult; onSelect: (
           </span>
         </span>
       </button>
+      <ChartVideoLink
+        chartId={chart.chartId}
+        difficulty={chart.difficulty}
+        songName={chart.songName}
+        variant="compact-tier"
+      />
     </article>
   );
 }
@@ -152,6 +201,28 @@ function CompactChartGrid({ charts, onSelect }: { charts: ChartResult[]; onSelec
         ? charts.map((chart) => <CompactChartCard chart={chart} key={chart.chartId} onSelect={onSelect} />)
         : <p className="empty-tier">No charts match the current filters.</p>}
     </div>
+  );
+}
+
+function TierDivider({
+  count,
+  detail,
+  headingId,
+  label,
+}: {
+  count: number;
+  detail?: string;
+  headingId: string;
+  label: string;
+}) {
+  return (
+    <header className="tier-divider">
+      <span aria-hidden="true" className="tier-divider-leading" />
+      <h2 id={headingId}>{label}</h2>
+      {detail ? <span className="tier-divider-detail">{detail}</span> : null}
+      <span aria-hidden="true" className="tier-divider-trailing" />
+      <span className="tier-count">{count} chart{count === 1 ? "" : "s"}</span>
+    </header>
   );
 }
 
@@ -245,26 +316,18 @@ function TierSection({ rank, name, range, charts, compact, onSelect }: {
   compact: boolean;
   onSelect: (chart: ChartResult) => void;
 }) {
-  if (compact) {
-    return (
-      <section className={`tier tier-${groupTone[rank - 1]} tier-compact`} aria-labelledby={`tier-${rank}`}>
-        <div className="compact-tier-label"><h2 id={`tier-${rank}`}>{name}</h2></div>
-        <CompactChartGrid charts={charts} onSelect={onSelect} />
-      </section>
-    );
-  }
   return (
-    <section className={`tier tier-${groupTone[rank - 1]}`} aria-labelledby={`tier-${rank}`}>
-      <header className="tier-header">
-        <div className="tier-rank">{String(rank).padStart(2, "0")}</div>
-        <div><p>{range}</p><h2 id={`tier-${rank}`}>{name}</h2></div>
-        <span className="tier-count">{charts.length} chart{charts.length === 1 ? "" : "s"}</span>
-      </header>
-      <div className="tier-list">
-        {charts.length
-          ? charts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)
-          : <p className="empty-tier">No charts match the current filters.</p>}
-      </div>
+    <section className={`tier tier-${groupTone[rank - 1]}${compact ? " tier-compact" : ""}`} aria-labelledby={`tier-${rank}`}>
+      <TierDivider count={charts.length} detail={range} headingId={`tier-${rank}`} label={name} />
+      {compact ? (
+        <CompactChartGrid charts={charts} onSelect={onSelect} />
+      ) : (
+        <div className="tier-list">
+          {charts.length
+            ? charts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)
+            : <p className="empty-tier">No charts match the current filters.</p>}
+        </div>
+      )}
     </section>
   );
 }
@@ -279,24 +342,21 @@ function EstimatedDifficultySection({ charts, compact, mode, value, onSelect }: 
   const formatted = formatEstimatedDifficulty(value);
   const label = `${mode === "singles" ? "S" : "D"}${formatted}`;
   const sectionId = `estimated-${mode}-${formatted.replace(".", "-")}`;
-  if (compact) {
-    return (
-      <section className="tier tier-sky tier-compact estimated-tier" aria-labelledby={sectionId}>
-        <div className="compact-tier-label"><h2 id={sectionId}>{label}</h2></div>
-        <CompactChartGrid charts={charts} onSelect={onSelect} />
-      </section>
-    );
-  }
   return (
-    <section className="tier tier-sky estimated-tier" aria-labelledby={sectionId}>
-      <header className="tier-header">
-        <div className="tier-rank">{formatted}</div>
-        <div><p>Estimated scoring difficulty</p><h2 id={sectionId}>{label}</h2></div>
-        <span className="tier-count">{charts.length} chart{charts.length === 1 ? "" : "s"}</span>
-      </header>
-      <div className="tier-list">
-        {charts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
-      </div>
+    <section className={`tier tier-sky estimated-tier${compact ? " tier-compact" : ""}`} aria-labelledby={sectionId}>
+      <TierDivider
+        count={charts.length}
+        detail="Estimated scoring difficulty"
+        headingId={sectionId}
+        label={label}
+      />
+      {compact ? (
+        <CompactChartGrid charts={charts} onSelect={onSelect} />
+      ) : (
+        <div className="tier-list">
+          {charts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
+        </div>
+      )}
     </section>
   );
 }
@@ -408,6 +468,7 @@ export default function TierListPage() {
         <h1>Scoring Difficulty Tier List</h1>
         <RefreshMeta
           generatedAtUtc={payload?.generatedAtUtc}
+          label="Tier list updated"
           loading={loading}
           loadingLabel="Loading tier list..."
           nowMs={nowMs}
@@ -510,20 +571,19 @@ export default function TierListPage() {
               ))}
           {groupingView === "estimated" && estimatedGroups.length === 0 ? (
             <section className="unrated-section">
-              <header><div><p>Current filters</p><h2>No estimated charts</h2></div><span>0 charts</span></header>
+              <TierDivider count={0} detail="Current filters" headingId="no-estimated-charts" label="No estimated charts" />
             </section>
           ) : null}
-          {layoutView === "compact" ? (
-            <section className="tier tier-compact unrated-section" aria-labelledby="unrated-compact">
-              <div className="compact-tier-label"><h2 id="unrated-compact">Unrated</h2></div>
+          <section className={`tier unrated-section${layoutView === "compact" ? " tier-compact" : ""}`} aria-labelledby="unrated-charts">
+            <TierDivider count={unratedCharts.length} detail="No estimate" headingId="unrated-charts" label="Unrated" />
+            {layoutView === "compact" ? (
               <CompactChartGrid charts={unratedCharts} onSelect={setSelectedChart} />
-            </section>
-          ) : (
-            <section className="unrated-section">
-              <header><div><p>No estimate</p><h2>Unrated</h2></div><span>{unratedCharts.length} charts</span></header>
-              {unratedCharts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
-            </section>
-          )}
+            ) : (
+              <div className="tier-list">
+                {unratedCharts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
+              </div>
+            )}
+          </section>
         </div>
       </section>
       {selectedChart ? <ChartDetailDialog chart={selectedChart} onClose={closeChartDialog} /> : null}

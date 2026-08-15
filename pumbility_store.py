@@ -498,9 +498,14 @@ def _read_cursor(database_url: str) -> Iterator[Any]:
             yield cursor
 
 
-def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
+def _canonical_json_bytes(value: Any) -> bytes:
+    normalized = dict(value) if isinstance(value, Mapping) else value
     return json.dumps(
-        dict(value), ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True
+        normalized,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
     ).encode("utf-8")
 
 
@@ -964,21 +969,28 @@ class PumbilityArtifactStore:
         snapshot: Mapping[str, Any],
         config: Any,
         payload: Mapping[str, Any],
-        baselines: Sequence[Mapping[str, Any]],
-        contributions: Sequence[Mapping[str, Any]],
-        chart_results: Sequence[Mapping[str, Any]],
+        baselines: Sequence[Mapping[str, Any]] = (),
+        contributions: Sequence[Mapping[str, Any]] = (),
+        chart_results: Sequence[Mapping[str, Any]] = (),
+        analysis_manifest: Mapping[str, Any] | None = None,
+        analysis_dataset: str | None = None,
+        analysis_rows: Sequence[Mapping[str, Any]] = (),
+        analysis_chunk_sha256: str | None = None,
         model_artifacts: tuple[
             dict[str, Any],
             dict[str, Any],
             bytes,
-            list[dict[str, Any]],
-            list[dict[str, Any]],
+            Sequence[Mapping[str, Any]] | int,
+            Sequence[Mapping[str, Any]] | int,
         ]
         | None = None,
+        phase: str = "all",
+        analysis_run_id: Any | None = None,
     ) -> tuple[Any, Any | None]:
         """Persist the already-computed runtime generation before pointer publication."""
         from scripts.analyze_pumbility_supabase import (
             AnalysisOutput,
+            _methodology,
             _persist_analysis,
             _read_database_input,
             _sha256,
@@ -986,52 +998,600 @@ class PumbilityArtifactStore:
         from scripts.populate_pumbility_production import _persist_model_generation
         from phoenix2_sync import sanitize_snapshot
 
+        if phase not in {
+            "all",
+            "analysis",
+            "analysis-start",
+            "analysis-chunk",
+            "analysis-finish",
+            "model",
+        }:
+            raise ValueError("Typed runtime persistence received an invalid phase.")
         generated_at = _parse_timestamp(payload.get("generatedAtUtc"))
         if generated_at is None:
             raise ValueError("Typed runtime persistence requires a generation timestamp.")
-        with _connect(self.database_url) as connection:
-            with connection.cursor() as cursor:
-                _assert_schema(cursor)
-                cursor.execute(
-                    "select id from pumbility.jobs where external_key = %s",
-                    (job_external_key,),
+        if phase in {"analysis-start", "analysis-chunk", "analysis-finish"}:
+            if not isinstance(analysis_manifest, Mapping):
+                raise ValueError("Resumable typed persistence requires a shard manifest.")
+            manifest_hash = str(analysis_manifest.get("sha256") or "")
+            raw_datasets = analysis_manifest.get("datasets")
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}", manifest_hash)
+                or not isinstance(raw_datasets, Mapping)
+                or set(raw_datasets)
+                != {"baselines", "contributions", "chartResults"}
+            ):
+                raise ValueError("Resumable typed persistence received an invalid manifest.")
+            expected_counts = {
+                name: int(dict(raw_datasets[name]).get("rowCount") or 0)
+                for name in ("baselines", "contributions", "chartResults")
+            }
+            if any(count < 0 for count in expected_counts.values()):
+                raise ValueError("Resumable typed persistence received invalid row counts.")
+        else:
+            manifest_hash = ""
+            expected_counts = {}
+
+        if phase == "analysis-start":
+            from psycopg.types.json import Jsonb
+
+            with _connect(self.database_url) as connection:
+                with connection.cursor() as cursor:
+                    _assert_schema(cursor)
+                    cursor.execute(
+                        "select id from pumbility.jobs where external_key = %s",
+                        (job_external_key,),
+                    )
+                    job_row = cursor.fetchone()
+                if job_row is None:
+                    raise RuntimeError("The typed runtime job row is unavailable.")
+                database_input = _read_database_input(connection, mix_key)
+                runtime_snapshot = sanitize_snapshot(snapshot, mix=mix_key)
+                runtime_snapshot["generatedAtUtc"] = str(
+                    database_input.snapshot.get("generatedAtUtc") or ""
                 )
-                job_row = cursor.fetchone()
-            if job_row is None:
-                raise RuntimeError("The typed runtime job row is unavailable.")
-            database_input = _read_database_input(connection, mix_key)
-            runtime_snapshot = sanitize_snapshot(snapshot, mix=mix_key)
-            # Relational reconstruction intentionally has no capture timestamp.
-            # Compare the immutable entity content while retaining every other
-            # canonical snapshot field in the source identity.
-            runtime_snapshot["generatedAtUtc"] = str(
-                database_input.snapshot.get("generatedAtUtc") or ""
-            )
-            runtime_source_hash = _sha256(runtime_snapshot)
-            database_source_hash = _sha256(database_input.snapshot)
-            if runtime_source_hash != database_source_hash:
-                raise RuntimeError(
-                    "The canonical snapshot changed before typed runtime persistence."
+                runtime_source_hash = _sha256(runtime_snapshot)
+                database_source_hash = _sha256(database_input.snapshot)
+                if runtime_source_hash != database_source_hash:
+                    raise RuntimeError(
+                        "The canonical snapshot changed before typed runtime persistence."
+                    )
+                output = AnalysisOutput(
+                    database_input=database_input,
+                    config=config,
+                    started_at=generated_at,
+                    payload=dict(payload),
+                    baselines=[],
+                    contributions=[],
+                    chart_results=[],
+                    source_hash=database_source_hash,
+                    output_hash=_sha256(payload),
                 )
-            output = AnalysisOutput(
-                database_input=database_input,
-                config=config,
-                started_at=generated_at,
-                payload=dict(payload),
-                baselines=[dict(row) for row in baselines],
-                contributions=[dict(row) for row in contributions],
-                chart_results=[dict(row) for row in chart_results],
-                source_hash=database_source_hash,
-                output_hash=_sha256(payload),
+                methodology = _methodology(output)
+                summary = dict(payload["summary"])
+                run_key = "runtime-analysis:{mix}:{digest}".format(
+                    mix=mix_key,
+                    digest=_sha256(
+                        {
+                            "sourceHash": output.source_hash,
+                            "outputHash": output.output_hash,
+                            "generatedAtUtc": str(payload["generatedAtUtc"]),
+                            "methodology": methodology,
+                        }
+                    ),
+                )
+                publishing_metadata = {
+                    "schemaVersion": int(analysis_manifest.get("schemaVersion") or 0),
+                    "manifestSha256": manifest_hash,
+                    "expectedRows": expected_counts,
+                }
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        insert into pumbility.methodologies (
+                            methodology_key, script_version, code_hash, dependency_hash,
+                            configuration, random_seed
+                        ) values (%s, %s, %s, %s, %s, %s)
+                        on conflict (methodology_key, script_version, code_hash) do nothing
+                        returning id
+                        """,
+                        (
+                            methodology["methodology_key"],
+                            methodology["script_version"],
+                            methodology["code_hash"],
+                            methodology["dependency_hash"],
+                            Jsonb(methodology["configuration"]),
+                            methodology["random_seed"],
+                        ),
+                    )
+                    methodology_row = cursor.fetchone()
+                    if methodology_row is None:
+                        cursor.execute(
+                            """
+                            select id, dependency_hash, configuration, random_seed
+                            from pumbility.methodologies
+                            where methodology_key = %s
+                              and script_version = %s and code_hash = %s
+                            """,
+                            (
+                                methodology["methodology_key"],
+                                methodology["script_version"],
+                                methodology["code_hash"],
+                            ),
+                        )
+                        existing_methodology = cursor.fetchone()
+                        if existing_methodology is None or (
+                            existing_methodology[1] != methodology["dependency_hash"]
+                            or dict(existing_methodology[2])
+                            != methodology["configuration"]
+                            or existing_methodology[3] != methodology["random_seed"]
+                        ):
+                            raise RuntimeError(
+                                "An immutable methodology identity has conflicting metadata."
+                            )
+                        methodology_id = existing_methodology[0]
+                    else:
+                        methodology_id = methodology_row[0]
+                    cursor.execute(
+                        """
+                        insert into pumbility.analysis_runs (
+                            run_key, job_id, mix_id, methodology_id, status,
+                            generated_at, source_hash, summary, input_hash,
+                            output_hash, coverage, metrics, started_at
+                        ) values (
+                            %s, %s, %s, %s, 'building', %s::timestamptz, %s,
+                            %s, %s, %s, %s, %s, %s
+                        ) on conflict (run_key) do nothing
+                        returning id
+                        """,
+                        (
+                            run_key,
+                            job_row[0],
+                            database_input.mix_id,
+                            methodology_id,
+                            str(payload["generatedAtUtc"]),
+                            output.source_hash,
+                            Jsonb(summary),
+                            output.source_hash,
+                            output.output_hash,
+                            Jsonb(dict(summary.get("coverage") or {})),
+                            Jsonb(
+                                {
+                                    **dict(summary.get("modes") or {}),
+                                    "typedPublishing": publishing_metadata,
+                                }
+                            ),
+                            generated_at,
+                        ),
+                    )
+                    inserted_run = cursor.fetchone()
+                    if inserted_run is None:
+                        cursor.execute(
+                            """
+                            select id, job_id, mix_id, methodology_id, status,
+                                   source_hash, input_hash, output_hash, metrics
+                            from pumbility.analysis_runs where run_key = %s
+                            """,
+                            (run_key,),
+                        )
+                        existing_run = cursor.fetchone()
+                        existing_publishing = (
+                            dict(existing_run[8]).get("typedPublishing")
+                            if existing_run is not None
+                            and isinstance(existing_run[8], Mapping)
+                            else None
+                        )
+                        if (
+                            existing_run is None
+                            or existing_run[4]
+                            not in {"building", "shadow", "published"}
+                            or tuple(existing_run[1:4])
+                            != (job_row[0], database_input.mix_id, methodology_id)
+                            or tuple(existing_run[5:8])
+                            != (output.source_hash, output.source_hash, output.output_hash)
+                            or existing_publishing != publishing_metadata
+                        ):
+                            raise RuntimeError(
+                                "An immutable analysis run conflicts with resumable output."
+                            )
+                        analysis_run_id = existing_run[0]
+                    else:
+                        analysis_run_id = inserted_run[0]
+                    mode_rows = []
+                    for mode in ("Singles", "Doubles"):
+                        metrics = dict(
+                            (summary.get("modes") or {}).get(mode.lower()) or {}
+                        )
+                        mode_rows.append(
+                            (
+                                analysis_run_id,
+                                mode,
+                                Jsonb(metrics),
+                                int(metrics.get("eligiblePlayers") or 0),
+                                int(metrics.get("catalogCharts") or 0),
+                                Jsonb(dict(metrics.get("calibration") or {})),
+                                Jsonb(dict(metrics.get("shrinkage") or {})),
+                                Jsonb({"folders": dict(metrics.get("folders") or {})}),
+                            )
+                        )
+                    cursor.executemany(
+                        """
+                        insert into pumbility.analysis_mode_results (
+                            analysis_run_id, mode, metrics, eligible_player_count,
+                            chart_count, calibration, shrinkage, coverage
+                        ) values (%s, %s, %s, %s, %s, %s, %s, %s)
+                        on conflict (analysis_run_id, mode) do update set
+                            metrics = excluded.metrics,
+                            eligible_player_count = excluded.eligible_player_count,
+                            chart_count = excluded.chart_count,
+                            calibration = excluded.calibration,
+                            shrinkage = excluded.shrinkage,
+                            coverage = excluded.coverage
+                        """,
+                        mode_rows,
+                    )
+            return analysis_run_id, None
+
+        if phase == "analysis-chunk":
+            from psycopg.types.json import Jsonb
+            from scripts.analyze_pumbility_supabase import _nullable_number
+
+            if analysis_run_id is None:
+                raise ValueError("A typed analysis chunk requires its analysis run.")
+            if analysis_dataset not in {
+                "baselines",
+                "contributions",
+                "chartResults",
+            }:
+                raise ValueError("A typed analysis chunk has an invalid dataset.")
+            normalized_rows = [dict(row) for row in analysis_rows]
+            if len(normalized_rows) > 5_000:
+                raise ValueError("A typed analysis chunk exceeds the 5,000-row limit.")
+            chunk_digest = hashlib.sha256(
+                _canonical_json_bytes(normalized_rows)
+            ).hexdigest()
+            if chunk_digest != str(analysis_chunk_sha256 or ""):
+                raise ValueError("A typed analysis chunk failed hash validation.")
+            with _connect(self.database_url) as connection:
+                with connection.transaction(), connection.cursor() as cursor:
+                    _assert_schema(cursor)
+                    cursor.execute(
+                        """
+                        select ar.status, ar.metrics, m.id
+                        from pumbility.analysis_runs ar
+                        join pumbility.mixes m on m.id = ar.mix_id
+                        where ar.id = %s and m.mix_key = %s
+                        for update
+                        """,
+                        (analysis_run_id, mix_key),
+                    )
+                    run_row = cursor.fetchone()
+                    typed_metadata = (
+                        dict(run_row[1]).get("typedPublishing")
+                        if run_row is not None and isinstance(run_row[1], Mapping)
+                        else None
+                    )
+                    if (
+                        run_row is None
+                        or run_row[0] != "building"
+                        or not isinstance(typed_metadata, Mapping)
+                        or typed_metadata.get("manifestSha256") != manifest_hash
+                    ):
+                        raise RuntimeError(
+                            "The resumable typed analysis generation is unavailable."
+                        )
+                    mix_id = run_row[2]
+                    cursor.execute(
+                        """
+                        select p.id, p.upstream_player_id
+                        from pumbility.player_consents pc
+                        join pumbility.players p on p.id = pc.player_id
+                        join pumbility.consent_scopes cs on cs.id = pc.consent_scope_id
+                        where pc.mix_id = %s and cs.scope_key = 'analysis'
+                          and pc.valid_to is null
+                        """,
+                        (mix_id,),
+                    )
+                    player_by_hash: dict[str, tuple[Any, str]] = {}
+                    for player_id, upstream_player_id in cursor.fetchall():
+                        full_hash = hashlib.sha256(
+                            str(upstream_player_id).encode("utf-8")
+                        ).hexdigest()
+                        short_hash = full_hash[:16]
+                        if short_hash in player_by_hash:
+                            raise RuntimeError(
+                                "A pseudonymous player-hash collision prevents safe analysis."
+                            )
+                        player_by_hash[short_hash] = (player_id, full_hash)
+                    cursor.execute(
+                        """
+                        select id, upstream_chart_id from pumbility.charts
+                        where mix_id = %s and is_active
+                        """,
+                        (mix_id,),
+                    )
+                    chart_ids = {
+                        str(upstream_chart_id): chart_id
+                        for chart_id, upstream_chart_id in cursor.fetchall()
+                    }
+
+                    if analysis_dataset == "baselines":
+                        values = []
+                        for row in normalized_rows:
+                            player = player_by_hash.get(str(row.get("playerHash") or ""))
+                            if player is None:
+                                raise ValueError(
+                                    "A typed player feature cannot be resolved."
+                                )
+                            values.append(
+                                (
+                                    analysis_run_id,
+                                    player[0],
+                                    player[1],
+                                    row["mode"],
+                                    int(row["validScoreCount"]),
+                                    _nullable_number(row.get("baselinePumbility")),
+                                    _nullable_number(row.get("baselineStd")),
+                                    _nullable_number(row.get("baselineMin")),
+                                    _nullable_number(row.get("baselineMax")),
+                                    int(row.get("baselineCount") or 0),
+                                    Jsonb(row),
+                                )
+                            )
+                        cursor.executemany(
+                            """
+                            insert into pumbility.player_mode_features (
+                                analysis_run_id, player_id, player_hash, mode,
+                                valid_score_count, baseline_pumbility, baseline_std,
+                                baseline_min, baseline_max, baseline_count, payload
+                            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            on conflict (analysis_run_id, player_id, mode) do update set
+                                player_hash = excluded.player_hash,
+                                valid_score_count = excluded.valid_score_count,
+                                baseline_pumbility = excluded.baseline_pumbility,
+                                baseline_std = excluded.baseline_std,
+                                baseline_min = excluded.baseline_min,
+                                baseline_max = excluded.baseline_max,
+                                baseline_count = excluded.baseline_count,
+                                payload = excluded.payload
+                            """,
+                            values,
+                        )
+                    elif analysis_dataset == "contributions":
+                        values = []
+                        for row in normalized_rows:
+                            player = player_by_hash.get(str(row.get("playerHash") or ""))
+                            chart_id = chart_ids.get(str(row.get("chartId") or ""))
+                            if player is None or chart_id is None:
+                                raise ValueError(
+                                    "A typed chart contribution cannot be resolved."
+                                )
+                            values.append(
+                                (
+                                    analysis_run_id,
+                                    chart_id,
+                                    player[0],
+                                    player[1],
+                                    row["mode"],
+                                    float(row["pumbility"]),
+                                    float(row["baselinePumbility"]),
+                                    float(row["residualPb"]),
+                                    Jsonb(row),
+                                    _nullable_number(row.get("playerRank"), integer=True),
+                                    bool(row.get("selectedByPumbility")),
+                                    bool(row.get("selectedByRecency")),
+                                    bool(row.get("selectedByTop100Fallback")),
+                                    row.get("recordedAt") or None,
+                                )
+                            )
+                        cursor.executemany(
+                            """
+                            insert into pumbility.chart_contributions (
+                                analysis_run_id, chart_id, player_id, player_hash,
+                                mode, pumbility, baseline_pumbility, residual_pb,
+                                payload, rank_index, selected_top, selected_recent,
+                                selected_fallback, recorded_at
+                            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            on conflict (analysis_run_id, chart_id, player_id, mode)
+                            do update set
+                                player_hash = excluded.player_hash,
+                                pumbility = excluded.pumbility,
+                                baseline_pumbility = excluded.baseline_pumbility,
+                                residual_pb = excluded.residual_pb,
+                                payload = excluded.payload,
+                                rank_index = excluded.rank_index,
+                                selected_top = excluded.selected_top,
+                                selected_recent = excluded.selected_recent,
+                                selected_fallback = excluded.selected_fallback,
+                                recorded_at = excluded.recorded_at
+                            """,
+                            values,
+                        )
+                    else:
+                        values = []
+                        for row in normalized_rows:
+                            chart_id = chart_ids.get(str(row.get("chartId") or ""))
+                            if chart_id is None:
+                                raise ValueError("A typed chart result cannot be resolved.")
+                            values.append(
+                                (
+                                    analysis_run_id,
+                                    chart_id,
+                                    row["mode"],
+                                    _nullable_number(row.get("estimatedDifficulty")),
+                                    _nullable_number(row.get("averageDifficulty")),
+                                    _nullable_number(row.get("difficultyDelta")),
+                                    _nullable_number(row.get("difficultyDeltaCi95Low")),
+                                    _nullable_number(row.get("difficultyDeltaCi95High")),
+                                    _nullable_number(row.get("difficultyCi95Low")),
+                                    _nullable_number(row.get("difficultyCi95High")),
+                                    int(row.get("nContributors") or 0),
+                                    int(row.get("nPlayersScored") or 0),
+                                    row.get("evidenceStatus"),
+                                    _nullable_number(row.get("modeRank"), integer=True),
+                                    _nullable_number(row.get("levelRank"), integer=True),
+                                    Jsonb(row),
+                                )
+                            )
+                        cursor.executemany(
+                            """
+                            insert into pumbility.chart_results (
+                                analysis_run_id, chart_id, mode,
+                                estimated_difficulty, average_difficulty,
+                                difficulty_delta, difficulty_delta_ci95_low,
+                                difficulty_delta_ci95_high, difficulty_ci95_low,
+                                difficulty_ci95_high, n_contributors,
+                                n_players_scored, evidence_status, mode_rank,
+                                level_rank, payload
+                            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            on conflict (analysis_run_id, chart_id, mode) do update set
+                                estimated_difficulty = excluded.estimated_difficulty,
+                                average_difficulty = excluded.average_difficulty,
+                                difficulty_delta = excluded.difficulty_delta,
+                                difficulty_delta_ci95_low = excluded.difficulty_delta_ci95_low,
+                                difficulty_delta_ci95_high = excluded.difficulty_delta_ci95_high,
+                                difficulty_ci95_low = excluded.difficulty_ci95_low,
+                                difficulty_ci95_high = excluded.difficulty_ci95_high,
+                                n_contributors = excluded.n_contributors,
+                                n_players_scored = excluded.n_players_scored,
+                                evidence_status = excluded.evidence_status,
+                                mode_rank = excluded.mode_rank,
+                                level_rank = excluded.level_rank,
+                                payload = excluded.payload
+                            """,
+                            values,
+                        )
+            return analysis_run_id, None
+
+        if phase == "analysis-finish":
+            from psycopg.types.json import Jsonb
+
+            if analysis_run_id is None:
+                raise ValueError("Typed analysis validation requires its analysis run.")
+            with _connect(self.database_url) as connection:
+                with connection.transaction(), connection.cursor() as cursor:
+                    _assert_schema(cursor)
+                    cursor.execute(
+                        """
+                        select status, metrics from pumbility.analysis_runs
+                        where id = %s for update
+                        """,
+                        (analysis_run_id,),
+                    )
+                    run_row = cursor.fetchone()
+                    typed_metadata = (
+                        dict(run_row[1]).get("typedPublishing")
+                        if run_row is not None and isinstance(run_row[1], Mapping)
+                        else None
+                    )
+                    if (
+                        run_row is None
+                        or run_row[0] not in {"building", "shadow", "published"}
+                        or not isinstance(typed_metadata, Mapping)
+                        or typed_metadata.get("manifestSha256") != manifest_hash
+                        or dict(typed_metadata.get("expectedRows") or {})
+                        != expected_counts
+                    ):
+                        raise RuntimeError(
+                            "The resumable typed analysis generation failed manifest validation."
+                        )
+                    actual_counts: dict[str, int] = {}
+                    for dataset, table in (
+                        ("baselines", "player_mode_features"),
+                        ("contributions", "chart_contributions"),
+                        ("chartResults", "chart_results"),
+                    ):
+                        cursor.execute(
+                            f"select count(*) from pumbility.{table} where analysis_run_id = %s",
+                            (analysis_run_id,),
+                        )
+                        actual_counts[dataset] = int(cursor.fetchone()[0])
+                    if actual_counts != expected_counts:
+                        raise RuntimeError(
+                            "The resumable typed analysis generation failed row-count validation."
+                        )
+                    cursor.execute(
+                        """
+                        update pumbility.analysis_runs
+                        set status = case when status = 'building' then 'shadow' else status end,
+                            completed_at = coalesce(completed_at, %s::timestamptz),
+                            validated_at = coalesce(validated_at, %s::timestamptz),
+                            metrics = jsonb_set(
+                                metrics,
+                                '{typedPublishing,validatedRows}',
+                                %s,
+                                true
+                            ),
+                            updated_at = now()
+                        where id = %s
+                        """,
+                        (
+                            str(payload["generatedAtUtc"]),
+                            str(payload["generatedAtUtc"]),
+                            Jsonb(actual_counts),
+                            analysis_run_id,
+                        ),
+                    )
+            return analysis_run_id, None
+        if phase in {"all", "analysis"}:
+            with _connect(self.database_url) as connection:
+                with connection.cursor() as cursor:
+                    _assert_schema(cursor)
+                    cursor.execute(
+                        "select id from pumbility.jobs where external_key = %s",
+                        (job_external_key,),
+                    )
+                    job_row = cursor.fetchone()
+                if job_row is None:
+                    raise RuntimeError("The typed runtime job row is unavailable.")
+                database_input = _read_database_input(connection, mix_key)
+                runtime_snapshot = sanitize_snapshot(snapshot, mix=mix_key)
+                # Relational reconstruction intentionally has no capture timestamp.
+                # Compare the immutable entity content while retaining every other
+                # canonical snapshot field in the source identity.
+                runtime_snapshot["generatedAtUtc"] = str(
+                    database_input.snapshot.get("generatedAtUtc") or ""
+                )
+                runtime_source_hash = _sha256(runtime_snapshot)
+                database_source_hash = _sha256(database_input.snapshot)
+                if runtime_source_hash != database_source_hash:
+                    raise RuntimeError(
+                        "The canonical snapshot changed before typed runtime persistence."
+                    )
+                output = AnalysisOutput(
+                    database_input=database_input,
+                    config=config,
+                    started_at=generated_at,
+                    payload=dict(payload),
+                    baselines=[dict(row) for row in baselines],
+                    contributions=[dict(row) for row in contributions],
+                    chart_results=[dict(row) for row in chart_results],
+                    source_hash=database_source_hash,
+                    output_hash=_sha256(payload),
+                )
+                analysis_run_id = _persist_analysis(
+                    connection,
+                    output,
+                    run_key_prefix="runtime-analysis",
+                    job_id=job_row[0],
+                )
+        elif analysis_run_id is None:
+            raise ValueError(
+                "Typed model persistence requires the checkpointed analysis run."
             )
-            analysis_run_id = _persist_analysis(
-                connection,
-                output,
-                run_key_prefix="runtime-analysis",
-                job_id=job_row[0],
-            )
+
         model_generation_id = None
-        if model_artifacts is not None:
+        if phase in {"all", "model"} and model_artifacts is not None:
+            phoenix1_shard_count = (
+                model_artifacts[3]
+                if isinstance(model_artifacts[3], int)
+                else len(model_artifacts[3])
+            )
+            phoenix2_shard_count = (
+                model_artifacts[4]
+                if isinstance(model_artifacts[4], int)
+                else len(model_artifacts[4])
+            )
             with _connect(self.database_url) as connection:
                 inputs = {
                     mix: _read_database_input(connection, mix)
@@ -1041,7 +1601,13 @@ class PumbilityArtifactStore:
                     connection,
                     analysis_run_id=analysis_run_id,
                     inputs=inputs,
-                    artifacts=model_artifacts,
+                    artifacts=(
+                        model_artifacts[0],
+                        model_artifacts[1],
+                        model_artifacts[2],
+                        phoenix1_shard_count,
+                        phoenix2_shard_count,
+                    ),
                 )
         return analysis_run_id, model_generation_id
 
@@ -1339,6 +1905,37 @@ class PumbilityJobStore:
 
     def start_lease_heartbeat(self, job_id: str) -> _ContinuousLeaseHeartbeat:
         return _ContinuousLeaseHeartbeat(lambda: self.heartbeat(job_id)).start()
+
+    def handoff_continuation(
+        self, job_id: str, payload: Mapping[str, Any]
+    ) -> None:
+        """Owner-safely release a running lease for the next queue continuation."""
+        from psycopg.types.json import Jsonb
+
+        queued_payload = {**dict(payload), "status": "queued"}
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute(
+                """
+                update pumbility.jobs
+                set status = 'queued',
+                    lease_owner = null,
+                    lease_expires_at = null,
+                    payload = %s,
+                    updated_at = clock_timestamp()
+                where external_key = %s
+                  and status = 'running'
+                  and lease_owner = %s
+                  and lease_expires_at >= clock_timestamp()
+                  and cancellation_requested_at is null
+                returning id
+                """,
+                (Jsonb(queued_payload), job_id, self.lease_owner),
+            )
+            if cursor.fetchone() is None:
+                raise RuntimeError(
+                    "The Pumbility job continuation lease could not be handed off."
+                )
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         with _read_cursor(self.database_url) as cursor:
@@ -1672,6 +2269,12 @@ class ShadowJobStore:
             lambda: self._mirror("heartbeat", job_id)
         ).start()
 
+    def handoff_continuation(
+        self, job_id: str, payload: Mapping[str, Any]
+    ) -> None:
+        """Release only the Supabase shadow lease; legacy primary stays unchanged."""
+        self._mirror("handoff_continuation", job_id, payload)
+
     def active_job_id(self) -> str | None:
         return self.primary.active_job_id()
 
@@ -1887,6 +2490,13 @@ class CanaryJobStore:
 
     def start_lease_heartbeat(self, job_id: str) -> Any:
         return self.authoritative.start_lease_heartbeat(job_id)
+
+    def handoff_continuation(
+        self, job_id: str, payload: Mapping[str, Any]
+    ) -> None:
+        handoff = getattr(self.authoritative, "handoff_continuation", None)
+        if callable(handoff):
+            handoff(job_id, payload)
 
     def active_job_id(self) -> str | None:
         return self.authoritative.active_job_id()

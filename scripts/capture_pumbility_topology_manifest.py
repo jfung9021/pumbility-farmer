@@ -43,9 +43,12 @@ REQUIRED_ENVIRONMENT_KEYS = frozenset(
     {
         "PUMBILITY_DATABASE_URL",
         "BLOB_READ_WRITE_TOKEN",
-        "QSTASH_TOKEN",
     }
 )
+QUEUE_AUTH_ENVIRONMENT_KEYS = frozenset(
+    {"VERCEL_OIDC_TOKEN", "VERCEL_QUEUE_TOKEN"}
+)
+QUALIFICATION_CANARY_DOMAINS = frozenset({"analysis", "tier-list"})
 SAFE_FLAG_KEYS = frozenset(
     {
         "backend",
@@ -112,8 +115,13 @@ def _safe_flags(value: object) -> dict[str, object]:
     if any(type(value.get(field)) is not bool for field in expected_bool_fields):
         raise ManifestError("Sanitized rollout flags have invalid types.")
     domains = value.get("readCanaryDomains")
-    if not isinstance(domains, list) or domains:
-        raise ManifestError("Read-canary domains must remain empty during qualification.")
+    if not isinstance(domains, list) or any(
+        not isinstance(domain, str) for domain in domains
+    ):
+        raise ManifestError("Read-canary domains exceed the protected qualification scope.")
+    normalized_domains = sorted(domains)
+    if normalized_domains not in ([], sorted(QUALIFICATION_CANARY_DOMAINS)):
+        raise ManifestError("Read-canary domains exceed the protected qualification scope.")
     if value["shadowStrict"]:
         raise ManifestError("Strict shadow mode is not an accepted safe topology state.")
     if value["blobMirrorEnabled"] or value["blobReadFallbackEnabled"]:
@@ -122,7 +130,10 @@ def _safe_flags(value: object) -> dict[str, object]:
         raise ManifestError("Selected-player refresh must remain frozen.")
     if backend == "vercel" and value["canonicalSnapshotWriteEnabled"]:
         raise ManifestError("Canonical writes cannot be enabled in Vercel-only mode.")
-    return {key: value[key] for key in sorted(value)}
+    return {
+        key: normalized_domains if key == "readCanaryDomains" else value[key]
+        for key in sorted(value)
+    }
 
 
 def _validated_metadata(value: Mapping[str, Any]) -> dict[str, object]:
@@ -147,6 +158,8 @@ def _validated_metadata(value: Mapping[str, Any]) -> dict[str, object]:
     environment_keys = _strings(value.get("environmentKeyNames"), "environmentKeyNames")
     if not REQUIRED_ENVIRONMENT_KEYS.issubset(environment_keys):
         raise ManifestError("Required environment key names are missing.")
+    if not QUEUE_AUTH_ENVIRONMENT_KEYS.intersection(environment_keys):
+        raise ManifestError("A supported Vercel Queue credential source is missing.")
     return {
         "label": _label(value.get("label")),
         "region": region,
@@ -176,11 +189,18 @@ def create_manifest(
     *,
     topology_kind: str,
     boundary: Mapping[str, Any],
+    adopted_label: str | None = None,
 ) -> dict[str, object]:
     first_value = _validated_metadata(first)
     second_value = _validated_metadata(second)
     if first_value["label"] == second_value["label"]:
         raise ManifestError("Deployment labels must be different.")
+    normalized_adopted_label = _label(adopted_label or first_value["label"])
+    if normalized_adopted_label not in {
+        first_value["label"],
+        second_value["label"],
+    }:
+        raise ManifestError("The adopted topology label is not one of the deployments.")
     if boundary.get("schemaVersion") != 1:
         raise ManifestError("Unsupported stable-boundary evidence schema.")
     boundary_keys = {
@@ -243,6 +263,7 @@ def create_manifest(
         "status": "passed",
         "topologyKind": topology_kind,
         "controlledDifference": controlled_field,
+        "adoptedLabel": normalized_adopted_label,
         "deployments": [sanitized(first_value), sanitized(second_value)],
         "identities": {
             "gitCommitMatch": True,
@@ -274,6 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--second", type=Path, required=True)
     parser.add_argument("--stable-boundary", type=Path, required=True)
     parser.add_argument("--topology-kind", choices=("region", "connection"), required=True)
+    parser.add_argument("--adopted-label", required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -285,6 +307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _mapping(args.second),
         topology_kind=args.topology_kind,
         boundary=_mapping(args.stable_boundary, allowed_keys=None),
+        adopted_label=args.adopted_label,
     )
     output = _local_output(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

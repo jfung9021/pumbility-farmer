@@ -1,19 +1,62 @@
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 from scripts.backfill_pumbility_production import (
     EXPECTED_PROJECT_REF,
     _assert_database_target,
+    _claim_lock,
     _copy_cached_players,
     _read_stable_boundary,
     validate_production_database_url,
 )
+from scripts.backfill_pumbility_supabase import _reference_path
+from scripts.stage_pumbility_reference_inputs import (
+    PUBLIC_REFERENCE_PATHS,
+    stage_reference_inputs,
+)
 
 
 class ProductionTargetTests(unittest.TestCase):
+    def test_backend_build_stages_public_reference_inputs(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads((root / "vercel.json").read_text(encoding="utf-8"))
+        backend = config["services"]["backend"]
+        self.assertEqual(
+            backend["buildCommand"],
+            "python scripts/stage_pumbility_reference_inputs.py",
+        )
+        self.assertNotIn("includeFiles", backend["functions"]["**/*.py"])
+
+    def test_reference_path_falls_back_to_staged_runtime_copy(self) -> None:
+        root = Path("missing-project-root")
+        self.assertEqual(
+            _reference_path("public/data/phoenix1.json", project_root=root),
+            root / "runtime_reference_data/phoenix1.json",
+        )
+
+    def test_reference_staging_copies_only_public_inputs(self) -> None:
+        with TemporaryDirectory() as source_name, TemporaryDirectory() as target_name:
+            source_root = Path(source_name)
+            target_root = Path(target_name)
+            for index, relative_path in enumerate(PUBLIC_REFERENCE_PATHS, start=1):
+                source = source_root / relative_path
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_bytes(bytes([index]) * index)
+            counts = stage_reference_inputs(
+                source_root=source_root, target_root=target_root
+            )
+            self.assertEqual(counts, {"files": 3, "bytes": 6})
+            self.assertEqual(
+                sorted(path.name for path in target_root.iterdir()),
+                sorted(path.name for path in PUBLIC_REFERENCE_PATHS),
+            )
+
     def test_accepts_only_exact_session_pooler_target(self) -> None:
         validate_production_database_url(
             "postgresql://pumbility_runtime_login.gsiyqhkcgegjrvqcqioc:secret@"
@@ -72,6 +115,12 @@ class ProductionTargetTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "fingerprint"):
             _assert_database_target(cursor)
+
+    def test_operator_statement_timeout_finishes_before_serverless_ceiling(self) -> None:
+        cursor = Mock()
+        cursor.fetchone.return_value = (True,)
+        _claim_lock(cursor)
+        cursor.execute.assert_any_call("set statement_timeout = '12min'")
 
 
 class ProductionBoundaryTests(unittest.TestCase):

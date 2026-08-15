@@ -61,7 +61,7 @@ from piu_recommendations import (
 
 
 PLAYER_ARTIFACT_SHARD_SIZE = 10
-MODEL_ARTIFACT_SCHEMA_VERSION = 3
+MODEL_ARTIFACT_SCHEMA_VERSION = 4
 PLAYER_STATE_SCHEMA_VERSION = 1
 
 
@@ -129,7 +129,7 @@ def _recommendation_method(
         "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
         "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
         "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-        "scoreProjection": "using each player's S+FG-equivalent ranks 11-30 Pumbility rating, take the unweighted median raw score from all other players with a normalized result on the exact chart; search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back to the player-balanced population response surface below five peers",
+        "scoreProjection": "using each player's S+FG-equivalent ranks 11-30 Pumbility rating, take the source-weighted median raw score from all other players with a normalized result on the exact chart, weighting Phoenix 1 observations 1x and Phoenix 2 observations 2x; search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back to the source-weighted, player-balanced population response surface below five peers",
         "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
     }
 
@@ -283,6 +283,18 @@ def build_recommendation_model_artifacts(
                 )
                 for mode in ("singles", "doubles")
             }
+            score_progress = {
+                mode: {
+                    "validScoreCount": (
+                        PROJECTION_RATING_SCORE_THRESHOLD
+                        if int(p1_counts.get(player_id, {}).get(mode, 0))
+                        >= PROJECTION_RATING_SCORE_THRESHOLD
+                        else int(p2_counts.get(player_id, {}).get(mode, 0))
+                    ),
+                    "requiredScoreCount": PROJECTION_RATING_SCORE_THRESHOLD,
+                }
+                for mode in ("singles", "doubles")
+            }
             index_players.append(
                 {
                     "playerKey": player_key,
@@ -290,6 +302,7 @@ def build_recommendation_model_artifacts(
                     "username": username,
                     "displayName": display_name,
                     "eligibility": eligibility,
+                    "scoreProgress": score_progress,
                     "inputShard": shard_number,
                 }
             )

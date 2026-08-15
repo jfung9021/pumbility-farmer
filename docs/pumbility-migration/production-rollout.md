@@ -203,6 +203,14 @@ deployments, uses `vercel curl --deployment` without a bypass token, and keeps t
 request paths, decoded bodies, response digests, and captured command output only in memory or
 short-lived temporary files:
 
+Run deployment, inspection, curl, and log commands only from a worktree whose `.vercel/project.json`
+has been compared in memory with the already trusted project link. Do not allow an interactive CLI
+command to create or relink a project during qualification. In PowerShell, pass every deployment
+environment override as one quoted argument. The two-domain value must therefore be written as
+`--env "PUMBILITY_SUPABASE_READ_CANARY=analysis,tier-list"`; an unquoted comma can split the value
+into separate PowerShell arguments. Inherit credentials from the linked Preview environment rather
+than placing secret values on the command line.
+
 ```powershell
 # Set these through the approved secure operator-shell mechanism; do not echo them.
 if ([string]::IsNullOrWhiteSpace($env:PUMBILITY_FIRST_PREVIEW_DEPLOYMENT)) {
@@ -233,6 +241,18 @@ exact-pair booleans. With the command above, each
 preview must produce exactly 103 expected `candidate-served` events per domain. Reconcile those exact
 counts in server logs before treating the telemetry gate as complete; the runner never marks that
 external gate complete itself.
+
+The owner approved one bounded transport exception on 2026-08-15: an individual request that ends
+before receiving any HTTP response may be retried once immediately against the same deployment,
+domain, and probe phase. The original attempt and retry must both be retained as separate sanitized
+attempt records; neither may expose a deployment reference, origin, request path or query, body,
+digest, credential, or raw error text. A no-response scored attempt does not count toward the sample
+set, so each deployment must still complete exactly 100 successful scored responses per domain in
+addition to the three successful warmups. There is no retry for an HTTP response of any status, an
+application or JSON-contract error, a cache hit, a parity mismatch, a candidate or authority error,
+a fallback, or a missing timing boundary. If the one retry also receives no HTTP response or fails
+any ordinary gate, the comparison fails immediately; the rule must not become a recursive retry or
+an excuse to omit the failed attempt from evidence.
 
 The comparison report applies the original diagnostic target directly to end-to-end latency:
 second-deployment p95 may be at most 10% above the first deployment and p99 at most 20% above it.
@@ -268,8 +288,18 @@ The command fails unless the deployments have the same commit, source and lock i
 memory, timeout, concurrency, database limit, environment key set, safe flags, and connection
 strategy; only `region` may differ. A connection-strategy experiment instead uses
 `--topology-kind connection` and requires the region to match. Safe flags mean Vercel-authoritative
-`vercel` or accepted fail-open `shadow`, an empty read-canary list, cutover-only Blob controls off,
-selected-player refresh frozen, and no canonical writes in Vercel-only mode.
+`vercel` or accepted fail-open `shadow`, cutover-only Blob controls off, selected-player refresh
+frozen, and no canonical writes in Vercel-only mode. The read-canary list must be either empty or,
+only for the protected Phase 5 API comparison, exactly `analysis,tier-list`; Production and rollback
+deployments keep it empty.
+
+For the adopted topology, `connectionStrategy` means the Vercel runtime transaction pooler on port
+6543. Capacity probes, queue durable effects, mutation probes, and injected database failures must
+exercise that same runtime URL. The session pooler on port 5432 remains restricted to the existing
+one-off backfill and reconciliation operations and cannot provide candidate-topology capacity or
+worker evidence. When exporting deployment metadata, read runtime region, runtime, memory, and
+timeout from each applicable function output; the deployment build location is not runtime-region
+evidence.
 
 Run the private-Blob harness *inside an isolated diagnostic task in each deployment topology*. The
 harness requires the platform-provided `VERCEL_REGION` to equal the supplied label, so running it
@@ -302,9 +332,12 @@ silently retained:
   `isolatedDiagnostic=true`. Each topology needs at least one successful isolated execution and zero
   failures for both configured worker components.
 - `cron`: label, source (`platform-scheduler`, `route`, or `manual`), a locally HMAC/SHA-256-derived
-  correlation value, count, and authorization result. A genuine cron requires exactly one independent
-  platform control-plane delivery and one correlated route observation, with zero manual events.
-  A manually authorized HTTP request alone can never pass this gate.
+  correlation value, count, and authorization result. This gate applies only to the adopted IAD1
+  topology because Vercel Cron invokes the current Production deployment and ignores Preview
+  deployments. A genuine cron requires exactly one independent platform control-plane delivery and
+  one correlated route observation, with zero manual events. A manually authorized HTTP request
+  alone can never pass this gate. CLE remains a protected comparison deployment and must never be
+  made current Production during this rollout.
 - `queue`: label, one of the configured `analysis` or `player-recommendations` topics, stage
   (`published`, `consumed`, `durable-effect`, or `error`), a one-way identity value, and attempt.
   Per topology and topic, at least 100 unique published/consumed/effect identities must reconcile,
@@ -313,10 +346,49 @@ silently retained:
   happy-path-only sample cannot claim redelivery safety.
 - `cold-start`: label, component (`api`, `analysis-worker`, or
   `player-recommendations-worker`), duration, success, and `cold=true`. Each component/topology needs
-  30 successful samples and zero errors. The diagnostic target is +10% p95 and +20% maximum.
+  30 successful samples and zero errors. Each record must measure a genuinely new runtime instance's
+  initialization boundary. A module timer started after imports, a first request served by a reused
+  process, or a duration that includes ordinary queue-task work is not a cold-start sample. Vercel
+  instance reuse means request or task concurrency alone cannot establish the sample count. The
+  diagnostic target is +10% p95 and +20% maximum.
 - `capacity`: label, active connections, connection limit, connection/deadline error counts. Each
   topology needs 30 samples, must reach configured worker concurrency, remain at or below 75% of the
   dedicated database connection limit, and have zero connection or deadline errors.
+
+Collect the runtime events with the tracked privacy-safe collector. Use UTC bounds that tightly
+cover the supervised run. The collector reads each deployment reference only from the named process
+environment variables, keeps Vercel log envelopes and immutable platform log IDs in memory, splits
+limit-saturated time windows, deduplicates overlapping boundaries, and writes only exact
+verifier-allowlisted event objects below ignored `.local-data/`. If a minimum time window remains
+saturated, it fails closed instead of emitting incomplete evidence:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\collect_pumbility_topology_events.py `
+  --first-label iad1 `
+  --second-label cle1 `
+  --since "<UTC-start>" `
+  --until "<UTC-end>" `
+  --output .\.local-data\qualification\diagnostic-events.jsonl
+```
+
+The output never contains deployment references, platform log IDs, hosts, URLs, secrets, or raw log
+messages. Preserve the private deployment references only in the operator process and clear them
+after collection.
+
+### Genuine scheduled-cron evidence
+
+Gather genuine scheduler evidence only for the adopted IAD1 topology. After every other hosted gate
+passes, retain the current safe Production deployment reference privately and prepare a
+date-specific UTC expression several minutes in the future. Deploy the IAD1 one-shot as Production,
+require the intended deployment to become current, verify its registered schedule and safe flags,
+and do not use `vercel crons run`. Require exactly one scheduler GET with HTTP 202, one correlated
+IAD1 route event, worker completion, and exact post-run reconciliation.
+
+Immediately restore `0 6 * * *` with a second IAD1 Production deployment. Do not rely on an instant
+rollback to restore cron registration. Verify the second deployment is READY and current, the daily
+schedule is registered, topology diagnostics are disabled, the safe flags are restored, and exact
+reconciliation still passes. A staged `--prod --skip-domain` deployment is useful for inspection but
+does not by itself prove that the scheduler invoked that staged deployment.
 
 The schema-version-1 fault/rollback checklist must cover `supabase-timeout`, `blob-timeout`,
 `queue-redelivery`, `worker-crash`, and `cron-replay`, each with the expected outcome observed, zero

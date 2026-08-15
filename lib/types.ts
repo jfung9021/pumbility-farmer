@@ -34,6 +34,10 @@ export interface ChartResult {
   bpmMin?: number | null;
   bpmMax?: number | null;
   estimatedDifficulty: number | null;
+  whatIfEstimates?: Array<{
+    level: number;
+    estimatedDifficulty: number | null;
+  }>;
   averageDifficulty: number;
   difficultyDelta: number | null;
   folderMeasuredCharts?: number;
@@ -220,11 +224,17 @@ export interface RecommendationModeResult {
   topRecommendations: RecommendationChart[];
 }
 
+export interface RecommendationScoreProgress {
+  validScoreCount: number;
+  requiredScoreCount: number;
+}
+
 export interface RecommendationPlayerSummary {
   playerKey: string;
   username: string;
   displayName: string;
   eligibility: Record<ModeKey, boolean>;
+  scoreProgress?: Partial<Record<ModeKey, RecommendationScoreProgress>>;
 }
 
 export interface RecommendationPlayer {

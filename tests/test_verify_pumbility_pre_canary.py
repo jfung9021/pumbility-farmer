@@ -189,6 +189,36 @@ class PreCanaryGateTests(unittest.TestCase):
             )
         )
 
+        cache_output = "\n".join(
+            (
+                json.dumps({"status": "stage-completed", "stage": "source-boundary"}),
+                json.dumps(
+                    {
+                        "status": "mismatch",
+                        "stage": "player-caches",
+                        "cacheIndex": 1,
+                        "sourceCount": 10,
+                        "targetCount": 11,
+                        "sourceOnlyCount": 0,
+                        "targetOnlyCount": 1,
+                        "privatePath": "PRIVATE/PATH",
+                    }
+                ),
+            )
+        )
+        self.assertEqual(
+            reconciliation_failure_evidence(cache_output)["failureEvent"],
+            {
+                "status": "mismatch",
+                "stage": "player-caches",
+                "cacheIndex": 1,
+                "sourceCount": 10,
+                "targetCount": 11,
+                "sourceOnlyCount": 0,
+                "targetOnlyCount": 1,
+            },
+        )
+
         self.assertEqual(
             reconciliation_failure_evidence(output),
             {

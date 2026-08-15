@@ -619,6 +619,11 @@ def _fit_level_calibration(
 
 def _estimate_shrinkage_k(result: pd.DataFrame) -> tuple[float, dict[str, Any]]:
     """Estimate empirical-Bayes prior strength from mode-wide chart variance."""
+    support_column = (
+        "effectiveContributors"
+        if "effectiveContributors" in result.columns
+        else "nContributors"
+    )
     required = {"folder", "chartResidualPb", "residualStdPb", "nContributors"}
     if not required.issubset(result.columns):
         return DEFAULT_EMPIRICAL_SHRINKAGE_K, {
@@ -626,10 +631,10 @@ def _estimate_shrinkage_k(result: pd.DataFrame) -> tuple[float, dict[str, Any]]:
             "k": DEFAULT_EMPIRICAL_SHRINKAGE_K,
         }
     measured = result[
-        result["chartResidualPb"].notna() & (result["nContributors"] > 0)
+        result["chartResidualPb"].notna() & (result[support_column] > 0)
     ].copy()
     repeated = measured[
-        (measured["nContributors"] > 1) & measured["residualStdPb"].notna()
+        (measured[support_column] > 1) & measured["residualStdPb"].notna()
     ].copy()
     if len(measured) < 10 or len(repeated) < 3:
         return DEFAULT_EMPIRICAL_SHRINKAGE_K, {
@@ -641,14 +646,14 @@ def _estimate_shrinkage_k(result: pd.DataFrame) -> tuple[float, dict[str, Any]]:
     )
     centered = measured["chartResidualPb"] - folder_center
     observed_variance = float(centered.var(ddof=1))
-    degrees = repeated["nContributors"] - 1
+    degrees = repeated[support_column] - 1
     within_variance = float(
         np.average(repeated["residualStdPb"].astype(float) ** 2, weights=degrees)
     )
     mean_noise = float(
         np.mean(
             repeated["residualStdPb"].astype(float) ** 2
-            / repeated["nContributors"].astype(float)
+            / repeated[support_column].astype(float)
         )
     )
     between_variance = max(observed_variance - mean_noise, 1e-6)
@@ -739,7 +744,12 @@ def apply_within_level_difficulty(
         shrinkage_k, _ = _estimate_shrinkage_k(result)
     else:
         shrinkage_k = float(config.shrinkage_k)
-    weight = result["nContributors"] / (result["nContributors"] + shrinkage_k)
+    support = (
+        result["effectiveContributors"]
+        if "effectiveContributors" in result.columns
+        else result["nContributors"]
+    )
+    weight = support / (support + shrinkage_k)
     result["shrinkageK"] = shrinkage_k
     result["reliabilityWeight"] = weight
     result["shrunkEasePb"] = np.where(

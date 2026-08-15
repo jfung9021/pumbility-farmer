@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import gc
+import hashlib
 import json
 import os
 import re
@@ -120,6 +121,39 @@ def typed_checkpoint_path(
     return f"analysis/private/runtime-checkpoints/{spec.slug}/{job_id}.json"
 
 
+def typed_checkpoint_shard_prefix(
+    job_id: str, mix: str | MixSpec = DEFAULT_MIX_KEY
+) -> str:
+    spec = resolve_mix(mix)
+    return f"analysis/private/runtime-checkpoint-shards/{spec.slug}/{job_id}/"
+
+
+def typed_checkpoint_shard_root_prefix(
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
+) -> str:
+    spec = resolve_mix(mix)
+    return f"analysis/private/runtime-checkpoint-shards/{spec.slug}/"
+
+
+def typed_checkpoint_shard_path(
+    job_id: str,
+    dataset: str,
+    shard: int,
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
+) -> str:
+    if dataset not in {"baselines", "contributions", "chartResults"}:
+        raise ValueError("The typed checkpoint dataset is invalid.")
+    if shard < 0:
+        raise ValueError("The typed checkpoint shard number must be nonnegative.")
+    return f"{typed_checkpoint_shard_prefix(job_id, mix)}{dataset}/{shard:06d}.json"
+
+
+def typed_checkpoint_snapshot_path(
+    job_id: str, mix: str | MixSpec = DEFAULT_MIX_KEY
+) -> str:
+    return f"{typed_checkpoint_shard_prefix(job_id, mix)}snapshot.json"
+
+
 # Backward-compatible constants refer to the default Phoenix 2 dataset.
 LATEST_BLOB_PATH = latest_blob_path()
 CURRENT_SNAPSHOT_PATH = current_snapshot_path()
@@ -131,7 +165,17 @@ FRESHNESS = timedelta(0)
 FAILED_RETRY_DELAY = timedelta(minutes=5)
 ACTIVE_JOB_STALE_AFTER = timedelta(minutes=5)
 STAGING_MAX_AGE = timedelta(hours=24)
-TYPED_CHECKPOINT_SCHEMA_VERSION = 1
+TYPED_CHECKPOINT_SCHEMA_VERSION = 4
+TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION = 1
+TYPED_CHECKPOINT_ROW_LIMIT = 5_000
+TYPED_CHECKPOINT_ANALYSIS_PHASE = "analysis"
+TYPED_CHECKPOINT_MODEL_PHASE = "model"
+TYPED_CHECKPOINT_SNAPSHOT_PHASE = "snapshot"
+TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE = "database-analysis-shards"
+TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE = "database-analysis"
+TYPED_CHECKPOINT_DATABASE_MODEL_PHASE = "database-model"
+ANALYSIS_CONTINUATION_FIELD = "_analysisContinuation"
+ANALYSIS_CONTINUATION_SEQUENCE_FIELD = "_analysisContinuationSequence"
 RUN_RETENTION = 10
 RECOMMENDATION_GENERATION_MIN_RETENTION = 2
 RECOMMENDATION_GENERATION_MAX_AGE = timedelta(hours=48)
@@ -848,6 +892,39 @@ def cleanup_abandoned_staging(
     return len(stale)
 
 
+def cleanup_abandoned_typed_checkpoints(
+    blobs: JsonBlobStore,
+    *,
+    now: datetime | None = None,
+    keep_job_id: str | None = None,
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
+) -> int:
+    """Bound deletion of private typed manifests/shards left by old failed jobs."""
+    effective_now = now or utc_now()
+    spec = resolve_mix(mix)
+    keep_shard_prefix = (
+        typed_checkpoint_shard_prefix(keep_job_id, spec) if keep_job_id else None
+    )
+    candidates = [
+        *blobs.list(f"analysis/private/runtime-checkpoints/{spec.slug}/"),
+        *blobs.list(typed_checkpoint_shard_root_prefix(spec)),
+    ]
+    stale = [
+        item.pathname
+        for item in candidates
+        if (keep_shard_prefix is None or not item.pathname.startswith(keep_shard_prefix))
+        and (
+            keep_job_id is None
+            or item.pathname != typed_checkpoint_path(keep_job_id, spec)
+        )
+        and item.uploaded_at is not None
+        and effective_now - item.uploaded_at > STAGING_MAX_AGE
+    ]
+    for offset in range(0, len(stale), BLOB_DELETE_BATCH_SIZE):
+        blobs.delete(stale[offset : offset + BLOB_DELETE_BATCH_SIZE])
+    return len(stale)
+
+
 def _run_path(
     payload: Mapping[str, Any],
     job_id: str,
@@ -1021,6 +1098,290 @@ def _checkpoint_records(value: Any, *, field: str) -> list[dict[str, Any]]:
     return [dict(row) for row in value]
 
 
+def _canonical_json_sha256(value: Any) -> str:
+    body = json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(body).hexdigest()
+
+
+def _write_typed_frame_shards(
+    *,
+    blob_store: JsonBlobStore,
+    job_store: JobStore,
+    job_id: str,
+    mix_spec: MixSpec,
+    frames: Mapping[str, Any],
+    lease_heartbeat: Any | None,
+) -> dict[str, Any]:
+    """Write bounded, deterministic typed rows and return a compact manifest."""
+    from scripts.analyze_pumbility_supabase import _frame_records
+
+    ordered_datasets = ("baselines", "contributions", "chartResults")
+    total_shards = sum(
+        (len(frames[name]) + TYPED_CHECKPOINT_ROW_LIMIT - 1)
+        // TYPED_CHECKPOINT_ROW_LIMIT
+        for name in ordered_datasets
+    )
+    completed_shards = 0
+    datasets: dict[str, Any] = {}
+    for dataset in ordered_datasets:
+        frame = frames[dataset]
+        descriptors: list[dict[str, Any]] = []
+        for shard, offset in enumerate(
+            range(0, len(frame), TYPED_CHECKPOINT_ROW_LIMIT)
+        ):
+            rows = _frame_records(
+                frame.iloc[offset : offset + TYPED_CHECKPOINT_ROW_LIMIT]
+            )
+            digest = _canonical_json_sha256(rows)
+            pathname = typed_checkpoint_shard_path(
+                job_id, dataset, shard, mix_spec
+            )
+            blob_store.put_json(
+                pathname,
+                {
+                    "schemaVersion": TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION,
+                    "jobId": job_id,
+                    "mix": mix_spec.key,
+                    "dataset": dataset,
+                    "shard": shard,
+                    "rowCount": len(rows),
+                    "sha256": digest,
+                    "rows": rows,
+                },
+            )
+            descriptors.append(
+                {
+                    "pathname": pathname,
+                    "shard": shard,
+                    "rowCount": len(rows),
+                    "sha256": digest,
+                }
+            )
+            completed_shards += 1
+            percent = (
+                int((completed_shards / total_shards) * 100)
+                if total_shards
+                else 100
+            )
+            update_job(
+                job_store,
+                job_id,
+                status="running",
+                stage="publishing",
+                progress={
+                    "current": completed_shards,
+                    "total": total_shards,
+                    "percent": percent,
+                    "message": (
+                        f"Checkpointing typed analysis rows "
+                        f"({completed_shards:,}/{total_shards:,} shards)."
+                    ),
+                },
+            )
+            _pulse_job_lease(lease_heartbeat)
+            del rows
+        dataset_manifest = {
+            "rowCount": int(len(frame)),
+            "shardCount": len(descriptors),
+            "shards": descriptors,
+        }
+        dataset_manifest["sha256"] = _canonical_json_sha256(descriptors)
+        datasets[dataset] = dataset_manifest
+    manifest = {
+        "schemaVersion": TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION,
+        "rowLimit": TYPED_CHECKPOINT_ROW_LIMIT,
+        "datasets": datasets,
+    }
+    manifest["sha256"] = _canonical_json_sha256(datasets)
+    return manifest
+
+
+def _typed_manifest(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
+    raw = checkpoint.get("typedShards")
+    if not isinstance(raw, Mapping):
+        raise ValueError("The typed analysis checkpoint has no shard manifest.")
+    manifest = dict(raw)
+    if (
+        int(manifest.get("schemaVersion") or 0)
+        != TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION
+        or int(manifest.get("rowLimit") or 0) != TYPED_CHECKPOINT_ROW_LIMIT
+        or not isinstance(manifest.get("datasets"), Mapping)
+    ):
+        raise ValueError("The typed analysis checkpoint shard manifest is invalid.")
+    datasets = dict(manifest["datasets"])
+    if manifest.get("sha256") != _canonical_json_sha256(datasets):
+        raise ValueError("The typed analysis checkpoint manifest failed validation.")
+    expected_names = {"baselines", "contributions", "chartResults"}
+    if set(datasets) != expected_names:
+        raise ValueError("The typed analysis checkpoint datasets are invalid.")
+    for dataset, raw_dataset in datasets.items():
+        if not isinstance(raw_dataset, Mapping):
+            raise ValueError("The typed analysis checkpoint dataset is invalid.")
+        dataset_manifest = dict(raw_dataset)
+        shards = dataset_manifest.get("shards")
+        if not isinstance(shards, list) or not all(
+            isinstance(item, Mapping) for item in shards
+        ):
+            raise ValueError("The typed analysis checkpoint shard list is invalid.")
+        descriptors = [dict(item) for item in shards]
+        if (
+            int(dataset_manifest.get("rowCount") or 0)
+            != sum(int(item.get("rowCount") or 0) for item in descriptors)
+            or int(dataset_manifest.get("shardCount") or 0) != len(descriptors)
+            or dataset_manifest.get("sha256")
+            != _canonical_json_sha256(descriptors)
+        ):
+            raise ValueError("The typed analysis checkpoint shard counts are invalid.")
+        for expected_shard, descriptor in enumerate(descriptors):
+            expected_path = typed_checkpoint_shard_path(
+                str(checkpoint.get("jobId") or ""),
+                dataset,
+                expected_shard,
+                str(checkpoint.get("mix") or DEFAULT_MIX_KEY),
+            )
+            if (
+                int(descriptor.get("shard") or 0) != expected_shard
+                or descriptor.get("pathname") != expected_path
+                or int(descriptor.get("rowCount") or 0) < 0
+                or int(descriptor.get("rowCount") or 0)
+                > TYPED_CHECKPOINT_ROW_LIMIT
+                or not re.fullmatch(r"[0-9a-f]{64}", str(descriptor.get("sha256") or ""))
+            ):
+                raise ValueError("The typed analysis checkpoint shard descriptor is invalid.")
+        datasets[dataset] = {**dataset_manifest, "shards": descriptors}
+    return {**manifest, "datasets": datasets}
+
+
+def _load_typed_checkpoint_shard(
+    blob_store: JsonBlobStore,
+    *,
+    checkpoint: Mapping[str, Any],
+    dataset: str,
+    descriptor: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    payload = blob_store.get_json(str(descriptor["pathname"]))
+    if payload is None:
+        raise RuntimeError("A typed analysis checkpoint shard is unavailable.")
+    rows = _checkpoint_records(payload.get("rows"), field=f"{dataset} shard")
+    digest = _canonical_json_sha256(rows)
+    if (
+        int(payload.get("schemaVersion") or 0)
+        != TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION
+        or payload.get("jobId") != checkpoint.get("jobId")
+        or payload.get("mix") != checkpoint.get("mix")
+        or payload.get("dataset") != dataset
+        or int(payload.get("shard") or 0) != int(descriptor.get("shard") or 0)
+        or int(payload.get("rowCount") or 0) != len(rows)
+        or int(descriptor.get("rowCount") or 0) != len(rows)
+        or payload.get("sha256") != digest
+        or descriptor.get("sha256") != digest
+    ):
+        raise ValueError("A typed analysis checkpoint shard failed count/hash validation.")
+    return rows
+
+
+def _typed_checkpoint_shard_paths(manifest: Mapping[str, Any]) -> list[str]:
+    return [
+        str(descriptor["pathname"])
+        for dataset in manifest["datasets"].values()
+        for descriptor in dataset["shards"]
+    ]
+
+
+def _write_typed_checkpoint_snapshot(
+    blob_store: JsonBlobStore,
+    *,
+    job_id: str,
+    mix_spec: MixSpec,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = sanitize_snapshot(snapshot, mix=mix_spec)
+    digest = _canonical_json_sha256(value)
+    pathname = typed_checkpoint_snapshot_path(job_id, mix_spec)
+    blob_store.put_json(
+        pathname,
+        {
+            "schemaVersion": TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION,
+            "jobId": job_id,
+            "mix": mix_spec.key,
+            "sha256": digest,
+            "snapshot": value,
+        },
+    )
+    return {"pathname": pathname, "sha256": digest}
+
+
+def _load_typed_checkpoint_snapshot(
+    blob_store: JsonBlobStore,
+    *,
+    checkpoint: Mapping[str, Any],
+    reference: Mapping[str, Any],
+    mix_spec: MixSpec,
+) -> dict[str, Any]:
+    expected_path = typed_checkpoint_snapshot_path(
+        str(checkpoint.get("jobId") or ""), mix_spec
+    )
+    if reference.get("pathname") != expected_path:
+        raise ValueError("The typed analysis checkpoint snapshot reference is invalid.")
+    payload = blob_store.get_json(expected_path)
+    raw_snapshot = payload.get("snapshot") if isinstance(payload, Mapping) else None
+    if not isinstance(raw_snapshot, Mapping):
+        raise RuntimeError("The typed analysis checkpoint snapshot is unavailable.")
+    snapshot = sanitize_snapshot(raw_snapshot, mix=mix_spec)
+    digest = _canonical_json_sha256(snapshot)
+    if (
+        int(payload.get("schemaVersion") or 0)
+        != TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION
+        or payload.get("jobId") != checkpoint.get("jobId")
+        or payload.get("mix") != mix_spec.key
+        or payload.get("sha256") != digest
+        or reference.get("sha256") != digest
+    ):
+        raise ValueError("The typed analysis checkpoint snapshot failed validation.")
+    return snapshot
+
+
+def _database_cursor_token(checkpoint: Mapping[str, Any]) -> str:
+    cursor = checkpoint.get("databaseCursor")
+    if isinstance(cursor, Mapping):
+        return "{phase}:{dataset}:{shard}".format(
+            phase=str(checkpoint.get("phase") or ""),
+            dataset=int(cursor.get("dataset") or 0),
+            shard=int(cursor.get("shard") or 0),
+        )
+    return str(checkpoint.get("phase") or "")
+
+
+def _audit_checkpoint_resume(
+    blob_store: JsonBlobStore,
+    checkpoint_path: str,
+    checkpoint: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Fail a repeatedly resumed checkpoint that never advances its durable token."""
+    value = dict(checkpoint)
+    token = _database_cursor_token(value)
+    raw_audit = value.get("resumeAudit")
+    audit = dict(raw_audit) if isinstance(raw_audit, Mapping) else {}
+    observations = (
+        int(audit.get("observations") or 0) + 1
+        if audit.get("token") == token
+        else 1
+    )
+    if observations >= 3:
+        raise ValueError(
+            "The typed analysis checkpoint made no progress after three resumptions."
+        )
+    value["resumeAudit"] = {"token": token, "observations": observations}
+    blob_store.put_json(checkpoint_path, value)
+    return value
+
+
 def _load_checkpoint_model_artifacts(
     blobs: JsonBlobStore, metadata: Mapping[str, Any] | None
 ) -> tuple[
@@ -1029,8 +1390,8 @@ def _load_checkpoint_model_artifacts(
         dict[str, Any],
         dict[str, Any],
         bytes,
-        list[dict[str, Any]],
-        list[dict[str, Any]],
+        int,
+        int,
     ]
     | None,
 ]:
@@ -1044,29 +1405,179 @@ def _load_checkpoint_model_artifacts(
     index = blobs.get_json(recommendation_index_path(generation))
     model = blobs.get_json(recommendation_model_path(generation))
     score_model = blobs.get_bytes(recommendation_score_model_path(generation))
-    phoenix1_shards = [
-        blobs.get_json(recommendation_phoenix1_shard_path(generation, shard))
-        for shard in range(phoenix1_count)
-    ]
-    phoenix2_shards = [
-        blobs.get_json(recommendation_phoenix2_shard_path(generation, shard))
-        for shard in range(phoenix2_count)
-    ]
     if (
         index is None
         or model is None
         or score_model is None
-        or any(value is None for value in phoenix1_shards)
-        or any(value is None for value in phoenix2_shards)
     ):
         raise RuntimeError("A typed analysis checkpoint model artifact is unavailable.")
+    phoenix1_hashes: list[str] = []
+    for shard in range(phoenix1_count):
+        value = blobs.get_json(recommendation_phoenix1_shard_path(generation, shard))
+        if value is None:
+            raise RuntimeError(
+                "A typed analysis checkpoint Phoenix 1 input shard is unavailable."
+            )
+        phoenix1_hashes.append(_canonical_json_sha256(value))
+        del value
+    phoenix2_hashes: list[str] = []
+    for shard in range(phoenix2_count):
+        value = blobs.get_json(recommendation_phoenix2_shard_path(generation, shard))
+        if value is None:
+            raise RuntimeError(
+                "A typed analysis checkpoint Phoenix 2 input shard is unavailable."
+            )
+        phoenix2_hashes.append(_canonical_json_sha256(value))
+        del value
+    if (
+        metadata.get("indexSha256") != _canonical_json_sha256(index)
+        or metadata.get("modelSha256") != _canonical_json_sha256(model)
+        or metadata.get("scoreModelSha256")
+        != hashlib.sha256(score_model).hexdigest()
+        or metadata.get("phoenix1ShardsSha256")
+        != _canonical_json_sha256(phoenix1_hashes)
+        or metadata.get("phoenix2ShardsSha256")
+        != _canonical_json_sha256(phoenix2_hashes)
+    ):
+        raise ValueError("A typed analysis checkpoint model artifact failed validation.")
     return dict(index), (
         dict(index),
         dict(model),
         score_model,
-        [dict(value) for value in phoenix1_shards if value is not None],
-        [dict(value) for value in phoenix2_shards if value is not None],
+        phoenix1_count,
+        phoenix2_count,
     )
+
+
+def _build_analysis_model_artifacts(
+    *,
+    blob_store: JsonBlobStore,
+    job_store: JobStore,
+    job_id: str,
+    snapshot: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    eligible_player_count: int,
+    lease_heartbeat: Any | None,
+) -> tuple[
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    tuple[
+        dict[str, Any],
+        dict[str, Any],
+        bytes,
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]
+    | None,
+]:
+    recommendation_payload: dict[str, Any] | None = None
+    combined_tier_payload: dict[str, Any] | None = None
+    recommendation_model_artifacts: tuple[
+        dict[str, Any],
+        dict[str, Any],
+        bytes,
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ] | None = None
+    frozen_phoenix1 = blob_store.get_json(phoenix1_snapshot_path())
+    if frozen_phoenix1 is None:
+        return (
+            combined_tier_payload,
+            recommendation_payload,
+            recommendation_model_artifacts,
+        )
+
+    update_job(
+        job_store,
+        job_id,
+        status="running",
+        stage="analyzing",
+        progress={
+            "current": eligible_player_count,
+            "total": eligible_player_count,
+            "percent": 100,
+            "message": "Combining Phoenix 1 and Phoenix 2 recommendation evidence.",
+        },
+    )
+    phoenix1_snapshot = sanitize_snapshot(frozen_phoenix1, mix="phoenix1")
+    combined_charts, combined_slopes, combined_metadata = (
+        build_combined_chart_results(phoenix1_snapshot, snapshot)
+    )
+    combined_tier_payload = build_combined_tier_payload(
+        combined_charts,
+        combined_metadata,
+        generated_at_utc=payload.get("generatedAtUtc"),
+    )
+    recommendation_generation = recommendation_generation_key(job_id)
+    (
+        recommendation_payload,
+        recommendation_model,
+        recommendation_score_model,
+        recommendation_phoenix1_shards,
+        recommendation_phoenix2_shards,
+    ) = build_recommendation_model_artifacts(
+        phoenix1_snapshot,
+        snapshot,
+        generated_at_utc=payload.get("generatedAtUtc"),
+        combined_charts=combined_charts,
+        phoenix2_slopes=combined_slopes,
+        generation_key=recommendation_generation,
+    )
+    recommendation_model_artifacts = (
+        recommendation_payload,
+        recommendation_model,
+        recommendation_score_model,
+        recommendation_phoenix1_shards,
+        recommendation_phoenix2_shards,
+    )
+    publish_recommendation_model_artifacts(
+        blob_store,
+        index=recommendation_payload,
+        model=recommendation_model,
+        score_model_bytes=recommendation_score_model,
+        phoenix1_shards=recommendation_phoenix1_shards,
+        phoenix2_shards=recommendation_phoenix2_shards,
+        index_path=recommendation_blob_path(),
+        publish_index=False,
+    )
+    _pulse_job_lease(lease_heartbeat)
+    return (
+        combined_tier_payload,
+        recommendation_payload,
+        recommendation_model_artifacts,
+    )
+
+
+def _checkpoint_continuation(
+    *,
+    job_store: JobStore,
+    job_id: str,
+    continuation: str,
+    stage: str,
+    message: str,
+    lease_heartbeat: Any | None,
+    sequence: str | None = None,
+) -> dict[str, Any]:
+    current = update_job(
+        job_store,
+        job_id,
+        status="running",
+        stage=stage,
+        progress={
+            "current": 1,
+            "total": 1,
+            "percent": 100,
+            "message": message,
+        },
+    )
+    _stop_job_lease(lease_heartbeat)
+    handoff = getattr(job_store, "handoff_continuation", None)
+    if callable(handoff):
+        handoff(job_id, current)
+    result = {**current, ANALYSIS_CONTINUATION_FIELD: continuation}
+    if sequence is not None:
+        result[ANALYSIS_CONTINUATION_SEQUENCE_FIELD] = sequence
+    return result
 
 
 def _resume_typed_analysis_checkpoint(
@@ -1079,6 +1590,7 @@ def _resume_typed_analysis_checkpoint(
     staging_path: str,
     checkpoint_path: str,
     lease_heartbeat: Any | None,
+    yield_after_checkpoint: bool = False,
 ) -> dict[str, Any]:
     from piu_misgrade_analyzer import AnalysisConfig
 
@@ -1088,63 +1600,344 @@ def _resume_typed_analysis_checkpoint(
         or resolve_mix(checkpoint.get("mix")).key != mix_spec.key
     ):
         raise ValueError("The typed analysis checkpoint identity is invalid.")
-    raw_snapshot = checkpoint.get("snapshot")
+    raw_snapshot_reference = checkpoint.get("snapshot")
     raw_config = checkpoint.get("config")
     raw_payload = checkpoint.get("payload")
     raw_combined_tier = checkpoint.get("combinedTier")
     raw_model = checkpoint.get("model")
+    checkpoint_phase = str(checkpoint.get("phase") or "")
+    eligible_player_count = checkpoint.get("eligiblePlayerCount")
+    checkpoint_phases = {
+        TYPED_CHECKPOINT_ANALYSIS_PHASE,
+        TYPED_CHECKPOINT_MODEL_PHASE,
+        TYPED_CHECKPOINT_SNAPSHOT_PHASE,
+        TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE,
+        TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+        TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+    }
     if (
-        not isinstance(raw_snapshot, Mapping)
+        not isinstance(raw_snapshot_reference, Mapping)
         or not isinstance(raw_config, Mapping)
         or not isinstance(raw_payload, Mapping)
+        or checkpoint_phase not in checkpoint_phases
+        or not isinstance(eligible_player_count, int)
+        or eligible_player_count < 0
         or (raw_combined_tier is not None and not isinstance(raw_combined_tier, Mapping))
         or (raw_model is not None and not isinstance(raw_model, Mapping))
     ):
         raise ValueError("The typed analysis checkpoint payload is invalid.")
-    snapshot = sanitize_snapshot(raw_snapshot, mix=mix_spec)
+    snapshot = _load_typed_checkpoint_snapshot(
+        blob_store,
+        checkpoint=checkpoint,
+        reference=raw_snapshot_reference,
+        mix_spec=mix_spec,
+    )
     config = AnalysisConfig(**dict(raw_config))
     if resolve_mix(config.mix).key != mix_spec.key:
         raise ValueError("The typed analysis checkpoint configuration is invalid.")
     payload = dict(raw_payload)
     if parse_utc(payload.get("generatedAtUtc")) is None:
         raise ValueError("The typed analysis checkpoint timestamp is invalid.")
-    recommendation_payload, model_artifacts = _load_checkpoint_model_artifacts(
-        blob_store, dict(raw_model) if raw_model is not None else None
+    manifest = _typed_manifest(checkpoint)
+    checkpoint = _audit_checkpoint_resume(
+        blob_store, checkpoint_path, checkpoint
     )
+
+    if checkpoint_phase == TYPED_CHECKPOINT_ANALYSIS_PHASE:
+        (
+            combined_tier_payload,
+            recommendation_payload,
+            model_artifacts,
+        ) = _build_analysis_model_artifacts(
+            blob_store=blob_store,
+            job_store=job_store,
+            job_id=job_id,
+            snapshot=snapshot,
+            payload=payload,
+            eligible_player_count=eligible_player_count,
+            lease_heartbeat=lease_heartbeat,
+        )
+        model_checkpoint = None
+        if model_artifacts is not None:
+            model_checkpoint = {
+                "generationKey": model_artifacts[0].get("generationKey"),
+                "phoenix1ShardCount": len(model_artifacts[3]),
+                "phoenix2ShardCount": len(model_artifacts[4]),
+                "indexSha256": _canonical_json_sha256(model_artifacts[0]),
+                "modelSha256": _canonical_json_sha256(model_artifacts[1]),
+                "scoreModelSha256": hashlib.sha256(model_artifacts[2]).hexdigest(),
+                "phoenix1ShardsSha256": _canonical_json_sha256(
+                    [_canonical_json_sha256(value) for value in model_artifacts[3]]
+                ),
+                "phoenix2ShardsSha256": _canonical_json_sha256(
+                    [_canonical_json_sha256(value) for value in model_artifacts[4]]
+                ),
+            }
+        checkpoint = {
+            **checkpoint,
+            "phase": TYPED_CHECKPOINT_MODEL_PHASE,
+            "combinedTier": combined_tier_payload,
+            "model": model_checkpoint,
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_MODEL_PHASE
+        raw_combined_tier = combined_tier_payload
+        raw_model = model_checkpoint
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="snapshot",
+                stage="publishing",
+                message="Recommendation model checkpointed; queued for snapshot persistence.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
+    if checkpoint_phase == TYPED_CHECKPOINT_MODEL_PHASE:
+        update_job(
+            job_store,
+            job_id,
+            status="running",
+            stage="publishing",
+            progress={
+                "current": 1,
+                "total": 1,
+                "percent": 100,
+                "message": "Persisting the canonical private snapshot.",
+            },
+        )
+        if not bool(checkpoint.get("reanalyzeOnly")):
+            blob_store.put_json(current_snapshot_path(mix_spec), snapshot)
+        checkpoint = {
+            **checkpoint,
+            "phase": TYPED_CHECKPOINT_SNAPSHOT_PHASE,
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_SNAPSHOT_PHASE
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="database-analysis",
+                stage="publishing",
+                message="Canonical snapshot checkpointed; queued for typed analysis persistence.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
     typed_publisher = getattr(blob_store, "persist_typed_generation", None)
     if not callable(typed_publisher):
         raise RuntimeError("Typed Pumbility persistence is not available.")
-    update_job(
-        job_store,
-        job_id,
-        status="running",
-        stage="publishing",
-        progress={
-            "current": 1,
-            "total": 1,
-            "percent": 100,
-            "message": "Resuming typed persistence from the private checkpoint.",
-        },
+    typed_kwargs = {
+        "job_external_key": job_id,
+        "mix_key": mix_spec.key,
+        "snapshot": snapshot,
+        "config": config,
+        "payload": payload,
+        "analysis_manifest": manifest,
+    }
+
+    if checkpoint_phase == TYPED_CHECKPOINT_SNAPSHOT_PHASE:
+        update_job(
+            job_store,
+            job_id,
+            status="running",
+            stage="publishing",
+            progress={
+                "current": 1,
+                "total": 1,
+                "percent": 100,
+                "message": "Preparing resumable typed analysis output.",
+            },
+        )
+        analysis_run_id, _ = typed_publisher(
+            **typed_kwargs,
+            model_artifacts=None,
+            phase="analysis-start",
+        )
+        if analysis_run_id is None:
+            raise RuntimeError("Typed analysis persistence returned no generation identity.")
+        checkpoint = {
+            **checkpoint,
+            "phase": TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE,
+            "analysisRunId": str(analysis_run_id),
+            "databaseCursor": {"dataset": 0, "shard": 0},
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="database-analysis",
+                stage="publishing",
+                message="Typed analysis generation prepared; queued for bounded row persistence.",
+                lease_heartbeat=lease_heartbeat,
+                sequence="start",
+            )
+
+    analysis_run_id = checkpoint.get("analysisRunId")
+    if checkpoint_phase in {
+        TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE,
+        TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+        TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+    } and (not isinstance(analysis_run_id, str) or not analysis_run_id.strip()):
+        raise ValueError("The typed analysis checkpoint has no analysis generation identity.")
+
+    if checkpoint_phase == TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE:
+        ordered_datasets = ("baselines", "contributions", "chartResults")
+        raw_cursor = checkpoint.get("databaseCursor")
+        if not isinstance(raw_cursor, Mapping):
+            raise ValueError("The typed analysis checkpoint has no database cursor.")
+        dataset_index = int(raw_cursor.get("dataset") or 0)
+        shard_index = int(raw_cursor.get("shard") or 0)
+        if dataset_index < 0 or shard_index < 0 or dataset_index > len(ordered_datasets):
+            raise ValueError("The typed analysis checkpoint database cursor is invalid.")
+        total_shards = sum(
+            int(manifest["datasets"][name]["shardCount"])
+            for name in ordered_datasets
+        )
+        while dataset_index < len(ordered_datasets):
+            dataset = ordered_datasets[dataset_index]
+            descriptors = manifest["datasets"][dataset]["shards"]
+            if shard_index >= len(descriptors):
+                dataset_index += 1
+                shard_index = 0
+                continue
+            descriptor = descriptors[shard_index]
+            rows = _load_typed_checkpoint_shard(
+                blob_store,
+                checkpoint=checkpoint,
+                dataset=dataset,
+                descriptor=descriptor,
+            )
+            completed_before = sum(
+                int(manifest["datasets"][name]["shardCount"])
+                for name in ordered_datasets[:dataset_index]
+            ) + shard_index
+            update_job(
+                job_store,
+                job_id,
+                status="running",
+                stage="publishing",
+                progress={
+                    "current": completed_before,
+                    "total": total_shards,
+                    "percent": (
+                        int((completed_before / total_shards) * 100)
+                        if total_shards
+                        else 100
+                    ),
+                    "message": (
+                        f"Persisting typed analysis shard "
+                        f"{completed_before + 1:,}/{total_shards:,}."
+                    ),
+                },
+            )
+            typed_publisher(
+                **typed_kwargs,
+                model_artifacts=None,
+                phase="analysis-chunk",
+                analysis_run_id=analysis_run_id,
+                analysis_dataset=dataset,
+                analysis_rows=rows,
+                analysis_chunk_sha256=str(descriptor["sha256"]),
+            )
+            del rows
+            shard_index += 1
+            checkpoint = {
+                **checkpoint,
+                "databaseCursor": {
+                    "dataset": dataset_index,
+                    "shard": shard_index,
+                },
+            }
+            blob_store.put_json(checkpoint_path, checkpoint)
+            _pulse_job_lease(lease_heartbeat)
+            if yield_after_checkpoint:
+                return _checkpoint_continuation(
+                    job_store=job_store,
+                    job_id=job_id,
+                    continuation="database-analysis",
+                    stage="publishing",
+                    message=(
+                        f"Typed analysis shard {completed_before + 1:,}/"
+                        f"{total_shards:,} persisted; continuation queued."
+                    ),
+                    lease_heartbeat=lease_heartbeat,
+                    sequence=f"{completed_before + 1:06d}",
+                )
+        typed_publisher(
+            **typed_kwargs,
+            model_artifacts=None,
+            phase="analysis-finish",
+            analysis_run_id=analysis_run_id,
+        )
+        checkpoint = {
+            **checkpoint,
+            "phase": TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+            "databaseCursor": {
+                "dataset": len(ordered_datasets),
+                "shard": 0,
+            },
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="database-model",
+                stage="publishing",
+                message="Typed analysis validated; queued for model persistence.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
+    recommendation_payload, model_artifacts = _load_checkpoint_model_artifacts(
+        blob_store, dict(raw_model) if raw_model is not None else None
     )
-    if not bool(checkpoint.get("reanalyzeOnly")):
-        blob_store.put_json(current_snapshot_path(mix_spec), snapshot)
-    _pulse_job_lease(lease_heartbeat)
-    typed_publisher(
-        job_external_key=job_id,
-        mix_key=mix_spec.key,
-        snapshot=snapshot,
-        config=config,
-        payload=payload,
-        baselines=_checkpoint_records(checkpoint.get("baselines"), field="baselines"),
-        contributions=_checkpoint_records(
-            checkpoint.get("contributions"), field="contributions"
-        ),
-        chart_results=_checkpoint_records(
-            checkpoint.get("chartResults"), field="chartResults"
-        ),
-        model_artifacts=model_artifacts,
-    )
-    _pulse_job_lease(lease_heartbeat)
+    if checkpoint_phase == TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE:
+        update_job(
+            job_store,
+            job_id,
+            status="running",
+            stage="publishing",
+            progress={
+                "current": 1,
+                "total": 1,
+                "percent": 100,
+                "message": "Persisting the typed recommendation model.",
+            },
+        )
+        _, model_generation_id = typed_publisher(
+            **typed_kwargs,
+            model_artifacts=model_artifacts,
+            phase="model",
+            analysis_run_id=analysis_run_id,
+        )
+        checkpoint = {
+            **checkpoint,
+            "phase": TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+            "modelGenerationId": (
+                str(model_generation_id) if model_generation_id is not None else None
+            ),
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_DATABASE_MODEL_PHASE
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="publish",
+                stage="publishing",
+                message="Typed model checkpointed; queued for atomic pointer publication.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
     publish_success(
         blob_store,
         job_id=job_id,
@@ -1157,7 +1950,14 @@ def _resume_typed_analysis_checkpoint(
         publish_snapshot=False,
         mix=mix_spec,
     )
-    blob_store.delete([staging_path, checkpoint_path])
+    blob_store.delete(
+        [
+            staging_path,
+            checkpoint_path,
+            typed_checkpoint_snapshot_path(job_id, mix_spec),
+            *_typed_checkpoint_shard_paths(manifest),
+        ]
+    )
     _pulse_job_lease(lease_heartbeat)
     _stop_job_lease(lease_heartbeat)
     completed = update_job(
@@ -1230,6 +2030,7 @@ def execute_analysis_job(
     jobs: JobStore | None = None,
     client: Any | None = None,
     now: Callable[[], datetime] = utc_now,
+    yield_after_typed_checkpoint: bool = False,
 ) -> dict[str, Any]:
     """Run one idempotent, checkpointed refresh in a queue worker."""
     from piu_misgrade_analyzer import AnalysisConfig, ApiError
@@ -1302,6 +2103,9 @@ def execute_analysis_job(
         cleanup_abandoned_staging(
             blob_store, now=now(), keep_path=staging_path, mix=mix_spec
         )
+        cleanup_abandoned_typed_checkpoints(
+            blob_store, now=now(), keep_job_id=job_id, mix=mix_spec
+        )
         if typed_persistence_enabled:
             typed_checkpoint = blob_store.get_json(checkpoint_path)
             if typed_checkpoint is not None:
@@ -1314,6 +2118,7 @@ def execute_analysis_job(
                     staging_path=staging_path,
                     checkpoint_path=checkpoint_path,
                     lease_heartbeat=lease_heartbeat,
+                    yield_after_checkpoint=yield_after_typed_checkpoint,
                 )
         current = blob_store.get_json(current_snapshot_path(mix_spec))
         reanalyze_only = bool(existing.get("reanalyzeOnly"))
@@ -1426,112 +2231,81 @@ def execute_analysis_job(
         _pulse_job_lease(lease_heartbeat)
         payload = build_web_payload(chart_results, summary)
         if typed_persistence_enabled:
-            from scripts.analyze_pumbility_supabase import _frame_records
-
-            typed_baselines = _frame_records(baseline_frame)
-            typed_contributions = _frame_records(contribution_frame)
-            typed_chart_results = _frame_records(chart_results)
+            typed_shards = _write_typed_frame_shards(
+                blob_store=blob_store,
+                job_store=job_store,
+                job_id=job_id,
+                mix_spec=mix_spec,
+                frames={
+                    "baselines": baseline_frame,
+                    "contributions": contribution_frame,
+                    "chartResults": chart_results,
+                },
+                lease_heartbeat=lease_heartbeat,
+            )
+            typed_snapshot = _write_typed_checkpoint_snapshot(
+                blob_store,
+                job_id=job_id,
+                mix_spec=mix_spec,
+                snapshot=snapshot,
+            )
+            _pulse_job_lease(lease_heartbeat)
         else:
-            typed_baselines = []
-            typed_contributions = []
-            typed_chart_results = []
+            typed_shards = None
+            typed_snapshot = None
         del chart_results, baseline_frame, contribution_frame, players, charts, scores
         gc.collect()
-        recommendation_payload: dict[str, Any] | None = None
-        combined_tier_payload: dict[str, Any] | None = None
-        recommendation_model_artifacts: tuple[
-            dict[str, Any],
-            dict[str, Any],
-            bytes,
-            list[dict[str, Any]],
-            list[dict[str, Any]],
-        ] | None = None
-        frozen_phoenix1 = blob_store.get_json(phoenix1_snapshot_path())
-        if frozen_phoenix1 is not None:
-            update_job(
-                job_store,
-                job_id,
-                status="running",
-                stage="analyzing",
-                progress={
-                    "current": eligible_player_count,
-                    "total": eligible_player_count,
-                    "percent": 100,
-                    "message": "Combining Phoenix 1 and Phoenix 2 recommendation evidence.",
-                },
-            )
-            phoenix1_snapshot = sanitize_snapshot(frozen_phoenix1, mix="phoenix1")
-            del frozen_phoenix1
-            combined_charts, combined_slopes, combined_metadata = (
-                build_combined_chart_results(phoenix1_snapshot, snapshot)
-            )
-            combined_tier_payload = build_combined_tier_payload(
-                combined_charts,
-                combined_metadata,
-                generated_at_utc=payload.get("generatedAtUtc"),
-            )
-            recommendation_generation = recommendation_generation_key(job_id)
-            (
-                recommendation_payload,
-                recommendation_model,
-                recommendation_score_model,
-                recommendation_phoenix1_shards,
-                recommendation_phoenix2_shards,
-            ) = build_recommendation_model_artifacts(
-                phoenix1_snapshot,
-                snapshot,
-                generated_at_utc=payload.get("generatedAtUtc"),
-                combined_charts=combined_charts,
-                phoenix2_slopes=combined_slopes,
-                generation_key=recommendation_generation,
-            )
-            recommendation_model_artifacts = (
-                recommendation_payload,
-                recommendation_model,
-                recommendation_score_model,
-                recommendation_phoenix1_shards,
-                recommendation_phoenix2_shards,
-            )
-            publish_recommendation_model_artifacts(
-                blob_store,
-                index=recommendation_payload,
-                model=recommendation_model,
-                score_model_bytes=recommendation_score_model,
-                phoenix1_shards=recommendation_phoenix1_shards,
-                phoenix2_shards=recommendation_phoenix2_shards,
-                index_path=recommendation_blob_path(),
-                publish_index=False,
-            )
-            _pulse_job_lease(lease_heartbeat)
-
         if typed_persistence_enabled:
-            model_checkpoint = None
-            if recommendation_model_artifacts is not None:
-                recommendation_index = recommendation_model_artifacts[0]
-                model_checkpoint = {
-                    "generationKey": recommendation_index.get("generationKey"),
-                    "phoenix1ShardCount": len(recommendation_model_artifacts[3]),
-                    "phoenix2ShardCount": len(recommendation_model_artifacts[4]),
-                }
-            blob_store.put_json(
-                checkpoint_path,
-                {
-                    "schemaVersion": TYPED_CHECKPOINT_SCHEMA_VERSION,
-                    "jobId": job_id,
-                    "mix": mix_spec.key,
-                    "createdAtUtc": isoformat_utc(now()),
-                    "reanalyzeOnly": reanalyze_only,
-                    "snapshot": sanitize_snapshot(snapshot, mix=mix_spec),
-                    "config": asdict(config),
-                    "payload": payload,
-                    "baselines": typed_baselines,
-                    "contributions": typed_contributions,
-                    "chartResults": typed_chart_results,
-                    "combinedTier": combined_tier_payload,
-                    "model": model_checkpoint,
-                },
-            )
+            checkpoint = {
+                "schemaVersion": TYPED_CHECKPOINT_SCHEMA_VERSION,
+                "phase": TYPED_CHECKPOINT_ANALYSIS_PHASE,
+                "jobId": job_id,
+                "mix": mix_spec.key,
+                "createdAtUtc": isoformat_utc(now()),
+                "reanalyzeOnly": reanalyze_only,
+                "eligiblePlayerCount": eligible_player_count,
+                "snapshot": typed_snapshot,
+                "config": asdict(config),
+                "payload": payload,
+                "typedShards": typed_shards,
+                "combinedTier": None,
+                "model": None,
+            }
+            blob_store.put_json(checkpoint_path, checkpoint)
             _pulse_job_lease(lease_heartbeat)
+            if yield_after_typed_checkpoint:
+                return _checkpoint_continuation(
+                    job_store=job_store,
+                    job_id=job_id,
+                    continuation="model",
+                    stage="analyzing",
+                    message="Base analysis checkpointed; queued for recommendation modeling.",
+                    lease_heartbeat=lease_heartbeat,
+                )
+            return _resume_typed_analysis_checkpoint(
+                checkpoint,
+                blob_store=blob_store,
+                job_store=job_store,
+                job_id=job_id,
+                mix_spec=mix_spec,
+                staging_path=staging_path,
+                checkpoint_path=checkpoint_path,
+                lease_heartbeat=lease_heartbeat,
+            )
+
+        (
+            combined_tier_payload,
+            recommendation_payload,
+            recommendation_model_artifacts,
+        ) = _build_analysis_model_artifacts(
+            blob_store=blob_store,
+            job_store=job_store,
+            job_id=job_id,
+            snapshot=snapshot,
+            payload=payload,
+            eligible_player_count=eligible_player_count,
+            lease_heartbeat=lease_heartbeat,
+        )
 
         update_job(
             job_store,
@@ -1547,28 +2321,6 @@ def execute_analysis_job(
         )
         _pulse_job_lease(lease_heartbeat)
         publish_snapshot = not reanalyze_only
-        if typed_persistence_enabled:
-            typed_publisher = getattr(blob_store, "persist_typed_generation", None)
-            if not callable(typed_publisher):
-                raise RuntimeError("Typed Pumbility persistence is not available.")
-            if publish_snapshot:
-                blob_store.put_json(
-                    current_snapshot_path(mix_spec),
-                    sanitize_snapshot(snapshot, mix=mix_spec),
-                )
-            _pulse_job_lease(lease_heartbeat)
-            typed_publisher(
-                job_external_key=job_id,
-                mix_key=mix_spec.key,
-                snapshot=snapshot,
-                config=config,
-                payload=payload,
-                baselines=typed_baselines,
-                contributions=typed_contributions,
-                chart_results=typed_chart_results,
-                model_artifacts=recommendation_model_artifacts,
-            )
-            _pulse_job_lease(lease_heartbeat)
         publish_success(
             blob_store,
             job_id=job_id,
@@ -1576,7 +2328,7 @@ def execute_analysis_job(
             payload=payload,
             recommendations=recommendation_payload,
             combined_tier=combined_tier_payload,
-            publish_snapshot=publish_snapshot and not typed_persistence_enabled,
+            publish_snapshot=publish_snapshot,
             mix=mix_spec,
         )
         blob_store.delete([staging_path, checkpoint_path])
