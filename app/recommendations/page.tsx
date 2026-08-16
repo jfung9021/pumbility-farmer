@@ -393,9 +393,6 @@ function TopScoreCard({
             {score.level}
           </span>
         </span>
-        <span className="top-score-copy">
-          <strong title={score.songName}>{score.songName}</strong>
-        </span>
         <span className="top-score-result">
           <span>
             <b>{score.grade || "—"}</b>
