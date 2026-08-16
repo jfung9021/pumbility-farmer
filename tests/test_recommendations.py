@@ -26,6 +26,7 @@ from phoenix1_score_overrides import (
 )
 from piu_recommendations import (
     COMBINED_TIER_SCHEMA_VERSION,
+    COOP_SCORE_PROJECTION_MODEL_NAME,
     PHOENIX2_RATING_SCORE_THRESHOLD,
     RECOMMENDATION_SCHEMA_VERSION,
     SCORE_PROJECTION_MODEL_NAME,
@@ -1448,6 +1449,14 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(
             artifact_response["player"]["modes"],
             direct["modes"],
+        )
+        self.assertEqual(
+            artifact_response["method"]["coopScoreProjectionModel"],
+            COOP_SCORE_PROJECTION_MODEL_NAME,
+        )
+        self.assertIn(
+            "boosted by one grade up to SSS+",
+            artifact_response["method"]["coopScoreProjection"],
         )
         stored_player = p1_shards[0]["players"][0]
         self.assertTrue(
