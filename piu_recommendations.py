@@ -80,27 +80,25 @@ TOP_PUMBILITY_COUNT = 50
 TOP_RECOMMENDATION_COUNT = 20
 MAX_RAW_SCORE = 1_000_000
 SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v3"
-SCORE_PROJECTION_MODEL_NAME = "similar-skill-pumbility-11-30-weighted-q50-v8"
-COOP_SCORE_PROJECTION_MODEL_NAME = "estimated-difficulty-master-grade-ladder-v1"
+SCORE_PROJECTION_MODEL_NAME = "similar-skill-pumbility-11-30-weighted-q50-v9"
+COOP_SCORE_PROJECTION_MODEL_NAME = "estimated-difficulty-master-grade-ladder-v3"
 COOP_SCORE_QUANTILE = 0.75
-COOP_DIFFICULTY_MODEL_NAME = "conditional-q75-player-source-adjusted-log-miss-v2"
+COOP_DIFFICULTY_MODEL_NAME = "conditional-q75-player-source-adjusted-log-miss-v3"
 COOP_DIFFICULTY_REFERENCE_PERCENTILE = 0.50
 COOP_ABILITY_SCORE_COUNT = 20
 COOP_DIFFICULTY_EASIEST = 10
-COOP_DIFFICULTY_MEDIAN = 17
-COOP_DIFFICULTY_HARDEST = 25
+COOP_DIFFICULTY_MEDIAN = 16
+COOP_DIFFICULTY_HARDEST = 23.9
 COOP_MASTER_TITLE_RATING = 16_000.0
 COOP_GOAL_PLATE = "Fair Game"
 COOP_GOAL_GRADE_BANDS = (
-    (12, "SSS+"),
-    (13, "SS+"),
-    (14, "SS"),
-    (15, "S"),
-    (17, "AAA+"),
+    (11, "SSS+"),
+    (12, "SSS"),
+    (13, "SS"),
+    (16, "S"),
     (18, "AAA"),
-    (20, "AA+"),
-    (24, "A+"),
-    (25, "B"),
+    (21, "AA+"),
+    (23, "A"),
 )
 COOP_GOAL_SCORE_BY_GRADE = {
     grade: int(score) for score, grade, _ in GRADE_BANDS
@@ -1319,6 +1317,27 @@ def _round_half_up(value: Decimal) -> int:
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def _truncate_estimated_difficulty(value: float) -> int:
+    """Truncate a non-negative continuous estimate without floating-point drift."""
+    return math.trunc(float(value) + 1e-9)
+
+
+def _recommendation_goal_from_projected_score(
+    projected_score: object,
+) -> tuple[int | None, str | None]:
+    """Raise a projected result by one grade for its recommendation goal."""
+    projected_grade = grade_for_score(projected_score)
+    if projected_grade is None:
+        return None, None
+    projected_index = next(
+        index
+        for index, (_, grade, _) in enumerate(GRADE_BANDS)
+        if grade == projected_grade
+    )
+    goal_score, goal_grade, _ = GRADE_BANDS[max(0, projected_index - 1)]
+    return int(goal_score), str(goal_grade)
+
+
 def coop_master_goal_for_estimated_difficulty(
     estimated_difficulty: object,
 ) -> tuple[int, str, str] | None:
@@ -1649,7 +1668,7 @@ def _coop_adjusted_difficulty_signals(
 def _coop_continuous_estimated_difficulties(
     difficulty_signals: Mapping[str, float],
 ) -> dict[str, float]:
-    """Piecewise-scale adjusted signals continuously through 10/17/25.
+    """Piecewise-scale adjusted signals continuously through 10/16/23.9.
 
     The two middle observations form a median anchor for even-sized catalogs.
     The rest of the empirical distribution is not quantile-normalized.
@@ -1712,9 +1731,9 @@ def _coop_continuous_estimated_difficulties(
 def _coop_estimated_difficulties(
     difficulty_signals: Mapping[str, float],
 ) -> dict[str, int]:
-    """Round continuous 10/17/25 calibration half up to whole tier buckets."""
+    """Truncate continuous 10/16/23.9 calibration to whole tier buckets."""
     return {
-        chart_id: _round_half_up(Decimal(str(continuous)))
+        chart_id: _truncate_estimated_difficulty(continuous)
         for chart_id, continuous in _coop_continuous_estimated_difficulties(
             difficulty_signals
         ).items()
@@ -1759,7 +1778,7 @@ def build_coop_chart_results(
         difficulty_signals
     )
     difficulties = {
-        chart_id: _round_half_up(Decimal(str(continuous)))
+        chart_id: _truncate_estimated_difficulty(continuous)
         for chart_id, continuous in continuous_difficulties.items()
     }
 
@@ -2219,10 +2238,10 @@ def build_combined_tier_payload(
             (coop_subset["evidenceStatus"] == "Published").sum()
         ),
         "calibration": {
-            "method": "conditional q75 score difficulty from player/source-adjusted log miss points, piecewise-scaled through 10/17/25 anchors",
+            "method": "conditional q75 score difficulty from player/source-adjusted log miss points, piecewise-scaled through 10/16/23.9 continuous anchors before integer truncation",
             "quantile": COOP_SCORE_QUANTILE,
             "medianDifficulty": COOP_DIFFICULTY_MEDIAN,
-            "rounding": "round half up to the nearest whole number",
+            "rounding": "truncate to a whole-number difficulty bucket",
         },
         "difficultyModel": {
             key: coop_meta.get(key)
@@ -2298,10 +2317,14 @@ def build_combined_tier_payload(
                 "sourceAdjustment": "Phoenix 2 indicator estimated after within-chart demeaning",
                 "robustFit": "the conditional quantile supplies post-adjustment outlier resistance; residual refit iterations are disabled and raw scores are not trimmed",
                 "difficultyStatistic": "25th percentile adjusted log miss at median player ability and Phoenix 2 source, equivalent to conditional 75th-percentile score",
-                "difficultyRange": [10, 25],
+                "difficultyRange": [10, 23],
+                "difficultyContinuousRange": [
+                    COOP_DIFFICULTY_EASIEST,
+                    COOP_DIFFICULTY_HARDEST,
+                ],
                 "difficultyMedian": COOP_DIFFICULTY_MEDIAN,
                 "difficultyCalibration": "piecewise linear on each side of the empirical median; no target histogram",
-                "difficultyRounding": "round half up to the nearest whole number",
+                "difficultyRounding": "truncate to a whole-number difficulty bucket",
                 "chartPool": "all current Phoenix 2 2x, 3x, 4x, and 5x Co-op charts",
                 "rating": "120 - 0.8 * grade penalty + 0.16 * plate units",
                 "aggregation": "sum every unique Co-op chart rating; no top-50 limit",
@@ -3434,7 +3457,7 @@ def build_player_coop_mode(
             {
                 **dict(chart),
                 "distanceFromRating": 0.0,
-                "farmEdge": round(25.0 - float(estimate), 6),
+                "farmEdge": round(COOP_DIFFICULTY_HARDEST - float(estimate), 6),
                 "existingPumbility": None,
                 "expectedPumbility": None,
                 "existingCoopRating": (
@@ -3476,7 +3499,7 @@ def build_player_coop_mode(
         "projectionAvailable": bool(candidates),
         "scoreProjectionModel": COOP_SCORE_PROJECTION_MODEL_NAME,
         "currentCoopRating": round(current_rating, 2),
-        "candidateRange": [10, 25],
+        "candidateRange": [10, 23],
         "candidateCount": len(candidates),
         "filterCandidateCount": len(candidates),
         "topScores": top_scores,
@@ -3713,8 +3736,9 @@ def build_player_recommendation(
                 and candidate_projection_rating is not None
                 else ScoreProjectionResult(None, "population-crossfit", 0, "unavailable")
             )
-            projected_score = projection.score
-            projected_grade = grade_for_score(projected_score)
+            projected_score, projected_grade = _recommendation_goal_from_projected_score(
+                projection.score
+            )
             projected_plate: str | None = None
             projected_plate_probability: float | None = None
             plate_projection_source: str | None = None

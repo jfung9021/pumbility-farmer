@@ -117,7 +117,8 @@ test("recommendation methodology separates top-50 Pumbility from top-20 display 
   assert.match(page, /visible skill rating uses top-20 average Pumbility/);
   assert.match(page, /up to 1\.0 estimated-difficulty point above that mode/);
   assert.match(page, /projected plate is the weighted median/);
-  assert.match(page, /Expected Pumbility is then calculated once from the displayed projected score/);
+  assert.match(page, /projected result is raised by one letter grade, capped at SSS\+/);
+  assert.match(page, /Expected Pumbility is then calculated once from that goal grade/);
   assert.match(page, /existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2/);
   assert.match(page, /Overall Pumbility is the best 50 values across both modes/);
   assert.match(page, /Skill title progress/);
@@ -215,15 +216,17 @@ test("Co-op methodology derives Master-title goals from tier difficulty", async 
     assert.match(content, /median(?: measured)? chart/);
     assert.match(content, /normal distribution/);
   }
-  assert.match(recommendations, /completing all current chart goals totals exactly 16,000 Co-op Rating/);
+  assert.match(recommendations, /completing all current chart goals clears the 16,000 Co-op Rating \[CO-OP\] Master threshold with extra leeway/);
   assert.match(tierList, /recommendation letter-grade goals are assigned from these whole-number difficulties/);
-  assert.match(tierList, /median chart anchored at 17/);
+  assert.match(tierList, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 23\.9/);
   assert.match(tierList, /const continuous = chart\.difficultyModelContinuous/);
   assert.match(tierList, /chart\.estimatedDifficulty\)\.toFixed\(1\)/);
-  assert.match(recommendations, /median chart at 17/);
-  assert.match(readme, /totals exactly 16,000 Co-op Rating/);
-  assert.match(readme, /raw per-chart\s*q75 result remains analysis provenance/);
-  assert.match(readme, /whole-number estimated difficulties from\s*10 through 25/);
+  assert.match(recommendations, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 23\.9/);
+  assert.match(readme, /clears the 16,000 Co-op Rating\s+`\[CO-OP\] Master` threshold with extra leeway/);
+  assert.match(readme, /one-grade recommendation boost capped at `SSS\+`/);
+  assert.match(readme, /raw per-chart\s*q75 result remains analysis\s+provenance/);
+  assert.match(readme, /whole-number buckets from 10 through 23/);
+  assert.match(readme, /hardest chart can retain a 23\.9 internal\s+rating/);
 });
 
 test("recommendation player clicks are tracked by display name", async () => {
@@ -559,16 +562,16 @@ test("recommendation refresh metadata distinguishes the model from player scores
   assert.match(css, /\.stale-notice \{[^}]*display: flex;/);
 });
 
-test("estimated difficulties truncate to one decimal place everywhere", async () => {
+test("published estimated difficulties truncate to whole numbers everywhere", async () => {
   const pages = await Promise.all([
     readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
   ]);
 
-  assert.equal(formatEstimatedDifficulty(17.49), "17.4");
-  assert.equal(formatEstimatedDifficulty(17.99), "17.9");
-  assert.equal(formatEstimatedDifficulty(18.0), "18.0");
-  assert.equal(truncateEstimatedDifficulty(20.89), 20.8);
+  assert.equal(formatEstimatedDifficulty(10.8), "10");
+  assert.equal(formatEstimatedDifficulty(17.99), "17");
+  assert.equal(formatEstimatedDifficulty(18.0), "18");
+  assert.equal(truncateEstimatedDifficulty(20.89), 20);
   for (const page of pages) {
     assert.match(page, /formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
     assert.doesNotMatch(page, /estimatedDifficulty\.toFixed\(/);
@@ -743,7 +746,7 @@ test("mobile recommendation cards keep gain on the right and show estimated diff
   assert.match(page, /chart\.stepArtist \|\| "Unknown step artist"/);
   assert.match(page, /formatBpm\(chart\.bpmMin, chart\.bpmMax\)/);
   assert.match(page, /bpm \? <> · \{bpm\}<\/> : null/);
-  assert.match(page, /const estimate = isCoop[\s\S]*String\(Math\.round\(chart\.estimatedDifficulty\)\)[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
+  assert.match(page, /const estimate = isCoop[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
   assert.match(page, /<b> · \{estimate\} estimate<\/b>/);
   assert.doesNotMatch(page, /official<\/b>/);
   assert.doesNotMatch(page, /formula expected/);
@@ -758,6 +761,8 @@ test("mobile recommendation cards keep gain on the right and show estimated diff
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendation-copy \{[^}]*height: 48px;/);
   assert.match(css, /\.recommendation-copy > p \{[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/);
   assert.match(css, /\.recommendation-tags \{[^}]*flex-wrap: nowrap;[^}]*margin-top: auto;/);
+  assert.match(css, /\.recommendation-mode-tabs button span \{[^}]*white-space: nowrap;/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendation-mode-tabs button \{[^}]*gap: 4px;[^}]*min-width: 0;[^}]*padding: 8px 3px;/);
 });
 
 test("recommendation player picker shares a 2-to-1 row with the view switch", async () => {

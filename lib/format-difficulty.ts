@@ -1,7 +1,7 @@
 export function truncateEstimatedDifficulty(value: number): number {
-  return Math.trunc(value * 10 + 1e-9) / 10;
+  return Math.trunc(value + 1e-9);
 }
 
 export function formatEstimatedDifficulty(value: number): string {
-  return truncateEstimatedDifficulty(value).toFixed(1);
+  return String(truncateEstimatedDifficulty(value));
 }

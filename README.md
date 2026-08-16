@@ -62,16 +62,18 @@ all observations. Tier ordering then uses the conditional 75th-percentile score 
 Phoenix 2 player. That conditional quantile provides the outlier robustness; raw chart scores and
 residuals are not trimmed.
 
-The robust chart ordering is calibrated monotonically to whole-number estimated difficulties from
-10 through 25. The median measured chart is anchored at 17, with the easiest and hardest ends mapped
-to 10 and 25. This is a calibration of observed chart order, not a percentile quota: it does not force
-a normal distribution, and any number of charts may share an integer difficulty.
+The robust chart ordering is calibrated monotonically through continuous anchors at 10, 16, and
+23.9. Published difficulties truncate those values to whole-number buckets from 10 through 23, so
+the median measured chart is anchored at 16 while the hardest chart can retain a 23.9 internal
+rating. This is a calibration of observed chart order, not a percentile quota: it does not force a
+normal distribution, and any number of charts may share an integer difficulty.
 
 Co-op recommendation goals are assigned from that whole-number tier difficulty rather than from a
-chart's population score. Harder difficulties receive progressively lower letter-grade goals. Every
-goal uses a Fair Game plate, and the grade bands are calibrated so one goal contribution from every
-current chart totals exactly 16,000 Co-op Rating, the `[CO-OP] Master` threshold. The raw per-chart
-q75 result remains analysis provenance and is not used as the recommendation target.
+chart's population score. Harder difficulties receive progressively lower letter-grade goals, and
+each goal receives the same one-grade recommendation boost capped at `SSS+`. Every goal uses a Fair
+Game plate, and one goal contribution from every current chart clears the 16,000 Co-op Rating
+`[CO-OP] Master` threshold with extra leeway. The raw per-chart q75 result remains analysis
+provenance and is not used as the recommendation target.
 
 ## Magnitude bands and relative ranks
 
@@ -353,11 +355,12 @@ narrowest successful radius participates in the ordinary median; peers are not t
 support target or weighted by distance. Below five peers at the maximum radius, the player-balanced
 nonlinear population response model is used.
 
-Projected raw scores are converted to Phoenix 2 letter grades. The plate distribution combines
+Projected raw scores are converted to Phoenix 2 letter grades, then raised by one grade (capped at
+`SSS+`) to set the recommendation goal score. The plate distribution combines
 Phoenix 2 player history with a held-out-tuned, capped Phoenix 1 prior and population smoothing;
 Phoenix 2 wins for an overlapping player/chart observation. The projected plate is the weighted
 median in the ordered Rough Game-to-Perfect Game ladder, with an exact 50% tie selecting the lower
-plate. Expected Pumbility is calculated once from the displayed projected score's grade, that median
+plate. Expected Pumbility is calculated once from the displayed goal score's grade, that median
 plate, and the chart mode's screenshot-validated Phoenix 2 projection formula. Projected gain is the
 deterministic change from that same Pumbility value against the active Phoenix 2 top-50 pool,
 including replacement of the number-50 chart. Single and Double use their independent mode pool;
@@ -365,9 +368,9 @@ Overall uses the shared S+D pool. Existing chart Pumbility and all current top-5
 authoritative values supplied by Phoenix 2; Phoenix 1 Pumbility totals never enter that pool.
 
 Co-op projections do not use the Singles/Doubles peer-rating model. The whole-number Co-op estimated
-difficulty selects a monotonic letter-grade goal, while every goal uses a Fair Game plate. The bands
-are calibrated against the current chart distribution so one goal contribution from all 140 charts
-totals exactly 16,000 Co-op Rating, the `[CO-OP] Master` threshold. Projected gain is the nonnegative
+difficulty selects a monotonic letter-grade goal with the same one-grade boost capped at `SSS+`,
+while every goal uses a Fair Game plate. One goal contribution from all 140 current charts clears
+the 16,000 Co-op Rating `[CO-OP] Master` threshold with extra leeway. Projected gain is the nonnegative
 increase over the player's current contribution on that chart, and Co-op Rating remains an all-chart
 sum with no top-50 cutoff. Equal gains are ordered by the underlying continuous difficulty signal,
 not the displayed whole-number difficulty. The merged population's raw nearest-rank q75 result remains provenance for
