@@ -588,7 +588,7 @@ footer b { color: #929b93; }
 .recommendation-mode-tabs { background: rgba(10, 14, 11, 0.84); border: 1px solid var(--line); border-radius: 10px; display: flex; gap: 4px; padding: 4px; }
 .recommendation-mode-tabs button { align-items: center; background: transparent; border: 1px solid transparent; border-radius: 7px; color: #737c74; display: flex; gap: 8px; padding: 8px 13px; text-transform: capitalize; }
 .recommendation-mode-tabs button b { align-items: center; border: 1px solid currentColor; border-radius: 4px; display: flex; font-size: 10px; height: 22px; justify-content: center; width: 22px; }
-.recommendation-mode-tabs button span { font-size: 11px; font-weight: 750; }
+.recommendation-mode-tabs button span { font-size: 11px; font-weight: 750; white-space: nowrap; }
 .recommendation-mode-tabs button.active { background: rgba(200, 255, 46, 0.11); border-color: rgba(200, 255, 46, 0.22); color: var(--acid); }
 .pumbility-progress-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px 26px 20px; width: 100%; }
 .pumbility-progress-heading { align-items: start; display: grid; gap: 18px; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 88px; }
@@ -731,7 +731,9 @@ footer b { color: #929b93; }
   .recommendation-readiness-grid { grid-template-columns: 1fr; }
   .recommendation-mode-row { margin-bottom: var(--recommendations-stack-gap); }
   .recommendation-mode-tabs { width: 100%; }
-  .recommendation-mode-tabs button { flex: 1; justify-content: center; }
+  .recommendation-mode-tabs button { flex: 1; gap: 4px; justify-content: center; min-width: 0; padding: 8px 3px; }
+  .recommendation-mode-tabs button b { flex: 0 0 22px; }
+  .recommendation-mode-tabs button span { font-size: clamp(9px, 3vw, 11px); }
   .pumbility-progress-panel { padding: 18px 16px 16px; }
   .pumbility-progress-heading { gap: 10px; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 66px; }
   .pumbility-progress-heading.no-emblem { grid-template-columns: minmax(0, 1fr) auto; }

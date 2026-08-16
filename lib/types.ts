@@ -278,8 +278,12 @@ export interface RecommendationModeResult {
     | "similar-skill-all-q50-v4"
     | "similar-skill-all-q50-v5"
     | "similar-skill-pumbility-11-30-q50-v6"
+    | "similar-skill-pumbility-11-30-weighted-q50-v8"
+    | "similar-skill-pumbility-11-30-weighted-q50-v9"
     | "chart-population-q75-v1"
-    | "estimated-difficulty-master-grade-ladder-v1";
+    | "estimated-difficulty-master-grade-ladder-v1"
+    | "estimated-difficulty-master-grade-ladder-v2"
+    | "estimated-difficulty-master-grade-ladder-v3";
   pumbilityPerLevel?: number | null;
   currentTop50Pumbility?: number;
   currentTop50CutoffPumbility?: number | null;
