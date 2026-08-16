@@ -17,7 +17,10 @@ import { ScoreSyncLink } from "../_components/score-sync-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { hasLimitedData } from "../../lib/chart-evidence";
-import { formatEstimatedDifficulty } from "../../lib/format-difficulty";
+import {
+  formatCoopEstimatedDifficulty,
+  formatEstimatedDifficulty,
+} from "../../lib/format-difficulty";
 import {
   recommendationModeFromSearchParams,
   recommendationViewFromSearchParams,
@@ -241,7 +244,7 @@ function RecommendationCard({
   const bpm = formatBpm(chart.bpmMin, chart.bpmMax);
   const isCoop = chart.type === "CoOp";
   const estimate = isCoop
-    ? formatEstimatedDifficulty(chart.estimatedDifficulty)
+    ? formatCoopEstimatedDifficulty(chart.estimatedDifficulty)
     : `${chart.type === "Single" ? "S" : "D"}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
   const goal = chart.projectedGrade && chart.projectedPlateCode
     ? `Goal: ${chart.projectedGrade} ${chart.projectedPlateCode}`
@@ -549,7 +552,7 @@ function TopScoreDetailDialog({
               <span><b>{score.estimatedDifficulty === null
                 ? "Unavailable"
                 : isCoop
-                  ? formatEstimatedDifficulty(score.estimatedDifficulty)
+                  ? formatCoopEstimatedDifficulty(score.estimatedDifficulty)
                   : `${prefix}${formatEstimatedDifficulty(score.estimatedDifficulty)}`}</b> estimated</span>
               {!isCoop && score.difficultyDelta !== null ? (
                 <span><b>{signed(score.difficultyDelta)}</b> difference</span>

@@ -11,7 +11,9 @@ import {
 } from "../lib/chart-evidence.ts";
 import { demoPayloads } from "../lib/demo-data.ts";
 import {
+  formatCoopEstimatedDifficulty,
   formatEstimatedDifficulty,
+  truncateCoopEstimatedDifficulty,
   truncateEstimatedDifficulty,
 } from "../lib/format-difficulty.ts";
 import {
@@ -564,20 +566,24 @@ test("recommendation refresh metadata distinguishes the model from player scores
   assert.match(css, /\.stale-notice \{[^}]*display: flex;/);
 });
 
-test("published estimated difficulties truncate to whole numbers everywhere", async () => {
+test("Singles and Doubles estimates keep tenths while Co-op stays whole-numbered", async () => {
   const pages = await Promise.all([
     readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
   ]);
 
-  assert.equal(formatEstimatedDifficulty(10.8), "10");
-  assert.equal(formatEstimatedDifficulty(17.99), "17");
-  assert.equal(formatEstimatedDifficulty(18.0), "18");
-  assert.equal(truncateEstimatedDifficulty(20.89), 20);
+  assert.equal(formatEstimatedDifficulty(10.8), "10.8");
+  assert.equal(formatEstimatedDifficulty(17.99), "17.9");
+  assert.equal(formatEstimatedDifficulty(18.0), "18.0");
+  assert.equal(truncateEstimatedDifficulty(20.89), 20.8);
+  assert.equal(formatCoopEstimatedDifficulty(17.99), "17");
+  assert.equal(truncateCoopEstimatedDifficulty(20.89), 20);
   for (const page of pages) {
     assert.match(page, /formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
     assert.doesNotMatch(page, /estimatedDifficulty\.toFixed\(/);
   }
+  assert.match(pages[0], /activeMode === "coop"[\s\S]*truncateCoopEstimatedDifficulty\(chart\.estimatedDifficulty\)[\s\S]*truncateEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
+  assert.match(pages[1], /isCoop[\s\S]*formatCoopEstimatedDifficulty\(chart\.estimatedDifficulty\)[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
 });
 
 test("tier list uses compact segmented controls for grouping and layout", async () => {
@@ -748,7 +754,7 @@ test("mobile recommendation cards keep gain on the right and show estimated diff
   assert.match(page, /chart\.stepArtist \|\| "Unknown step artist"/);
   assert.match(page, /formatBpm\(chart\.bpmMin, chart\.bpmMax\)/);
   assert.match(page, /bpm \? <> · \{bpm\}<\/> : null/);
-  assert.match(page, /const estimate = isCoop[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
+  assert.match(page, /const estimate = isCoop[\s\S]*formatCoopEstimatedDifficulty\(chart\.estimatedDifficulty\)[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
   assert.match(page, /<b> · \{estimate\} estimate<\/b>/);
   assert.doesNotMatch(page, /official<\/b>/);
   assert.doesNotMatch(page, /formula expected/);
