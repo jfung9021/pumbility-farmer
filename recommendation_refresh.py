@@ -36,6 +36,7 @@ from phoenix2_sync import isoformat_utc, merge_best_scores, parse_utc, utc_now
 from piu_recommendations import (
     BASELINE_END_RANK,
     BASELINE_START_RANK,
+    COOP_SCORE_PROJECTION_MODEL_NAME,
     DIFFICULTY_DELTA_SCALE,
     MIN_TARGET_LEVEL,
     PHOENIX2_RATING_SCORE_THRESHOLD,
@@ -131,8 +132,8 @@ def _recommendation_method(
         "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
         "scoreProjection": "using each player's S+FG-equivalent ranks 11-30 Pumbility rating, take the source-weighted median raw score from all other players with a normalized result on the exact chart, weighting Phoenix 1 observations 1x and Phoenix 2 observations 2x; search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back to the source-weighted, player-balanced population response surface below five peers",
         "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
-        "coopScoreProjectionModel": "estimated-difficulty-master-grade-ladder-v1",
-        "coopScoreProjection": "a monotonic letter-grade goal determined only by whole-number Co-op estimated difficulty, using a fixed Fair Game plate and calibrated so the complete catalog totals 16,000 Co-op Rating",
+        "coopScoreProjectionModel": COOP_SCORE_PROJECTION_MODEL_NAME,
+        "coopScoreProjection": "a monotonic letter-grade goal determined only by whole-number Co-op estimated difficulty, boosted by one grade up to SSS+, using a fixed Fair Game plate so the complete catalog clears 16,000 Co-op Rating with leeway",
         "coopRating": "the sum of every unique current Phoenix 2 Co-op chart rating; projected gain is additive and is not limited to a top-50 pool",
     }
 
