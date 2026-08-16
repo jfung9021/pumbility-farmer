@@ -216,7 +216,9 @@ test("Co-op methodology derives Master-title goals from tier difficulty", async 
     assert.match(content, /median(?: measured)? chart/);
     assert.match(content, /normal distribution/);
   }
-  assert.match(recommendations, /completing all current chart goals clears the 16,000 Co-op Rating \[CO-OP\] Master threshold with extra leeway/);
+  assert.match(recommendations, /completing all current chart goals clears the 16,000 Co-op Rating \[CO-OP\] Master threshold with extra leeway/i);
+  assert.match(recommendations, /folder lookup is fixed and never rebalanced when charts are added/);
+  assert.match(recommendations, /every difficulty-17 chart always targets AAA with Fair Game/);
   assert.match(tierList, /recommendation letter-grade goals are assigned from these whole-number difficulties/);
   assert.match(tierList, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24\.9/);
   assert.match(tierList, /const continuous = chart\.difficultyModelContinuous/);
