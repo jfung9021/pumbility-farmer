@@ -9,7 +9,9 @@ import { readJsonResponse } from "../../lib/api-response";
 import { hasLimitedData } from "../../lib/chart-evidence";
 import { demoPayload } from "../../lib/demo-data";
 import {
+  formatCoopEstimatedDifficulty,
   formatEstimatedDifficulty,
+  truncateCoopEstimatedDifficulty,
   truncateEstimatedDifficulty,
 } from "../../lib/format-difficulty";
 import { tierModeFromSearchParams } from "../../lib/page-view-state";
@@ -326,7 +328,9 @@ function EstimatedDifficultySection({ charts, compact, mode, value, onSelect }: 
   value: number;
   onSelect: (chart: ChartResult) => void;
 }) {
-  const formatted = formatEstimatedDifficulty(value);
+  const formatted = mode === "coop"
+    ? formatCoopEstimatedDifficulty(value)
+    : formatEstimatedDifficulty(value);
   const label = mode === "coop"
     ? `Co-op ${formatted}`
     : `${mode === "singles" ? "S" : "D"}${formatted}`;
@@ -432,7 +436,9 @@ export default function TierListPage() {
     const groups = new Map<number, ChartResult[]>();
     for (const chart of filteredCharts) {
       if (chart.estimatedDifficulty === null) continue;
-      const bucket = truncateEstimatedDifficulty(chart.estimatedDifficulty);
+      const bucket = activeMode === "coop"
+        ? truncateCoopEstimatedDifficulty(chart.estimatedDifficulty)
+        : truncateEstimatedDifficulty(chart.estimatedDifficulty);
       const charts = groups.get(bucket) ?? [];
       charts.push(chart);
       groups.set(bucket, charts);
