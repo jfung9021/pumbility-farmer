@@ -1,6 +1,6 @@
 import type { CombinedMixInfo, MixInfo, MixKey } from "./mixes";
 
-export type ModeKey = "singles" | "doubles";
+export type ModeKey = "singles" | "doubles" | "coop";
 export type RecommendationModeKey = "overall" | ModeKey;
 export type EvidenceStatus = "Published" | "Provisional" | "Insufficient" | "Unrated";
 
@@ -13,7 +13,7 @@ export interface ChartRerate {
 }
 
 export interface ChartResult {
-  mode: "Singles" | "Doubles";
+  mode: "Singles" | "Doubles" | "Co-op";
   modeRank: number | null;
   levelRank: number | null;
   levelPercentile: number | null;
@@ -25,7 +25,7 @@ export interface ChartResult {
   effectBand: string | null;
   songName: string;
   difficulty: string;
-  type: "Single" | "Double";
+  type: "Single" | "Double" | "CoOp";
   level: number;
   chartId: string;
   imageUrl: string | null;
@@ -34,14 +34,22 @@ export interface ChartResult {
   bpmMin?: number | null;
   bpmMax?: number | null;
   estimatedDifficulty: number | null;
+  difficultyModelContinuous?: number | null;
+  difficultyModelSignal?: number | null;
+  difficultyModelSupportCount?: number | null;
+  percentileScore?: number | null;
+  percentileGrade?: string | null;
+  percentilePlate?: string | null;
+  percentilePlateCode?: string | null;
+  percentileSupportCount?: number | null;
   whatIfEstimates?: Array<{
     level: number;
     estimatedDifficulty: number | null;
-  }>;
-  averageDifficulty: number;
+  }> | null;
+  averageDifficulty: number | null;
   difficultyDelta: number | null;
-  folderMeasuredCharts?: number;
-  folderRangeCompression?: number;
+  folderMeasuredCharts?: number | null;
+  folderRangeCompression?: number | null;
   difficultyDeltaCi95Low: number | null;
   difficultyDeltaCi95High: number | null;
   difficultyCi95Low: number | null;
@@ -59,9 +67,30 @@ export interface FolderSummary {
   measuredCharts: number;
   publishedCharts: number;
   medianContributors: number | null;
-  rangeCompression: number;
-  overratedCharts: number;
-  underratedCharts: number;
+  rangeCompression?: number;
+  overratedCharts?: number;
+  underratedCharts?: number;
+}
+
+export interface CoopDifficultyModelSummary {
+  difficultyModel: string;
+  difficultyTransform: string;
+  difficultyConditionalQuantile: number;
+  difficultyReferenceAbilityPercentile: number;
+  difficultyReferenceSource: "phoenix2";
+  difficultyCalibrationAnchors: {
+    easiest: 10;
+    median: 17;
+    hardest: 25;
+  };
+  abilityCoverageObservations: number;
+  abilitySameSourceObservations: number;
+  abilityOppositeSourceObservations: number;
+  abilityMedianFallbackObservations: number;
+  difficultyFitObservations: number;
+  difficultyResidualRefitIterations: 0;
+  abilityCoefficients: number[];
+  phoenix2SourceCoefficient: number;
 }
 
 export interface ModeSummary {
@@ -69,23 +98,26 @@ export interface ModeSummary {
   catalogCharts: number;
   measuredCharts: number;
   publishedCharts: number;
-  pumbilityPerLevel: number | null;
+  pumbilityPerLevel?: number | null;
   calibration: Record<string, unknown>;
-  shrinkage: Record<string, unknown>;
+  difficultyModel?: CoopDifficultyModelSummary;
+  shrinkage?: Record<string, unknown>;
   folders: Record<string, FolderSummary>;
 }
 
 export interface AnalysisPayload {
+  schemaVersion?: number;
   generatedAtUtc: string;
   mix: MixInfo | CombinedMixInfo;
   summary: {
     scriptVersion: string;
     method: Record<string, unknown>;
     coverage: Record<string, number>;
-    modes: Record<ModeKey, ModeSummary>;
+    modes: Partial<Record<ModeKey, ModeSummary>>;
   };
   singles: ChartResult[];
   doubles: ChartResult[];
+  coop?: ChartResult[];
   relativeGroups: Array<{ rank: number; name: string }>;
   effectBands: Array<{
     rank: number;
@@ -135,10 +167,10 @@ export type AnalysisRefreshResponse =
     };
 
 export interface RecommendationChartEstimate {
-  mode: "Singles" | "Doubles";
+  mode: "Singles" | "Doubles" | "Co-op";
   songName: string;
   difficulty: string;
-  type: "Single" | "Double";
+  type: "Single" | "Double" | "CoOp";
   level: number;
   chartId: string;
   imageUrl: string | null;
@@ -147,7 +179,14 @@ export interface RecommendationChartEstimate {
   bpmMin?: number | null;
   bpmMax?: number | null;
   estimatedDifficulty: number;
-  difficultyDelta: number;
+  difficultyModelContinuous?: number | null;
+  difficultyModelSignal?: number | null;
+  percentileScore?: number | null;
+  percentileGrade?: string | null;
+  percentilePlate?: string | null;
+  percentilePlateCode?: string | null;
+  percentileSupportCount?: number | null;
+  difficultyDelta: number | null;
   difficultyCi95Low: number | null;
   difficultyCi95High: number | null;
   nContributors: number;
@@ -161,13 +200,15 @@ export interface RecommendationChart extends RecommendationChartEstimate {
   farmEdge: number;
   existingPumbility: number | null;
   expectedPumbility: number | null;
+  existingCoopRating?: number | null;
+  expectedCoopRating?: number | null;
   projectedGain: number | null;
   projectedScore: number | null;
   projectedGrade: string | null;
   projectedPlate: string | null;
   projectedPlateCode: string | null;
   projectedPlateProbability: number | null;
-  plateProjectionSource: "phoenix1" | "phoenix2" | "population" | null;
+  plateProjectionSource: "phoenix1" | "phoenix2" | "population" | "fixed-fair-game" | null;
   scoreProjectionSource?: string | null;
   scoreProjectionSupportCount?: number | null;
   scoreProjectionConfidence?: "high" | "medium" | "low" | "limited" | "unavailable";
@@ -175,10 +216,10 @@ export interface RecommendationChart extends RecommendationChartEstimate {
 }
 
 export interface RecommendationTopScore {
-  mode: "Singles" | "Doubles";
+  mode: "Singles" | "Doubles" | "Co-op";
   songName: string;
   difficulty: string;
-  type: "Single" | "Double";
+  type: "Single" | "Double" | "CoOp";
   level: number;
   chartId: string;
   imageUrl: string | null;
@@ -194,7 +235,8 @@ export interface RecommendationTopScore {
   phoenix1Contributors: number | null;
   phoenix2Contributors: number | null;
   evidenceStatus: EvidenceStatus | null;
-  pumbility: number;
+  pumbility?: number | null;
+  coopRating?: number | null;
   grade: string | null;
   plate: string | null;
   plateCode: string | null;
@@ -235,14 +277,17 @@ export interface RecommendationModeResult {
     | "similar-skill-staged-q50-v3"
     | "similar-skill-all-q50-v4"
     | "similar-skill-all-q50-v5"
-    | "similar-skill-pumbility-11-30-q50-v6";
+    | "similar-skill-pumbility-11-30-q50-v6"
+    | "chart-population-q75-v1"
+    | "estimated-difficulty-master-grade-ladder-v1";
   pumbilityPerLevel?: number | null;
   currentTop50Pumbility?: number;
   currentTop50CutoffPumbility?: number | null;
   currentTop50Count?: number;
-  top50ModeCounts?: Record<ModeKey, number>;
-  sourceModeEligibility?: Record<ModeKey, boolean>;
-  sourceRecommendationCounts?: Record<ModeKey, number>;
+  currentCoopRating?: number;
+  top50ModeCounts?: Record<Exclude<ModeKey, "coop">, number>;
+  sourceModeEligibility?: Record<Exclude<ModeKey, "coop">, boolean>;
+  sourceRecommendationCounts?: Record<Exclude<ModeKey, "coop">, number>;
   candidateRange?: [number | null, number];
   candidateCount?: number;
   filterCandidateCount?: number;
@@ -269,7 +314,8 @@ export interface RecommendationPlayer {
   username: string;
   displayName: string;
   manual?: boolean;
-  modes: Record<ModeKey, RecommendationModeResult>
+  modes: Record<Exclude<ModeKey, "coop">, RecommendationModeResult>
+    & Partial<Record<"coop", RecommendationModeResult>>
     & Partial<Record<"overall", RecommendationModeResult>>;
 }
 

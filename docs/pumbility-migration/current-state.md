@@ -54,7 +54,7 @@ Vercel Queues/Celery remains the execution layer:
 | `public/data/phoenix1.json` | Frozen public Phoenix 1 chart aggregate. It is not the private Phoenix 1 score evidence. |
 | `public/data/phoenix1.manifest.json` | Frozen archive checksum, counts, timestamp, and historical methodology `6.0.0-level-16-and-0.7-scale`. |
 | `public/data/phoenix1-rerates.json` | Display/provenance annotations only: 231 changes, currently 197 up and 34 down. |
-| `lib/data/nevsister-chart-videos.json` | Validated chart-to-video catalog; test contract currently requires 2,572 mappings. |
+| `lib/data/nevsister-chart-videos.json` | Validated chart-to-video catalog; test contract currently requires 2,712 Singles, Doubles, and Co-op mappings. |
 | `lib/data/nevsister-chart-video-overrides.json` | Manual mappings, aliases, and notes. |
 | `public/images/phoenix2-ranks/*.webp` | Thirty-seven vendored Overall rank emblems. |
 | `phoenix1_score_overrides.py` | Two Phoenix 1-only score transformations and reband behavior. |

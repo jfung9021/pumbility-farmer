@@ -1,5 +1,7 @@
 import type { AnalysisPayload, ChartResult, ModeKey } from "./types";
 
+type StandardModeKey = Exclude<ModeKey, "coop">;
+
 const DEMO_DIFFICULTY_DELTA_SCALE = 0.4;
 const DEMO_DELTA_CI_HALF_WIDTH = 0.18 * DEMO_DIFFICULTY_DELTA_SCALE;
 
@@ -37,7 +39,7 @@ function effectBand(delta: number | null) {
   return effectBands[6];
 }
 
-const demoRows: Record<ModeKey, Array<[string, number, number | null, number, number]>> = {
+const demoRows: Record<StandardModeKey, Array<[string, number, number | null, number, number]>> = {
   singles: [
     ["Lucid Dream", 16, -1.08, 34, 1],
     ["Becouse of You", 21, -0.82, 28, 2],
@@ -80,7 +82,7 @@ function makeWhatIfEstimates(
     }));
 }
 
-function makeChart(mode: ModeKey, row: [string, number, number | null, number, number], index: number): ChartResult {
+function makeChart(mode: StandardModeKey, row: [string, number, number | null, number, number], index: number): ChartResult {
   const [songName, level, unscaledDelta, contributors, group] = row;
   const prefix = mode === "singles" ? "S" : "D";
   const averageDifficulty = level + 0.5;

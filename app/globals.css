@@ -7,6 +7,7 @@
   --acid-soft: #9dca24;
   --chart-single-border: #ff4a4a;
   --chart-double-border: #39d96a;
+  --chart-coop-border: #f3ce55;
   --black: #090c0a;
   color-scheme: dark;
 }
@@ -274,7 +275,7 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
   border: 1px solid var(--line);
   border-radius: 14px 14px 0 0;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   padding: 8px;
 }
 
@@ -286,8 +287,9 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
   color: #6f7870;
   display: flex;
   gap: 14px;
+  justify-content: center;
   padding: 15px 18px;
-  text-align: left;
+  text-align: center;
 }
 
 .mode-tabs button.active {
@@ -360,6 +362,7 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 .results-legend b:last-child { color: #ff6868; }
 .results-legend span { background: var(--line); height: 13px; margin: 0 5px; width: 1px; }
 .view-switcher { background: #0b0f0c; border: 1px solid var(--line); border-radius: 8px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; padding: 3px; }
+.view-switcher.single-option { grid-template-columns: minmax(0, 1fr); }
 .view-switcher button { background: transparent; border: 0; border-radius: 5px; color: #737c74; cursor: pointer; font-size: 8px; font-weight: 800; letter-spacing: 0.03em; line-height: 1.15; min-height: 42px; min-width: 0; padding: 0 8px; text-transform: uppercase; white-space: normal; }
 .view-switcher button:hover { color: #b7c0b8; }
 .view-switcher button.active { background: rgba(200, 255, 46, 0.12); color: var(--acid); }
@@ -399,6 +402,7 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 }
 .chart-card:last-child { border-bottom: 0; }
 .chart-card:hover { background: rgba(255, 255, 255, 0.018); }
+.chart-card-coop { grid-template-columns: 58px minmax(0, 1fr); }
 .chart-art-rail { height: 58px; position: relative; width: 58px; }
 
 .compact-chart-grid {
@@ -433,12 +437,14 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 .compact-jacket span { color: var(--tone); font-size: 13px; font-weight: 900; }
 .compact-jacket .chart-difficulty-badge, .recommendation-jacket .chart-difficulty-badge { align-items: center; background: #b62e35; border: 1px solid rgba(255, 255, 255, 0.42); border-radius: 50%; bottom: 5px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55); color: white; display: flex; font-size: 10px; height: 26px; justify-content: center; line-height: 1; position: absolute; right: 5px; width: 26px; z-index: 2; }
 .compact-jacket .chart-difficulty-double, .recommendation-jacket .chart-difficulty-double { background: #176b3a; }
+.compact-jacket .chart-difficulty-coop, .recommendation-jacket .chart-difficulty-coop { background: #d5a91b; color: #171207; }
 
 .jacket { align-items: center; background: linear-gradient(135deg, #2a3825, #111712); border: 1px solid var(--line); border-radius: 7px; display: flex; height: 58px; justify-content: center; overflow: hidden; width: 58px; }
 .jacket img { height: 100%; object-fit: cover; width: 100%; }
 .jacket span { color: var(--tone); font-size: 13px; font-weight: 900; }
 .chart-art[data-chart-type="Single"] { border: 1px solid var(--chart-single-border); }
 .chart-art[data-chart-type="Double"] { border: 1px solid var(--chart-double-border); }
+.chart-art[data-chart-type="CoOp"] { border: 1px solid var(--chart-coop-border); }
 
 .chart-copy { min-width: 0; }
 .chart-heading { align-items: center; display: flex; gap: 8px; }
@@ -663,6 +669,7 @@ footer b { color: #929b93; }
 .top-score-jacket > b { color: var(--acid); font-size: 11px; }
 .top-score-jacket .chart-difficulty-badge { align-items: center; background: #b62e35; border: 1px solid rgba(255, 255, 255, 0.42); border-radius: 50%; bottom: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55); color: white; display: flex; font-size: 11px; height: 27px; justify-content: center; line-height: 1; position: absolute; right: 6px; width: 27px; z-index: 2; }
 .top-score-jacket .chart-difficulty-double { background: #176b3a; }
+.top-score-jacket .chart-difficulty-coop { background: #d5a91b; color: #171207; }
 .top-score-rank { background: rgba(3, 6, 4, 0.8); border-radius: 0 0 6px; color: white; font-size: 11px; font-weight: 900; left: 0; padding: 5px 7px; position: absolute; top: 0; z-index: 2; }
 .top-score-jacket .top-score-warning { background: transparent; border: 0; padding: 0; position: absolute; right: 6px; top: 6px; z-index: 2; }
 .top-score-jacket .top-score-warning > b { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55); }

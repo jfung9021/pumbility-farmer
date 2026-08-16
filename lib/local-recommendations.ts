@@ -60,9 +60,20 @@ const TOP_SCORE_KEYS = new Set([
   "plate",
   "plateCode",
 ]);
+const OPTIONAL_TOP_SCORE_KEYS = new Set([
+  "percentileScore",
+  "percentileGrade",
+  "percentilePlate",
+  "percentilePlateCode",
+  "percentileSupportCount",
+]);
+const COOP_TOP_SCORE_KEYS = new Set([
+  ...[...TOP_SCORE_KEYS].filter((key) => key !== "pumbility"),
+  "coopRating",
+]);
 const DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL = 16;
-const RECOMMENDATION_UPPER_RADIUS = 0.5;
-const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 22;
+const RECOMMENDATION_UPPER_RADIUS = 1.0;
+const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 23;
 
 export type LocalRecommendationIndex = {
   schemaVersion?: number;
@@ -77,7 +88,7 @@ type LocalRecommendationPlayerEntry = RecommendationPlayer | {
   playerKey: string;
   username: string;
   displayName: string;
-  eligibility: { singles: boolean; doubles: boolean };
+  eligibility: Record<ModeKey, boolean>;
   scoreProgress?: Partial<Record<ModeKey, RecommendationScoreProgress>>;
   shard: number;
 };
@@ -105,11 +116,16 @@ function isNullableNonnegativeInteger(value: unknown): boolean {
 function isRecommendationTopScore(value: unknown): value is RecommendationTopScore {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const score = value as Record<string, unknown>;
-  return Object.keys(score).length === TOP_SCORE_KEYS.size
-    && Object.keys(score).every((key) => TOP_SCORE_KEYS.has(key))
-    && (score.mode === "Singles" || score.mode === "Doubles")
-    && (score.type === "Single" || score.type === "Double")
-    && (score.mode === "Singles") === (score.type === "Single")
+  const requiredKeys = score.type === "CoOp" ? COOP_TOP_SCORE_KEYS : TOP_SCORE_KEYS;
+  return [...requiredKeys].every((key) => key in score)
+    && Object.keys(score).every(
+      (key) => requiredKeys.has(key) || OPTIONAL_TOP_SCORE_KEYS.has(key),
+    )
+    && (score.mode === "Singles" || score.mode === "Doubles" || score.mode === "Co-op")
+    && (score.type === "Single" || score.type === "Double" || score.type === "CoOp")
+    && ((score.mode === "Singles" && score.type === "Single")
+      || (score.mode === "Doubles" && score.type === "Double")
+      || (score.mode === "Co-op" && score.type === "CoOp"))
     && typeof score.songName === "string"
     && typeof score.difficulty === "string"
     && typeof score.level === "number"
@@ -135,9 +151,14 @@ function isRecommendationTopScore(value: unknown): value is RecommendationTopSco
       || score.evidenceStatus === "Insufficient"
       || score.evidenceStatus === "Unrated"
     )
-    && typeof score.pumbility === "number"
-    && Number.isFinite(score.pumbility)
-    && score.pumbility >= 0
+    && (score.type === "CoOp"
+      ? typeof score.coopRating === "number"
+        && Number.isFinite(score.coopRating)
+        && score.coopRating >= 0
+        && score.pumbility === undefined
+      : typeof score.pumbility === "number"
+        && Number.isFinite(score.pumbility)
+        && score.pumbility >= 0)
     && (score.grade === null || typeof score.grade === "string")
     && (score.plate === null || typeof score.plate === "string")
     && (score.plateCode === null || typeof score.plateCode === "string");
@@ -149,10 +170,11 @@ function hasValidTopScores(modes: unknown): boolean {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     const topScores = (value as Record<string, unknown>).topScores;
     return Array.isArray(topScores)
-      && topScores.length <= 50
+      && (modeKey === "coop" || topScores.length <= 50)
       && topScores.every((score) => isRecommendationTopScore(score)
         && (modeKey !== "singles" || score.type === "Single")
-        && (modeKey !== "doubles" || score.type === "Double"));
+        && (modeKey !== "doubles" || score.type === "Double")
+        && (modeKey !== "coop" || score.type === "CoOp"));
   });
 }
 
@@ -192,7 +214,7 @@ export function validateLocalRecommendationIndex(value: unknown): LocalRecommend
       || typeof chart !== "object"
       || typeof chart.chartId !== "string"
       || typeof chart.songName !== "string"
-      || (chart.type !== "Single" && chart.type !== "Double")
+      || (chart.type !== "Single" && chart.type !== "Double" && chart.type !== "CoOp")
       || typeof chart.level !== "number"
       || typeof chart.estimatedDifficulty !== "number"
       || !Number.isFinite(chart.estimatedDifficulty)
@@ -333,7 +355,9 @@ function manualMode(
   scoringRating: number,
   minimumOfficialLevel: number,
 ): RecommendationModeResult {
-  const chartType = modeKey === "singles" ? "Single" : "Double";
+  const chartType = modeKey === "singles"
+    ? "Single"
+    : modeKey === "doubles" ? "Double" : "CoOp";
   const maximumEstimatedDifficulty = scoringRating + RECOMMENDATION_UPPER_RADIUS;
   const filterCandidates: RecommendationChart[] = charts
     .filter(
@@ -466,6 +490,16 @@ export function recommendationsForRating(
     scoringRating,
     minimumOfficialLevel,
   );
+  const coop: RecommendationModeResult = {
+    eligible: false,
+    manual: true,
+    projectionAvailable: false,
+    validScoreCount: 0,
+    reason: "Co-op recommendations require a selected player.",
+    filterCandidates: [],
+    topScores: [],
+    topRecommendations: [],
+  };
   return {
     generatedAtUtc: payload.generatedAtUtc,
     modelGeneratedAtUtc: payload.generatedAtUtc,
@@ -479,6 +513,7 @@ export function recommendationsForRating(
         overall: manualOverallMode(singles, doubles),
         singles,
         doubles,
+        coop,
       },
     },
   };
@@ -503,6 +538,9 @@ export function recommendationPlayerList(
         doubles: "modes" in player
           ? Boolean(player.modes.doubles?.eligible)
           : Boolean(player.eligibility.doubles),
+        coop: "modes" in player
+          ? Boolean(player.modes.coop?.eligible)
+          : Boolean(player.eligibility.coop),
       },
       scoreProgress: "modes" in player
         ? {

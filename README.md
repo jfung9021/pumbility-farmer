@@ -1,6 +1,6 @@
 # Pumbility Farmer
 
-Pumbility Farmer is a PIU Phoenix scoring-difficulty analyzer and Vercel web UI. Its primary tier list combines normalized Phoenix 1 and Phoenix 2 score evidence against the current Phoenix 2 catalog. Phoenix 1 is a frozen, privacy-safe source captured on August 7, 2026; Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Singles and Doubles rankings are completely independent. Published chart analysis starts at level 16, while player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 16.
+Pumbility Farmer is a PIU Phoenix scoring-difficulty analyzer and Vercel web UI. Its primary tier list combines normalized Phoenix 1 and Phoenix 2 score evidence against the current Phoenix 2 catalog. Phoenix 1 is a frozen, privacy-safe source captured on August 7, 2026; Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Singles and Doubles rankings are completely independent. Co-op has its own combined 2x-5x analysis because those charts have no official difficulty rating. Published Singles and Doubles analysis starts at level 16, while player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 16.
 
 ## Analysis method
 
@@ -51,6 +51,27 @@ selects the corresponding Phoenix 1 Pumbility band for combined tier evidence.
 A negative value is easier to score than the typical chart in the same mode and official level. Continuous estimates are not hard-clamped to the official folder, but the `L + 0.5` center and evidence shrinkage mean that an estimate below `L` requires an unusually strong within-folder signal.
 
 The analyzer does not use the chart catalog's existing `scoringLevel` or an existing tier list.
+
+### Co-op tier difficulty
+
+Co-op difficulty is estimated independently from the Singles and Doubles residual models. The current
+Phoenix 2 2x, 3x, 4x, and 5x charts share one catalog and one tier list. Phoenix 1 and Phoenix 2
+observations are merged per player and chart with Phoenix 2 precedence. Before charts are compared,
+miss points are adjusted for a source-specific player-strength percentile and Phoenix source using
+all observations. Tier ordering then uses the conditional 75th-percentile score for a median-strength
+Phoenix 2 player. That conditional quantile provides the outlier robustness; raw chart scores and
+residuals are not trimmed.
+
+The robust chart ordering is calibrated monotonically to whole-number estimated difficulties from
+10 through 25. The median measured chart is anchored at 17, with the easiest and hardest ends mapped
+to 10 and 25. This is a calibration of observed chart order, not a percentile quota: it does not force
+a normal distribution, and any number of charts may share an integer difficulty.
+
+Co-op recommendation goals are assigned from that whole-number tier difficulty rather than from a
+chart's population score. Harder difficulties receive progressively lower letter-grade goals. Every
+goal uses a Fair Game plate, and the grade bands are calibrated so one goal contribution from every
+current chart totals exactly 16,000 Co-op Rating, the `[CO-OP] Master` threshold. The raw per-chart
+q75 result remains analysis provenance and is not used as the recommendation target.
 
 ## Magnitude bands and relative ranks
 
@@ -285,7 +306,8 @@ Player rating history is selected independently for Singles and Doubles. The pub
 rating averages ranks 1-20 by Pumbility and converts that average to the continuous chart level where
 an S with Fair Game earns the same Phoenix 2 Pumbility. A mode uses Phoenix 2 once it has 20 valid,
 deduplicated scores; below that threshold it uses a complete Phoenix 1 top 20, then any available
-Phoenix 2 history. This public rating is displayed on the page and sets the eligible-chart ceiling.
+Phoenix 2 history. This public rating is displayed on the page and sets the recommendation ceiling at
+one estimated-difficulty point above the rating for that mode.
 
 Score projections use a separate rating calculated with the same S-and-Fair-Game conversion from
 Pumbility ranks 11-30. Phoenix 2 supplies that window at 30 valid scores; otherwise a complete
@@ -295,7 +317,7 @@ training or projecting an already-played target chart, that chart is removed fro
 window and rank 31 is promoted when available. Played status, existing Pumbility, current top-50
 totals, and projected gain always use Phoenix 2.
 
-The recommendation page opens on **Overall**, followed by **Single** and **Double**. Overall keeps
+The recommendation page opens on **Overall**, followed by **Single**, **Double**, and **Co-op**. Overall keeps
 the mode-specific rating and projection for every chart, merges the displayed top 20 from each
 eligible mode, recalculates each candidate's gain against one shared Single-and-Double Phoenix 2
 pool, and displays the best 20 merged opportunities. Overall Pumbility is the sum of the highest 50
@@ -311,7 +333,12 @@ divisions of Bronze, Silver, Gold, Platinum, Diamond, Red Beryl, and Alexandrite
 Phoenix at 20,000. Phoenix 1 may supply an existing rating or projection fallback, but never a
 current Pumbility total or progress value.
 
-The unfiltered suggested-chart list has no lower estimated-difficulty bound and extends through 0.5
+Co-op is eligible for every named Phoenix 2 player and has no 30-score readiness gate. Current Co-op
+Rating sums the contribution from every unique Phoenix 2 Co-op chart PB rather than retaining a top
+50. Its title ladder runs from no title through `[CO-OP] Lv.1`-`Lv.10`, Advanced at 12,000,
+Expert at 14,000, and Master at 16,000.
+
+The unfiltered suggested-chart list has no lower estimated-difficulty bound and extends through 1.0
 points above the player's scoring rating. Official-difficulty filters instead use every rankable level-16+
 chart in the authoritative catalog, show every exact-level match, and order those matches by projected
 Pumbility gain from highest to lowest.
@@ -336,6 +363,15 @@ deterministic change from that same Pumbility value against the active Phoenix 2
 including replacement of the number-50 chart. Single and Double use their independent mode pool;
 Overall uses the shared S+D pool. Existing chart Pumbility and all current top-50 totals remain the
 authoritative values supplied by Phoenix 2; Phoenix 1 Pumbility totals never enter that pool.
+
+Co-op projections do not use the Singles/Doubles peer-rating model. The whole-number Co-op estimated
+difficulty selects a monotonic letter-grade goal, while every goal uses a Fair Game plate. The bands
+are calibrated against the current chart distribution so one goal contribution from all 140 charts
+totals exactly 16,000 Co-op Rating, the `[CO-OP] Master` threshold. Projected gain is the nonnegative
+increase over the player's current contribution on that chart, and Co-op Rating remains an all-chart
+sum with no top-50 cutoff. Equal gains are ordered by the underlying continuous difficulty signal,
+not the displayed whole-number difficulty. The merged population's raw nearest-rank q75 result remains provenance for
+the adjusted conditional-q75 tier model rather than serving as the recommendation target.
 
 The population models and frozen per-player inputs are rebuilt once in the daily background run.
 Opening or selecting a player on `/recommendations` first renders any cached result, then requests

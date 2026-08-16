@@ -42,8 +42,8 @@ from piu_recommendations import (
     PROJECTION_RATING_END_RANK,
     PROJECTION_RATING_SCORE_THRESHOLD,
     PROJECTION_RATING_START_RANK,
-    RECOMMENDATION_RADIUS,
     RECOMMENDATION_RATING_SCORE_COUNT,
+    RECOMMENDATION_RADIUS,
     RECOMMENDATION_SCHEMA_VERSION,
     SCORE_PROJECTION_MODEL_NAME,
     SKILL_RATING_REFERENCE_GRADE,
@@ -61,7 +61,7 @@ from piu_recommendations import (
 
 
 PLAYER_ARTIFACT_SHARD_SIZE = 10
-MODEL_ARTIFACT_SCHEMA_VERSION = 4
+MODEL_ARTIFACT_SCHEMA_VERSION = 5
 PLAYER_STATE_SCHEMA_VERSION = 1
 
 
@@ -110,7 +110,7 @@ def _recommendation_method(
         "ratingReferenceGrade": SKILL_RATING_REFERENCE_GRADE,
         "ratingReferencePlate": SKILL_RATING_REFERENCE_PLATE,
         "ratingReferenceMultiplier": SKILL_RATING_REFERENCE_MULTIPLIER,
-        "ratingSource": "display and candidate eligibility use Phoenix 2 top 20 at 20 valid scores; otherwise Phoenix 1 top 20 when available, then partial Phoenix 2",
+        "ratingSource": "the displayed rating and recommendation ceiling use Phoenix 2 top 20 at 20 valid scores; otherwise Phoenix 1 top 20 when available, then partial Phoenix 2",
         "projectionRatingSource": "score projections use Phoenix 2 ranks 11-30 at 30 valid scores; otherwise Phoenix 1 ranks 11-30 when all 30 are available",
         "shortHistoryBaseline": "a mode without a complete 30-score Phoenix 2 or Phoenix 1 source keeps top-20 farm-edge recommendations but does not receive personal projected scores",
         "candidateUpperRadius": RECOMMENDATION_RADIUS,
@@ -125,12 +125,15 @@ def _recommendation_method(
         "pumbilityProjectionStatistic": "median-score-median-plate",
         "phoenix1PlatePriorCap": phoenix1_cap,
         "projectedGain": "deterministic change from the median-score and median-plate projected Pumbility to the active Phoenix 2 top-50 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; the projection replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
-        "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
+        "projectedGainTieBreak": "equal displayed projected gains use estimated difficulty for Singles/Doubles and the underlying continuous difficulty signal for Co-op, then expected rating and chart name",
         "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
         "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
         "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
         "scoreProjection": "using each player's S+FG-equivalent ranks 11-30 Pumbility rating, take the source-weighted median raw score from all other players with a normalized result on the exact chart, weighting Phoenix 1 observations 1x and Phoenix 2 observations 2x; search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back to the source-weighted, player-balanced population response surface below five peers",
         "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
+        "coopScoreProjectionModel": "estimated-difficulty-master-grade-ladder-v1",
+        "coopScoreProjection": "a monotonic letter-grade goal determined only by whole-number Co-op estimated difficulty, using a fixed Fair Game plate and calibrated so the complete catalog totals 16,000 Co-op Rating",
+        "coopRating": "the sum of every unique current Phoenix 2 Co-op chart rating; projected gain is additive and is not limited to a top-50 pool",
     }
 
 
@@ -146,9 +149,48 @@ def _mode_counts(
     for (player_id, chart_type), group in typed.groupby(
         ["playerId", "type"], sort=False
     ):
+        if chart_type not in {"Single", "Double"}:
+            continue
         mode = "singles" if chart_type == "Single" else "doubles"
         result[str(player_id)][mode] = int(len(group))
     return dict(result)
+
+
+def _model_catalog_records(
+    phoenix2_snapshot: Mapping[str, Any], phoenix2_catalog: pd.DataFrame
+) -> list[dict[str, Any]]:
+    """Retain the S/D analysis catalog plus raw Co-op chart metadata."""
+    catalog_fields = (
+        "chartId",
+        "songName",
+        "type",
+        "level",
+        "difficulty",
+        "imageUrl",
+        "noteCount",
+        "stepArtist",
+        "bpmMin",
+        "bpmMax",
+    )
+    standard_fields = [
+        column for column in catalog_fields if column in phoenix2_catalog.columns
+    ]
+    records = _frame_records(phoenix2_catalog[standard_fields])
+    retained_ids = {str(row.get("chartId") or "") for row in records}
+    for chart in phoenix2_snapshot.get("charts", []):
+        if not isinstance(chart, Mapping) or chart.get("type") != "CoOp":
+            continue
+        chart_id = str(chart.get("id") or chart.get("chartId") or "").strip()
+        if not chart_id or chart_id in retained_ids:
+            continue
+        record = {
+            field: chart.get("id" if field == "chartId" else field)
+            for field in catalog_fields
+        }
+        record["chartId"] = chart_id
+        records.append(record)
+        retained_ids.add(chart_id)
+    return records
 
 
 def build_recommendation_model_artifacts(
@@ -179,28 +221,13 @@ def build_recommendation_model_artifacts(
     slopes = dict(phoenix2_slopes)
     method = _recommendation_method(slopes, score_metadata, plate_model.phoenix1_cap)
 
-    catalog_fields = [
-        column
-        for column in (
-            "chartId",
-            "songName",
-            "type",
-            "level",
-            "difficulty",
-            "imageUrl",
-            "noteCount",
-            "stepArtist",
-            "bpmMin",
-            "bpmMax",
-        )
-        if column in phoenix2_catalog.columns
-    ]
+    model_catalog = _model_catalog_records(phoenix2_snapshot, phoenix2_catalog)
     model = {
         "artifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
         "recommendationSchemaVersion": RECOMMENDATION_SCHEMA_VERSION,
         "generationKey": generation_key,
         "generatedAtUtc": generated_at_utc,
-        "catalog": _frame_records(phoenix2_catalog[catalog_fields]),
+        "catalog": model_catalog,
         "recommendationCharts": [dict(row) for row in charts_for_players],
         "phoenix2Slopes": slopes,
         "scoreResponseModelPath": recommendation_score_model_path(generation_key),
@@ -215,10 +242,13 @@ def build_recommendation_model_artifacts(
         str(player_id): _frame_records(group)
         for player_id, group in phoenix1_scores.groupby("playerId", sort=False)
     }
+    valid_model_chart_ids = {
+        str(row.get("chartId") or "") for row in model_catalog
+    }
     p2_by_player = {
         str(player_id): [dict(row) for row in group]
         for player_id, group in _raw_scores_by_player(
-            phoenix2_snapshot, set(phoenix2_catalog["chartId"].astype(str))
+            phoenix2_snapshot, valid_model_chart_ids
         ).items()
     }
     p1_plate_by_player = _raw_scores_by_player(
@@ -283,6 +313,7 @@ def build_recommendation_model_artifacts(
                 )
                 for mode in ("singles", "doubles")
             }
+            eligibility["coop"] = True
             score_progress = {
                 mode: {
                     "validScoreCount": (
@@ -548,7 +579,20 @@ def player_recommendation_response(
     )
     recommendation = build_player_recommendation(
         player_id,
-        {},
+        {
+            "charts": [
+                {
+                    **dict(row),
+                    "id": str(row.get("chartId") or row.get("id") or ""),
+                }
+                for row in catalog_rows
+            ],
+            "scores": [
+                dict(row)
+                for row in phoenix2_state.get("scores", [])
+                if isinstance(row, Mapping)
+            ],
+        },
         model.get("recommendationCharts", []),
         model.get("phoenix2Slopes", {}),
         score_model,

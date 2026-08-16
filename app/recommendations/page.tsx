@@ -18,6 +18,11 @@ import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { hasLimitedData } from "../../lib/chart-evidence";
 import { formatEstimatedDifficulty } from "../../lib/format-difficulty";
+import {
+  recommendationModeFromSearchParams,
+  recommendationViewFromSearchParams,
+  type RecommendationView,
+} from "../../lib/page-view-state";
 import { pumbilityProgress } from "../../lib/pumbility-progress";
 import {
   ALL_DIFFICULTIES,
@@ -42,15 +47,17 @@ const RECOMMENDATION_MODES: RecommendationModeKey[] = [
   "overall",
   "singles",
   "doubles",
+  "coop",
 ];
 const INITIAL_DIFFICULTY_FILTERS: Record<RecommendationModeKey, string> = {
   overall: ALL_DIFFICULTIES,
   singles: ALL_DIFFICULTIES,
   doubles: ALL_DIFFICULTIES,
+  coop: ALL_DIFFICULTIES,
 };
 const DEFAULT_RECOMMENDATION_SCORE_TARGET = 30;
 const MODEL_DELAY_THRESHOLD_MS = 26 * 60 * 60 * 1000;
-type RecommendationView = "recommendations" | "top50";
+type StandardModeKey = Exclude<ModeKey, "coop">;
 
 
 function signed(value: number, digits = 2): string {
@@ -78,6 +85,7 @@ function ProgressStat({
   const ariaMaximum = progress.nextThreshold ?? Math.max(progress.threshold, value);
   const ariaNow = Math.min(ariaMaximum, Math.max(ariaMinimum, value));
   const emblemLevel = String(progress.rungIndex).padStart(2, "0");
+  const ratingName = mode === "coop" ? "Co-op Rating" : "Pumbility";
   return (
     <article className="pumbility-progress-panel">
       <div className={`pumbility-progress-heading${mode === "overall" ? "" : " no-emblem"}`}>
@@ -96,7 +104,7 @@ function ProgressStat({
           <strong>{progress.label}</strong>
           <small>
             {progress.nextLabel
-              ? `${pumbilityLabel(progress.remaining)} Pumbility to ${progress.nextLabel}`
+              ? `${pumbilityLabel(progress.remaining)} ${ratingName} to ${progress.nextLabel}`
               : `Maximum ${mode === "overall" ? "rank" : "skill title"} reached`}
           </small>
         </div>
@@ -108,7 +116,7 @@ function ProgressStat({
         aria-valuemin={ariaMinimum}
         aria-valuenow={ariaNow}
         aria-valuetext={progress.nextLabel
-          ? `${roundedPercent}%, ${pumbilityLabel(progress.remaining)} Pumbility to ${progress.nextLabel}`
+          ? `${roundedPercent}%, ${pumbilityLabel(progress.remaining)} ${ratingName} to ${progress.nextLabel}`
           : `100%, maximum ${mode === "overall" ? "rank" : "skill title"} reached`}
         className="pumbility-progress"
         role="progressbar"
@@ -132,7 +140,7 @@ function ProgressStat({
 function scoreProgressForMode(
   summary: RecommendationPlayerSummary | undefined,
   payload: PlayerRecommendationsResponse | null,
-  mode: ModeKey,
+  mode: StandardModeKey,
 ): RecommendationScoreProgress {
   const summaryProgress = summary?.scoreProgress?.[mode];
   const modeResult = payload?.player.modes[mode];
@@ -156,10 +164,10 @@ function RecommendationReadiness({
   progress,
   detail,
 }: {
-  progress: Record<ModeKey, RecommendationScoreProgress>;
+  progress: Record<StandardModeKey, RecommendationScoreProgress>;
   detail?: string;
 }) {
-  const allModesReady = (["singles", "doubles"] as ModeKey[]).every(
+  const allModesReady = (["singles", "doubles"] as StandardModeKey[]).every(
     (modeKey) => progress[modeKey].validScoreCount
       >= progress[modeKey].requiredScoreCount,
   );
@@ -171,7 +179,7 @@ function RecommendationReadiness({
         ? "Your score history is ready. Recommendations will appear after the next player refresh."
         : "Build a larger score history in Singles and Doubles so we can calculate a reliable route for each mode.")}</p>
       <div className="recommendation-readiness-grid">
-        {(["singles", "doubles"] as ModeKey[]).map((modeKey) => {
+        {(["singles", "doubles"] as StandardModeKey[]).map((modeKey) => {
           const modeProgress = progress[modeKey];
           const current = Math.min(
             modeProgress.validScoreCount,
@@ -231,7 +239,10 @@ function RecommendationCard({
   rank: number;
 }) {
   const bpm = formatBpm(chart.bpmMin, chart.bpmMax);
-  const estimate = `${chart.type === "Single" ? "S" : "D"}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
+  const isCoop = chart.type === "CoOp";
+  const estimate = isCoop
+    ? String(Math.round(chart.estimatedDifficulty))
+    : `${chart.type === "Single" ? "S" : "D"}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
   const goal = chart.projectedGrade && chart.projectedPlateCode
     ? `Goal: ${chart.projectedGrade} ${chart.projectedPlateCode}`
     : null;
@@ -239,7 +250,12 @@ function RecommendationCard({
   const pumbilityPopupId = useId();
   const pumbilityControlRef = useRef<HTMLDivElement>(null);
   const projectedGain = chart.projectedGain === null ? "-" : signed(chart.projectedGain);
-  const hasProjectedPumbility = chart.expectedPumbility !== null;
+  const currentRating = isCoop ? chart.existingCoopRating : chart.existingPumbility;
+  const expectedRating = isCoop ? chart.expectedCoopRating : chart.expectedPumbility;
+  const hasProjectedRating = expectedRating !== null && expectedRating !== undefined;
+  const projectedRatingLabel = isCoop
+    ? "Projected chart contribution"
+    : "Total projected Pumbility";
 
   useEffect(() => {
     if (!pumbilityOpen) return;
@@ -278,7 +294,7 @@ function RecommendationCard({
       <div className="chart-art recommendation-jacket" data-chart-type={chart.type} aria-hidden="true">
         {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <b>{chart.difficulty}</b>}
         <span className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>
-          {chart.level}
+          {isCoop ? `${chart.level}x` : chart.level}
         </span>
       </div>
       <div className="recommendation-copy">
@@ -301,7 +317,9 @@ function RecommendationCard({
           <b> · {estimate} estimate</b>
         </p>
         <div className="recommendation-tags">
-          <span>{chart.played ? `Current ${chart.existingPumbility?.toFixed(2)} PB` : "Unplayed in Phoenix 2"}</span>
+          <span>{chart.played
+            ? `Current ${currentRating?.toFixed(2) ?? "-"} ${isCoop ? "Co-op Rating contribution" : "PB"}`
+            : "Unplayed in Phoenix 2"}</span>
         </div>
       </div>
       <div className="recommendation-value">
@@ -314,11 +332,11 @@ function RecommendationCard({
           }}
           ref={pumbilityControlRef}
         >
-          {hasProjectedPumbility ? (
+          {hasProjectedRating ? (
             <button
               aria-controls={pumbilityPopupId}
               aria-expanded={pumbilityOpen}
-              aria-label={`Projected gain ${projectedGain}. ${pumbilityOpen ? "Hide" : "Show"} total projected Pumbility.`}
+              aria-label={`Projected gain ${projectedGain}. ${pumbilityOpen ? "Hide" : "Show"} ${projectedRatingLabel}.`}
               className="recommendation-pumbility-trigger"
               onClick={() => setPumbilityOpen((open) => !open)}
               type="button"
@@ -332,14 +350,14 @@ function RecommendationCard({
               <strong>{projectedGain}</strong>
             </div>
           )}
-          {pumbilityOpen && chart.expectedPumbility !== null ? (
+          {pumbilityOpen && expectedRating !== null && expectedRating !== undefined ? (
             <div
               className="recommendation-pumbility-popup"
               id={pumbilityPopupId}
               role="status"
             >
-              <span>Total projected Pumbility</span>
-              <strong>{pumbilityLabel(chart.expectedPumbility)}</strong>
+              <span>{projectedRatingLabel}</span>
+              <strong>{pumbilityLabel(expectedRating)}</strong>
             </div>
           ) : null}
         </div>
@@ -351,6 +369,12 @@ function RecommendationCard({
       </div>
     </article>
   );
+}
+
+function topScoreRating(score: RecommendationTopScore): number | null {
+  return score.type === "CoOp"
+    ? score.coopRating ?? null
+    : score.pumbility ?? null;
 }
 
 function TopScoreCard({
@@ -365,6 +389,7 @@ function TopScoreCard({
   const limitedData = score.nContributors !== null
     && hasLimitedData(score.nContributors);
   const result = [score.grade, score.plateCode].filter(Boolean).join(" ") || "Result unavailable";
+  const rating = topScoreRating(score);
   return (
     <article className="top-score-card">
       <button
@@ -390,7 +415,7 @@ function TopScoreCard({
             aria-hidden="true"
             className={`chart-difficulty-badge chart-difficulty-${score.type.toLowerCase()}`}
           >
-            {score.level}
+            {score.type === "CoOp" ? `${score.level}x` : score.level}
           </span>
         </span>
         <span className="top-score-result">
@@ -398,7 +423,7 @@ function TopScoreCard({
             <b>{score.grade || "—"}</b>
             <small>{score.plateCode || "—"}</small>
           </span>
-          <strong>{pumbilityLabel(score.pumbility)}</strong>
+          <strong>{rating === null ? "—" : pumbilityLabel(rating)}</strong>
         </span>
       </button>
     </article>
@@ -421,7 +446,9 @@ function TopScoreDetailDialog({
   const bpm = formatBpm(score.bpmMin, score.bpmMax);
   const limitedData = score.nContributors !== null
     && hasLimitedData(score.nContributors);
+  const isCoop = score.type === "CoOp";
   const prefix = score.type === "Single" ? "S" : "D";
+  const rating = topScoreRating(score);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement
@@ -516,14 +543,18 @@ function TopScoreDetailDialog({
               {bpm ? ` · ${bpm}` : ""}
             </p>
             <div className="chart-meta">
-              <span><b>{score.difficulty}</b> official</span>
+              {isCoop
+                ? <span><b>{score.difficulty}</b> chart</span>
+                : <span><b>{score.difficulty}</b> official</span>}
               <span><b>{score.estimatedDifficulty === null
                 ? "Unavailable"
-                : `${prefix}${formatEstimatedDifficulty(score.estimatedDifficulty)}`}</b> estimated</span>
-              {score.difficultyDelta !== null ? (
+                : isCoop
+                  ? String(Math.round(score.estimatedDifficulty))
+                  : `${prefix}${formatEstimatedDifficulty(score.estimatedDifficulty)}`}</b> estimated</span>
+              {!isCoop && score.difficultyDelta !== null ? (
                 <span><b>{signed(score.difficultyDelta)}</b> difference</span>
               ) : null}
-              {score.difficultyCi95Low !== null && score.difficultyCi95High !== null ? (
+              {!isCoop && score.difficultyCi95Low !== null && score.difficultyCi95High !== null ? (
                 <span><b>{formatEstimatedDifficulty(score.difficultyCi95Low)}–{formatEstimatedDifficulty(score.difficultyCi95High)}</b> CI</span>
               ) : null}
               {score.nContributors !== null ? (
@@ -537,7 +568,10 @@ function TopScoreDetailDialog({
           </div>
           <div className="top-score-dialog-result">
             <span><small>Rank</small><strong>#{rank}</strong></span>
-            <span><small>Pumbility</small><strong>{pumbilityLabel(score.pumbility)}</strong></span>
+            <span>
+              <small>{isCoop ? "Co-op Rating" : "Pumbility"}</small>
+              <strong>{rating === null ? "Unavailable" : pumbilityLabel(rating)}</strong>
+            </span>
             <span><small>Grade</small><strong>{score.grade || "Unavailable"}</strong></span>
             <span><small>Plate</small><strong>{score.plate
               ? `${score.plate}${score.plateCode ? ` (${score.plateCode})` : ""}`
@@ -558,12 +592,17 @@ function TopScoresSection({
   scores: RecommendationTopScore[];
   onSelect: (score: RecommendationTopScore, rank: number) => void;
 }) {
-  const modeLabel = mode === "overall" ? "Overall" : mode === "singles" ? "Singles" : "Doubles";
+  const modeLabel = mode === "overall"
+    ? "Overall"
+    : mode === "singles" ? "Singles" : mode === "doubles" ? "Doubles" : "Co-op";
+  const isCoop = mode === "coop";
   return (
     <section className="top-scores" aria-labelledby="top-scores-title">
       <div className="recommendation-section-heading top-scores-heading">
-        <h2 id="top-scores-title">TOP 50 PUMBILITY SCORES</h2>
-        <span>Showing {scores.length} of up to 50</span>
+        {isCoop
+          ? <h2 id="top-scores-title">CO-OP RATING SCORES</h2>
+          : <h2 id="top-scores-title">TOP 50 PUMBILITY SCORES</h2>}
+        <span>{isCoop ? `Showing ${scores.length} scored charts` : `Showing ${scores.length} of up to 50`}</span>
       </div>
       {scores.length ? (
         <div className="top-score-grid">
@@ -578,8 +617,8 @@ function TopScoresSection({
         </div>
       ) : (
         <div className="top-score-empty">
-          <h3>No Top 50 scores yet</h3>
-          <p>{modeLabel} Phoenix 2 Pumbility scores will appear here after score sync.</p>
+          <h3>{isCoop ? "No Co-op scores yet" : "No Top 50 scores yet"}</h3>
+          <p>{modeLabel} Phoenix 2 {isCoop ? "Co-op Rating" : "Pumbility"} scores will appear here after score sync.</p>
         </div>
       )}
     </section>
@@ -611,6 +650,18 @@ export default function RecommendationsPage() {
     setNowMs(Date.now());
     const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const applyViewFromUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      setActiveMode(recommendationModeFromSearchParams(params));
+      setRecommendationView(recommendationViewFromSearchParams(params));
+      setSelectedTopScore(null);
+    };
+    applyViewFromUrl();
+    window.addEventListener("popstate", applyViewFromUrl);
+    return () => window.removeEventListener("popstate", applyViewFromUrl);
   }, []);
 
   useEffect(() => {
@@ -741,19 +792,42 @@ export default function RecommendationsPage() {
   };
 
   const mode = playerPayload?.player.modes[activeMode] || null;
-  const modePumbility = mode?.currentTop50Pumbility ?? 0;
+  const modeRating = activeMode === "coop"
+    ? mode?.currentCoopRating ?? 0
+    : mode?.currentTop50Pumbility ?? 0;
   const sourceModeEligibility = mode?.sourceModeEligibility;
   const unavailableOverallModes = activeMode === "overall" && sourceModeEligibility
-    ? (["singles", "doubles"] as ModeKey[]).filter(
+    ? (["singles", "doubles"] as StandardModeKey[]).filter(
         (modeKey) => !sourceModeEligibility[modeKey],
       )
     : [];
   const selectedPlayer = playersPayload?.players.find(
     (player) => player.playerKey === selectedKey,
   );
-  const scoreReadiness: Record<ModeKey, RecommendationScoreProgress> = {
+  const scoreReadiness: Record<StandardModeKey, RecommendationScoreProgress> = {
     singles: scoreProgressForMode(selectedPlayer, playerPayload, "singles"),
     doubles: scoreProgressForMode(selectedPlayer, playerPayload, "doubles"),
+  };
+
+  const updatePageUrl = (
+    mode: RecommendationModeKey,
+    view: RecommendationView,
+  ) => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("mode") === mode && url.searchParams.get("view") === view) return;
+    url.searchParams.set("mode", mode);
+    url.searchParams.set("view", view);
+    window.history.pushState({}, "", url);
+  };
+  const selectMode = (mode: RecommendationModeKey) => {
+    setSelectedTopScore(null);
+    setActiveMode(mode);
+    updatePageUrl(mode, recommendationView);
+  };
+  const selectView = (view: RecommendationView) => {
+    setSelectedTopScore(null);
+    setRecommendationView(view);
+    updatePageUrl(activeMode, view);
   };
 
   const handleTabKeyDown = (
@@ -775,8 +849,7 @@ export default function RecommendationsPage() {
     }
     event.preventDefault();
     const nextMode = RECOMMENDATION_MODES[nextIndex];
-    setSelectedTopScore(null);
-    setActiveMode(nextMode);
+    selectMode(nextMode);
     window.requestAnimationFrame(() => {
       document.getElementById(`recommendation-tab-${nextMode}`)?.focus();
     });
@@ -913,14 +986,13 @@ export default function RecommendationsPage() {
             aria-labelledby="recommendation-view-label"
             className={`recommendation-view-switch ${recommendationView === "top50" ? "top50-active" : "recommendations-active"}`}
             onClick={() => {
-              setSelectedTopScore(null);
-              setRecommendationView((current) => current === "recommendations" ? "top50" : "recommendations");
+              selectView(recommendationView === "recommendations" ? "top50" : "recommendations");
             }}
             role="switch"
             type="button"
           >
             <span>Recommendations</span>
-            <span>Top 50</span>
+            <span>{activeMode === "coop" ? "Scores" : "Top 50"}</span>
           </button>
           <div className="player-picker-meta">
             <ScoreSyncLink className="player-score-sync-link" />
@@ -955,17 +1027,14 @@ export default function RecommendationsPage() {
                     className={activeMode === modeKey ? "active" : ""}
                     id={`recommendation-tab-${modeKey}`}
                     key={modeKey}
-                    onClick={() => {
-                      setSelectedTopScore(null);
-                      setActiveMode(modeKey);
-                    }}
+                    onClick={() => selectMode(modeKey)}
                     onKeyDown={(event) => handleTabKeyDown(event, index)}
                     role="tab"
                     tabIndex={activeMode === modeKey ? 0 : -1}
                     type="button"
                   >
-                    <b>{modeKey === "overall" ? "O" : modeKey === "singles" ? "S" : "D"}</b>
-                    <span>{modeKey}</span>
+                    <b>{modeKey === "overall" ? "O" : modeKey === "singles" ? "S" : modeKey === "doubles" ? "D" : "C"}</b>
+                    <span>{modeKey === "coop" ? "Co-op" : modeKey}</span>
                   </button>
                 ))}
               </div>
@@ -977,7 +1046,7 @@ export default function RecommendationsPage() {
               role="tabpanel"
             >
               {mode && (mode.eligible || recommendationView === "top50") ? (
-                <ProgressStat mode={activeMode} value={modePumbility} />
+                <ProgressStat mode={activeMode} value={modeRating} />
               ) : null}
 
               {recommendationView === "recommendations" ? unavailableOverallModes.map((modeKey) => {
@@ -1008,12 +1077,24 @@ export default function RecommendationsPage() {
                     remain available while the latest analysis is published.
                   </p>
                 </div>
+              ) : activeMode === "coop" && !mode ? (
+                <div className="recommendation-empty insufficient-state">
+                  <span>C</span>
+                  <h2>Co-op is being prepared</h2>
+                  <p>This cached recommendation predates Co-op analysis. Overall, Singles, and Doubles remain available.</p>
+                </div>
               ) : recommendationView === "top50" ? (
                 <TopScoresSection
                   mode={activeMode}
                   onSelect={(score, rank) => setSelectedTopScore({ score, rank })}
                   scores={mode?.topScores ?? []}
                 />
+              ) : !mode?.eligible && activeMode === "coop" ? (
+                <div className="recommendation-empty insufficient-state">
+                  <span>C</span>
+                  <h2>Co-op recommendations are unavailable</h2>
+                  <p>{mode?.reason || "This player cannot be rated for Co-op yet."}</p>
+                </div>
               ) : !mode?.eligible ? (
                 <RecommendationReadiness
                   detail={mode?.reason || "This mode cannot be rated yet."}
@@ -1024,16 +1105,18 @@ export default function RecommendationsPage() {
                   <div className="recommendation-section-heading">
                     <h2 id="top-recommendations-title">RECOMMENDED CHARTS</h2>
                     <label className="recommendation-difficulty-filter">
-                      <span className="visually-hidden">Official difficulty</span>
+                      <span className="visually-hidden">{activeMode === "coop" ? "Player count" : "Official difficulty"}</span>
                       <select
-                        aria-label="Official difficulty"
+                        aria-label={activeMode === "coop" ? "Player count" : "Official difficulty"}
                         onChange={(event) => setDifficultyFilters((current) => ({
                           ...current,
                           [activeMode]: event.target.value,
                         }))}
                         value={effectiveDifficulty}
                       >
-                        <option value={ALL_DIFFICULTIES}>All difficulties</option>
+                        <option value={ALL_DIFFICULTIES}>
+                          {activeMode === "coop" ? "All player types" : "All difficulties"}
+                        </option>
                         {difficultyOptions.map((difficulty) => (
                           <option key={difficulty} value={difficulty}>{difficulty}</option>
                         ))}
@@ -1046,7 +1129,9 @@ export default function RecommendationsPage() {
                     )) : (
                       <p className="no-recommendations">
                         {effectiveDifficulty === ALL_DIFFICULTIES
-                          ? "No nearby chart is projected to improve the current top 50."
+                          ? activeMode === "coop"
+                            ? "No Co-op chart is projected to increase the current Co-op Rating."
+                            : "No chart is projected to improve the current top 50."
                           : `No ${effectiveDifficulty} charts are available in the recommendation dataset.`}
                       </p>
                     )}
@@ -1071,9 +1156,11 @@ export default function RecommendationsPage() {
       <footer>
         <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. When a player has a score in both versions, only their best Phoenix 2 score is used.</p>
         <p>Phoenix 1 scores are rebased to Phoenix 2 chart levels before each version is normalized and combined. Removed Phoenix 1 charts never enter this engine.</p>
-        <p>Projected scores use the ranks 11–30 Pumbility rating and the Phoenix-weighted median (50th percentile) from all other players with a normalized result on the exact chart, giving Phoenix 2 results twice the weight of Phoenix 1. The search tries plus or minus 0.2 through 0.5 rating in 0.1 steps seeking 20 peers, repeats those radii seeking 10, then repeats seeking five. Every peer within the narrowest successful radius is used; below five peers, the player-balanced population model uses the same Phoenix weighting.</p>
-        <p>The projected plate is the weighted median in Phoenix 2 order from Rough Game through Perfect Game. Expected Pumbility is then calculated once from the displayed projected score&apos;s grade, that median plate, and the chart&apos;s mode-specific formula. Projected gain is the deterministic top-50 change from that same displayed result.</p>
-        <p>The visible skill rating and eligible-chart ceiling use top-20 average Pumbility. Both ratings are expressed as the continuous chart level where an S with Fair Game earns the selected window&apos;s average Pumbility. Phoenix 2 supplies a window once it is complete; otherwise a complete Phoenix 1 window is used, followed by partial Phoenix 2 only for the visible top-20 rating.</p>
+        <p>Singles and Doubles projected scores use the ranks 11–30 Pumbility rating and the Phoenix-weighted median (50th percentile) from all other players with a normalized result on the exact chart, giving Phoenix 2 results twice the weight of Phoenix 1. The search tries plus or minus 0.2 through 0.5 rating in 0.1 steps seeking 20 peers, repeats those radii seeking 10, then repeats seeking five. Every peer within the narrowest successful radius is used; below five peers, the player-balanced population model uses the same Phoenix weighting.</p>
+        <p>For Singles and Doubles, the projected plate is the weighted median in Phoenix 2 order from Rough Game through Perfect Game. Expected Pumbility is then calculated once from the displayed projected score&apos;s grade, that median plate, and the chart&apos;s mode-specific formula. Projected gain is the deterministic top-50 change from that same displayed result.</p>
+        <p>Co-op recommendations assign a letter-grade goal from each chart&apos;s whole-number estimated difficulty: harder charts receive lower goals. Every goal uses a Fair Game plate, and completing all current chart goals totals exactly 16,000 Co-op Rating, the [CO-OP] Master threshold. Projected gain is additive rather than limited to a top-50 pool; equal gains use the underlying continuous difficulty for ordering.</p>
+        <p>The underlying Co-op tier model adjusts miss points for player strength and Phoenix source using all observations, then estimates the conditional 75th-percentile score for a median-strength Phoenix 2 player. The conditional quantile supplies outlier robustness without trimming raw scores or residuals. Chart order is calibrated to whole-number difficulties from 10 through 25 with the median chart at 17, without forcing a normal distribution.</p>
+        <p>The visible skill rating uses top-20 average Pumbility and is expressed as the continuous chart level where an S with Fair Game earns the selected window&apos;s average Pumbility. Phoenix 2 supplies a window once it is complete; otherwise a complete Phoenix 1 window is used, followed by partial Phoenix 2. Singles and Doubles recommendations extend up to 1.0 estimated-difficulty point above that mode&apos;s rating; Overall merges those capped mode lists.</p>
         <p>Played status, existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2 rather than recomputing historical results. Overall Pumbility is the best 50 values across both modes; Overall recommendations merge each mode&apos;s displayed top 20 and recalculate their deterministic gain against that shared top-50 pool. Official-difficulty filters show every matching level-16+ chart, ordered by projected Pumbility gain. Projections are estimates, not guaranteed results.</p>
       </footer>
     </main>

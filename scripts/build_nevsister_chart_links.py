@@ -29,6 +29,10 @@ DEFAULT_OUTPUT = ROOT / "lib/data/nevsister-chart-videos.json"
 DEFAULT_OVERRIDES = ROOT / "lib/data/nevsister-chart-video-overrides.json"
 VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 CHART_TOKEN_RE = re.compile(r"(?<![A-Z0-9])([SD])\s*[-_.]?\s*(\d{1,2})(?!\d)", re.I)
+COOP_TOKEN_RE = re.compile(
+    r"(?<![A-Z0-9])CO\s*[-_. ]?\s*OP\s*[-_. ]?\s*X\s*(\d)(?!\d)",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -41,7 +45,12 @@ class Chart:
 
     @property
     def difficulty(self) -> str:
-        return f"{'S' if self.mode == 'Single' else 'D'}{self.level}"
+        prefix = {"Single": "S", "Double": "D", "CoOp": "C"}[self.mode]
+        return f"{prefix}{self.level}"
+
+    @property
+    def display_difficulty(self) -> str:
+        return f"Co-op {self.level}x" if self.mode == "CoOp" else self.difficulty
 
 
 @dataclass(frozen=True)
@@ -100,7 +109,12 @@ def core_song_names(value: str) -> list[str]:
 
 
 def explicit_difficulties(title: str) -> set[str]:
-    return {f"{mode.upper()}{int(level)}" for mode, level in CHART_TOKEN_RE.findall(title)}
+    standard = {
+        f"{mode.upper()}{int(level)}"
+        for mode, level in CHART_TOKEN_RE.findall(title)
+    }
+    coop = {f"C{int(players)}" for players in COOP_TOKEN_RE.findall(title)}
+    return standard | coop
 
 
 def load_charts(path: Path) -> list[Chart]:
@@ -113,7 +127,11 @@ def load_charts(path: Path) -> list[Chart]:
     for item in raw:
         mode = str(item.get("type") or "")
         level = int(item.get("level") or 0)
-        if mode not in {"Single", "Double"} or level < 16:
+        if mode not in {"Single", "Double", "CoOp"}:
+            continue
+        if mode != "CoOp" and level < 16:
+            continue
+        if mode == "CoOp" and level not in {2, 3, 4, 5}:
             continue
         chart_id = str(item.get("id") or "").strip()
         song_name = str(item.get("songName") or "").strip()
@@ -320,7 +338,11 @@ def build_mapping(
 def write_report(path: Path, missing: Iterable[Chart], ambiguous: dict[str, list[Candidate]]) -> None:
     payload = {
         "missing": [
-            {"chartId": chart.chart_id, "songName": chart.song_name, "difficulty": chart.difficulty}
+            {
+                "chartId": chart.chart_id,
+                "songName": chart.song_name,
+                "difficulty": chart.display_difficulty,
+            }
             for chart in missing
         ],
         "ambiguous": {
@@ -381,7 +403,11 @@ def main() -> int:
     charts = load_charts(args.charts)
     expected_singles = sum(chart.mode == "Single" for chart in charts)
     expected_doubles = sum(chart.mode == "Double" for chart in charts)
-    print(f"Catalog charts: {len(charts)} ({expected_singles} Singles, {expected_doubles} Doubles)")
+    expected_coop = sum(chart.mode == "CoOp" for chart in charts)
+    print(
+        f"Catalog charts: {len(charts)} "
+        f"({expected_singles} Singles, {expected_doubles} Doubles, {expected_coop} Co-op)"
+    )
 
     if args.check:
         inventory = None if args.offline else load_inventory(args.cache)

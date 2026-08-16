@@ -87,6 +87,7 @@ _PUBLIC_COMBINED_PARITY_FIELDS = (
     "summary",
     "singles",
     "doubles",
+    "coop",
     "relativeGroups",
     "effectBands",
 )
@@ -153,6 +154,9 @@ _PUBLIC_RECOMMENDATION_METHOD_FIELDS = (
     "displayMinimumOfficialLevel",
     "scoreProjection",
     "scoreProjectionModel",
+    "coopScoreProjectionModel",
+    "coopScoreProjection",
+    "coopRating",
 )
 _PUBLIC_RECOMMENDATION_PLAYER_FIELDS = (
     "playerKey",
@@ -326,7 +330,7 @@ def _parity_mismatch_evidence(
     list_fields = (
         ("players",)
         if recommendation_index
-        else ("singles", "doubles", "relativeGroups", "effectBands")
+        else ("singles", "doubles", "coop", "relativeGroups", "effectBands")
     )
     for field in list_fields:
         actual_items = actual.get(field)
@@ -579,10 +583,10 @@ def _combined_payload_for_active_generation(
     result = dict(payload)
     if active_schema == COMBINED_TIER_SCHEMA_VERSION:
         return result
-    if (
-        COMBINED_TIER_SCHEMA_VERSION != 3
-        or active_schema != LEGACY_COMBINED_TIER_SCHEMA_VERSION
-    ):
+    if COMBINED_TIER_SCHEMA_VERSION != 5 or active_schema not in {
+        3,
+        LEGACY_COMBINED_TIER_SCHEMA_VERSION,
+    }:
         raise RuntimeError("The active combined-tier schema is not supported for population.")
 
     summary = dict(result.get("summary") or {})
@@ -590,20 +594,54 @@ def _combined_payload_for_active_generation(
     current_suffix = f"+combined-tier-v{COMBINED_TIER_SCHEMA_VERSION}"
     if not current_script_version.endswith(current_suffix):
         raise RuntimeError("The current combined-tier script version is inconsistent.")
-    summary["scriptVersion"] = (
-        current_script_version[: -len(current_suffix)]
-        + f"+combined-tier-v{LEGACY_COMBINED_TIER_SCHEMA_VERSION}"
-    )
+    summary["scriptVersion"] = current_script_version[: -len(current_suffix)] + "+combined-tier-v3"
     method = dict(summary.get("method") or {})
-    method.pop("whatIfEstimates", None)
+    method.pop("coop", None)
+    if "modeSeparation" in method:
+        method["modeSeparation"] = (
+            "Singles and Doubles use independent baselines, calibration, and ranks"
+        )
     summary["method"] = method
-    result["schemaVersion"] = LEGACY_COMBINED_TIER_SCHEMA_VERSION
+    coop_rows = [row for row in result.get("coop", []) if isinstance(row, Mapping)]
+    if isinstance(summary.get("modes"), Mapping):
+        modes = dict(summary["modes"])
+        modes.pop("coop", None)
+        summary["modes"] = modes
+    if isinstance(summary.get("coverage"), Mapping):
+        coverage = dict(summary["coverage"])
+        coverage["targetCatalogCharts"] = max(
+            0, int(coverage.get("targetCatalogCharts") or 0) - len(coop_rows)
+        )
+        coverage["targetChartsMeasured"] = max(
+            0,
+            int(coverage.get("targetChartsMeasured") or 0)
+            - sum(row.get("estimatedDifficulty") is not None for row in coop_rows),
+        )
+        coverage["targetChartsPublished"] = max(
+            0,
+            int(coverage.get("targetChartsPublished") or 0)
+            - sum(row.get("evidenceStatus") == "Published" for row in coop_rows),
+        )
+        summary["coverage"] = coverage
+    result.pop("coop", None)
+    result["schemaVersion"] = 3
     result["summary"] = summary
-    for field in ("singles", "doubles"):
-        result[field] = [
-            {key: value for key, value in dict(chart).items() if key != "whatIfEstimates"}
-            for chart in result.get(field, [])
-        ]
+    if active_schema == LEGACY_COMBINED_TIER_SCHEMA_VERSION:
+        summary["scriptVersion"] = (
+            current_script_version[: -len(current_suffix)]
+            + f"+combined-tier-v{LEGACY_COMBINED_TIER_SCHEMA_VERSION}"
+        )
+        method.pop("whatIfEstimates", None)
+        result["schemaVersion"] = LEGACY_COMBINED_TIER_SCHEMA_VERSION
+        for field in ("singles", "doubles"):
+            result[field] = [
+                {
+                    key: value
+                    for key, value in dict(chart).items()
+                    if key != "whatIfEstimates"
+                }
+                for chart in result.get(field, [])
+            ]
     return result
 
 

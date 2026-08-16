@@ -12,6 +12,7 @@ import {
   formatEstimatedDifficulty,
   truncateEstimatedDifficulty,
 } from "../../lib/format-difficulty";
+import { tierModeFromSearchParams } from "../../lib/page-view-state";
 import type {
   AnalysisPayload,
   ChartResult,
@@ -39,8 +40,18 @@ function signed(value: number, digits = 2): string {
 
 function chartGrade(chart: ChartResult): string {
   if (chart.estimatedDifficulty === null) return "-";
+  if (chart.type === "CoOp") {
+    const continuous = chart.difficultyModelContinuous;
+    return (typeof continuous === "number" && Number.isFinite(continuous)
+      ? continuous
+      : chart.estimatedDifficulty).toFixed(1);
+  }
   const prefix = chart.type === "Single" ? "S" : "D";
   return `${prefix}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
+}
+
+function chartCountLabel(chart: ChartResult): string {
+  return chart.type === "CoOp" ? `${chart.level}x` : String(chart.level);
 }
 
 function LimitedDataWarning({ chart, compact = false }: { chart: ChartResult; compact?: boolean }) {
@@ -103,6 +114,7 @@ function WhatIfDifficulty({ chart }: { chart: ChartResult }) {
 
 function ChartDetails({ chart, headingId }: { chart: ChartResult; headingId?: string }) {
   const delta = chart.difficultyDelta;
+  const isCoop = chart.type === "CoOp";
   return (
     <>
       <div className="chart-copy">
@@ -115,32 +127,36 @@ function ChartDetails({ chart, headingId }: { chart: ChartResult; headingId?: st
           {chart.noteCount ? ` - ${chart.noteCount.toLocaleString()} notes` : ""}
         </p>
         <div className="chart-meta">
-          <span><b>{chart.difficulty}</b> official</span>
+          {isCoop
+            ? <span><b>{chart.difficulty}</b> chart</span>
+            : <span><b>{chart.difficulty}</b> official</span>}
           <span><b>{chartGrade(chart)}</b> estimated</span>
           <span><b>{chart.nContributors}</b> contributors</span>
           {chart.phoenix1Contributors !== undefined && chart.phoenix2Contributors !== undefined ? (
             <span><b>{chart.phoenix1Contributors}/{chart.phoenix2Contributors}</b> P1/P2</span>
           ) : null}
-          {chart.levelRank !== null && chart.levelComparisonCharts !== null ? (
+          {!isCoop && chart.levelRank !== null && chart.levelComparisonCharts !== null ? (
             <span><b>#{chart.levelRank}</b> of {chart.levelComparisonCharts} in {chart.difficulty}</span>
           ) : null}
         </div>
       </div>
-      <div className={`delta ${delta !== null && delta < 0 ? "delta-easy" : "delta-hard"}`}>
-        <span>difference</span>
-        <strong>{delta === null ? "-" : signed(delta)}</strong>
-        {chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null ? (
-          <small>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
-        ) : null}
-        <WhatIfDifficulty chart={chart} />
-      </div>
+      {isCoop ? null : (
+        <div className={`delta ${delta !== null && delta < 0 ? "delta-easy" : "delta-hard"}`}>
+          <span>difference</span>
+          <strong>{delta === null ? "-" : signed(delta)}</strong>
+          {chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null ? (
+            <small>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
+          ) : null}
+          <WhatIfDifficulty chart={chart} />
+        </div>
+      )}
     </>
   );
 }
 
 function ChartCard({ chart }: { chart: ChartResult }) {
   return (
-    <article className="chart-card">
+    <article className={`chart-card${chart.type === "CoOp" ? " chart-card-coop" : ""}`}>
       <div className="chart-art-rail">
         <div className="chart-art jacket" data-chart-type={chart.type} aria-hidden="true">
           {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
@@ -170,7 +186,7 @@ function CompactChartCard({ chart, onSelect }: { chart: ChartResult; onSelect: (
           {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
           <LimitedDataWarning chart={chart} compact />
           <span aria-hidden="true" className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>
-            {chart.level}
+            {chartCountLabel(chart)}
           </span>
         </span>
       </button>
@@ -311,7 +327,9 @@ function EstimatedDifficultySection({ charts, compact, mode, value, onSelect }: 
   onSelect: (chart: ChartResult) => void;
 }) {
   const formatted = formatEstimatedDifficulty(value);
-  const label = `${mode === "singles" ? "S" : "D"}${formatted}`;
+  const label = mode === "coop"
+    ? `Co-op ${Math.round(value)}`
+    : `${mode === "singles" ? "S" : "D"}${formatted}`;
   const sectionId = `estimated-${mode}-${formatted.replace(".", "-")}`;
   return (
     <section className={`tier tier-sky estimated-tier${compact ? " tier-compact" : ""}`} aria-labelledby={sectionId}>
@@ -338,6 +356,7 @@ export default function TierListPage() {
   const [filters, setFilters] = useState<Record<ModeKey, FilterState>>({
     singles: { ...initialFilter },
     doubles: { ...initialFilter },
+    coop: { ...initialFilter },
   });
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
@@ -381,6 +400,16 @@ export default function TierListPage() {
   }, [loadLatest]);
 
   useEffect(() => {
+    const applyModeFromUrl = () => {
+      setActiveMode(tierModeFromSearchParams(new URLSearchParams(window.location.search)));
+      setSelectedChart(null);
+    };
+    applyModeFromUrl();
+    window.addEventListener("popstate", applyModeFromUrl);
+    return () => window.removeEventListener("popstate", applyModeFromUrl);
+  }, []);
+
+  useEffect(() => {
     setNowMs(Date.now());
     const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => window.clearInterval(timer);
@@ -403,7 +432,9 @@ export default function TierListPage() {
     const groups = new Map<number, ChartResult[]>();
     for (const chart of filteredCharts) {
       if (chart.estimatedDifficulty === null) continue;
-      const bucket = truncateEstimatedDifficulty(chart.estimatedDifficulty);
+      const bucket = activeMode === "coop"
+        ? Math.round(chart.estimatedDifficulty)
+        : truncateEstimatedDifficulty(chart.estimatedDifficulty);
       const charts = groups.get(bucket) ?? [];
       charts.push(chart);
       groups.set(bucket, charts);
@@ -416,10 +447,12 @@ export default function TierListPage() {
           (left.estimatedDifficulty ?? 0) - (right.estimatedDifficulty ?? 0)
           || left.songName.localeCompare(right.songName)),
       }));
-  }, [filteredCharts]);
+  }, [activeMode, filteredCharts]);
   const unratedCharts = useMemo(
-    () => filteredCharts.filter((chart) => chart.difficultyDelta === null),
-    [filteredCharts],
+    () => filteredCharts.filter((chart) => activeMode === "coop"
+      ? chart.estimatedDifficulty === null
+      : chart.difficultyDelta === null),
+    [activeMode, filteredCharts],
   );
   const updateFilter = (patch: Partial<FilterState>) => {
     setFilters((current) => ({
@@ -428,6 +461,14 @@ export default function TierListPage() {
     }));
   };
   const closeChartDialog = useCallback(() => setSelectedChart(null), []);
+  const selectMode = useCallback((mode: ModeKey) => {
+    setActiveMode(mode);
+    setSelectedChart(null);
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("mode") === mode) return;
+    url.searchParams.set("mode", mode);
+    window.history.pushState({}, "", url);
+  }, []);
 
   return (
     <main className="tier-list-page">
@@ -447,17 +488,19 @@ export default function TierListPage() {
 
       <section className="dashboard" aria-busy={loading} id="rankings-dashboard">
         <div className="mode-tabs" role="tablist" aria-label="Chart mode">
-          {(["singles", "doubles"] as ModeKey[]).map((mode) => (
+          {(["singles", "doubles", "coop"] as ModeKey[]).map((mode) => (
             <button
               aria-selected={activeMode === mode}
               className={activeMode === mode ? "active" : ""}
               key={mode}
-              onClick={() => setActiveMode(mode)}
+              onClick={() => selectMode(mode)}
               role="tab"
               type="button"
             >
-              <span className="mode-letter">{mode === "singles" ? "S" : "D"}</span>
-              <span><b>{mode}</b><small>Independent ranking</small></span>
+              <span className="mode-letter">{mode === "singles" ? "S" : mode === "doubles" ? "D" : "C"}</span>
+              <span>
+                <b>{mode === "coop" ? "Co-op" : mode}</b>
+              </span>
             </button>
           ))}
         </div>
@@ -474,29 +517,39 @@ export default function TierListPage() {
             />
           </label>
           <label className="level-field">
-            <span>Official level</span>
+            <span>{activeMode === "coop" ? "Players" : "Official level"}</span>
             <select value={filter.level} onChange={(event) => updateFilter({ level: event.target.value })}>
               <option>All</option>
-              {levels.map((level) => <option key={level} value={level}>{activeMode === "singles" ? "S" : "D"}{level}</option>)}
+              {levels.map((level) => (
+                <option key={level} value={level}>
+                  {activeMode === "coop" ? `${level}x` : `${activeMode === "singles" ? "S" : "D"}${level}`}
+                </option>
+              ))}
             </select>
           </label>
         </div>
 
         <div className="results-controls">
           <div className="results-switchers">
-            <div aria-label="Difficulty grouping" className="view-switcher" role="group">
+            <div
+              aria-label="Difficulty grouping"
+              className={`view-switcher${activeMode === "coop" ? " single-option" : ""}`}
+              role="group"
+            >
               <button
-                aria-pressed={groupingView === "estimated"}
-                className={groupingView === "estimated" ? "active" : ""}
+                aria-pressed={activeMode === "coop" || groupingView === "estimated"}
+                className={activeMode === "coop" || groupingView === "estimated" ? "active" : ""}
                 onClick={() => setGroupingView("estimated")}
                 type="button"
               ><span>Estimated<br />Difficulty</span></button>
-              <button
-                aria-pressed={groupingView === "tiers"}
-                className={groupingView === "tiers" ? "active" : ""}
-                onClick={() => setGroupingView("tiers")}
-                type="button"
-              >Tier Bands</button>
+              {activeMode === "coop" ? null : (
+                <button
+                  aria-pressed={groupingView === "tiers"}
+                  className={groupingView === "tiers" ? "active" : ""}
+                  onClick={() => setGroupingView("tiers")}
+                  type="button"
+                >Tier Bands</button>
+              )}
             </div>
             <div aria-label="Chart layout" className="view-switcher" role="group">
               <button
@@ -516,7 +569,7 @@ export default function TierListPage() {
         </div>
 
         <div className="tiers">
-          {groupingView === "tiers"
+          {groupingView === "tiers" && activeMode !== "coop"
             ? (payload?.effectBands || demoPayload.effectBands).map((group) => (
                 <TierSection
                   charts={filteredCharts.filter((chart) => chart.effectBandRank === group.rank)}
@@ -537,7 +590,7 @@ export default function TierListPage() {
                   value={group.value}
                 />
               ))}
-          {groupingView === "estimated" && estimatedGroups.length === 0 ? (
+          {(groupingView === "estimated" || activeMode === "coop") && estimatedGroups.length === 0 ? (
             <p className="empty-tier">No estimated charts match the current filters.</p>
           ) : null}
           <section className={`tier unrated-section${layoutView === "compact" ? " tier-compact" : ""}`} aria-labelledby="unrated-charts">
@@ -552,6 +605,10 @@ export default function TierListPage() {
           </section>
         </div>
       </section>
+      <footer>
+        <p><b>How Co-op estimates work</b> Co-op charts share one 2x-5x tier list. Miss points are adjusted for player strength and Phoenix source using all observations, then a conditional 75th-percentile score is estimated for a median-strength Phoenix 2 player. The conditional quantile provides outlier robustness; raw scores and residuals are not trimmed.</p>
+        <p>The resulting chart order is calibrated to whole-number estimated difficulties from 10 through 25, with the median chart anchored at 17. This preserves the observed ordering without forcing a normal distribution. Co-op recommendation letter-grade goals are assigned from these whole-number difficulties.</p>
+      </footer>
       {selectedChart ? <ChartDetailDialog chart={selectedChart} onClose={closeChartDialog} /> : null}
     </main>
   );

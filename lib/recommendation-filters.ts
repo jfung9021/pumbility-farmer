@@ -10,6 +10,7 @@ export const RECOMMENDATION_DISPLAY_COUNT = 20;
 export const MIN_RECOMMENDATION_LEVEL = 16;
 
 export function officialDifficulty(chart: RecommendationChart): string {
+  if (chart.type === "CoOp") return `${chart.level}x`;
   return `${chart.type === "Single" ? "S" : "D"}${chart.level}`;
 }
 
@@ -17,15 +18,18 @@ function chartMatchesMode(
   chart: RecommendationChart,
   mode: RecommendationModeKey,
 ): boolean {
-  if (mode === "overall") return true;
-  return chart.type === (mode === "singles" ? "Single" : "Double");
+  if (mode === "overall") return chart.type !== "CoOp";
+  const typeByMode = { singles: "Single", doubles: "Double", coop: "CoOp" } as const;
+  return chart.type === typeByMode[mode];
 }
 
 function sortOfficialDifficulties(left: string, right: string): number {
-  const modeDifference = (left.startsWith("S") ? 0 : 1)
-    - (right.startsWith("S") ? 0 : 1);
+  const modeOrder = (value: string) => value.startsWith("S")
+    ? 0
+    : value.startsWith("D") ? 1 : 2;
+  const modeDifference = modeOrder(left) - modeOrder(right);
   return modeDifference
-    || Number(left.slice(1)) - Number(right.slice(1));
+    || Number(left.replace(/\D/g, "")) - Number(right.replace(/\D/g, ""));
 }
 
 export function recommendationDifficultyOptions(
@@ -35,7 +39,7 @@ export function recommendationDifficultyOptions(
   return [...new Set(
     charts
       .filter(
-        (chart) => chart.level >= MIN_RECOMMENDATION_LEVEL
+        (chart) => (mode === "coop" || chart.level >= MIN_RECOMMENDATION_LEVEL)
           && chartMatchesMode(chart, mode),
       )
       .map(officialDifficulty),
@@ -50,12 +54,12 @@ export function visibleRecommendations(
   if (!mode) return [];
   if (difficulty === ALL_DIFFICULTIES) {
     return mode.topRecommendations
-      .filter((chart) => chart.level >= MIN_RECOMMENDATION_LEVEL)
+      .filter((chart) => modeKey === "coop" || chart.level >= MIN_RECOMMENDATION_LEVEL)
       .slice(0, RECOMMENDATION_DISPLAY_COUNT);
   }
   return (mode.filterCandidates ?? [])
     .filter(
-      (chart) => chart.level >= MIN_RECOMMENDATION_LEVEL
+      (chart) => (modeKey === "coop" || chart.level >= MIN_RECOMMENDATION_LEVEL)
         && chartMatchesMode(chart, modeKey)
         && officialDifficulty(chart) === difficulty,
     )

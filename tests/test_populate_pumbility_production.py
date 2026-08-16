@@ -111,13 +111,14 @@ class HostedPopulationSafetyTests(unittest.TestCase):
 
     def test_active_generation_compatibility_removes_only_pending_fields(self) -> None:
         current_combined = {
-            "schemaVersion": 3,
+            "schemaVersion": 5,
             "summary": {
-                "scriptVersion": "6.0+combined-tier-v3",
+                "scriptVersion": "6.0+combined-tier-v5",
                 "method": {"catalog": "same", "whatIfEstimates": {"radius": 3}},
             },
             "singles": [{"chartId": "a", "whatIfEstimates": []}],
             "doubles": [{"chartId": "b", "whatIfEstimates": []}],
+            "coop": [],
         }
         active_combined = {
             "schemaVersion": 2,
@@ -128,10 +129,32 @@ class HostedPopulationSafetyTests(unittest.TestCase):
             "singles": [{"chartId": "a"}],
             "doubles": [{"chartId": "b"}],
         }
+        active_v3 = {
+            "schemaVersion": 3,
+            "summary": {
+                "scriptVersion": "6.0+combined-tier-v3",
+                "method": {"catalog": "same", "whatIfEstimates": {"radius": 3}},
+            },
+            "singles": [{"chartId": "a", "whatIfEstimates": []}],
+            "doubles": [{"chartId": "b", "whatIfEstimates": []}],
+        }
+        self.assertEqual(
+            _combined_payload_for_active_generation(current_combined, active_v3),
+            active_v3,
+        )
         self.assertEqual(
             _combined_payload_for_active_generation(current_combined, active_combined),
             active_combined,
         )
+        active_v4 = {
+            "schemaVersion": 4,
+            "summary": {"scriptVersion": "6.0+combined-tier-v4"},
+            "singles": [],
+            "doubles": [],
+            "coop": [],
+        }
+        with self.assertRaisesRegex(RuntimeError, "not supported"):
+            _combined_payload_for_active_generation(current_combined, active_v4)
 
         current_index = {
             "schemaVersion": 21,
