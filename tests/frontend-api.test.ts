@@ -218,15 +218,15 @@ test("Co-op methodology derives Master-title goals from tier difficulty", async 
   }
   assert.match(recommendations, /completing all current chart goals clears the 16,000 Co-op Rating \[CO-OP\] Master threshold with extra leeway/);
   assert.match(tierList, /recommendation letter-grade goals are assigned from these whole-number difficulties/);
-  assert.match(tierList, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 23\.9/);
+  assert.match(tierList, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24\.9/);
   assert.match(tierList, /const continuous = chart\.difficultyModelContinuous/);
   assert.match(tierList, /chart\.estimatedDifficulty\)\.toFixed\(1\)/);
-  assert.match(recommendations, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 23\.9/);
+  assert.match(recommendations, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24\.9/);
   assert.match(readme, /clears the 16,000 Co-op Rating\s+`\[CO-OP\] Master` threshold with extra leeway/);
   assert.match(readme, /one-grade recommendation boost capped at `SSS\+`/);
   assert.match(readme, /raw per-chart\s*q75 result remains analysis\s+provenance/);
-  assert.match(readme, /whole-number buckets from 10 through 23/);
-  assert.match(readme, /hardest chart can retain a 23\.9 internal\s+rating/);
+  assert.match(readme, /whole-number buckets from 10 through 24/);
+  assert.match(readme, /hardest chart can retain a 24\.9 internal\s+rating/);
 });
 
 test("recommendation player clicks are tracked by display name", async () => {

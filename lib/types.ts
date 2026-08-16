@@ -283,7 +283,8 @@ export interface RecommendationModeResult {
     | "chart-population-q75-v1"
     | "estimated-difficulty-master-grade-ladder-v1"
     | "estimated-difficulty-master-grade-ladder-v2"
-    | "estimated-difficulty-master-grade-ladder-v3";
+    | "estimated-difficulty-master-grade-ladder-v3"
+    | "estimated-difficulty-master-grade-ladder-v4";
   pumbilityPerLevel?: number | null;
   currentTop50Pumbility?: number;
   currentTop50CutoffPumbility?: number | null;
