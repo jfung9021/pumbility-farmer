@@ -689,10 +689,7 @@ test("Top 50 cards expose PIU result data and open an accessible detail dialog",
   assert.match(page, /function TopScoreCard/);
   assert.match(page, /className="top-score-rank">#\{rank\}/);
   assert.match(page, /\{score\.songName\}/);
-  assert.doesNotMatch(
-    page,
-    /<span className="top-score-copy">\s*<strong[^>]*>\{score\.songName\}<\/strong>\s*<small/,
-  );
+  assert.doesNotMatch(page, /className="top-score-copy"/);
   assert.match(page, /\{score\.grade \|\| "—"\}/);
   assert.match(page, /\{score\.plateCode \|\| "—"\}/);
   assert.match(
@@ -713,10 +710,9 @@ test("Top 50 cards expose PIU result data and open an accessible detail dialog",
   assert.match(css, /\.top-score-result > span \{[^}]*display: flex;[^}]*gap: 4px;/);
   assert.match(css, /\.top-score-rank \{[^}]*font-size: 11px;/);
   assert.match(css, /\.top-score-jacket \.chart-difficulty-badge \{[^}]*font-size: 11px;/);
-  assert.match(css, /\.top-score-copy > strong \{[^}]*font-size: 11px;/);
-  assert.match(css, /\.top-score-result > span b \{[^}]*font-size: 11px;/);
-  assert.match(css, /\.top-score-result > span small \{[^}]*font-size: 11px;/);
-  assert.match(css, /\.top-score-result > strong \{[^}]*font-size: 11px;/);
+  assert.match(css, /\.top-score-result > span b \{[^}]*font-size: 13px;/);
+  assert.match(css, /\.top-score-result > span small \{[^}]*font-size: 10px;/);
+  assert.match(css, /\.top-score-result > strong \{[^}]*font-size: 13px;/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.top-score-grid \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
 });
 
