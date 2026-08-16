@@ -38,6 +38,7 @@ _POPULATION_PARITY_FIELDS = frozenset(
         "summary",
         "singles",
         "doubles",
+        "coop",
         "relativeGroups",
         "effectBands",
         "storageSchemaVersion",
@@ -55,7 +56,7 @@ _POPULATION_SUMMARY_FIELDS = frozenset(
     {"scriptVersion", "generatedAtUtc", "mix", "method", "coverage", "modes"}
 )
 _POPULATION_LIST_FIELDS = frozenset(
-    {"singles", "doubles", "relativeGroups", "effectBands", "players"}
+    {"singles", "doubles", "coop", "relativeGroups", "effectBands", "players"}
 )
 _POPULATION_RECOMMENDATION_METHOD_FIELDS = frozenset(
     {
@@ -100,6 +101,9 @@ _POPULATION_RECOMMENDATION_METHOD_FIELDS = frozenset(
         "displayMinimumOfficialLevel",
         "scoreProjection",
         "scoreProjectionModel",
+        "coopScoreProjectionModel",
+        "coopScoreProjection",
+        "coopRating",
     }
 )
 _POPULATION_RECOMMENDATION_PLAYER_FIELDS = frozenset(

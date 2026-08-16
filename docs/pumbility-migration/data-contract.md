@@ -99,26 +99,32 @@ Required statistical invariants are implemented and tested in `tests/test_analyz
 
 ## Combined tier contract
 
-`piu_recommendations.COMBINED_TIER_SCHEMA_VERSION` is 3.
+`piu_recommendations.COMBINED_TIER_SCHEMA_VERSION` is 5.
 
 - Phoenix 2 charts are the strict target allowlist.
 - Phoenix 2 replaces Phoenix 1 for an overlapping player/chart observation.
 - Version/mode residuals are normalized to level units before joining.
-- Output is limited to official level 16+ and retains separate mode arrays.
+- Singles and Doubles remain limited to official level 16+ and retain their existing independent models.
+- Co-op adds a separate `coop` array containing the current Phoenix 2 2x, 3x, 4x, and 5x catalog without an official-level gate.
 - Phoenix 1 rerates are presentation provenance, not inputs that mutate the frozen public analysis.
 - Two Phoenix 1 score overrides are applied only to Phoenix 1 evidence.
-- Every schema-3 chart contains `whatIfEstimates`, ordered by alternative official level. Each entry has `level` and an `estimatedDifficulty` rounded to six decimal digits or `null` when the target folder has no measured reference or the chart has no usable observations.
+- Every Single and Double chart contains `whatIfEstimates`, ordered by alternative official level. Each entry has `level` and an `estimatedDifficulty` rounded to six decimal digits or `null` when the target folder has no measured reference or the chart has no usable observations. Co-op does not use these folder what-if estimates.
 - Alternatives cover the three official levels below and above the chart, omit its current level, and never go below level 16. Near the floor the list is correspondingly shorter.
 - What-if values are chart-only projections, not tier-list recalculations. They preserve the selected contribution set, player baselines, reliability/shrinkage, target-folder reference and range compression, ranks, percentiles, and tier membership.
 - Phoenix 2 observations are revalued at the hypothetical level with the existing score-derived grade, recorded plate, and Phoenix 2 Pumbility formula. Phoenix 1 observations, and Phoenix 2 observations without sufficient grade/plate data, retain the existing normalized one-level residual shift.
 - The hypothetical chart residual is recomputed from the frozen observations and compared with the frozen target-folder model using the existing 0.4 difficulty-delta scale. No hypothetical confidence interval, rank, percentile, or effect band is published.
+- Co-op tier difficulty uses a player/source-adjusted conditional chart q75 in log miss-point space. The player/source fit uses every observation; raw scores and residuals are not trimmed. The conditional quantile supplies outlier resistance.
+- Co-op difficulty is calibrated monotonically to whole integers from 10 through 25, anchors the median measured chart at 17, and does not impose a normal distribution or tier-size quota.
+- Co-op recommendation goals use monotonic letter-grade bands determined only by whole-number estimated difficulty and a fixed Fair Game plate. The current 140-chart goal ladder totals exactly 16,000 Co-op Rating (`[CO-OP] Master`).
+- Equal Co-op projected gains are ordered by the underlying continuous difficulty signal before stable name/ID fallbacks; the UI still displays the rounded whole-number difficulty.
+- The raw exact-chart population q75 score-and-plate pair remains in the payload as analysis provenance and is not used as the recommendation target.
 
 ## Recommendation contract
 
-- Public recommendation schema: 21.
+- Public recommendation schema: 23.
 - Legacy storage schema: 2, ten-player public shards.
 - Selected-player refresh storage schema: 3.
-- Global model artifact schema: 3.
+- Global model artifact schema: 5.
 - Player state schema: 1.
 - Private input shard size: ten players.
 

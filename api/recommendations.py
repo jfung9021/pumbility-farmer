@@ -49,7 +49,7 @@ def _player_eligibility(player: Mapping) -> dict[str, bool]:
     if isinstance(stored, Mapping):
         return {
             mode: bool(stored.get(mode))
-            for mode in ("singles", "doubles")
+            for mode in ("singles", "doubles", "coop")
             if mode in stored
         }
     modes = player.get("modes", {})
@@ -58,7 +58,7 @@ def _player_eligibility(player: Mapping) -> dict[str, bool]:
     return {
         mode: bool(details.get("eligible"))
         for mode, details in modes.items()
-        if mode in {"singles", "doubles"} and isinstance(details, Mapping)
+        if mode in {"singles", "doubles", "coop"} and isinstance(details, Mapping)
     }
 
 

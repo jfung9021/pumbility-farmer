@@ -7,6 +7,7 @@ import { COMBINED_MIX, DEFAULT_MIX, isMixKey, MIXES, type MixKey } from "./mixes
 
 const SECRET_PATTERN = /(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}/i;
 const FORBIDDEN_KEYS = new Set(["playerId", "username", "gameTag", "authorization", "apiKey", "token"]);
+export const LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION = 5;
 
 export const LEGACY_LOCAL_RESULTS_PATH = path.join(
   process.cwd(),
@@ -63,11 +64,20 @@ export function validateLocalAnalysisPayload(
   }
   const payload = value as Partial<AnalysisPayload>;
   if (
+    expectedMix === "combined"
+    && payload.schemaVersion !== LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION
+  ) {
+    throw new LocalAnalysisValidationError(
+      "The local combined aggregate uses an unsupported schema.",
+    );
+  }
+  if (
     typeof payload.generatedAtUtc !== "string"
     || !payload.summary
     || typeof payload.summary !== "object"
     || !Array.isArray(payload.singles)
     || !Array.isArray(payload.doubles)
+    || (expectedMix === "combined" && !Array.isArray(payload.coop))
     || !Array.isArray(payload.relativeGroups)
     || !Array.isArray(payload.effectBands)
   ) {

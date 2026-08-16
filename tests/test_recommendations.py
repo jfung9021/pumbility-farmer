@@ -11,7 +11,9 @@ import pandas as pd
 
 from analysis_runtime import MemoryBlobStore
 from phoenix2_pumbility import (
+    GRADE_BANDS,
     PlateProjectionModel,
+    phoenix2_coop_rating,
     phoenix2_pumbility,
     skill_rating_for_pumbility,
 )
@@ -36,7 +38,9 @@ from piu_recommendations import (
     _ScoreSurface,
     _apply_phoenix1_score_overrides,
     _build_score_surface,
+    _coop_continuous_estimated_difficulties,
     _effective_sample_size,
+    _coop_estimated_difficulties,
     _observation_weight,
     _peer_cohort_key,
     _prepare_phoenix1_rating_frames,
@@ -48,8 +52,11 @@ from piu_recommendations import (
     _what_if_residual_shift,
     build_chart_what_if_estimates,
     build_combined_tier_payload,
+    build_coop_chart_results,
     build_manual_recommendation_mode,
     build_player_recommendation,
+    build_player_coop_mode,
+    coop_master_goal_for_estimated_difficulty,
     build_recommendation_index,
     fit_score_response_model,
     merge_source_contributions,
@@ -1185,7 +1192,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual(index["method"]["phoenix1RatingRanks"], [1, 20])
         self.assertEqual(index["method"]["phoenix2RatingRanks"], [1, 20])
         self.assertEqual(index["method"]["phoenix2RatingScoreThreshold"], 20)
-        self.assertEqual(index["method"]["candidateUpperRadius"], 0.5)
+        self.assertEqual(index["method"]["candidateUpperRadius"], 1.0)
         self.assertEqual([len(shards[number]["players"]) for number in shards], [2, 1])
         self.assertIn("modes", shards[0]["players"][0])
 
@@ -1201,8 +1208,10 @@ class PlayerRecommendationTests(unittest.TestCase):
                 generated_at_utc=generated,
             )
         )
-        self.assertEqual(index["method"]["candidateUpperRadius"], 0.5)
-        self.assertEqual(model["method"]["candidateUpperRadius"], 0.5)
+        self.assertEqual(index["method"]["candidateUpperRadius"], 1.0)
+        self.assertEqual(model["method"]["candidateUpperRadius"], 1.0)
+        self.assertTrue(index["players"][0]["eligibility"]["coop"])
+        self.assertNotIn("coop", index["players"][0]["scoreProgress"])
         self.assertEqual(
             index["players"][0]["scoreProgress"],
             {
@@ -1547,9 +1556,16 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertIn("chart-33", ids)
         self.assertIn("chart-34", ids)
         displayed_ids = {row["chartId"] for row in result["topRecommendations"]}
-        self.assertNotIn("chart-33", displayed_ids)
+        self.assertIn("chart-33", displayed_ids)
         self.assertNotIn("chart-34", displayed_ids)
-        self.assertEqual(result["candidateRange"], [None, 21.0])
+        self.assertEqual(result["candidateRange"], [None, 21.5])
+        self.assertEqual(
+            result["candidateCount"],
+            sum(
+                row["level"] >= 16 and row["estimatedDifficulty"] <= 21.5
+                for row in result["filterCandidates"]
+            ),
+        )
         easy = next(row for row in result["filterCandidates"] if row["chartId"] == "chart-30")
         self.assertEqual(easy["estimatedDifficulty"], 20.0)
         self.assertEqual(easy["difficultyDelta"], -0.5)
@@ -1888,7 +1904,7 @@ class PlayerRecommendationTests(unittest.TestCase):
             {row["type"] for row in overall["topScores"]},
             {"Single", "Double"},
         )
-        for mode in modes.values():
+        for mode in (modes["singles"], modes["doubles"], overall):
             self.assertAlmostEqual(
                 sum(row["pumbility"] for row in mode["topScores"]),
                 mode["currentTop50Pumbility"],
@@ -1900,6 +1916,7 @@ class PlayerRecommendationTests(unittest.TestCase):
                 "doubles": len(modes["doubles"]["topRecommendations"]),
             },
         )
+        self.assertNotIn("coop", overall["sourceModeEligibility"])
         filter_source_ids = {
             row["chartId"]
             for mode_key in ("singles", "doubles")
@@ -2540,6 +2557,266 @@ class WhatIfDifficultyTests(unittest.TestCase):
         )
 
 
+class CoopRecommendationTests(unittest.TestCase):
+    @staticmethod
+    def _chart(chart_id: str, player_count: int) -> dict:
+        return {
+            "id": chart_id,
+            "songName": f"Chart {chart_id}",
+            "type": "CoOp",
+            "level": player_count,
+            "difficulty": f"CoOp{player_count}",
+        }
+
+    @staticmethod
+    def _score(
+        player_id: str,
+        chart_id: str,
+        score: int,
+        plate: str = "Fair Game",
+    ) -> dict:
+        return {
+            "playerId": player_id,
+            "chartId": chart_id,
+            "score": score,
+            "plate": plate,
+            "pumbility": 0,
+            "isBroken": False,
+        }
+
+    def test_q75_precedence_all_sizes_and_integer_difficulty(self) -> None:
+        catalog = [
+            self._chart("easy", 2),
+            self._chart("middle", 3),
+            self._chart("hard", 4),
+            self._chart("other", 5),
+        ]
+        desired = {
+            "easy": [900_000, 950_000, 1_000_000, 1_000_000],
+            "middle": [700_000, 800_000, 900_000, 950_000],
+            "hard": [600_000, 700_000, 800_000, 900_000],
+            "other": [650_000, 750_000, 850_000, 950_000],
+        }
+        phoenix1_scores = [
+            self._score(f"p{index}", chart_id, score)
+            for chart_id, scores in desired.items()
+            for index, score in enumerate(scores, start=1)
+        ]
+        rows, _ = build_coop_chart_results(
+            {"charts": catalog, "scores": phoenix1_scores},
+            {
+                "charts": catalog,
+                "scores": [
+                    self._score("p1", "middle", 700_001, "Perfect Game")
+                ],
+            },
+        )
+        by_id = {row["chartId"]: row for row in rows}
+
+        self.assertEqual({row["difficulty"] for row in rows}, {"2x", "3x", "4x", "5x"})
+        self.assertEqual(by_id["middle"]["percentileScore"], 900_000)
+        self.assertEqual(by_id["middle"]["percentileGrade"], "A+")
+        self.assertEqual(by_id["middle"]["percentilePlate"], "Fair Game")
+        self.assertEqual(by_id["middle"]["percentileSupportCount"], 4)
+        self.assertEqual(by_id["middle"]["phoenix1Contributors"], 3)
+        self.assertEqual(by_id["middle"]["phoenix2Contributors"], 1)
+        self.assertEqual(by_id["easy"]["estimatedDifficulty"], 10)
+        self.assertEqual(by_id["hard"]["estimatedDifficulty"], 25)
+        self.assertEqual(by_id["easy"]["difficultyModelContinuous"], 10.0)
+        self.assertEqual(by_id["hard"]["difficultyModelContinuous"], 25.0)
+        self.assertTrue(
+            all(isinstance(row["estimatedDifficulty"], int) for row in rows)
+        )
+
+    def test_difficulty_calibration_anchors_median_and_rounds_half_up(self) -> None:
+        signals = {
+            "easy": 0.0,
+            "easy_middle": 0.5,
+            "middle": 1.0,
+            "hard_middle": 1.5,
+            "hard": 2.0,
+        }
+        self.assertEqual(
+            _coop_continuous_estimated_difficulties(signals),
+            {
+                "easy": 10.0,
+                "easy_middle": 13.5,
+                "middle": 17.0,
+                "hard_middle": 21.0,
+                "hard": 25.0,
+            },
+        )
+        self.assertEqual(
+            _coop_estimated_difficulties(signals),
+            {
+                "easy": 10,
+                "easy_middle": 14,
+                "middle": 17,
+                "hard_middle": 21,
+                "hard": 25,
+            },
+        )
+
+    def test_tier_signal_adjusts_for_player_cohort_but_keeps_raw_q75(self) -> None:
+        players = [f"p{index}" for index in range(5)]
+        singles = [
+            {
+                "id": f"s{chart_index}",
+                "songName": f"Single {chart_index}",
+                "type": "Single",
+                "level": 20,
+            }
+            for chart_index in range(20)
+        ]
+        coop = [
+            self._chart("anchor", 2),
+            self._chart("easy-weak-cohort", 2),
+            self._chart("hard-strong-cohort", 2),
+        ]
+        scores = [
+            {
+                **self._score(player_id, f"s{chart_index}", 950_000),
+                "pumbility": 100.0 + player_index * 100.0 + chart_index,
+            }
+            for player_index, player_id in enumerate(players)
+            for chart_index in range(20)
+        ]
+
+        def score_for_log_miss(log_miss: float) -> int:
+            return 1_000_000 - round(float(np.expm1(log_miss)))
+
+        scores.extend(
+            self._score(
+                player_id,
+                "anchor",
+                score_for_log_miss(9.0 - 2.0 * player_index / 4.0),
+            )
+            for player_index, player_id in enumerate(players)
+        )
+        scores.extend(
+            [
+                self._score(
+                    players[0],
+                    "easy-weak-cohort",
+                    score_for_log_miss(8.5),
+                ),
+                self._score(
+                    players[-1],
+                    "hard-strong-cohort",
+                    score_for_log_miss(8.0),
+                ),
+            ]
+        )
+        rows, metadata = build_coop_chart_results(
+            {},
+            {"charts": [*singles, *coop], "scores": scores},
+        )
+        by_id = {row["chartId"]: row for row in rows}
+
+        self.assertLess(
+            by_id["easy-weak-cohort"]["percentileScore"],
+            by_id["hard-strong-cohort"]["percentileScore"],
+        )
+        self.assertLess(
+            by_id["easy-weak-cohort"]["modeRank"],
+            by_id["hard-strong-cohort"]["modeRank"],
+        )
+        self.assertEqual(metadata["difficultyResidualRefitIterations"], 0)
+        self.assertEqual(metadata["abilityMedianFallbackObservations"], 0)
+        self.assertEqual(
+            metadata["difficultyModel"],
+            "conditional-q75-player-source-adjusted-log-miss-v2",
+        )
+
+    def test_zero_history_is_eligible_and_current_rating_is_additive(self) -> None:
+        catalog = [self._chart("two", 2), self._chart("three", 3)]
+        analysis, _ = build_coop_chart_results(
+            {},
+            {
+                "charts": catalog,
+                "scores": [
+                    self._score("population", "two", 995_000, "Perfect Game"),
+                    self._score("population", "three", 900_000),
+                ],
+            },
+        )
+        for row in analysis:
+            row["estimatedDifficulty"] = 17
+            row["difficultyModelContinuous"] = (
+                16.8 if row["chartId"] == "three" else 17.2
+            )
+        empty = build_player_coop_mode(
+            "new-player", {"charts": catalog, "scores": []}, analysis
+        )
+        current = build_player_coop_mode(
+            "player",
+            {
+                "charts": catalog,
+                "scores": [
+                    self._score("player", "two", 995_000, "Perfect Game"),
+                    self._score("player", "three", 0, "Rough Game"),
+                ],
+            },
+            analysis,
+        )
+
+        self.assertTrue(empty["eligible"])
+        self.assertEqual(empty["currentCoopRating"], 0)
+        self.assertEqual(empty["candidateCount"], 2)
+        self.assertEqual(
+            [row["chartId"] for row in empty["topRecommendations"]],
+            ["three", "two"],
+        )
+        self.assertEqual(current["currentCoopRating"], 201.6)
+        candidate = next(
+            row
+            for row in current["filterCandidates"]
+            if row["chartId"] == "three"
+        )
+        self.assertEqual(candidate["existingCoopRating"], 80.0)
+        self.assertEqual(candidate["estimatedDifficulty"], 17)
+        self.assertEqual(candidate["expectedCoopRating"], 114.56)
+        self.assertEqual(candidate["projectedGain"], 34.56)
+        self.assertEqual(candidate["projectedScore"], 960_000)
+        self.assertEqual(candidate["projectedGrade"], "AAA+")
+        self.assertEqual(candidate["projectedPlate"], "Fair Game")
+        self.assertEqual(candidate["plateProjectionSource"], "fixed-fair-game")
+        self.assertEqual(
+            current["scoreProjectionModel"],
+            "estimated-difficulty-master-grade-ladder-v1",
+        )
+        self.assertEqual(len(current["topScores"]), 2)
+        self.assertTrue(all("pumbility" not in row for row in current["topScores"]))
+
+    def test_coop_goal_ladder_is_monotonic_and_totals_master(self) -> None:
+        expected_grades = {
+            10: "SSS+", 11: "SSS+", 12: "SSS+", 13: "SS+", 14: "SS",
+            15: "S", 16: "AAA+", 17: "AAA+", 18: "AAA", 19: "AA+",
+            20: "AA+", 21: "A+", 22: "A+", 23: "A+", 24: "A+", 25: "B",
+        }
+        distribution = {
+            10: 2, 11: 1, 12: 8, 13: 9, 14: 6, 15: 9, 16: 17,
+            17: 35, 18: 19, 19: 19, 20: 8, 21: 4, 22: 1, 23: 1, 25: 1,
+        }
+        total = 0.0
+        for difficulty, count in distribution.items():
+            goal = coop_master_goal_for_estimated_difficulty(difficulty)
+            self.assertIsNotNone(goal)
+            score, grade, plate = goal  # type: ignore[misc]
+            self.assertEqual(grade, expected_grades[difficulty])
+            self.assertEqual(
+                score,
+                next(
+                    threshold
+                    for threshold, candidate_grade, _ in GRADE_BANDS
+                    if candidate_grade == grade
+                ),
+            )
+            self.assertEqual(plate, "Fair Game")
+            total += count * phoenix2_coop_rating(grade, plate)
+        self.assertEqual(round(total, 2), 16_000.0)
+
+
 class CombinedTierPayloadTests(unittest.TestCase):
     def test_payload_uses_combined_identity_and_filters_below_level_sixteen(self) -> None:
         chart = {
@@ -2606,7 +2883,7 @@ class CombinedTierPayloadTests(unittest.TestCase):
 
         self.assertEqual(payload["mix"]["key"], "combined")
         self.assertEqual(payload["schemaVersion"], COMBINED_TIER_SCHEMA_VERSION)
-        self.assertEqual(payload["schemaVersion"], 3)
+        self.assertEqual(payload["schemaVersion"], 5)
         self.assertEqual(
             [row["chartId"] for row in payload["singles"]],
             ["easier", "current"],
@@ -2684,14 +2961,14 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
                     "songName": "Above Rating",
                     "type": "Single",
                     "level": 16,
-                    "estimatedDifficulty": 16.5,
+                    "estimatedDifficulty": 17.0,
                 },
                 {
                     "chartId": "above-upper-bound",
                     "songName": "Above Upper Bound",
                     "type": "Single",
                     "level": 16,
-                    "estimatedDifficulty": 16.5000000001,
+                    "estimatedDifficulty": 17.0000000001,
                 },
             ],
             "Single",
@@ -2704,9 +2981,13 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(
             [row["chartId"] for row in mode["topRecommendations"]],
-            ["rating-edge", "sixteen", "above-rating"],
+            [
+                "rating-edge",
+                "sixteen",
+                "above-rating",
+            ],
         )
-        self.assertEqual(mode["candidateRange"], [None, 16.5])
+        self.assertEqual(mode["candidateRange"], [None, 17.0])
         self.assertTrue(
             all(row["expectedPumbility"] is None for row in mode["filterCandidates"])
         )

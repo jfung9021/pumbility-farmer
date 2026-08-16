@@ -70,6 +70,7 @@ PLATE_BONUS_UNITS_BY_TYPE = {
     "Single": SINGLE_PLATE_BONUS_UNITS,
     "Double": DOUBLE_PLATE_BONUS_UNITS,
 }
+COOP_BASE_RATING = 120.0
 PLATE_CODES = {
     "Rough Game": "RG",
     "Fair Game": "FG",
@@ -149,6 +150,23 @@ def phoenix2_pumbility(
         + plate_bonuses[normalized_plate]
     ) / 750
     raw = max(0.0, base * multiplier)
+    return math.floor((raw + 1e-9) * 100) / 100
+
+
+@lru_cache(maxsize=None)
+def phoenix2_coop_rating(grade: str, plate: str) -> float:
+    """Calculate one Phoenix 2 Co-op chart rating to two decimal places."""
+    normalized_grade = str(grade).strip().upper()
+    if normalized_grade not in DOUBLE_GRADE_PENALTY_UNITS:
+        raise ValueError(f"Unsupported Phoenix 2 grade: {grade!r}")
+    normalized_plate = normalize_plate(plate)
+    if normalized_plate is None:
+        raise ValueError(f"Unsupported Phoenix 2 plate: {plate!r}")
+    raw = (
+        COOP_BASE_RATING
+        - 0.8 * DOUBLE_GRADE_PENALTY_UNITS[normalized_grade]
+        + 0.16 * DOUBLE_PLATE_BONUS_UNITS[normalized_plate]
+    )
     return math.floor((raw + 1e-9) * 100) / 100
 
 

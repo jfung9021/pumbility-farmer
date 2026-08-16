@@ -14,6 +14,7 @@ import json
 import math
 from collections import Counter
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
 
@@ -49,6 +50,7 @@ from piu_misgrade_analyzer import (
     apply_within_level_difficulty,
 )
 from phoenix2_pumbility import (
+    GRADE_BANDS,
     PLATE_CODES,
     SKILL_RATING_REFERENCE_GRADE,
     SKILL_RATING_REFERENCE_MULTIPLIER,
@@ -56,6 +58,7 @@ from phoenix2_pumbility import (
     PlateProjectionModel,
     grade_for_score,
     normalize_plate,
+    phoenix2_coop_rating,
     phoenix2_pumbility,
     skill_rating_for_pumbility,
 )
@@ -63,8 +66,8 @@ from phoenix2_pumbility import (
 
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
-COMBINED_TIER_SCHEMA_VERSION = 3
-RECOMMENDATION_RADIUS = 0.5
+COMBINED_TIER_SCHEMA_VERSION = 5
+RECOMMENDATION_RADIUS = 1.0
 WHAT_IF_LEVEL_RADIUS = 3
 BASELINE_START_RANK = 11
 BASELINE_END_RANK = 30
@@ -78,6 +81,30 @@ TOP_RECOMMENDATION_COUNT = 20
 MAX_RAW_SCORE = 1_000_000
 SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v3"
 SCORE_PROJECTION_MODEL_NAME = "similar-skill-pumbility-11-30-weighted-q50-v8"
+COOP_SCORE_PROJECTION_MODEL_NAME = "estimated-difficulty-master-grade-ladder-v1"
+COOP_SCORE_QUANTILE = 0.75
+COOP_DIFFICULTY_MODEL_NAME = "conditional-q75-player-source-adjusted-log-miss-v2"
+COOP_DIFFICULTY_REFERENCE_PERCENTILE = 0.50
+COOP_ABILITY_SCORE_COUNT = 20
+COOP_DIFFICULTY_EASIEST = 10
+COOP_DIFFICULTY_MEDIAN = 17
+COOP_DIFFICULTY_HARDEST = 25
+COOP_MASTER_TITLE_RATING = 16_000.0
+COOP_GOAL_PLATE = "Fair Game"
+COOP_GOAL_GRADE_BANDS = (
+    (12, "SSS+"),
+    (13, "SS+"),
+    (14, "SS"),
+    (15, "S"),
+    (17, "AAA+"),
+    (18, "AAA"),
+    (20, "AA+"),
+    (24, "A+"),
+    (25, "B"),
+)
+COOP_GOAL_SCORE_BY_GRADE = {
+    grade: int(score) for score, grade, _ in GRADE_BANDS
+}
 SCORE_RESPONSE_FOLDS = 5
 SCORE_RESPONSE_GRID_STEP = 0.1
 SCORE_RESPONSE_SMOOTHING_RADIUS = 8
@@ -105,6 +132,8 @@ RECOMMENDATION_CHART_FIELDS = (
     "bpmMin",
     "bpmMax",
     "estimatedDifficulty",
+    "difficultyModelContinuous",
+    "difficultyModelSignal",
     "difficultyDelta",
     "difficultyCi95Low",
     "difficultyCi95High",
@@ -112,8 +141,26 @@ RECOMMENDATION_CHART_FIELDS = (
     "phoenix1Contributors",
     "phoenix2Contributors",
     "evidenceStatus",
+    "percentileScore",
+    "percentileGrade",
+    "percentilePlate",
+    "percentilePlateCode",
+    "percentileSupportCount",
 )
-TOP_SCORE_CHART_FIELDS = RECOMMENDATION_CHART_FIELDS
+TOP_SCORE_CHART_FIELDS = tuple(
+    field
+    for field in RECOMMENDATION_CHART_FIELDS
+    if field
+    not in {
+        "difficultyModelContinuous",
+        "difficultyModelSignal",
+        "percentileScore",
+        "percentileGrade",
+        "percentilePlate",
+        "percentilePlateCode",
+        "percentileSupportCount",
+    }
+)
 
 
 def _weighted_quantile(
@@ -1268,6 +1315,588 @@ def retain_phoenix2_catalog_contributions(
     return contributions[contributions["chartId"].astype(str).isin(valid_ids)].copy()
 
 
+def _round_half_up(value: Decimal) -> int:
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def coop_master_goal_for_estimated_difficulty(
+    estimated_difficulty: object,
+) -> tuple[int, str, str] | None:
+    """Return the fixed-plate Master-title goal for one whole Co-op difficulty."""
+    if isinstance(estimated_difficulty, bool):
+        return None
+    try:
+        value = float(estimated_difficulty)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(value):
+        return None
+    difficulty = _round_half_up(Decimal(str(value)))
+    grade = next(
+        (
+            candidate_grade
+            for maximum_difficulty, candidate_grade in COOP_GOAL_GRADE_BANDS
+            if difficulty <= maximum_difficulty
+        ),
+        COOP_GOAL_GRADE_BANDS[-1][1],
+    )
+    return COOP_GOAL_SCORE_BY_GRADE[grade], grade, COOP_GOAL_PLATE
+
+
+def _coop_catalog_rows(
+    phoenix2_snapshot: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return the authoritative 2x-5x Phoenix 2 Co-op catalog."""
+    by_id: dict[str, dict[str, Any]] = {}
+    for raw in phoenix2_snapshot.get("charts", []):
+        if not isinstance(raw, Mapping) or str(raw.get("type")) != "CoOp":
+            continue
+        chart_id = str(raw.get("id") or "").strip()
+        try:
+            player_count = int(raw.get("level"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not chart_id or player_count not in {2, 3, 4, 5}:
+            continue
+        row = dict(raw)
+        row.update(
+            {
+                "chartId": chart_id,
+                "type": "CoOp",
+                "level": player_count,
+                "difficulty": f"{player_count}x",
+            }
+        )
+        row.pop("id", None)
+        by_id[chart_id] = row
+    return [by_id[chart_id] for chart_id in sorted(by_id)]
+
+
+def _coop_snapshot_observations(
+    snapshot: Mapping[str, Any],
+    allowed_chart_ids: set[str],
+    *,
+    source: str,
+) -> list[dict[str, Any]]:
+    """Clean raw Co-op scores without requiring a positive Pumbility value."""
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for raw in snapshot.get("scores", []):
+        if not isinstance(raw, Mapping) or bool(raw.get("isBroken", False)):
+            continue
+        player_id = str(raw.get("playerId") or "").strip()
+        chart_id = str(raw.get("chartId") or "").strip()
+        if not player_id or chart_id not in allowed_chart_ids:
+            continue
+        raw_score = raw.get("score")
+        if source == "phoenix1":
+            raw_score = convert_phoenix1_score(chart_id, raw_score)
+        if isinstance(raw_score, bool):
+            continue
+        try:
+            score = int(float(raw_score))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        plate = normalize_plate(raw.get("plate"))
+        grade = grade_for_score(score)
+        if score < 0 or grade is None or plate is None:
+            continue
+        score = min(score, MAX_RAW_SCORE)
+        row = {
+            "playerId": player_id,
+            "chartId": chart_id,
+            "score": score,
+            "grade": grade,
+            "plate": plate,
+            "source": source,
+            "recordedAt": str(raw.get("recordedAt") or ""),
+        }
+        key = (player_id, chart_id)
+        current = by_key.get(key)
+        priority = (
+            score,
+            phoenix2_coop_rating(grade, plate),
+            row["recordedAt"],
+        )
+        current_priority = (
+            (
+                int(current["score"]),
+                phoenix2_coop_rating(
+                    str(current["grade"]), str(current["plate"])
+                ),
+                str(current["recordedAt"]),
+            )
+            if current is not None
+            else None
+        )
+        if current_priority is None or priority > current_priority:
+            by_key[key] = row
+    return [by_key[key] for key in sorted(by_key)]
+
+
+def build_coop_observations(
+    phoenix1_snapshot: Mapping[str, Any] | None,
+    phoenix2_snapshot: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return the P2 Co-op catalog and merged raw scores with P2 precedence."""
+    catalog = _coop_catalog_rows(phoenix2_snapshot)
+    allowed_ids = {str(row["chartId"]) for row in catalog}
+    phoenix1 = _coop_snapshot_observations(
+        phoenix1_snapshot or {}, allowed_ids, source="phoenix1"
+    )
+    phoenix2 = _coop_snapshot_observations(
+        phoenix2_snapshot, allowed_ids, source="phoenix2"
+    )
+    phoenix2_keys = {
+        (str(row["playerId"]), str(row["chartId"])) for row in phoenix2
+    }
+    merged = [
+        row
+        for row in phoenix1
+        if (str(row["playerId"]), str(row["chartId"])) not in phoenix2_keys
+    ]
+    merged.extend(phoenix2)
+    merged.sort(
+        key=lambda row: (
+            str(row["chartId"]),
+            str(row["playerId"]),
+            str(row["source"]),
+        )
+    )
+    return catalog, merged
+
+
+def _coop_player_ability_percentiles(
+    snapshot: Mapping[str, Any] | None,
+    *,
+    source: str,
+) -> dict[str, float]:
+    """Return source-local 0..1 ability percentiles from top-20 S/D PBs."""
+    if not snapshot:
+        return {}
+    try:
+        charts, scores = _clean_snapshot_frames(snapshot)
+    except ValueError:
+        return {}
+    if source == "phoenix1":
+        scores = _apply_phoenix1_score_overrides(scores)
+    scored = scores.merge(
+        charts[["chartId", "type"]],
+        on="chartId",
+        how="inner",
+        validate="many_to_one",
+    )
+    if scored.empty:
+        return {}
+    scored = scored.sort_values(
+        ["playerId", "pumbility", "score", "chartId"],
+        ascending=[True, False, False, True],
+        kind="mergesort",
+    )
+    scored["abilityRank"] = scored.groupby("playerId", sort=False).cumcount() + 1
+    top = scored[scored["abilityRank"] <= COOP_ABILITY_SCORE_COUNT]
+    counts = top.groupby("playerId", sort=False).size()
+    complete_players = counts[counts == COOP_ABILITY_SCORE_COUNT].index
+    means = (
+        top[top["playerId"].isin(complete_players)]
+        .groupby("playerId", sort=False)["pumbility"]
+        .mean()
+    )
+    if means.empty:
+        return {}
+    if len(means) == 1:
+        return {str(means.index[0]): COOP_DIFFICULTY_REFERENCE_PERCENTILE}
+    average_ranks = means.rank(method="average", ascending=True)
+    denominator = float(len(means) - 1)
+    return {
+        str(player_id): float((average_ranks.loc[player_id] - 1.0) / denominator)
+        for player_id in sorted(means.index.astype(str))
+    }
+
+
+def _coop_adjusted_difficulty_signals(
+    observations: Sequence[Mapping[str, Any]],
+    phoenix1_snapshot: Mapping[str, Any] | None,
+    phoenix2_snapshot: Mapping[str, Any],
+) -> tuple[dict[str, float], dict[str, int], dict[str, Any]]:
+    """Estimate conditional chart q75s at median ability in Phoenix 2.
+
+    The response is log miss-points so scores near the one-million ceiling retain
+    useful separation.  Player ability and source effects are estimated after
+    removing chart means.  The final chart signal is q25 adjusted log-miss,
+    which supplies outlier resistance after adjustment and corresponds to q75
+    score because the transformation reverses score ordering.  Raw chart scores
+    are never trimmed.
+    """
+    chart_ids = sorted({str(row["chartId"]) for row in observations})
+    if not chart_ids:
+        return {}, {}, {
+            "abilityCoverageObservations": 0,
+            "abilitySameSourceObservations": 0,
+            "abilityOppositeSourceObservations": 0,
+            "abilityMedianFallbackObservations": 0,
+            "difficultyFitObservations": 0,
+            "difficultyResidualRefitIterations": 0,
+            "abilityCoefficients": [0.0, 0.0, 0.0],
+            "phoenix2SourceCoefficient": 0.0,
+        }
+
+    abilities = {
+        "phoenix1": _coop_player_ability_percentiles(
+            phoenix1_snapshot, source="phoenix1"
+        ),
+        "phoenix2": _coop_player_ability_percentiles(
+            phoenix2_snapshot, source="phoenix2"
+        ),
+    }
+    chart_index = {chart_id: index for index, chart_id in enumerate(chart_ids)}
+    response: list[float] = []
+    covariates: list[list[float]] = []
+    groups: list[int] = []
+    ability_sources: list[str] = []
+    for row in observations:
+        source = str(row["source"])
+        player_id = str(row["playerId"])
+        ability = abilities.get(source, {}).get(player_id)
+        ability_source = "same-source"
+        if ability is None or not math.isfinite(float(ability)):
+            fallback_source = (
+                "phoenix2" if source == "phoenix1" else "phoenix1"
+            )
+            ability = abilities.get(fallback_source, {}).get(player_id)
+            ability_source = "opposite-source"
+        has_ability = ability is not None and math.isfinite(float(ability))
+        if not has_ability:
+            ability_source = "median"
+        centered = (
+            float(ability) - COOP_DIFFICULTY_REFERENCE_PERCENTILE
+            if has_ability
+            else 0.0
+        )
+        score = min(MAX_RAW_SCORE, max(0, int(row["score"])))
+        response.append(math.log1p(MAX_RAW_SCORE - score))
+        covariates.append(
+            [
+                centered,
+                centered * centered,
+                centered * centered * centered,
+                1.0 if source == "phoenix2" else 0.0,
+            ]
+        )
+        groups.append(chart_index[str(row["chartId"])])
+        ability_sources.append(ability_source)
+
+    y = np.asarray(response, dtype=float)
+    x = np.asarray(covariates, dtype=float)
+    group_index = np.asarray(groups, dtype=int)
+    def fit_within_chart() -> np.ndarray:
+        centered_x: list[np.ndarray] = []
+        centered_y: list[np.ndarray] = []
+        for group in range(len(chart_ids)):
+            selected = group_index == group
+            if not np.any(selected):
+                continue
+            group_x = x[selected]
+            group_y = y[selected]
+            centered_x.append(group_x - group_x.mean(axis=0))
+            centered_y.append(group_y - group_y.mean())
+        if not centered_x:
+            return np.zeros(x.shape[1], dtype=float)
+        design = np.concatenate(centered_x, axis=0)
+        target = np.concatenate(centered_y, axis=0)
+        if not np.any(np.abs(design) > 0):
+            return np.zeros(x.shape[1], dtype=float)
+        coefficients, *_ = np.linalg.lstsq(design, target, rcond=None)
+        return np.asarray(coefficients, dtype=float)
+
+    coefficients = fit_within_chart()
+
+    # Evaluate every original row at median ability and in Phoenix 2.  The
+    # reference-source term is common to all charts but makes the signal's
+    # interpretation explicit and stable as source coverage changes.
+    reference_covariates = np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)
+    adjusted_log_miss = y - x @ coefficients + float(
+        reference_covariates @ coefficients
+    )
+    signals: dict[str, float] = {}
+    model_support: dict[str, int] = {}
+    for chart_id, group in chart_index.items():
+        selected = group_index == group
+        signals[chart_id] = float(
+            np.quantile(adjusted_log_miss[selected], 0.25, method="linear")
+        )
+        model_support[chart_id] = int(np.count_nonzero(selected))
+
+    ability_source_counts = Counter(ability_sources)
+    coverage_count = int(len(y) - ability_source_counts.get("median", 0))
+    return signals, model_support, {
+        "abilityCoverageObservations": coverage_count,
+        "abilitySameSourceObservations": int(
+            ability_source_counts.get("same-source", 0)
+        ),
+        "abilityOppositeSourceObservations": int(
+            ability_source_counts.get("opposite-source", 0)
+        ),
+        "abilityMedianFallbackObservations": int(
+            ability_source_counts.get("median", 0)
+        ),
+        "difficultyFitObservations": int(len(y)),
+        "difficultyResidualRefitIterations": 0,
+        "abilityCoefficients": [round(float(value), 9) for value in coefficients[:3]],
+        "phoenix2SourceCoefficient": round(float(coefficients[3]), 9),
+    }
+
+
+def _coop_continuous_estimated_difficulties(
+    difficulty_signals: Mapping[str, float],
+) -> dict[str, float]:
+    """Piecewise-scale adjusted signals continuously through 10/17/25.
+
+    The two middle observations form a median anchor for even-sized catalogs.
+    The rest of the empirical distribution is not quantile-normalized.
+    """
+    finite_signals = {
+        str(chart_id): float(signal)
+        for chart_id, signal in difficulty_signals.items()
+        if isinstance(signal, (int, float)) and math.isfinite(float(signal))
+    }
+    if not finite_signals:
+        return {}
+    ordered = sorted(finite_signals.values())
+    easiest_signal = ordered[0]
+    hardest_signal = ordered[-1]
+    if easiest_signal == hardest_signal:
+        return {
+            chart_id: float(COOP_DIFFICULTY_MEDIAN)
+            for chart_id in finite_signals
+        }
+
+    lower_median = ordered[(len(ordered) - 1) // 2]
+    upper_median = ordered[len(ordered) // 2]
+
+    def calibrated(signal: float) -> float:
+        if signal <= lower_median:
+            denominator = lower_median - easiest_signal
+            continuous = (
+                float(COOP_DIFFICULTY_MEDIAN)
+                if denominator <= 0
+                else COOP_DIFFICULTY_EASIEST
+                + (COOP_DIFFICULTY_MEDIAN - COOP_DIFFICULTY_EASIEST)
+                * (signal - easiest_signal)
+                / denominator
+            )
+        elif signal <= upper_median:
+            continuous = float(COOP_DIFFICULTY_MEDIAN)
+        else:
+            denominator = hardest_signal - upper_median
+            continuous = (
+                float(COOP_DIFFICULTY_MEDIAN)
+                if denominator <= 0
+                else COOP_DIFFICULTY_MEDIAN
+                + (COOP_DIFFICULTY_HARDEST - COOP_DIFFICULTY_MEDIAN)
+                * (signal - upper_median)
+                / denominator
+            )
+        return float(
+            max(
+                COOP_DIFFICULTY_EASIEST,
+                min(COOP_DIFFICULTY_HARDEST, continuous),
+            )
+        )
+
+    return {
+        chart_id: calibrated(signal)
+        for chart_id, signal in finite_signals.items()
+    }
+
+
+def _coop_estimated_difficulties(
+    difficulty_signals: Mapping[str, float],
+) -> dict[str, int]:
+    """Round continuous 10/17/25 calibration half up to whole tier buckets."""
+    return {
+        chart_id: _round_half_up(Decimal(str(continuous)))
+        for chart_id, continuous in _coop_continuous_estimated_difficulties(
+            difficulty_signals
+        ).items()
+    }
+
+
+def build_coop_chart_results(
+    phoenix1_snapshot: Mapping[str, Any] | None,
+    phoenix2_snapshot: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build raw q75 projections and independently adjusted tier estimates."""
+    catalog, observations = build_coop_observations(
+        phoenix1_snapshot, phoenix2_snapshot
+    )
+    observations_by_chart: dict[str, list[dict[str, Any]]] = {}
+    for observation in observations:
+        observations_by_chart.setdefault(str(observation["chartId"]), []).append(
+            observation
+        )
+
+    percentile_rows: dict[str, dict[str, Any]] = {}
+    for chart_id, rows in observations_by_chart.items():
+        ordered = sorted(
+            rows,
+            key=lambda row: (
+                int(row["score"]),
+                phoenix2_coop_rating(str(row["grade"]), str(row["plate"])),
+                str(row["playerId"]),
+                str(row["source"]),
+            ),
+        )
+        index = max(0, math.ceil(COOP_SCORE_QUANTILE * len(ordered)) - 1)
+        percentile_rows[chart_id] = ordered[index]
+    difficulty_signals, model_support, difficulty_metadata = (
+        _coop_adjusted_difficulty_signals(
+            observations,
+            phoenix1_snapshot,
+            phoenix2_snapshot,
+        )
+    )
+    continuous_difficulties = _coop_continuous_estimated_difficulties(
+        difficulty_signals
+    )
+    difficulties = {
+        chart_id: _round_half_up(Decimal(str(continuous)))
+        for chart_id, continuous in continuous_difficulties.items()
+    }
+
+    ranked_chart_ids = sorted(
+        difficulties,
+        key=lambda chart_id: (
+            continuous_difficulties[chart_id],
+            difficulty_signals[chart_id],
+            -int(percentile_rows[chart_id]["score"]),
+            chart_id,
+        ),
+    )
+    rank_by_id = {
+        chart_id: rank for rank, chart_id in enumerate(ranked_chart_ids, start=1)
+    }
+    output: list[dict[str, Any]] = []
+    for chart in catalog:
+        chart_id = str(chart["chartId"])
+        rows = observations_by_chart.get(chart_id, [])
+        percentile = percentile_rows.get(chart_id)
+        counts = Counter(str(row["source"]) for row in rows)
+        support = len(rows)
+        estimated = difficulties.get(chart_id)
+        evidence_status = (
+            "Published"
+            if support >= 10
+            else "Provisional"
+            if support >= 5
+            else "Insufficient"
+            if support > 0
+            else "Unrated"
+        )
+        output.append(
+            {
+                "mode": "Co-op",
+                "modeRank": rank_by_id.get(chart_id),
+                "levelRank": rank_by_id.get(chart_id),
+                "levelPercentile": (
+                    round((rank_by_id[chart_id] - 0.5) / len(ranked_chart_ids), 6)
+                    if chart_id in rank_by_id and ranked_chart_ids
+                    else None
+                ),
+                "levelComparisonCharts": len(ranked_chart_ids),
+                "folder": chart["difficulty"],
+                "relativeGroupRank": None,
+                "relativeGroup": None,
+                "effectBandRank": None,
+                "effectBand": None,
+                "songName": chart.get("songName"),
+                "difficulty": chart["difficulty"],
+                "type": "CoOp",
+                "level": int(chart["level"]),
+                "chartId": chart_id,
+                "imageUrl": chart.get("imageUrl"),
+                "noteCount": chart.get("noteCount"),
+                "stepArtist": chart.get("stepArtist"),
+                "bpmMin": chart.get("bpmMin"),
+                "bpmMax": chart.get("bpmMax"),
+                "estimatedDifficulty": estimated,
+                "difficultyModelContinuous": (
+                    round(float(continuous_difficulties[chart_id]), 6)
+                    if chart_id in continuous_difficulties
+                    else None
+                ),
+                "difficultyModelSignal": (
+                    round(float(difficulty_signals[chart_id]), 9)
+                    if chart_id in difficulty_signals
+                    else None
+                ),
+                "difficultyModelSupportCount": int(
+                    model_support.get(chart_id, 0)
+                ),
+                "whatIfEstimates": None,
+                "averageDifficulty": None,
+                "difficultyDelta": None,
+                "folderMeasuredCharts": None,
+                "folderRangeCompression": None,
+                "difficultyDeltaCi95Low": None,
+                "difficultyDeltaCi95High": None,
+                "difficultyCi95Low": None,
+                "difficultyCi95High": None,
+                "pumbilityPerLevel": None,
+                "nContributors": support,
+                "nPlayersScored": support,
+                "phoenix1Contributors": int(counts.get("phoenix1", 0)),
+                "phoenix2Contributors": int(counts.get("phoenix2", 0)),
+                "evidenceStatus": evidence_status,
+                "percentileScore": (
+                    int(percentile["score"]) if percentile is not None else None
+                ),
+                "percentileGrade": (
+                    str(percentile["grade"]) if percentile is not None else None
+                ),
+                "percentilePlate": (
+                    str(percentile["plate"]) if percentile is not None else None
+                ),
+                "percentilePlateCode": (
+                    PLATE_CODES[str(percentile["plate"])]
+                    if percentile is not None
+                    else None
+                ),
+                "percentileSupportCount": support,
+            }
+        )
+    output.sort(
+        key=lambda chart: (
+            chart.get("estimatedDifficulty") is None,
+            int(chart.get("estimatedDifficulty") or 0),
+            str(chart.get("songName") or "").casefold(),
+            str(chart["chartId"]),
+        )
+    )
+    metadata = {
+        "eligiblePlayers": len({str(row["playerId"]) for row in observations}),
+        "phoenix1Observations": sum(
+            1 for row in observations if row["source"] == "phoenix1"
+        ),
+        "phoenix2Observations": sum(
+            1 for row in observations if row["source"] == "phoenix2"
+        ),
+        "catalogCharts": len(catalog),
+        "measuredCharts": len(percentile_rows),
+        "difficultyModel": COOP_DIFFICULTY_MODEL_NAME,
+        "difficultyTransform": "log1p(1,000,000 - score)",
+        "difficultyConditionalQuantile": COOP_SCORE_QUANTILE,
+        "difficultyReferenceAbilityPercentile": COOP_DIFFICULTY_REFERENCE_PERCENTILE,
+        "difficultyReferenceSource": "phoenix2",
+        "difficultyCalibrationAnchors": {
+            "easiest": COOP_DIFFICULTY_EASIEST,
+            "median": COOP_DIFFICULTY_MEDIAN,
+            "hardest": COOP_DIFFICULTY_HARDEST,
+        },
+        **difficulty_metadata,
+    }
+    return output, metadata
+
+
 def build_combined_chart_results(
     phoenix1_snapshot: Mapping[str, Any],
     phoenix2_snapshot: Mapping[str, Any],
@@ -1453,11 +2082,19 @@ def build_combined_chart_results(
         if column not in output.columns:
             output[column] = pd.NA
     records = json.loads(output[keep].to_json(orient="records", double_precision=6))
+    coop_records, coop_metadata = build_coop_chart_results(
+        phoenix1_snapshot, phoenix2_snapshot
+    )
+    records.extend(coop_records)
     metadata = {
-        "modes": mode_metadata,
+        "modes": {**mode_metadata, "coop": coop_metadata},
         "sourceObservations": int(len(combined)),
         "phoenix1Observations": int((combined["source"] == "phoenix1").sum()),
         "phoenix2Observations": int((combined["source"] == "phoenix2").sum()),
+        "coopSourceObservations": int(
+            coop_metadata["phoenix1Observations"]
+            + coop_metadata["phoenix2Observations"]
+        ),
     }
     return records, phoenix2_slopes, metadata
 
@@ -1475,13 +2112,20 @@ def build_combined_tier_payload(
     records = [
         dict(chart)
         for chart in combined_charts
-        if int(chart.get("level") or 0) >= MIN_TARGET_LEVEL
+        if chart.get("type") == "CoOp"
+        or int(chart.get("level") or 0) >= MIN_TARGET_LEVEL
     ]
     records.sort(
         key=lambda chart: (
-            0 if chart.get("type") == "Single" else 1,
+            {"Single": 0, "Double": 1, "CoOp": 2}.get(
+                str(chart.get("type")), 3
+            ),
             (
-                float(chart["difficultyDelta"])
+                float(chart["estimatedDifficulty"])
+                if chart.get("type") == "CoOp"
+                and isinstance(chart.get("estimatedDifficulty"), (int, float))
+                and math.isfinite(float(chart["estimatedDifficulty"]))
+                else float(chart["difficultyDelta"])
                 if isinstance(chart.get("difficultyDelta"), (int, float))
                 and math.isfinite(float(chart["difficultyDelta"]))
                 else math.inf
@@ -1546,8 +2190,78 @@ def build_combined_tier_payload(
             "folders": folders,
         }
 
+    coop_subset = chart_frame[chart_frame["type"] == "CoOp"].copy()
+    coop_measured = coop_subset[coop_subset["estimatedDifficulty"].notna()]
+    coop_meta = metadata_modes.get("coop", {})
+    coop_folders: dict[str, Any] = {}
+    for folder in ("2x", "3x", "4x", "5x"):
+        folder_subset = coop_subset[coop_subset["difficulty"] == folder]
+        if folder_subset.empty:
+            continue
+        contributors = folder_subset.loc[
+            folder_subset["nContributors"] > 0, "nContributors"
+        ]
+        coop_folders[folder] = {
+            "catalogCharts": int(len(folder_subset)),
+            "measuredCharts": int(folder_subset["estimatedDifficulty"].notna().sum()),
+            "publishedCharts": int(
+                (folder_subset["evidenceStatus"] == "Published").sum()
+            ),
+            "medianContributors": (
+                float(contributors.median()) if not contributors.empty else None
+            ),
+        }
+    modes["coop"] = {
+        "eligiblePlayers": int(coop_meta.get("eligiblePlayers", 0)),
+        "catalogCharts": int(len(coop_subset)),
+        "measuredCharts": int(len(coop_measured)),
+        "publishedCharts": int(
+            (coop_subset["evidenceStatus"] == "Published").sum()
+        ),
+        "calibration": {
+            "method": "conditional q75 score difficulty from player/source-adjusted log miss points, piecewise-scaled through 10/17/25 anchors",
+            "quantile": COOP_SCORE_QUANTILE,
+            "medianDifficulty": COOP_DIFFICULTY_MEDIAN,
+            "rounding": "round half up to the nearest whole number",
+        },
+        "difficultyModel": {
+            key: coop_meta.get(key)
+            for key in (
+                "difficultyModel",
+                "difficultyTransform",
+                "difficultyConditionalQuantile",
+                "difficultyReferenceAbilityPercentile",
+                "difficultyReferenceSource",
+                "difficultyCalibrationAnchors",
+                "abilityCoverageObservations",
+                "abilitySameSourceObservations",
+                "abilityOppositeSourceObservations",
+                "abilityMedianFallbackObservations",
+                "difficultyFitObservations",
+                "difficultyResidualRefitIterations",
+                "abilityCoefficients",
+                "phoenix2SourceCoefficient",
+            )
+        },
+        "sources": {
+            "phoenix1Observations": int(coop_meta.get("phoenix1Observations", 0)),
+            "phoenix2Observations": int(coop_meta.get("phoenix2Observations", 0)),
+            "weights": {"phoenix1": 1, "phoenix2": 1},
+        },
+        "folders": coop_folders,
+    }
+
     measured_count = sum(
-        1 for chart in records if chart.get("difficultyDelta") is not None
+        1
+        for chart in records
+        if (
+            chart.get("type") == "CoOp"
+            and chart.get("estimatedDifficulty") is not None
+        )
+        or (
+            chart.get("type") != "CoOp"
+            and chart.get("difficultyDelta") is not None
+        )
     )
     summary = {
         "scriptVersion": f"{SCRIPT_VERSION}+combined-tier-v{COMBINED_TIER_SCHEMA_VERSION}",
@@ -1566,7 +2280,32 @@ def build_combined_tier_payload(
                 "missingAbilityWeight": 1,
             },
             "levelReference": "median measured chart residual within the exact mode and Phoenix 2 official level",
-            "modeSeparation": "Singles and Doubles use independent baselines, calibration, and ranks",
+            "modeSeparation": "Singles and Doubles keep independent residual models; Co-op recommendation goals use the independent whole-number tier difficulty",
+            "coop": {
+                "scoreProjectionModel": COOP_SCORE_PROJECTION_MODEL_NAME,
+                "goalTitle": "[CO-OP] Master",
+                "goalTotalRating": COOP_MASTER_TITLE_RATING,
+                "goalPlate": COOP_GOAL_PLATE,
+                "goalGradeBands": [
+                    {"maximumDifficulty": maximum, "grade": grade}
+                    for maximum, grade in COOP_GOAL_GRADE_BANDS
+                ],
+                "rawEvidenceQuantile": COOP_SCORE_QUANTILE,
+                "rawEvidenceSelection": "nearest-rank observed score-and-plate pair retained for analysis provenance",
+                "difficultyModel": COOP_DIFFICULTY_MODEL_NAME,
+                "difficultyResponse": "log1p(1,000,000 - score)",
+                "playerAbility": "source-specific percentile of the player's mean top-20 Single and Double Pumbility",
+                "sourceAdjustment": "Phoenix 2 indicator estimated after within-chart demeaning",
+                "robustFit": "the conditional quantile supplies post-adjustment outlier resistance; residual refit iterations are disabled and raw scores are not trimmed",
+                "difficultyStatistic": "25th percentile adjusted log miss at median player ability and Phoenix 2 source, equivalent to conditional 75th-percentile score",
+                "difficultyRange": [10, 25],
+                "difficultyMedian": COOP_DIFFICULTY_MEDIAN,
+                "difficultyCalibration": "piecewise linear on each side of the empirical median; no target histogram",
+                "difficultyRounding": "round half up to the nearest whole number",
+                "chartPool": "all current Phoenix 2 2x, 3x, 4x, and 5x Co-op charts",
+                "rating": "120 - 0.8 * grade penalty + 0.16 * plate units",
+                "aggregation": "sum every unique Co-op chart rating; no top-50 limit",
+            },
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
             "effectBands": "seven fixed absolute bands with Overrated and Underrated beyond +/-0.5",
             "folderRangeNormalization": {
@@ -1614,6 +2353,7 @@ def build_combined_tier_payload(
         "summary": summary,
         "singles": [chart for chart in records if chart.get("type") == "Single"],
         "doubles": [chart for chart in records if chart.get("type") == "Double"],
+        "coop": [chart for chart in records if chart.get("type") == "CoOp"],
         "relativeGroups": [
             {"rank": rank, "name": name}
             for rank, name in enumerate(RELATIVE_GROUPS, start=1)
@@ -1660,10 +2400,15 @@ def _projected_gain_sort_key(row: Mapping[str, Any]) -> tuple[float, float, floa
 def _recommendation_chart_rows(
     combined_charts: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    return [
-        {key: chart.get(key) for key in RECOMMENDATION_CHART_FIELDS}
-        for chart in combined_charts
-    ]
+    rows: list[dict[str, Any]] = []
+    for chart in combined_charts:
+        fields = (
+            RECOMMENDATION_CHART_FIELDS
+            if chart.get("type") == "CoOp"
+            else TOP_SCORE_CHART_FIELDS
+        )
+        rows.append({key: chart.get(key) for key in fields})
+    return rows
 
 
 def _json_safe_scalar(value: Any) -> Any:
@@ -2537,8 +3282,6 @@ def _build_player_recommendation_phoenix2_only(
             if estimate is None or not math.isfinite(float(estimate)):
                 continue
             estimate = float(estimate)
-            if estimate > scoring_rating + RECOMMENDATION_RADIUS:
-                continue
             farm_edge = float(chart["level"]) + 0.5 - estimate
             expected = max(0.0, baseline_pb + float(slope) * (farm_edge - baseline_edge))
             chart_id = str(chart["chartId"])
@@ -2599,15 +3342,147 @@ def _build_player_recommendation_phoenix2_only(
             ),
             "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
             "currentTop50Pumbility": round(current_total, 3),
-            "candidateRange": [
-                None,
-                round(scoring_rating + RECOMMENDATION_RADIUS, 3),
-            ],
             "candidateCount": len(candidates),
             "candidates": candidates,
             "topRecommendations": top,
         }
     return {"playerKey": public_player_key(player_id), "modes": modes}
+
+
+def build_player_coop_mode(
+    player_id: str,
+    phoenix2_snapshot: Mapping[str, Any],
+    combined_charts: Sequence[Mapping[str, Any]],
+    *,
+    include_candidates: bool = True,
+) -> dict[str, Any]:
+    """Build additive Co-op recommendations from the Master grade ladder."""
+    catalog, phoenix2_observations = build_coop_observations(
+        None, phoenix2_snapshot
+    )
+    catalog_by_id = {str(row["chartId"]): row for row in catalog}
+    player_scores = [
+        row
+        for row in phoenix2_observations
+        if str(row["playerId"]) == str(player_id)
+    ]
+    existing_by_chart = {
+        str(row["chartId"]): phoenix2_coop_rating(
+            str(row["grade"]), str(row["plate"])
+        )
+        for row in player_scores
+    }
+    current_rating = sum(existing_by_chart.values())
+    analysis_by_id = {
+        str(row["chartId"]): dict(row)
+        for row in combined_charts
+        if row.get("type") == "CoOp" and row.get("chartId") is not None
+    }
+
+    sortable_top_scores: list[tuple[int, dict[str, Any]]] = []
+    for score in player_scores:
+        chart_id = str(score["chartId"])
+        chart = analysis_by_id.get(chart_id, catalog_by_id.get(chart_id, {}))
+        plate = str(score["plate"])
+        sortable_top_scores.append(
+            (
+                int(score["score"]),
+                {
+                    **{
+                        field: _json_safe_scalar(chart.get(field))
+                        for field in TOP_SCORE_CHART_FIELDS
+                    },
+                    "mode": "Co-op",
+                    "songName": chart.get("songName") or "Unknown chart",
+                    "difficulty": chart.get("difficulty")
+                    or f"{int(chart.get('level') or 0)}x",
+                    "type": "CoOp",
+                    "level": int(chart.get("level") or 0),
+                    "chartId": chart_id,
+                    "grade": str(score["grade"]),
+                    "plate": plate,
+                    "plateCode": PLATE_CODES[plate],
+                    "coopRating": round(existing_by_chart[chart_id], 2),
+                },
+            )
+        )
+    sortable_top_scores.sort(
+        key=lambda item: (
+            -float(item[1]["coopRating"]),
+            -item[0],
+            str(item[1].get("songName") or "").casefold(),
+            str(item[1]["chartId"]),
+        )
+    )
+    top_scores = [row for _, row in sortable_top_scores]
+
+    candidates: list[dict[str, Any]] = []
+    for chart_id, chart in analysis_by_id.items():
+        estimate = chart.get("estimatedDifficulty")
+        goal = coop_master_goal_for_estimated_difficulty(estimate)
+        if (
+            not isinstance(estimate, (int, float))
+            or not math.isfinite(float(estimate))
+            or goal is None
+        ):
+            continue
+        score, grade, plate = goal
+        expected = phoenix2_coop_rating(str(grade), plate)
+        existing = existing_by_chart.get(chart_id)
+        gain = max(0.0, expected - float(existing or 0.0))
+        candidates.append(
+            {
+                **dict(chart),
+                "distanceFromRating": 0.0,
+                "farmEdge": round(25.0 - float(estimate), 6),
+                "existingPumbility": None,
+                "expectedPumbility": None,
+                "existingCoopRating": (
+                    round(existing, 2) if existing is not None else None
+                ),
+                "expectedCoopRating": round(expected, 2),
+                "projectedGain": round(gain, 2),
+                "projectedScore": score,
+                "scoreProjectionSource": "estimated-difficulty-master-grade-ladder",
+                "scoreProjectionSupportCount": None,
+                "scoreProjectionConfidence": "high",
+                "projectedGrade": str(grade),
+                "projectedPlate": plate,
+                "projectedPlateCode": PLATE_CODES[plate],
+                "projectedPlateProbability": None,
+                "plateProjectionSource": "fixed-fair-game",
+                "played": existing is not None,
+            }
+        )
+    candidates.sort(
+        key=lambda row: (
+            -float(row["projectedGain"]),
+            (
+                float(row["difficultyModelContinuous"])
+                if isinstance(row.get("difficultyModelContinuous"), (int, float))
+                and math.isfinite(float(row["difficultyModelContinuous"]))
+                else float(row["estimatedDifficulty"])
+            ),
+            -float(row["expectedCoopRating"]),
+            str(row.get("songName") or "").casefold(),
+            str(row.get("chartId") or ""),
+        )
+    )
+    top_recommendations = candidates[:TOP_RECOMMENDATION_COUNT]
+    return {
+        "eligible": True,
+        "validScoreCount": len(player_scores),
+        "requiredScoreCount": 0,
+        "projectionAvailable": bool(candidates),
+        "scoreProjectionModel": COOP_SCORE_PROJECTION_MODEL_NAME,
+        "currentCoopRating": round(current_rating, 2),
+        "candidateRange": [10, 25],
+        "candidateCount": len(candidates),
+        "filterCandidateCount": len(candidates),
+        "topScores": top_scores,
+        **({"filterCandidates": candidates} if include_candidates else {}),
+        "topRecommendations": top_recommendations,
+    }
 
 
 def build_player_recommendation(
@@ -3000,6 +3875,13 @@ def build_player_recommendation(
             "topRecommendations": [public_candidate(row) for row in top],
         }
 
+    modes["coop"] = build_player_coop_mode(
+        str(player_id),
+        phoenix2_snapshot,
+        combined_charts,
+        include_candidates=include_candidates,
+    )
+
     source_mode_eligibility = {
         mode_key: bool(modes.get(mode_key, {}).get("eligible"))
         for mode_key in ("singles", "doubles")
@@ -3187,7 +4069,7 @@ def build_recommendation_index(
                 "eligibility": {
                     mode: bool(details.get("eligible"))
                     for mode, details in recommendation.get("modes", {}).items()
-                    if mode in {"singles", "doubles"}
+                    if mode in {"singles", "doubles", "coop"}
                 },
                 "shard": shard_number,
             }
@@ -3249,7 +4131,7 @@ def build_recommendation_index(
             "ratingReferenceGrade": SKILL_RATING_REFERENCE_GRADE,
             "ratingReferencePlate": SKILL_RATING_REFERENCE_PLATE,
             "ratingReferenceMultiplier": SKILL_RATING_REFERENCE_MULTIPLIER,
-            "ratingSource": "display and candidate eligibility use Phoenix 2 top 20 at 20 valid scores; otherwise Phoenix 1 top 20 when available, then partial Phoenix 2",
+            "ratingSource": "the displayed rating and recommendation ceiling use Phoenix 2 top 20 at 20 valid scores; otherwise Phoenix 1 top 20 when available, then partial Phoenix 2",
             "projectionRatingSource": "score projections use Phoenix 2 ranks 11-30 at 30 valid scores; otherwise Phoenix 1 ranks 11-30 when all 30 are available",
             "shortHistoryBaseline": "a mode without a complete 30-score Phoenix 2 or Phoenix 1 source keeps top-20 farm-edge recommendations but does not receive personal projected scores",
             "candidateUpperRadius": RECOMMENDATION_RADIUS,
@@ -3265,7 +4147,7 @@ def build_recommendation_index(
             "phoenix1PlatePriorCap": plate_model.phoenix1_cap,
             "projectedGain": "deterministic change from the median-score and median-plate projected Pumbility to the active Phoenix 2 top-50 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; the projection replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
             "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
-            "manualRanking": "farm edge up to 0.5 estimated-difficulty points above the requested scoring rating; official-difficulty filters use all ranked level-16+ charts and no personal top-50 gain is inferred",
+            "manualRanking": "farm edge up to 1.0 estimated-difficulty point above the requested scoring rating; official-difficulty filters use all ranked level-16+ charts and no personal top-50 gain is inferred",
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,

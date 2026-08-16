@@ -9,6 +9,7 @@ from phoenix2_pumbility import (
     _weighted_median_plate,
     grade_for_score,
     normalize_plate,
+    phoenix2_coop_rating,
     phoenix2_pumbility,
     skill_rating_for_pumbility,
 )
@@ -96,6 +97,15 @@ class Phoenix2PumbilityTests(unittest.TestCase):
                 self.assertEqual(
                     phoenix2_pumbility("Double", 24, grade, "RG"), expected
                 )
+
+    def test_coop_formula_uses_fixed_base_and_double_penalty_units(self) -> None:
+        self.assertEqual(phoenix2_coop_rating("SSS+", "PG"), 121.6)
+        self.assertEqual(phoenix2_coop_rating("F", "Rough Game"), 80.0)
+        self.assertEqual(phoenix2_coop_rating("AA", "FG"), 109.76)
+        with self.assertRaises(ValueError):
+            phoenix2_coop_rating("invalid", "FG")
+        with self.assertRaises(ValueError):
+            phoenix2_coop_rating("SSS+", "invalid")
 
     def test_formula_matches_the_official_top_fifty_screenshot(self) -> None:
         cases = [

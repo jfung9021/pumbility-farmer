@@ -17,7 +17,7 @@ export default function HomePage() {
               <h2>Recommendations</h2>
               <span>
                 Select a username, see which version supplies your skill rating,
-                and rank nearby charts against your current Phoenix 2 history.
+                and rank charts against your current Phoenix 2 history.
               </span>
             </div>
             <b aria-hidden="true">↗</b>

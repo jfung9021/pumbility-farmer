@@ -22,6 +22,11 @@ import {
   validateLocalAnalysisPayload,
 } from "../lib/local-analysis.ts";
 import { archiveForMix, MIXES, mixFromSearchParams } from "../lib/mixes.ts";
+import {
+  recommendationModeFromSearchParams,
+  recommendationViewFromSearchParams,
+  tierModeFromSearchParams,
+} from "../lib/page-view-state.ts";
 import { pumbilityProgress } from "../lib/pumbility-progress.ts";
 import {
   recommendationDifficultyOptions,
@@ -109,7 +114,8 @@ test("recommendation methodology separates top-50 Pumbility from top-20 display 
   assert.match(page, /top-20 average Pumbility/);
   assert.match(page, /ranks 11–30 Pumbility rating/);
   assert.match(page, /S with Fair Game/);
-  assert.match(page, /visible skill rating and eligible-chart ceiling use top-20/);
+  assert.match(page, /visible skill rating uses top-20 average Pumbility/);
+  assert.match(page, /up to 1\.0 estimated-difficulty point above that mode/);
   assert.match(page, /projected plate is the weighted median/);
   assert.match(page, /Expected Pumbility is then calculated once from the displayed projected score/);
   assert.match(page, /existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2/);
@@ -131,7 +137,7 @@ test("recommendation modes put Overall first and select it by default", async ()
 
   assert.match(
     page,
-    /const RECOMMENDATION_MODES:[\s\S]*"overall",[\s\S]*"singles",[\s\S]*"doubles"/,
+    /const RECOMMENDATION_MODES:[\s\S]*"overall",[\s\S]*"singles",[\s\S]*"doubles",[\s\S]*"coop"/,
   );
   assert.match(page, /useState<RecommendationModeKey>\("overall"\)/);
   assert.match(page, /role="tabpanel"/);
@@ -148,6 +154,76 @@ test("recommendation modes put Overall first and select it by default", async ()
   assert.doesNotMatch(css, /\.pumbility-progress-percent\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/);
   assert.match(page, /Math\.round\(progress\.percent\)/);
   assert.match(page, /cached recommendation predates the Overall model/);
+});
+
+test("Co-op tabs and yellow badges are available on both data pages", async () => {
+  const [tierList, recommendations, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(tierList, /\(\["singles", "doubles", "coop"\] as ModeKey\[\]\)\.map/);
+  assert.match(tierList, /mode === "coop" \? "Co-op" : mode/);
+  assert.match(tierList, /chart\.type === "CoOp" \? `\$\{chart\.level\}x`/);
+  assert.match(recommendations, /"overall",\s*"singles",\s*"doubles",\s*"coop"/);
+  assert.match(recommendations, /isCoop \? `\$\{chart\.level\}x` : chart\.level/);
+  assert.match(css, /\.chart-difficulty-coop \{ background: #d5a91b; color: #171207; \}/);
+});
+
+test("tier and recommendation tabs are URL-addressable", async () => {
+  assert.equal(tierModeFromSearchParams(new URLSearchParams("mode=singles")), "singles");
+  assert.equal(tierModeFromSearchParams(new URLSearchParams("mode=doubles")), "doubles");
+  assert.equal(tierModeFromSearchParams(new URLSearchParams("mode=coop")), "coop");
+  assert.equal(tierModeFromSearchParams(new URLSearchParams("mode=overall")), "singles");
+
+  assert.equal(recommendationModeFromSearchParams(new URLSearchParams("mode=overall")), "overall");
+  assert.equal(recommendationModeFromSearchParams(new URLSearchParams("mode=singles")), "singles");
+  assert.equal(recommendationModeFromSearchParams(new URLSearchParams("mode=doubles")), "doubles");
+  assert.equal(recommendationModeFromSearchParams(new URLSearchParams("mode=coop")), "coop");
+  assert.equal(recommendationModeFromSearchParams(new URLSearchParams("mode=invalid")), "overall");
+  assert.equal(recommendationViewFromSearchParams(new URLSearchParams("view=top50")), "top50");
+  assert.equal(
+    recommendationViewFromSearchParams(new URLSearchParams("view=recommendations")),
+    "recommendations",
+  );
+
+  const [tierList, recommendations] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+  ]);
+  assert.match(tierList, /url\.searchParams\.set\("mode", mode\)/);
+  assert.match(tierList, /window\.addEventListener\("popstate", applyModeFromUrl\)/);
+  assert.match(recommendations, /url\.searchParams\.set\("mode", mode\)/);
+  assert.match(recommendations, /url\.searchParams\.set\("view", view\)/);
+  assert.match(recommendations, /window\.addEventListener\("popstate", applyViewFromUrl\)/);
+});
+
+test("Co-op methodology derives Master-title goals from tier difficulty", async () => {
+  const [tierList, recommendations, readme] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "README.md"), "utf8"),
+  ]);
+
+  for (const content of [tierList, recommendations, readme]) {
+    assert.match(content, /player[- ]strength/);
+    assert.match(content, /Phoenix source/);
+    assert.match(content, /robust/);
+    assert.match(content, /using\s+all observations/);
+    assert.match(content, /(?:not trimmed|without trimming)/);
+    assert.match(content, /median(?: measured)? chart/);
+    assert.match(content, /normal distribution/);
+  }
+  assert.match(recommendations, /completing all current chart goals totals exactly 16,000 Co-op Rating/);
+  assert.match(tierList, /recommendation letter-grade goals are assigned from these whole-number difficulties/);
+  assert.match(tierList, /median chart anchored at 17/);
+  assert.match(tierList, /const continuous = chart\.difficultyModelContinuous/);
+  assert.match(tierList, /chart\.estimatedDifficulty\)\.toFixed\(1\)/);
+  assert.match(recommendations, /median chart at 17/);
+  assert.match(readme, /totals exactly 16,000 Co-op Rating/);
+  assert.match(readme, /raw per-chart\s*q75 result remains analysis provenance/);
+  assert.match(readme, /whole-number estimated difficulties from\s*10 through 25/);
 });
 
 test("recommendation player clicks are tracked by display name", async () => {
@@ -186,6 +262,19 @@ test("Pumbility progress uses the Phoenix 2 title and rank boundaries", () => {
   const phoenix = pumbilityProgress("overall", 20_000);
   assert.equal(phoenix.label, "Phoenix");
   assert.equal(phoenix.nextThreshold, null);
+
+  const noCoopTitle = pumbilityProgress("coop", 999);
+  assert.equal(noCoopTitle.label, "No Co-op title");
+  assert.equal(noCoopTitle.nextLabel, "[CO-OP] Lv.1");
+
+  const coopLevelTen = pumbilityProgress("coop", 10_000);
+  assert.equal(coopLevelTen.label, "[CO-OP] Lv.10");
+  assert.equal(coopLevelTen.nextLabel, "[CO-OP] Advanced");
+  assert.equal(coopLevelTen.nextThreshold, 12_000);
+
+  const coopMaster = pumbilityProgress("coop", 16_000);
+  assert.equal(coopMaster.label, "[CO-OP] Master");
+  assert.equal(coopMaster.percent, 100);
 });
 
 test("recommendation page keeps the filterable recommendation list beside the Top 50 view", async () => {
@@ -196,10 +285,11 @@ test("recommendation page keeps the filterable recommendation list beside the To
   const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
 
   assert.match(page, /<h2 id="top-recommendations-title">RECOMMENDED CHARTS<\/h2>/);
-  assert.match(page, /aria-label="Official difficulty"/);
+  assert.match(page, /aria-label=\{activeMode === "coop" \? "Player count" : "Official difficulty"\}/);
+  assert.match(page, /activeMode === "coop" \? "All player types" : "All difficulties"/);
   assert.match(page, /recommendationDifficultyOptions/);
   assert.match(page, /recommendationsForDifficulty\(activeMode, mode, effectiveDifficulty\)/);
-  assert.match(page, /type RecommendationView = "recommendations" \| "top50"/);
+  assert.match(page, /type RecommendationView,[\s\S]*from "\.\.\/\.\.\/lib\/page-view-state"/);
   assert.match(page, /<h2 id="top-scores-title">TOP 50 PUMBILITY SCORES<\/h2>/);
   assert.match(page, /scores=\{mode\?\.topScores \?\? \[\]\}/);
   assert.doesNotMatch(page, /Top 20 Pumbility opportunities|Top 20 farmable charts/);
@@ -271,7 +361,7 @@ test("NEVSISTER catalog has the complete validated chart inventory", async () =>
 
   assert.equal(catalog.schemaVersion, 1);
   assert.equal(catalog.channelId, "UCicVRsgv4iIhZGZcbx7xUkw");
-  assert.equal(catalogIds.length, 2572);
+  assert.equal(catalogIds.length, 2712);
   assert.equal(new Set(catalogIds).size, catalogIds.length);
   for (const [chartId, videoId] of Object.entries(catalog.charts)) {
     assert.match(chartId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
@@ -355,7 +445,7 @@ test("local recommendations reject stale schemas before rendering", () => {
   assert.throws(
     () => validateLocalRecommendationIndex(payload),
     (error: unknown) => error instanceof LocalRecommendationsValidationError
-      && /Regenerate schema 22 recommendations/.test(error.message),
+      && /Regenerate schema 23 recommendations/.test(error.message),
   );
 });
 
@@ -385,8 +475,9 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
     plate: "Perfect Game",
     plateCode: "PG",
   };
+  const { pumbility: _pumbility, ...topScoreWithoutPumbility } = topScore;
   const payload = {
-    schemaVersion: 22,
+    schemaVersion: 23,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: [],
@@ -397,11 +488,20 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
       modes: {
         singles: { topScores: [topScore] },
         doubles: { topScores: [] },
+        coop: { topScores: [{
+          ...topScoreWithoutPumbility,
+          mode: "Co-op",
+          difficulty: "CoOp3",
+          type: "CoOp",
+          level: 3,
+          chartId: "test-song-coop3",
+          coopRating: 121.6,
+        }] },
       },
     }],
   };
 
-  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 22);
+  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 23);
   const privatePayload = structuredClone(payload);
   Object.assign(privatePayload.players[0].modes.singles.topScores[0], { rawScore: 1_000_000 });
   assert.throws(
@@ -487,9 +587,9 @@ test("tier list uses compact segmented controls for grouping and layout", async 
   assert.doesNotMatch(page, /Combined scoring tier list|Scoring-based Tier List/);
   assert.match(page, /<span>Estimated<br \/>Difficulty<\/span>/);
   assert.match(page, /Tier Bands/);
-  assert.match(page, /aria-label="Difficulty grouping" className="view-switcher" role="group"/);
+  assert.match(page, /aria-label="Difficulty grouping"[\s\S]*className=\{`view-switcher\$\{activeMode === "coop" \? " single-option" : ""\}`\}[\s\S]*role="group"/);
   assert.match(page, /aria-label="Chart layout" className="view-switcher" role="group"/);
-  assert.match(page, /aria-pressed=\{groupingView === "estimated"\}/);
+  assert.match(page, /aria-pressed=\{activeMode === "coop" \|\| groupingView === "estimated"\}/);
   assert.match(css, /\.results-switchers \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
   assert.match(css, /\.view-switcher button \{[^}]*font-size: clamp\(6px, 2vw, 8px\);/);
   assert.match(css, /\.view-switcher button \{[^}]*line-height: 1\.15;[^}]*min-height: 42px;[^}]*white-space: normal;/);
@@ -560,7 +660,7 @@ test("tier list chart details provide local mode-specific what-if estimates", as
     page.indexOf("function ChartCard"),
   );
 
-  assert.match(types, /whatIfEstimates\?: Array<\{\s*level: number;\s*estimatedDifficulty: number \| null;\s*\}>;/);
+  assert.match(types, /whatIfEstimates\?: Array<\{\s*level: number;\s*estimatedDifficulty: number \| null;\s*\}> \| null;/);
   assert.match(whatIfComponent, /const prefix = chart\.type === "Single" \? "S" : "D";/);
   assert.match(whatIfComponent, /<option value="">\{prefix\}\?\?<\/option>/);
   assert.match(whatIfComponent, /disabled=\{estimate\.estimatedDifficulty === null\}/);
@@ -590,8 +690,11 @@ test("chart art uses mode-colored borders in every rendering layout", async () =
   assert.match(recommendations, /chart-difficulty-badge chart-difficulty-\$\{chart\.type\.toLowerCase\(\)\}[\s\S]*\{chart\.level\}/);
   assert.match(css, /--chart-single-border: #ff4a4a;/);
   assert.match(css, /--chart-double-border: #39d96a;/);
+  assert.match(css, /--chart-coop-border: #f3ce55;/);
   assert.match(css, /\.chart-art\[data-chart-type="Single"\] \{ border: 1px solid var\(--chart-single-border\); \}/);
   assert.match(css, /\.chart-art\[data-chart-type="Double"\] \{ border: 1px solid var\(--chart-double-border\); \}/);
+  assert.match(css, /\.chart-art\[data-chart-type="CoOp"\] \{ border: 1px solid var\(--chart-coop-border\); \}/);
+  assert.match(css, /\.recommendation-jacket \.chart-difficulty-coop \{ background: #d5a91b; color: #171207; \}/);
 });
 
 test("recommendation cards show a compact grade and plate goal", async () => {
@@ -619,8 +722,8 @@ test("projected gain opens an accessible total Pumbility popup", async () => {
     page,
     /<button[\s\S]*aria-controls=\{pumbilityPopupId\}[\s\S]*aria-expanded=\{pumbilityOpen\}[\s\S]*className="recommendation-pumbility-trigger"[\s\S]*<span>projected gain<\/span>[\s\S]*<strong>\{projectedGain\}<\/strong>[\s\S]*<\/button>/,
   );
-  assert.match(page, /<span>Total projected Pumbility<\/span>/);
-  assert.match(page, /pumbilityLabel\(chart\.expectedPumbility\)/);
+  assert.match(page, /<span>\{projectedRatingLabel\}<\/span>/);
+  assert.match(page, /pumbilityLabel\(expectedRating\)/);
   assert.match(page, /document\.addEventListener\("pointerdown", closeOnOutsideClick\)/);
   assert.match(page, /event\.key === "Escape"/);
   assert.match(css, /\.recommendation-pumbility-popup \{[^}]*bottom: calc\(100% \+ 8px\);[^}]*position: absolute;[^}]*right: -4px;/);
@@ -640,7 +743,7 @@ test("mobile recommendation cards keep gain on the right and show estimated diff
   assert.match(page, /chart\.stepArtist \|\| "Unknown step artist"/);
   assert.match(page, /formatBpm\(chart\.bpmMin, chart\.bpmMax\)/);
   assert.match(page, /bpm \? <> · \{bpm\}<\/> : null/);
-  assert.match(page, /const estimate = `\$\{chart\.type === "Single" \? "S" : "D"\}\$\{formatEstimatedDifficulty\(chart\.estimatedDifficulty\)\}`/);
+  assert.match(page, /const estimate = isCoop[\s\S]*String\(Math\.round\(chart\.estimatedDifficulty\)\)[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
   assert.match(page, /<b> · \{estimate\} estimate<\/b>/);
   assert.doesNotMatch(page, /official<\/b>/);
   assert.doesNotMatch(page, /formula expected/);
@@ -673,7 +776,7 @@ test("recommendation player picker shares a 2-to-1 row with the view switch", as
   assert.match(css, /\.top-recommendations \{[^}]*margin-top: var\(--recommendations-stack-gap\);/);
   assert.match(page, /role="switch"/);
   assert.match(page, /aria-checked=\{recommendationView === "top50"\}/);
-  assert.match(page, /<span>Recommendations<\/span>[\s\S]*<span>Top 50<\/span>/);
+  assert.match(page, /<span>Recommendations<\/span>[\s\S]*<span>\{activeMode === "coop" \? "Scores" : "Top 50"\}<\/span>/);
   assert.match(css, /\.player-picker \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(0, 1fr\);[^}]*width: 100%;/);
   assert.match(css, /\.player-picker-meta \{[^}]*grid-column: 1 \/ -1;/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendations-page \{ --recommendations-stack-gap: 14px; \}/);
@@ -696,7 +799,8 @@ test("Top 50 cards expose PIU result data and open an accessible detail dialog",
     page,
     /className="top-score-result">\s*<span>\s*<b>\{score\.grade \|\| "—"\}<\/b>\s*<small>\{score\.plateCode \|\| "—"\}<\/small>/,
   );
-  assert.match(page, /pumbilityLabel\(score\.pumbility\)/);
+  assert.match(page, /function topScoreRating\(score: RecommendationTopScore\)/);
+  assert.match(page, /pumbilityLabel\(rating\)/);
   assert.match(page, /className="chart-dialog top-score-dialog"/);
   assert.match(page, /aria-modal="true"/);
   assert.match(page, /document\.body\.style\.overflow = "hidden"/);
@@ -874,6 +978,7 @@ test("reads a privacy-safe local aggregate", async () => {
     summary: { scriptVersion: "test", method: {}, coverage: {}, modes: {} },
     singles: [],
     doubles: [],
+    coop: [],
     relativeGroups: [],
     effectBands: [],
   };
@@ -955,15 +1060,21 @@ test("validates local aggregates against the requested Phoenix version", async (
 
 test("accepts the combined tier-list identity", () => {
   const payload = {
+    schemaVersion: 5,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     mix: { key: "combined", apiValue: "Phoenix+Phoenix2", label: "Phoenix 1 + 2" },
     summary: { scriptVersion: "test", method: {}, coverage: {}, modes: {} },
     singles: [],
     doubles: [],
+    coop: [],
     relativeGroups: [],
     effectBands: [],
   };
   assert.equal(validateLocalAnalysisPayload(payload, "combined").mix.key, "combined");
+  assert.throws(
+    () => validateLocalAnalysisPayload({ ...payload, schemaVersion: 4 }, "combined"),
+    /unsupported schema/,
+  );
   assert.throws(
     () => validateLocalAnalysisPayload(payload, "phoenix2"),
     /does not contain Phoenix 2 data/,
@@ -1016,7 +1127,7 @@ test("recommendation player list exposes names and eligibility without mode payl
       playerKey: "opaque",
       username: "PLAYER",
       displayName: "PLAYER",
-      eligibility: { singles: true, doubles: false },
+      eligibility: { singles: true, doubles: false, coop: false },
       scoreProgress: {
         singles: { validScoreCount: 30, requiredScoreCount: 30 },
         doubles: { validScoreCount: 4, requiredScoreCount: 30 },
@@ -1040,7 +1151,7 @@ test("recommendation readiness explains missing score history", async () => {
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendation-readiness-grid \{ grid-template-columns: 1fr; \}/);
 });
 
-test("manual recommendations include charts up to 0.5 above the scoring rating", () => {
+test("manual recommendations cap chart difficulty at 1.0 above the scoring rating", () => {
   const chart = (chartId: string, estimatedDifficulty: number, level: number) => ({
     mode: "Singles" as const,
     songName: chartId,
@@ -1066,8 +1177,8 @@ test("manual recommendations include charts up to 0.5 above the scoring rating",
     charts: [
       chart("level-16", 10, 16),
       chart("rating-edge", 20.5, 21),
-      chart("upper-edge", 21, 21),
-      chart("too-hard", 21.0000000001, 21),
+      chart("upper-edge", 21.5, 21),
+      chart("too-hard", 21.5000000001, 21),
       chart("level-15", 10, 15),
     ],
     players: [],
@@ -1077,7 +1188,7 @@ test("manual recommendations include charts up to 0.5 above the scoring rating",
   const overall = response.player.modes.overall;
   assert.ok(overall);
   assert.equal(singles.projectionAvailable, false);
-  assert.deepEqual(singles.candidateRange, [null, 21]);
+  assert.deepEqual(singles.candidateRange, [null, 21.5]);
   assert.deepEqual(
     (singles.filterCandidates ?? []).map((candidate) => candidate.chartId),
     ["level-16", "level-15", "rating-edge", "upper-edge", "too-hard"],
@@ -1198,4 +1309,18 @@ test("official difficulty filters use the full mode-specific chart pools", () =>
     ranked.slice(0, 3).map((row) => row.chartId),
     ["double-24-01", "double-24-02", "double-24-00"],
   );
+
+  const coopChart = {
+    ...(modes.singles.filterCandidates ?? [])[0],
+    mode: "Co-op" as const,
+    difficulty: "CoOp2",
+    type: "CoOp" as const,
+    level: 2,
+    chartId: "coop-2",
+  };
+  assert.deepEqual(recommendationDifficultyOptions("coop", [coopChart]), ["2x"]);
+  assert.equal(visibleRecommendations("coop", {
+    ...modes.singles,
+    topRecommendations: [coopChart],
+  }, "All").length, 1);
 });

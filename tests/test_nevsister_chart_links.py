@@ -29,6 +29,12 @@ class NevsisterChartLinkTests(unittest.TestCase):
     def test_explicit_difficulties_support_combined_uploads(self) -> None:
         self.assertEqual(catalog.explicit_difficulties("Song S6 & S16 / D20"), {"S6", "S16", "D20"})
 
+    def test_explicit_difficulties_support_coop_player_counts(self) -> None:
+        self.assertEqual(
+            catalog.explicit_difficulties("Song CO-OP X2 / COOP X4"),
+            {"C2", "C4"},
+        )
+
     def test_short_and_full_song_variants_do_not_collapse(self) -> None:
         self.assertEqual(catalog.chart_variant("Song - SHORT CUT - S20"), "short-cut")
         self.assertEqual(catalog.chart_variant("Song - FULL SONG - D24"), "full-song")
@@ -38,7 +44,7 @@ class NevsisterChartLinkTests(unittest.TestCase):
         payload = json.loads(catalog.DEFAULT_OUTPUT.read_text(encoding="utf-8"))
         self.assertEqual(payload["schemaVersion"], 1)
         self.assertEqual(payload["channelId"], catalog.CHANNEL_ID)
-        self.assertEqual(len(payload["charts"]), 2_572)
+        self.assertEqual(len(payload["charts"]), 2_712)
         for chart_id, video_id in payload["charts"].items():
             self.assertRegex(chart_id, r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
             self.assertRegex(video_id, catalog.VIDEO_ID_RE)

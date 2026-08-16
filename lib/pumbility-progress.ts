@@ -70,10 +70,25 @@ const OVERALL_RANK_LADDER: ProgressRung[] = [
   { label: "Phoenix", threshold: 20_000 },
 ];
 
+const COOP_TITLE_LADDER: ProgressRung[] = [
+  { label: "No Co-op title", threshold: 0 },
+  ...[
+    1_000, 2_000, 3_000, 4_000, 5_000,
+    6_000, 7_000, 8_000, 9_000, 10_000,
+  ].map((threshold, index) => ({
+    label: `[CO-OP] Lv.${index + 1}`,
+    threshold,
+  })),
+  { label: "[CO-OP] Advanced", threshold: 12_000 },
+  { label: "[CO-OP] Expert", threshold: 14_000 },
+  { label: "[CO-OP] Master", threshold: 16_000 },
+];
+
 const LADDERS: Record<RecommendationModeKey, ProgressRung[]> = {
   overall: OVERALL_RANK_LADDER,
   singles: SINGLE_TITLE_LADDER,
   doubles: DOUBLE_TITLE_LADDER,
+  coop: COOP_TITLE_LADDER,
 };
 
 export function pumbilityProgress(
