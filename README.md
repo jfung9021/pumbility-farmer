@@ -63,8 +63,8 @@ Phoenix 2 player. That conditional quantile provides the outlier robustness; raw
 residuals are not trimmed.
 
 The robust chart ordering is calibrated monotonically through continuous anchors at 10, 16, and
-23.9. Published difficulties truncate those values to whole-number buckets from 10 through 23, so
-the median measured chart is anchored at 16 while the hardest chart can retain a 23.9 internal
+24.9. Published difficulties truncate those values to whole-number buckets from 10 through 24, so
+the median measured chart is anchored at 16 while the hardest chart can retain a 24.9 internal
 rating. This is a calibration of observed chart order, not a percentile quota: it does not force a
 normal distribution, and any number of charts may share an integer difficulty.
 

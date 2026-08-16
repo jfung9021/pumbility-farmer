@@ -2654,9 +2654,9 @@ class CoopRecommendationTests(unittest.TestCase):
         self.assertEqual(by_id["middle"]["phoenix1Contributors"], 3)
         self.assertEqual(by_id["middle"]["phoenix2Contributors"], 1)
         self.assertEqual(by_id["easy"]["estimatedDifficulty"], 10)
-        self.assertEqual(by_id["hard"]["estimatedDifficulty"], 23)
+        self.assertEqual(by_id["hard"]["estimatedDifficulty"], 24)
         self.assertEqual(by_id["easy"]["difficultyModelContinuous"], 10.0)
-        self.assertEqual(by_id["hard"]["difficultyModelContinuous"], 23.9)
+        self.assertEqual(by_id["hard"]["difficultyModelContinuous"], 24.9)
         self.assertTrue(
             all(isinstance(row["estimatedDifficulty"], int) for row in rows)
         )
@@ -2675,8 +2675,8 @@ class CoopRecommendationTests(unittest.TestCase):
                 "easy": 10.0,
                 "easy_middle": 13.0,
                 "middle": 16.0,
-                "hard_middle": 19.95,
-                "hard": 23.9,
+                "hard_middle": 20.45,
+                "hard": 24.9,
             },
         )
         self.assertEqual(
@@ -2685,8 +2685,8 @@ class CoopRecommendationTests(unittest.TestCase):
                 "easy": 10,
                 "easy_middle": 13,
                 "middle": 16,
-                "hard_middle": 19,
-                "hard": 23,
+                "hard_middle": 20,
+                "hard": 24,
             },
         )
 
@@ -2758,7 +2758,7 @@ class CoopRecommendationTests(unittest.TestCase):
         self.assertEqual(metadata["abilityMedianFallbackObservations"], 0)
         self.assertEqual(
             metadata["difficultyModel"],
-            "conditional-q75-player-source-adjusted-log-miss-v3",
+            "conditional-q75-player-source-adjusted-log-miss-v4",
         )
 
     def test_zero_history_is_eligible_and_current_rating_is_additive(self) -> None:
@@ -2816,7 +2816,7 @@ class CoopRecommendationTests(unittest.TestCase):
         self.assertEqual(candidate["plateProjectionSource"], "fixed-fair-game")
         self.assertEqual(
             current["scoreProjectionModel"],
-            "estimated-difficulty-master-grade-ladder-v3",
+            "estimated-difficulty-master-grade-ladder-v4",
         )
         self.assertEqual(len(current["topScores"]), 2)
         self.assertTrue(all("pumbility" not in row for row in current["topScores"]))
@@ -2825,11 +2825,11 @@ class CoopRecommendationTests(unittest.TestCase):
         expected_grades = {
             10: "SSS+", 11: "SSS+", 12: "SSS", 13: "SS", 14: "S",
             15: "S", 16: "S", 17: "AAA", 18: "AAA", 19: "AA+",
-            20: "AA+", 21: "AA+", 22: "A", 23: "A",
+            20: "AA+", 21: "AA+", 22: "A", 23: "A", 24: "A",
         }
         distribution = {
-            10: 3, 11: 6, 12: 11, 13: 10, 14: 12, 15: 27, 16: 29,
-            17: 19, 18: 15, 19: 3, 20: 3, 21: 1, 23: 1,
+            10: 3, 11: 6, 12: 11, 13: 9, 14: 12, 15: 28, 16: 27,
+            17: 19, 18: 11, 19: 8, 20: 3, 21: 1, 22: 1, 24: 1,
         }
         total = 0.0
         for difficulty, count in distribution.items():
@@ -2847,7 +2847,7 @@ class CoopRecommendationTests(unittest.TestCase):
             )
             self.assertEqual(plate, "Fair Game")
             total += count * phoenix2_coop_rating(grade, plate)
-        self.assertEqual(round(total, 2), 16_195.2)
+        self.assertEqual(round(total, 2), 16_170.4)
         self.assertGreater(total, 16_000.0)
 
 
