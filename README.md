@@ -373,7 +373,9 @@ while every goal uses a Fair Game plate. One goal contribution from all 140 curr
 the 16,000 Co-op Rating `[CO-OP] Master` threshold with extra leeway. Projected gain is the nonnegative
 increase over the player's current contribution on that chart, and Co-op Rating remains an all-chart
 sum with no top-50 cutoff. Equal gains are ordered by the underlying continuous difficulty signal,
-not the displayed whole-number difficulty. The merged population's raw nearest-rank q75 result remains provenance for
+not the displayed whole-number difficulty. The goal-grade lookup is fixed by whole-number folder and
+never rebalanced from catalog counts: for example, every difficulty-17 chart always targets AAA with
+Fair Game, including charts added later. The merged population's raw nearest-rank q75 result remains provenance for
 the adjusted conditional-q75 tier model rather than serving as the recommendation target.
 
 The population models and frozen per-player inputs are rebuilt once in the daily background run.

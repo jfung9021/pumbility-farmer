@@ -26,6 +26,7 @@ from phoenix1_score_overrides import (
 )
 from piu_recommendations import (
     COMBINED_TIER_SCHEMA_VERSION,
+    COOP_GOAL_GRADE_BY_DIFFICULTY,
     COOP_SCORE_PROJECTION_MODEL_NAME,
     PHOENIX2_RATING_SCORE_THRESHOLD,
     RECOMMENDATION_SCHEMA_VERSION,
@@ -1455,8 +1456,12 @@ class PlayerRecommendationTests(unittest.TestCase):
             COOP_SCORE_PROJECTION_MODEL_NAME,
         )
         self.assertIn(
-            "boosted by one grade up to SSS+",
+            "catalog additions do not rebalance folder goals",
             artifact_response["method"]["coopScoreProjection"],
+        )
+        self.assertEqual(
+            artifact_response["method"]["coopGoalGradeByDifficulty"]["17"],
+            "AAA",
         )
         stored_player = p1_shards[0]["players"][0]
         self.assertTrue(
@@ -2827,6 +2832,7 @@ class CoopRecommendationTests(unittest.TestCase):
             15: "S", 16: "S", 17: "AAA", 18: "AAA", 19: "AA+",
             20: "AA+", 21: "AA+", 22: "A", 23: "A", 24: "A",
         }
+        self.assertEqual(COOP_GOAL_GRADE_BY_DIFFICULTY, expected_grades)
         distribution = {
             10: 3, 11: 6, 12: 11, 13: 9, 14: 12, 15: 28, 16: 27,
             17: 19, 18: 11, 19: 8, 20: 3, 21: 1, 22: 1, 24: 1,
@@ -2849,6 +2855,28 @@ class CoopRecommendationTests(unittest.TestCase):
             total += count * phoenix2_coop_rating(grade, plate)
         self.assertEqual(round(total, 2), 16_170.4)
         self.assertGreater(total, 16_000.0)
+
+    def test_coop_folder_goals_do_not_rebalance_when_charts_are_added(self) -> None:
+        original_goals = {
+            difficulty: coop_master_goal_for_estimated_difficulty(difficulty)
+            for difficulty in range(10, 25)
+        }
+        new_folder_seventeen_goals = [
+            coop_master_goal_for_estimated_difficulty(17) for _ in range(20)
+        ]
+
+        self.assertTrue(
+            all(goal == (950_000, "AAA", "Fair Game") for goal in new_folder_seventeen_goals)
+        )
+        self.assertEqual(
+            {
+                difficulty: coop_master_goal_for_estimated_difficulty(difficulty)
+                for difficulty in range(10, 25)
+            },
+            original_goals,
+        )
+        self.assertIsNone(coop_master_goal_for_estimated_difficulty(9))
+        self.assertIsNone(coop_master_goal_for_estimated_difficulty(25))
 
 
 class CombinedTierPayloadTests(unittest.TestCase):

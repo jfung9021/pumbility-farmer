@@ -91,6 +91,26 @@ COOP_DIFFICULTY_MEDIAN = 16
 COOP_DIFFICULTY_HARDEST = 24.9
 COOP_MASTER_TITLE_RATING = 16_000.0
 COOP_GOAL_PLATE = "Fair Game"
+# This table is intentionally catalog-invariant. Adding or removing charts must
+# never rebalance goal grades for an existing whole-number difficulty folder.
+COOP_GOAL_GRADE_BY_DIFFICULTY = {
+    10: "SSS+",
+    11: "SSS+",
+    12: "SSS",
+    13: "SS",
+    14: "S",
+    15: "S",
+    16: "S",
+    17: "AAA",
+    18: "AAA",
+    19: "AA+",
+    20: "AA+",
+    21: "AA+",
+    22: "A",
+    23: "A",
+    24: "A",
+}
+# Retained as a compact representation for existing analysis metadata.
 COOP_GOAL_GRADE_BANDS = (
     (11, "SSS+"),
     (12, "SSS"),
@@ -1341,7 +1361,7 @@ def _recommendation_goal_from_projected_score(
 def coop_master_goal_for_estimated_difficulty(
     estimated_difficulty: object,
 ) -> tuple[int, str, str] | None:
-    """Return the fixed-plate Master-title goal for one whole Co-op difficulty."""
+    """Return the catalog-invariant fixed-plate goal for a Co-op folder."""
     if isinstance(estimated_difficulty, bool):
         return None
     try:
@@ -1351,14 +1371,9 @@ def coop_master_goal_for_estimated_difficulty(
     if not math.isfinite(value):
         return None
     difficulty = _round_half_up(Decimal(str(value)))
-    grade = next(
-        (
-            candidate_grade
-            for maximum_difficulty, candidate_grade in COOP_GOAL_GRADE_BANDS
-            if difficulty <= maximum_difficulty
-        ),
-        COOP_GOAL_GRADE_BANDS[-1][1],
-    )
+    grade = COOP_GOAL_GRADE_BY_DIFFICULTY.get(difficulty)
+    if grade is None:
+        return None
     return COOP_GOAL_SCORE_BY_GRADE[grade], grade, COOP_GOAL_PLATE
 
 
@@ -2309,6 +2324,11 @@ def build_combined_tier_payload(
                     {"maximumDifficulty": maximum, "grade": grade}
                     for maximum, grade in COOP_GOAL_GRADE_BANDS
                 ],
+                "goalGradeByDifficulty": {
+                    str(difficulty): grade
+                    for difficulty, grade in COOP_GOAL_GRADE_BY_DIFFICULTY.items()
+                },
+                "goalGradePolicy": "fixed by whole-number difficulty; catalog additions do not rebalance folder goals",
                 "rawEvidenceQuantile": COOP_SCORE_QUANTILE,
                 "rawEvidenceSelection": "nearest-rank observed score-and-plate pair retained for analysis provenance",
                 "difficultyModel": COOP_DIFFICULTY_MODEL_NAME,
