@@ -689,9 +689,16 @@ test("Top 50 cards expose PIU result data and open an accessible detail dialog",
   assert.match(page, /function TopScoreCard/);
   assert.match(page, /className="top-score-rank">#\{rank\}/);
   assert.match(page, /\{score\.songName\}/);
-  assert.match(page, /\{score\.stepArtist \|\| "Unknown step artist"\}/);
+  assert.doesNotMatch(
+    page,
+    /<span className="top-score-copy">\s*<strong[^>]*>\{score\.songName\}<\/strong>\s*<small/,
+  );
   assert.match(page, /\{score\.grade \|\| "—"\}/);
   assert.match(page, /\{score\.plateCode \|\| "—"\}/);
+  assert.match(
+    page,
+    /className="top-score-result">\s*<span>\s*<b>\{score\.grade \|\| "—"\}<\/b>\s*<small>\{score\.plateCode \|\| "—"\}<\/small>/,
+  );
   assert.match(page, /pumbilityLabel\(score\.pumbility\)/);
   assert.match(page, /className="chart-dialog top-score-dialog"/);
   assert.match(page, /aria-modal="true"/);
@@ -701,8 +708,15 @@ test("Top 50 cards expose PIU result data and open an accessible detail dialog",
   assert.match(page, /event\.key !== "Tab"/);
   assert.match(page, /event\.target === event\.currentTarget/);
   assert.match(page, /<ChartVideoLink[\s\S]*variant="dialog"/);
-  assert.match(css, /\.top-score-grid \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(165px, 1fr\)\);/);
+  assert.match(css, /\.top-score-grid \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\);/);
   assert.match(css, /\.top-score-card \{[^}]*border-radius: 0;/);
+  assert.match(css, /\.top-score-result > span \{[^}]*display: flex;[^}]*gap: 4px;/);
+  assert.match(css, /\.top-score-rank \{[^}]*font-size: 11px;/);
+  assert.match(css, /\.top-score-jacket \.chart-difficulty-badge \{[^}]*font-size: 11px;/);
+  assert.match(css, /\.top-score-copy > strong \{[^}]*font-size: 11px;/);
+  assert.match(css, /\.top-score-result > span b \{[^}]*font-size: 11px;/);
+  assert.match(css, /\.top-score-result > span small \{[^}]*font-size: 11px;/);
+  assert.match(css, /\.top-score-result > strong \{[^}]*font-size: 11px;/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.top-score-grid \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
 });
 

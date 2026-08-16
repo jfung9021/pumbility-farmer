@@ -395,9 +395,6 @@ function TopScoreCard({
         </span>
         <span className="top-score-copy">
           <strong title={score.songName}>{score.songName}</strong>
-          <small title={score.stepArtist || "Unknown step artist"}>
-            {score.stepArtist || "Unknown step artist"}
-          </small>
         </span>
         <span className="top-score-result">
           <span>
