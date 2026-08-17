@@ -296,6 +296,7 @@ export interface RecommendationModeResult {
   candidateRange?: [number | null, number];
   candidateCount?: number;
   filterCandidateCount?: number;
+  difficultyOptions?: string[];
   filterCandidates?: RecommendationChart[];
   topScores: RecommendationTopScore[];
   topRecommendations: RecommendationChart[];
@@ -342,7 +343,9 @@ export interface PlayerRecommendationsResponse {
   stale?: boolean;
   legacySnapshot?: boolean;
   method: Record<string, unknown>;
-  player: RecommendationPlayer;
+  player: Omit<RecommendationPlayer, "modes"> & {
+    modes: Partial<Record<RecommendationModeKey, RecommendationModeResult>>;
+  };
 }
 
 export interface PlayerRefreshJob {

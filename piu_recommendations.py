@@ -8,6 +8,7 @@ player/chart score.
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import io
 import json
@@ -68,9 +69,10 @@ from phoenix2_pumbility import (
 
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
-COMBINED_TIER_SCHEMA_VERSION = 5
+COMBINED_TIER_SCHEMA_VERSION = 7
 RECOMMENDATION_RADIUS = 1.0
-WHAT_IF_LEVEL_RADIUS = 3
+WHAT_IF_LEVEL_RADIUS = 1
+CANDIDATE_OFFICIAL_LEVEL_RADIUS = 2
 BASELINE_START_RANK = 11
 BASELINE_END_RANK = 30
 RECOMMENDATION_RATING_SCORE_COUNT = 20
@@ -79,7 +81,7 @@ PROJECTION_RATING_START_RANK = BASELINE_START_RANK
 PROJECTION_RATING_END_RANK = BASELINE_END_RANK
 PROJECTION_RATING_SCORE_THRESHOLD = PROJECTION_RATING_END_RANK
 TOP_PUMBILITY_COUNT = 50
-TOP_RECOMMENDATION_COUNT = 20
+TOP_RECOMMENDATION_COUNT = 50
 MAX_RAW_SCORE = 1_000_000
 SCORE_RESPONSE_MODEL_NAME = "population-crossfit-monotone-v3"
 SCORE_PROJECTION_MODEL_NAME = "similar-skill-pumbility-11-30-weighted-q50-v9"
@@ -137,8 +139,7 @@ PEER_SCORE_MAX_RADIUS = 0.5
 PEER_SCORE_RADIUS_STEP = 0.1
 PLAYER_KEY_NAMESPACE = "pumbility-farmer-recommendations-v1"
 SOURCE_WEIGHTS = {"phoenix1": 1.0, "phoenix2": 2.0}
-ABILITY_FULL_WEIGHT_RADIUS = 1.0
-ABILITY_OUTSIDE_WEIGHT = 0.5
+ABILITY_HALF_WEIGHT_DISTANCE = 1.0
 RECOMMENDATION_CHART_FIELDS = (
     "mode",
     "songName",
@@ -233,17 +234,26 @@ def _effective_sample_size(weights: np.ndarray) -> float:
     return weight_sum * weight_sum / square_sum if square_sum > 0 else 0.0
 
 
+def _ability_weight_from_distance(distance: object) -> float | np.ndarray:
+    """Return inverse-square ability weights with a one-level half-weight point."""
+    distances = np.asarray(distance, dtype=float)
+    scaled = np.abs(distances) / ABILITY_HALF_WEIGHT_DISTANCE
+    weights = np.where(
+        np.isfinite(scaled),
+        1.0 / (1.0 + scaled * scaled),
+        1.0,
+    )
+    return float(weights) if weights.ndim == 0 else weights
+
+
 def _observation_weight(source: object, player_ability: object, level: int) -> float:
     source_weight = SOURCE_WEIGHTS.get(str(source), 1.0)
     try:
         ability = float(player_ability)
     except (TypeError, ValueError):
         ability = math.nan
-    ability_weight = (
-        ABILITY_OUTSIDE_WEIGHT
-        if math.isfinite(ability)
-        and abs(ability - (float(level) + 0.5)) > ABILITY_FULL_WEIGHT_RADIUS
-        else 1.0
+    ability_weight = float(
+        _ability_weight_from_distance(ability - (float(level) + 0.5))
     )
     return source_weight * ability_weight
 
@@ -736,11 +746,44 @@ COMBINED_MIX = {
 }
 
 
-def _clean_snapshot_frames(
-    snapshot: Mapping[str, Any],
+def _records_to_frame_consuming(
+    rows: list[Any],
+    *,
+    included_columns: Sequence[str] | None = None,
+    row_consumer: Callable[[Mapping[str, Any]], None] | None = None,
+) -> pd.DataFrame:
+    """Build a frame while releasing owned row dictionaries during iteration."""
+    columns: dict[str, list[Any]] = (
+        {name: [] for name in included_columns}
+        if included_columns is not None
+        else {}
+    )
+    row_count = 0
+    for index in range(len(rows)):
+        raw = rows[index]
+        rows[index] = None
+        if not isinstance(raw, Mapping):
+            continue
+        if row_consumer is not None:
+            row_consumer(raw)
+        if included_columns is None:
+            for key in raw:
+                name = str(key)
+                if name not in columns:
+                    columns[name] = [None] * row_count
+        for name, values in columns.items():
+            values.append(raw.get(name))
+        row_count += 1
+    rows.clear()
+    frame = pd.DataFrame(columns)
+    columns.clear()
+    return frame
+
+
+def _clean_snapshot_dataframes(
+    charts: pd.DataFrame,
+    scores: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    charts = pd.DataFrame(snapshot.get("charts", []))
-    scores = pd.DataFrame(snapshot.get("scores", []))
     required_charts = {"id", "songName", "type", "level"}
     required_scores = {"playerId", "chartId", "pumbility", "isBroken"}
     if charts.empty or not required_charts.issubset(charts.columns):
@@ -782,6 +825,42 @@ def _clean_snapshot_frames(
         kind="mergesort",
     ).drop_duplicates(["playerId", "chartId"], keep="first")
     return charts, scores
+
+
+def _clean_snapshot_frames(
+    snapshot: Mapping[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return _clean_snapshot_dataframes(
+        pd.DataFrame(snapshot.get("charts", [])),
+        pd.DataFrame(snapshot.get("scores", [])),
+    )
+
+
+def _clean_snapshot_frames_consuming(
+    snapshot: dict[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Clean a uniquely owned snapshot without overlapping all raw row dicts."""
+    raw_charts = snapshot.pop("charts", [])
+    raw_scores = snapshot.pop("scores", [])
+    if not isinstance(raw_charts, list) or not isinstance(raw_scores, list):
+        raise ValueError("A consumed recommendation snapshot is invalid.")
+    # Players and snapshot metadata are not inputs to combined chart analysis.
+    snapshot.clear()
+    charts = pd.DataFrame(raw_charts)
+    raw_charts.clear()
+    scores = _records_to_frame_consuming(
+        raw_scores,
+        included_columns=(
+            "playerId",
+            "chartId",
+            "pumbility",
+            "isBroken",
+            "score",
+            "recordedAt",
+            "plate",
+        ),
+    )
+    return _clean_snapshot_dataframes(charts, scores)
 
 
 def _normalizations_from_frames(
@@ -913,11 +992,19 @@ def _source_contributions(
     contribution_fraction: float = 0.20,
     allowed_chart_ids: set[str] | None = None,
     authoritative_catalog: pd.DataFrame | None = None,
+    prepared_frames: tuple[pd.DataFrame, pd.DataFrame] | None = None,
+    phoenix1_normalizations: Phoenix1ScoreNormalizations | None = None,
 ) -> tuple[pd.DataFrame, dict[str, float]]:
-    charts, scores = _clean_snapshot_frames(snapshot)
+    charts, scores = (
+        prepared_frames
+        if prepared_frames is not None
+        else _clean_snapshot_frames(snapshot)
+    )
     if source == "phoenix1":
         normalizations = (
-            _normalizations_from_frames(charts, authoritative_catalog)
+            phoenix1_normalizations
+            if phoenix1_normalizations is not None
+            else _normalizations_from_frames(charts, authoritative_catalog)
             if authoritative_catalog is not None
             else {}
         )
@@ -1068,9 +1155,11 @@ def _source_contributions(
 
 def _attach_contribution_weights(
     contributions: pd.DataFrame,
-    phoenix1_snapshot: Mapping[str, Any],
+    phoenix1_snapshot: Mapping[str, Any] | None,
     phoenix2_scores: pd.DataFrame,
     phoenix2_catalog: pd.DataFrame,
+    *,
+    phoenix1_rating_scores: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Attach source and leave-one-chart-out ability weights to observations."""
     weighted = contributions.copy()
@@ -1081,9 +1170,12 @@ def _attach_contribution_weights(
         weighted["observationWeight"] = pd.Series(dtype=float)
         return weighted
 
-    _, phoenix1_rating_scores = _prepare_phoenix1_rating_frames(
-        phoenix1_snapshot, phoenix2_catalog
-    )
+    if phoenix1_rating_scores is None:
+        if phoenix1_snapshot is None:
+            raise ValueError("Phoenix 1 rating rows are required.")
+        _, phoenix1_rating_scores = _prepare_phoenix1_rating_frames(
+            phoenix1_snapshot, phoenix2_catalog
+        )
 
     def attach_mode(scores: pd.DataFrame) -> pd.DataFrame:
         return scores.merge(
@@ -1121,17 +1213,9 @@ def _attach_contribution_weights(
         pd.Series(abilities, index=weighted.index), errors="coerce"
     )
     weighted["sourceWeight"] = weighted["source"].map(SOURCE_WEIGHTS).fillna(1.0)
-    weighted["abilityWeight"] = np.where(
-        weighted["playerAbility"].notna()
-        & (
-            (
-                weighted["playerAbility"]
-                - (weighted["chartLevel"].astype(float) + 0.5)
-            ).abs()
-            > ABILITY_FULL_WEIGHT_RADIUS
-        ),
-        ABILITY_OUTSIDE_WEIGHT,
-        1.0,
+    weighted["abilityWeight"] = _ability_weight_from_distance(
+        weighted["playerAbility"].to_numpy(dtype=float)
+        - (weighted["chartLevel"].to_numpy(dtype=float) + 0.5)
     )
     weighted["observationWeight"] = (
         weighted["sourceWeight"] * weighted["abilityWeight"]
@@ -1552,6 +1636,22 @@ def _coop_player_ability_percentiles(
         charts, scores = _clean_snapshot_frames(snapshot)
     except ValueError:
         return {}
+    return _coop_player_ability_percentiles_from_frames(
+        charts,
+        scores,
+        source=source,
+        normalizations=normalizations,
+    )
+
+
+def _coop_player_ability_percentiles_from_frames(
+    charts: pd.DataFrame,
+    scores: pd.DataFrame,
+    *,
+    source: str,
+    normalizations: Phoenix1ScoreNormalizations | None = None,
+) -> dict[str, float]:
+    """Return co-op ability percentiles from already-cleaned source frames."""
     if source == "phoenix1":
         scores = _apply_phoenix1_score_overrides(scores, normalizations)
     scored = scores.merge(
@@ -1592,6 +1692,8 @@ def _coop_adjusted_difficulty_signals(
     observations: Sequence[Mapping[str, Any]],
     phoenix1_snapshot: Mapping[str, Any] | None,
     phoenix2_snapshot: Mapping[str, Any],
+    *,
+    ability_percentiles: Mapping[str, Mapping[str, float]] | None = None,
 ) -> tuple[dict[str, float], dict[str, int], dict[str, Any]]:
     """Estimate conditional chart q75s at median ability in Phoenix 2.
 
@@ -1615,28 +1717,37 @@ def _coop_adjusted_difficulty_signals(
             "phoenix2SourceCoefficient": 0.0,
         }
 
-    normalizations = build_phoenix1_score_normalizations(
-        [
-            row
-            for row in (phoenix1_snapshot or {}).get("charts", [])
-            if isinstance(row, Mapping)
-        ],
-        [
-            row
-            for row in phoenix2_snapshot.get("charts", [])
-            if isinstance(row, Mapping)
-        ],
-    )
-    abilities = {
-        "phoenix1": _coop_player_ability_percentiles(
-            phoenix1_snapshot,
-            source="phoenix1",
-            normalizations=normalizations,
-        ),
-        "phoenix2": _coop_player_ability_percentiles(
-            phoenix2_snapshot, source="phoenix2"
-        ),
-    }
+    if ability_percentiles is None:
+        normalizations = build_phoenix1_score_normalizations(
+            [
+                row
+                for row in (phoenix1_snapshot or {}).get("charts", [])
+                if isinstance(row, Mapping)
+            ],
+            [
+                row
+                for row in phoenix2_snapshot.get("charts", [])
+                if isinstance(row, Mapping)
+            ],
+        )
+        abilities = {
+            "phoenix1": _coop_player_ability_percentiles(
+                phoenix1_snapshot,
+                source="phoenix1",
+                normalizations=normalizations,
+            ),
+            "phoenix2": _coop_player_ability_percentiles(
+                phoenix2_snapshot, source="phoenix2"
+            ),
+        }
+    else:
+        abilities = {
+            source: {
+                str(player_id): float(value)
+                for player_id, value in ability_percentiles.get(source, {}).items()
+            }
+            for source in ("phoenix1", "phoenix2")
+        }
     chart_index = {chart_id: index for index, chart_id in enumerate(chart_ids)}
     response: list[float] = []
     covariates: list[list[float]] = []
@@ -1813,11 +1924,21 @@ def _coop_estimated_difficulties(
 def build_coop_chart_results(
     phoenix1_snapshot: Mapping[str, Any] | None,
     phoenix2_snapshot: Mapping[str, Any],
+    *,
+    prepared_inputs: tuple[
+        Sequence[Mapping[str, Any]], Sequence[Mapping[str, Any]]
+    ]
+    | None = None,
+    ability_percentiles: Mapping[str, Mapping[str, float]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build raw q75 projections and independently adjusted tier estimates."""
-    catalog, observations = build_coop_observations(
-        phoenix1_snapshot, phoenix2_snapshot
-    )
+    if prepared_inputs is None:
+        catalog, observations = build_coop_observations(
+            phoenix1_snapshot, phoenix2_snapshot
+        )
+    else:
+        catalog = [dict(row) for row in prepared_inputs[0]]
+        observations = [dict(row) for row in prepared_inputs[1]]
     observations_by_chart: dict[str, list[dict[str, Any]]] = {}
     for observation in observations:
         observations_by_chart.setdefault(str(observation["chartId"]), []).append(
@@ -1842,6 +1963,7 @@ def build_coop_chart_results(
             observations,
             phoenix1_snapshot,
             phoenix2_snapshot,
+            ability_percentiles=ability_percentiles,
         )
     )
     continuous_difficulties = _coop_continuous_estimated_difficulties(
@@ -1991,6 +2113,7 @@ def build_combined_chart_results(
     phoenix2_snapshot: Mapping[str, Any],
     *,
     bootstrap_samples: int = 0,
+    consume_phoenix1_snapshot: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, float], dict[str, Any]]:
     """Build Phoenix 2-catalog chart estimates from normalized two-version evidence."""
     del bootstrap_samples  # Normal-approximation intervals keep full refreshes bounded.
@@ -2008,11 +2131,49 @@ def build_combined_chart_results(
     )
     phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
     phoenix2_chart_ids = set(phoenix2_catalog["chartId"].astype(str))
+    # Preserve Co-op's raw-score observations before releasing Phoenix 1. Its
+    # large ability calculation can then reuse the cleaned S/D frames below.
+    coop_inputs = build_coop_observations(phoenix1_snapshot, phoenix2_snapshot)
+    if consume_phoenix1_snapshot:
+        if not isinstance(phoenix1_snapshot, dict):
+            raise TypeError("A consumed Phoenix 1 snapshot must be a mutable dict.")
+        phoenix1_frames = _clean_snapshot_frames_consuming(phoenix1_snapshot)
+    else:
+        phoenix1_frames = _clean_snapshot_frames(phoenix1_snapshot)
+    coop_abilities = {
+        "phoenix1": _coop_player_ability_percentiles_from_frames(
+            *phoenix1_frames,
+            source="phoenix1",
+            normalizations=score_normalizations,
+        ),
+        "phoenix2": _coop_player_ability_percentiles_from_frames(
+            phoenix2_catalog,
+            phoenix2_scores,
+            source="phoenix2",
+        ),
+    }
+    coop_records, coop_metadata = build_coop_chart_results(
+        None,
+        phoenix2_snapshot,
+        prepared_inputs=coop_inputs,
+        ability_percentiles=coop_abilities,
+    )
+    del coop_inputs, coop_abilities
+    gc.collect()
     phoenix1, _ = _source_contributions(
         phoenix1_snapshot,
         "phoenix1",
         authoritative_catalog=phoenix2_catalog,
+        prepared_frames=phoenix1_frames,
+        phoenix1_normalizations=score_normalizations,
     )
+    _, phoenix1_rating_scores = _prepare_phoenix1_rating_frames_from_frames(
+        *phoenix1_frames,
+        phoenix2_catalog,
+        normalizations=score_normalizations,
+    )
+    del phoenix1_frames
+    gc.collect()
     phoenix2, phoenix2_slopes = _source_contributions(
         phoenix2_snapshot,
         "phoenix2",
@@ -2034,10 +2195,13 @@ def build_combined_chart_results(
     combined = retain_phoenix2_catalog_contributions(combined, catalog)
     combined = _attach_contribution_weights(
         combined,
-        phoenix1_snapshot,
+        None,
         phoenix2_scores,
         catalog,
+        phoenix1_rating_scores=phoenix1_rating_scores,
     )
+    del phoenix1_rating_scores
+    gc.collect()
     rows: list[pd.DataFrame] = []
     config = AnalysisConfig(
         mix="phoenix2",
@@ -2183,9 +2347,6 @@ def build_combined_chart_results(
         if column not in output.columns:
             output[column] = pd.NA
     records = json.loads(output[keep].to_json(orient="records", double_precision=6))
-    coop_records, coop_metadata = build_coop_chart_results(
-        phoenix1_snapshot, phoenix2_snapshot
-    )
     records.extend(coop_records)
     metadata = {
         "modes": {**mode_metadata, "coop": coop_metadata},
@@ -2378,8 +2539,9 @@ def build_combined_tier_payload(
             "observationWeighting": {
                 "sourceWeights": {"phoenix1": 1, "phoenix2": 2},
                 "playerAbility": "per-mode S+FG-equivalent rating from Pumbility ranks 11-30, leave-one-chart-out",
-                "fullWeightRadius": ABILITY_FULL_WEIGHT_RADIUS,
-                "outsideRadiusWeight": ABILITY_OUTSIDE_WEIGHT,
+                "curve": "inverse-square distance decay",
+                "formula": "1 / (1 + (abs(playerAbility - midpoint) / halfWeightDistance)^2)",
+                "halfWeightDistance": ABILITY_HALF_WEIGHT_DISTANCE,
                 "midpoint": "official chart level + 0.5",
                 "missingAbilityWeight": 1,
             },
@@ -2526,6 +2688,13 @@ def _recommendation_chart_rows(
     return rows
 
 
+def recommendation_model_chart_rows(
+    combined_charts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the compact chart input shared by model fitting and inference."""
+    return _recommendation_chart_rows(combined_charts)
+
+
 def _json_safe_scalar(value: Any) -> Any:
     """Return one public payload scalar with missing pandas values normalized."""
     if value is None:
@@ -2598,11 +2767,19 @@ def build_manual_recommendation_mode(
     scoring_rating: float,
 ) -> dict[str, Any]:
     """Rank anonymous recommendations without inferring personal score gains."""
+    official_level_center = math.floor(scoring_rating)
+    official_level_low = max(
+        MIN_TARGET_LEVEL,
+        official_level_center - CANDIDATE_OFFICIAL_LEVEL_RADIUS,
+    )
+    official_level_high = official_level_center + CANDIDATE_OFFICIAL_LEVEL_RADIUS
     filter_candidates: list[dict[str, Any]] = []
     for chart in charts:
         if chart.get("type") != chart_type:
             continue
         level = float(chart.get("level", 0))
+        if level < official_level_low or level > official_level_high:
+            continue
         estimate = float(chart.get("estimatedDifficulty", 0))
         if not math.isfinite(estimate):
             continue
@@ -2962,17 +3139,13 @@ def _build_score_surface(rows: pd.DataFrame) -> _ScoreSurface | None:
     return _ScoreSurface(rating_axis, difficulty_axis, score_grid, support_grid)
 
 
-def fit_score_response_model(
-    phoenix1_snapshot: Mapping[str, Any] | None,
-    phoenix2_snapshot: Mapping[str, Any],
+def _score_response_estimates(
     combined_charts: Sequence[Mapping[str, Any]],
-) -> tuple[ScoreResponseModel, dict[str, Any]]:
-    """Fit P2-calibrated, player-balanced monotone population score surfaces."""
-    catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
+) -> pd.DataFrame | None:
     estimates = pd.DataFrame(combined_charts)
     required = ["chartId", "type", "estimatedDifficulty"]
     if estimates.empty or not set(required).issubset(estimates.columns):
-        return ScoreResponseModel({}, {}, frozenset()), {"modes": {}}
+        return None
     estimates = estimates[required].copy()
     estimates["chartId"] = estimates["chartId"].astype(str)
     estimates["estimatedDifficulty"] = pd.to_numeric(
@@ -2981,13 +3154,167 @@ def fit_score_response_model(
     estimates = estimates.sort_values("chartId", kind="mergesort").drop_duplicates(
         "chartId", keep="last"
     )
+    return estimates
+
+
+def fit_score_response_model(
+    phoenix1_snapshot: Mapping[str, Any] | None,
+    phoenix2_snapshot: Mapping[str, Any],
+    combined_charts: Sequence[Mapping[str, Any]],
+) -> tuple[ScoreResponseModel, dict[str, Any]]:
+    """Fit P2-calibrated, player-balanced monotone population score surfaces."""
+    estimates = _score_response_estimates(combined_charts)
+    if estimates is None:
+        return ScoreResponseModel({}, {}, frozenset()), {"modes": {}}
+    catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
 
     if phoenix1_snapshot is not None:
-        phoenix1_charts, phoenix1_scores = _prepare_phoenix1_rating_frames(
+        _, phoenix1_scores = _prepare_phoenix1_rating_frames(
             phoenix1_snapshot, catalog
         )
     else:
         phoenix1_scores = phoenix2_scores.iloc[0:0].copy()
+    return _fit_score_response_model_from_frames(
+        phoenix1_scores,
+        catalog,
+        phoenix2_scores,
+        estimates,
+    )
+
+
+def fit_score_response_model_from_frames(
+    phoenix1_scores: pd.DataFrame,
+    phoenix2_catalog: pd.DataFrame,
+    phoenix2_scores: pd.DataFrame,
+    combined_charts: Sequence[Mapping[str, Any]],
+) -> tuple[ScoreResponseModel, dict[str, Any]]:
+    """Fit score surfaces from the builder's already-normalized source frames."""
+    estimates = _score_response_estimates(combined_charts)
+    if estimates is None:
+        return ScoreResponseModel({}, {}, frozenset()), {"modes": {}}
+    return _fit_score_response_model_from_frames(
+        phoenix1_scores,
+        phoenix2_catalog,
+        phoenix2_scores,
+        estimates,
+    )
+
+
+def fit_score_response_model_mode_from_frames(
+    phoenix1_scores: pd.DataFrame,
+    phoenix2_catalog: pd.DataFrame,
+    phoenix2_scores: pd.DataFrame,
+    combined_charts: Sequence[Mapping[str, Any]],
+    chart_type: str,
+) -> tuple[ScoreResponseModel, dict[str, Any]]:
+    """Fit one independently calibrated recommendation mode."""
+    if chart_type not in MODE_TYPES:
+        raise ValueError("A score-response mode must be Single or Double.")
+    estimates = _score_response_estimates(combined_charts)
+    if estimates is None:
+        return ScoreResponseModel({}, {}, frozenset()), {"modes": {}}
+    return _fit_score_response_model_from_frames(
+        phoenix1_scores,
+        phoenix2_catalog,
+        phoenix2_scores,
+        estimates,
+        mode_types=(chart_type,),
+    )
+
+
+def merge_score_response_mode_models(
+    parts: Mapping[str, tuple[ScoreResponseModel, Mapping[str, Any]]],
+) -> tuple[ScoreResponseModel, dict[str, Any]]:
+    """Reassemble independently fitted modes into the legacy model contract."""
+    expected = {"singles", "doubles"}
+    if set(parts) != expected:
+        raise ValueError("Both recommendation score-response modes are required.")
+    full_surfaces: dict[str, _ScoreSurface] = {}
+    crossfit_surfaces: dict[int, dict[str, _ScoreSurface]] = {
+        fold: {} for fold in range(SCORE_RESPONSE_FOLDS)
+    }
+    training_player_ids: set[str] = set()
+    peer_cohorts: dict[str, _PeerScoreCohort] = {}
+    mode_metadata: dict[str, Any] = {}
+    shared_metadata: dict[str, Any] | None = None
+    overlap_rows_removed = 0
+    for mode_key in ("singles", "doubles"):
+        model, raw_metadata = parts[mode_key]
+        metadata = dict(raw_metadata)
+        raw_modes = metadata.pop("modes", None)
+        overlap_rows_removed += int(
+            metadata.pop("phoenix2OverlapRowsRemovedFromPhoenix1", 0)
+        )
+        if not isinstance(raw_modes, Mapping) or set(raw_modes) != {mode_key}:
+            raise ValueError("A score-response mode metadata payload is invalid.")
+        if shared_metadata is None:
+            shared_metadata = metadata
+        elif metadata != shared_metadata:
+            raise ValueError("Score-response mode metadata is inconsistent.")
+        if set(model.full_surfaces) - {mode_key}:
+            raise ValueError("A score-response mode model contains another mode.")
+        full_surfaces.update(model.full_surfaces)
+        for fold, surfaces in model.crossfit_surfaces.items():
+            if fold not in crossfit_surfaces or set(surfaces) - {mode_key}:
+                raise ValueError("A score-response mode model has invalid folds.")
+            crossfit_surfaces[fold].update(surfaces)
+        if any(
+            not str(key).startswith(f"{mode_key}\x1f")
+            for key in model.peer_cohorts
+        ):
+            raise ValueError("A score-response peer cohort has the wrong mode.")
+        peer_cohorts.update(model.peer_cohorts)
+        training_player_ids.update(model.training_player_ids)
+        mode_metadata[mode_key] = dict(raw_modes[mode_key])
+    assert shared_metadata is not None
+    return (
+        ScoreResponseModel(
+            full_surfaces,
+            crossfit_surfaces,
+            frozenset(training_player_ids),
+            peer_cohorts,
+        ),
+        {
+            **shared_metadata,
+            "phoenix2OverlapRowsRemovedFromPhoenix1": overlap_rows_removed,
+            "modes": mode_metadata,
+        },
+    )
+
+
+def _fit_score_response_model_from_frames(
+    phoenix1_scores: pd.DataFrame,
+    catalog: pd.DataFrame,
+    phoenix2_scores: pd.DataFrame,
+    estimates: pd.DataFrame,
+    *,
+    mode_types: Sequence[str] = MODE_TYPES,
+) -> tuple[ScoreResponseModel, dict[str, Any]]:
+    """Shared fitting implementation after source-frame preparation."""
+
+    selected_mode_types = tuple(mode_types)
+    if not selected_mode_types or any(
+        chart_type not in MODE_TYPES for chart_type in selected_mode_types
+    ):
+        raise ValueError("A score-response fit has invalid modes.")
+    if selected_mode_types != tuple(MODE_TYPES):
+        selected_chart_ids = set(
+            catalog.loc[
+                catalog["type"].isin(selected_mode_types), "chartId"
+            ].astype(str)
+        )
+        catalog = catalog[
+            catalog["chartId"].astype(str).isin(selected_chart_ids)
+        ].copy()
+        phoenix1_scores = phoenix1_scores[
+            phoenix1_scores["chartId"].astype(str).isin(selected_chart_ids)
+        ].copy()
+        phoenix2_scores = phoenix2_scores[
+            phoenix2_scores["chartId"].astype(str).isin(selected_chart_ids)
+        ].copy()
+        estimates = estimates[
+            estimates["chartId"].astype(str).isin(selected_chart_ids)
+        ].copy()
 
     phoenix2_keys = pd.MultiIndex.from_frame(
         phoenix2_scores[["playerId", "chartId"]]
@@ -3046,26 +3373,31 @@ def fit_score_response_model(
     }
     empty_rating_rows = rating_frames["phoenix2"].iloc[0:0]
     rating_groups = {
-        source: {
-            (str(player_id), str(chart_type)): group
-            for (player_id, chart_type), group in frame.groupby(
-                ["playerId", "type"], sort=False
-            )
-        }
+        source: frame.groupby(["playerId", "type"], sort=False)
         for source, frame in rating_frames.items()
     }
     rating_lookups: dict[tuple[str, str], tuple[float | None, dict[str, float | None]]] = {}
-    all_player_modes = set(rating_groups["phoenix1"]) | set(
-        rating_groups["phoenix2"]
+    all_player_modes = set(rating_groups["phoenix1"].groups) | set(
+        rating_groups["phoenix2"].groups
     )
     for player_id, chart_type in all_player_modes:
         key = (player_id, chart_type)
-        p2_group = rating_groups["phoenix2"].get(key, empty_rating_rows)
-        p1_group = rating_groups["phoenix1"].get(key, empty_rating_rows)
+        p2_group = (
+            rating_groups["phoenix2"].get_group(key)
+            if key in rating_groups["phoenix2"].groups
+            else empty_rating_rows
+        )
+        p1_group = (
+            rating_groups["phoenix1"].get_group(key)
+            if key in rating_groups["phoenix1"].groups
+            else empty_rating_rows
+        )
         _, selected = _select_projection_rating_scores(p1_group, p2_group)
         rating_lookups[(player_id, chart_type)] = _rating_lookup(
             selected, chart_type
         )
+    del rating_groups, rating_frames, empty_rating_rows, all_player_modes
+    gc.collect()
 
     ratings: list[float | None] = []
     for row in merged[["playerId", "type", "chartId"]].itertuples(index=False):
@@ -3081,6 +3413,8 @@ def fit_score_response_model(
         np.asarray(ratings, dtype=float), errors="coerce"
     )
     merged = merged[merged["scoringRating"].notna()].copy()
+    del rating_lookups, ratings
+    gc.collect()
 
     merged["fold"] = merged["playerId"].map(_score_response_fold)
 
@@ -3090,7 +3424,7 @@ def fit_score_response_model(
     }
     peer_cohorts: dict[str, _PeerScoreCohort] = {}
     mode_metadata: dict[str, Any] = {}
-    for chart_type in MODE_TYPES:
+    for chart_type in selected_mode_types:
         mode_key = _mode_key(chart_type)
         mode = merged[merged["type"] == chart_type].copy()
         calibrated_mode, source_offset = _calibrate_score_rows(mode)
@@ -3277,7 +3611,23 @@ def _prepare_phoenix1_rating_frames(
     phoenix2_catalog: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     charts, scores = _clean_snapshot_frames(phoenix1_snapshot)
-    normalizations = _normalizations_from_frames(charts, phoenix2_catalog)
+    return _prepare_phoenix1_rating_frames_from_frames(
+        charts,
+        scores,
+        phoenix2_catalog,
+    )
+
+
+def _prepare_phoenix1_rating_frames_from_frames(
+    charts: pd.DataFrame,
+    scores: pd.DataFrame,
+    phoenix2_catalog: pd.DataFrame,
+    *,
+    normalizations: Phoenix1ScoreNormalizations | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Prepare rating rows from a caller-owned clean Phoenix 1 frame pair."""
+    if normalizations is None:
+        normalizations = _normalizations_from_frames(charts, phoenix2_catalog)
     allowed_ids = set(phoenix2_catalog["chartId"].astype(str))
     charts, scores = retain_catalog_source_rows(charts, scores, allowed_ids)
     scores = _apply_phoenix1_score_overrides(scores, normalizations)
@@ -3779,6 +4129,14 @@ def build_player_recommendation(
         )
         if scoring_rating is None:
             raise ValueError("A selected recommendation rating window is invalid.")
+        official_level_center = math.floor(scoring_rating)
+        official_level_low = max(
+            MIN_TARGET_LEVEL,
+            official_level_center - CANDIDATE_OFFICIAL_LEVEL_RADIUS,
+        )
+        official_level_high = (
+            official_level_center + CANDIDATE_OFFICIAL_LEVEL_RADIUS
+        )
 
         projection_rating_source, projection_rating_scores = (
             _select_projection_rating_scores(phoenix1_mode_scores, mode_scores)
@@ -3804,6 +4162,9 @@ def build_player_recommendation(
         filter_candidates: list[dict[str, Any]] = []
         for chart in combined_charts:
             if chart.get("type") != chart_type:
+                continue
+            chart_level = int(chart.get("level") or 0)
+            if chart_level < official_level_low or chart_level > official_level_high:
                 continue
             estimate = chart.get("estimatedDifficulty")
             if estimate is None or not math.isfinite(float(estimate)):
@@ -3899,8 +4260,16 @@ def build_player_recommendation(
                     "played": existing is not None,
                 }
             )
-        projection_available = any(
-            row.get("projectedScore") is not None for row in filter_candidates
+        projection_available = (
+            score_response_model is not None
+            and projection_rating is not None
+            and (
+                not filter_candidates
+                or any(
+                    row.get("projectedScore") is not None
+                    for row in filter_candidates
+                )
+            )
         )
         if projection_available:
             ranked_filter_candidates = sorted(
@@ -4255,12 +4624,17 @@ def build_recommendation_index(
             "ratingReferenceMultiplier": SKILL_RATING_REFERENCE_MULTIPLIER,
             "ratingSource": "the displayed rating and recommendation ceiling use Phoenix 2 top 20 at 20 valid scores; otherwise Phoenix 1 top 20 when available, then partial Phoenix 2",
             "projectionRatingSource": "score projections use Phoenix 2 ranks 11-30 at 30 valid scores; otherwise Phoenix 1 ranks 11-30 when all 30 are available",
-            "shortHistoryBaseline": "a mode without a complete 30-score Phoenix 2 or Phoenix 1 source keeps top-20 farm-edge recommendations but does not receive personal projected scores",
+            "shortHistoryBaseline": "a mode without a complete 30-score Phoenix 2 or Phoenix 1 source keeps top-50 farm-edge recommendations but does not receive personal projected scores",
             "candidateUpperRadius": RECOMMENDATION_RADIUS,
             "candidateLowerBound": None,
+            "candidateOfficialLevelWindow": {
+                "center": "floor(scoringRating)",
+                "radius": CANDIDATE_OFFICIAL_LEVEL_RADIUS,
+                "minimumOfficialLevel": MIN_TARGET_LEVEL,
+            },
             "topPumbilityCount": TOP_PUMBILITY_COUNT,
             "overallPumbility": "the highest 50 Phoenix 2 Pumbility values from the player's combined Single and Double scores",
-            "overallRecommendations": "merge the displayed top 20 Single and top 20 Double recommendations, recalculate every projected gain against the shared Phoenix 2 S+D top 50, then retain the best 20; official-difficulty filters rank the full level-16+ recommendation catalog",
+            "overallRecommendations": "merge the displayed top 50 Single and top 50 Double recommendations, recalculate every projected gain against the shared Phoenix 2 S+D top 50, then retain the best 50; official-difficulty filters use floor(scoring rating) plus or minus two levels with a level-16 minimum",
             "actualPumbilitySource": "upstream",
             "projection": "median projected raw score converted with the mode-specific Phoenix 2 projection formula and the weighted-median plate",
             "plateProjection": "weighted median of the ordered RG-to-PG hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
@@ -4269,7 +4643,7 @@ def build_recommendation_index(
             "phoenix1PlatePriorCap": plate_model.phoenix1_cap,
             "projectedGain": "deterministic change from the median-score and median-plate projected Pumbility to the active Phoenix 2 top-50 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; the projection replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
             "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
-            "manualRanking": "farm edge up to 1.0 estimated-difficulty point above the requested scoring rating; official-difficulty filters use all ranked level-16+ charts and no personal top-50 gain is inferred",
+            "manualRanking": "farm edge up to 1.0 estimated-difficulty point above the requested scoring rating; official-difficulty filters use floor(scoring rating) plus or minus two levels with a level-16 minimum and no personal top-50 gain is inferred",
             "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
             "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,

@@ -6,8 +6,21 @@ import type {
 
 
 export const ALL_DIFFICULTIES = "All";
-export const RECOMMENDATION_DISPLAY_COUNT = 20;
+export const RECOMMENDATION_DISPLAY_COUNT = 50;
 export const MIN_RECOMMENDATION_LEVEL = 16;
+export const RECOMMENDATION_OFFICIAL_LEVEL_RADIUS = 2;
+
+export function recommendationOfficialLevelRange(
+  scoringRating: number | undefined,
+  minimumOfficialLevel = MIN_RECOMMENDATION_LEVEL,
+): [number, number] | null {
+  if (typeof scoringRating !== "number" || !Number.isFinite(scoringRating)) return null;
+  const base = Math.floor(scoringRating);
+  return [
+    Math.max(minimumOfficialLevel, base - RECOMMENDATION_OFFICIAL_LEVEL_RADIUS),
+    base + RECOMMENDATION_OFFICIAL_LEVEL_RADIUS,
+  ];
+}
 
 export function officialDifficulty(chart: RecommendationChart): string {
   if (chart.type === "CoOp") return `${chart.level}x`;
@@ -15,12 +28,25 @@ export function officialDifficulty(chart: RecommendationChart): string {
 }
 
 function chartMatchesMode(
-  chart: RecommendationChart,
+  chart: Pick<RecommendationChart, "type" | "level">,
   mode: RecommendationModeKey,
 ): boolean {
   if (mode === "overall") return chart.type !== "CoOp";
   const typeByMode = { singles: "Single", doubles: "Double", coop: "CoOp" } as const;
   return chart.type === typeByMode[mode];
+}
+
+export function chartMatchesRecommendationLevelRange(
+  chart: Pick<RecommendationChart, "type" | "level">,
+  mode: RecommendationModeKey,
+  scoringRating: number | undefined,
+  minimumOfficialLevel = MIN_RECOMMENDATION_LEVEL,
+): boolean {
+  if (!chartMatchesMode(chart, mode)) return false;
+  if (mode === "coop") return true;
+  if (mode === "overall") return chart.level >= minimumOfficialLevel;
+  const bounds = recommendationOfficialLevelRange(scoringRating, minimumOfficialLevel);
+  return bounds !== null && chart.level >= bounds[0] && chart.level <= bounds[1];
 }
 
 function sortOfficialDifficulties(left: string, right: string): number {
@@ -35,12 +61,16 @@ function sortOfficialDifficulties(left: string, right: string): number {
 export function recommendationDifficultyOptions(
   mode: RecommendationModeKey,
   charts: RecommendationChart[],
+  scoringRating?: number,
 ): string[] {
   return [...new Set(
     charts
       .filter(
-        (chart) => (mode === "coop" || chart.level >= MIN_RECOMMENDATION_LEVEL)
-          && chartMatchesMode(chart, mode),
+        (chart) => chartMatchesRecommendationLevelRange(
+          chart,
+          mode,
+          scoringRating,
+        ),
       )
       .map(officialDifficulty),
   )].sort(sortOfficialDifficulties);
@@ -52,15 +82,19 @@ export function visibleRecommendations(
   difficulty: string,
 ): RecommendationChart[] {
   if (!mode) return [];
+  const visible = (chart: RecommendationChart) => chartMatchesRecommendationLevelRange(
+    chart,
+    modeKey,
+    mode.scoringRating,
+  );
   if (difficulty === ALL_DIFFICULTIES) {
     return mode.topRecommendations
-      .filter((chart) => modeKey === "coop" || chart.level >= MIN_RECOMMENDATION_LEVEL)
+      .filter(visible)
       .slice(0, RECOMMENDATION_DISPLAY_COUNT);
   }
   return (mode.filterCandidates ?? [])
     .filter(
-      (chart) => (modeKey === "coop" || chart.level >= MIN_RECOMMENDATION_LEVEL)
-        && chartMatchesMode(chart, modeKey)
+      (chart) => visible(chart)
         && officialDifficulty(chart) === difficulty,
     )
     .sort((left, right) => {

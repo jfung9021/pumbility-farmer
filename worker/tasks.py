@@ -155,6 +155,11 @@ def refresh_analysis(job_id: str) -> dict[str, Any]:
     continuation = result.pop(ANALYSIS_CONTINUATION_FIELD, None)
     sequence = result.pop(ANALYSIS_CONTINUATION_SEQUENCE_FIELD, None)
     if continuation in {
+        "combined",
+        "model-prepare",
+        "model-fit-singles",
+        "model-fit-doubles",
+        "model-assemble-overall",
         "model",
         "snapshot",
         "database-analysis",

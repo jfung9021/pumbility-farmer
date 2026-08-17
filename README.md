@@ -56,7 +56,28 @@ unchanged, or cross-mode note-count pairs are left unchanged. Phoenix 2 scores
 are never converted. Each normalized score also selects the corresponding
 Phoenix 1 Pumbility band for combined tier evidence.
 
+The combined Phoenix 1 and Phoenix 2 Singles/Doubles estimator also weights each
+observation by how closely the player's source-specific ranks 11–30 skill rating
+matches the chart's official-level midpoint. For official level `L`, the
+midpoint is `L + 0.5` and the smooth ability weight is:
+
+```text
+distance = abs(player skill rating - (official level + 0.5))
+ability weight = 1 / (1 + distance²)
+observation weight = Phoenix source weight × ability weight
+```
+
+The weight is `1.0` at the midpoint, `0.5` one level away, `0.2` two levels
+away, and remains positive while approaching zero for increasingly distant
+players. Phoenix 1 retains source weight `1`; Phoenix 2 retains source weight
+`2`. Adjacent-folder What-if estimates recalculate the same curve against the
+hypothetical folder midpoint.
+
 A negative value is easier to score than the typical chart in the same mode and official level. Continuous estimates are not hard-clamped to the official folder, but the `L + 0.5` center and evidence shrinkage mean that an estimate below `L` requires an unusually strong within-folder signal.
+
+The tier-list What-if selector stores and displays only the adjacent official folders, one level
+below and one level above the chart, with level 16 as the minimum. These are chart-only projections;
+they do not rerank or regroup the tier list.
 
 The analyzer does not use the chart catalog's existing `scoringLevel` or an existing tier list.
 
@@ -249,8 +270,8 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 - `POST /api/jonathan/refresh?mode=incremental|full`: operator-page trigger; requires `X-Jonathan-Password` matching `JONATHAN_PASSWORD`. Incremental refresh ignores the freshness cooldown but retains the score watermark; full refresh discards it.
 - `POST /api/deploy?mix=phoenix2`: validate and acknowledge a legacy signed deployment event without starting analysis.
 - `GET /api/recommendations/players`: return consented usernames and mode eligibility without raw IDs; successful lists are cached for five minutes with stale revalidation.
-- `GET /api/recommendations?playerKey=...`: return the last cached recommendation for one player.
-- `POST /api/recommendations/refresh?playerKey=...`: synchronize only that player's new Phoenix 2 scores and queue a lightweight recommendation calculation; requests for the same player within 60 seconds are deduplicated.
+- `GET /api/recommendations?playerKey=...&mode=overall|singles|doubles|coop`: return only the requested mode from the last cached recommendation for one player. Omitting `mode` retains the full compatibility response. The default Overall response includes canonical `difficultyOptions` but omits its large filter pool; add `difficulty=S16` (for example) to return only that exact Overall difficulty slice.
+- `POST /api/recommendations/refresh?playerKey=...&mode=...`: synchronize only that player's new Phoenix 2 scores and queue a lightweight recommendation calculation; requests for the same player within 60 seconds are deduplicated. A fresh response honors the optional mode and Overall difficulty projection used by the GET endpoint.
 - `GET /api/recommendations/refresh?jobId=...`: poll a player-refresh job.
 - `GET /api/tier-list`: return the public combined Phoenix 1 and Phoenix 2 tier aggregate.
 
@@ -284,6 +305,12 @@ The browser polls active jobs every two seconds (ten seconds in a hidden tab), d
 
 The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as a private-data backend in Vercel Services; the Next.js UI remains the frontend service. The subscriber uses Vercel Queues through the `vercel://` broker. PostgreSQL stores durable jobs, snapshots, analysis and recommendation JSON, while private Supabase Storage holds binary model artifacts. The logical artifact keys include:
 
+Population analysis is resumed through fresh-process continuations: `analysis`, `combined`,
+`model-prepare`, `model-fit-singles`, `model-fit-doubles`, `model-assemble-overall`, `model`,
+`snapshot`, database registration, and atomic publication. Singles and Doubles are fitted
+independently; Overall is assembled from those two outputs and is never fitted as a third model.
+Every continuation validates immutable generation and input digests before reusing committed work.
+
 - `analysis/phoenix2/latest.json` — current Phoenix 2 aggregate.
 - `analysis/combined/latest.json` — current combined tier-list aggregate.
 - `analysis/private/phoenix2-current.json` — private, privacy-minimized incremental snapshot.
@@ -294,7 +321,7 @@ The FastAPI publisher and Celery subscriber declared in `pyproject.toml` run as 
 - `analysis/recommendations/models/<generation>.npz` — compressed, non-pickle population score surfaces and chart-indexed all-score peer cohorts.
 - `analysis/private/recommendation-inputs/<generation>/{phoenix1,phoenix2}/*.json` — private ten-player input shards used by player-only refreshes.
 - `analysis/private/recommendation-player-state/<playerKey>.json` — newest incrementally merged Phoenix 2 state for one player.
-- `analysis/recommendations/players/<playerKey>.json` — cached public-safe top-20 result and full filterable chart pool for one player; private IDs and raw scores are not stored.
+- `analysis/recommendations/players/<playerKey>.json` — cached public-safe top-50 result and bounded mode-specific chart pools for one player; Overall stores ordered references to the canonical Singles and Doubles rows rather than duplicate chart objects. Private IDs and raw scores are not stored.
 - `analysis/phoenix2/staging/<job>.json` — resumable 50-player checkpoints.
 - `analysis/phoenix2/runs/*.json` — the latest ten immutable Phoenix 2 aggregate runs.
 
@@ -322,15 +349,15 @@ one estimated-difficulty point above the rating for that mode.
 Score projections use a separate rating calculated with the same S-and-Fair-Game conversion from
 Pumbility ranks 11-30. Phoenix 2 supplies that window at 30 valid scores; otherwise a complete
 Phoenix 1 ranks 11-30 window is used. A mode without either complete 30-score source still receives
-top-20-based farm-edge recommendations, but it does not receive personal projected scores. When
+top-50-based farm-edge recommendations, but it does not receive personal projected scores. When
 training or projecting an already-played target chart, that chart is removed from the projection
 window and rank 31 is promoted when available. Played status, existing Pumbility, current top-50
 totals, and projected gain always use Phoenix 2.
 
 The recommendation page opens on **Overall**, followed by **Single**, **Double**, and **Co-op**. Overall keeps
-the mode-specific rating and projection for every chart, merges the displayed top 20 from each
+the mode-specific rating and projection for every chart, merges the displayed top 50 from each
 eligible mode, recalculates each candidate's gain against one shared Single-and-Double Phoenix 2
-pool, and displays the best 20 merged opportunities. Overall Pumbility is the sum of the highest 50
+pool, and displays the best 50 merged opportunities. Overall Pumbility is the sum of the highest 50
 Phoenix 2 Pumbility values in the union of the player's Single and Double scores; it is not the sum
 of both mode totals. If only one mode can be rated, Overall still uses that mode's recommendations
 and explains which source is unavailable, while every existing Phoenix 2 score in either mode still
@@ -348,10 +375,11 @@ Rating sums the contribution from every unique Phoenix 2 Co-op chart PB rather t
 50. Its title ladder runs from no title through `[CO-OP] Lv.1`-`Lv.10`, Advanced at 12,000,
 Expert at 14,000, and Master at 16,000.
 
-The unfiltered suggested-chart list has no lower estimated-difficulty bound and extends through 1.0
-points above the player's scoring rating. Official-difficulty filters instead use every rankable level-16+
-chart in the authoritative catalog, show every exact-level match, and order those matches by projected
-Pumbility gain from highest to lowest.
+The suggested-chart list retains the 1.0 estimated-difficulty ceiling above the player's scoring
+rating and is additionally bounded by official folder: `floor(scoring rating) ±2`, never below
+level 16. The default list and exact official-difficulty filters use that same five-level window
+and order matching charts by projected Pumbility gain from highest to lowest. Overall is the union
+of the independently bounded Singles and Doubles pools.
 
 Projected raw scores target the unweighted median (50th percentile) among all other players with a
 similar ranks 11-30 projection rating and a normalized result on the exact chart. Phoenix 1 and Phoenix 2 observations are joined with Phoenix 2
@@ -387,10 +415,13 @@ Fair Game, including charts added later. The merged population's raw nearest-ran
 the adjusted conditional-q75 tier model rather than serving as the recommendation target.
 
 The population models and frozen per-player inputs are rebuilt once in the daily background run.
-Opening or selecting a player on `/recommendations` first renders any cached result, then requests
+Opening or selecting a player on `/recommendations` first renders any cached result for the active
+mode, then requests
 only that player's scores newer than the last successful player sync. The lightweight worker loads
-the frozen model and the selected player's small input shard, recalculates the complete filterable
-chart pool plus the displayed top 20, and replaces the page automatically. If the upstream request or worker
+the frozen model and the selected player's small input shard, recalculates the bounded filterable
+chart pool plus up to 50 displayed recommendations, and replaces the page automatically. Other modes load lazily
+when their tabs are opened and are cached by model generation and recommendation timestamp. Overall
+loads its official-difficulty candidates one selected difficulty at a time. If the upstream request or worker
 fails, the previous cached result remains visible with a warning. This keeps the interactive path
 independent of the hundreds of player score endpoints and the population-wide model fitting.
 Interactive refreshes have a rolling 60-second deduplication window, a 30-second browser and
@@ -497,6 +528,20 @@ npm run verify:phoenix1-archive
 npm run typecheck
 npm run build
 ```
+
+After creating an immutable staged Production deployment with `--prod --skip-domain`, smoke the
+deployment without exposing the selected player key or response bodies. The fallback refresh is
+explicitly authorized by the switch and is used only when every listed player cache returns 404:
+
+```powershell
+.\scripts\smoke_recommendation_deployment.ps1 `
+  -Deployment "<deployment-id-or-immutable-url>" `
+  -Label staged `
+  -AllowRefreshFallback
+```
+
+The script emits only aggregate HTTP status, decoded/wire byte counts, and response-shape counts.
+Omit `-AllowRefreshFallback` for a strictly read-only smoke.
 
 The suite includes incremental merge/pruning/recheck/checkpoint tests, recommendation catalog and
 Phoenix 2 precedence tests, serialized model round-trip and player-only refresh tests, shared

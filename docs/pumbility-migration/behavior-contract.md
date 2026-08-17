@@ -82,7 +82,7 @@ The backend production player list is 30 seconds; the standalone local list is f
 - Charts with fewer than 20 contributors show Limited data.
 - Chart video links and Phoenix 1 rerates remain presentation-only.
 - Detailed chart cards and compact-layout detail dialogs share the same per-chart what-if control. Its unset prompt is `S??` for Singles and `D??` for Doubles; selecting an available alternative renders `If S<level> then S<estimate>` or `If D<level> then D<estimate>`.
-- The control reads the schema-3 `whatIfEstimates` already present on the chart. It performs no fetch and does not regroup, rerank, move, or otherwise recalculate the tier list.
+- The control reads the `whatIfEstimates` already present on the chart. The artifact stores only the adjacent official levels (one below and one above, never below level 16). It performs no fetch and does not regroup, rerank, move, or otherwise recalculate the tier list.
 - Alternatives with no estimate remain visible but disabled. The control is optional-data safe for older combined artifacts and resets when its chart details unmount.
 - What-if text occupies the unused right side of the existing difference row with out-of-flow positioning. It must not change detailed-card or dialog grid tracks, padding, minimum heights, or the placement of existing chart metadata, difference, and confidence interval content.
 

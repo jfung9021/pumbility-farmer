@@ -61,6 +61,47 @@ const INITIAL_DIFFICULTY_FILTERS: Record<RecommendationModeKey, string> = {
 const DEFAULT_RECOMMENDATION_SCORE_TARGET = 30;
 const MODEL_DELAY_THRESHOLD_MS = 26 * 60 * 60 * 1000;
 type StandardModeKey = Exclude<ModeKey, "coop">;
+type CachedModePayload = {
+  activeCacheKeys: Record<string, string>;
+  byCacheKey: Record<string, PlayerRecommendationsResponse>;
+};
+type PlayerModePayloadCache = {
+  playerKey: string;
+  modes: Partial<Record<RecommendationModeKey, CachedModePayload>>;
+};
+
+
+function recommendationPayloadCacheKey(
+  playerKey: string,
+  mode: RecommendationModeKey,
+  difficulty: string,
+  payload: PlayerRecommendationsResponse,
+): string {
+  const modelGeneration = payload.modelGeneration
+    || payload.currentModelGeneratedAtUtc
+    || payload.modelGeneratedAtUtc
+    || "unknown-model";
+  const generatedAt = payload.recommendationsGeneratedAtUtc
+    || payload.playerSyncedAtUtc
+    || payload.generatedAtUtc;
+  return `${playerKey}:${mode}:${difficulty}:${modelGeneration}:${generatedAt}`;
+}
+
+
+function payloadForMode(
+  payload: PlayerRecommendationsResponse,
+  mode: RecommendationModeKey,
+): PlayerRecommendationsResponse | null {
+  const modePayload = payload.player.modes[mode];
+  if (!modePayload) return null;
+  return {
+    ...payload,
+    player: {
+      ...payload.player,
+      modes: { [mode]: modePayload },
+    },
+  };
+}
 
 
 function signed(value: number, digits = 2): string {
@@ -630,7 +671,10 @@ function TopScoresSection({
 
 export default function RecommendationsPage() {
   const [playersPayload, setPlayersPayload] = useState<RecommendationPlayersResponse | null>(null);
-  const [playerPayload, setPlayerPayload] = useState<PlayerRecommendationsResponse | null>(null);
+  const [playerPayloadCache, setPlayerPayloadCache] = useState<PlayerModePayloadCache>({
+    playerKey: "",
+    modes: {},
+  });
   const [selectedKey, setSelectedKey] = useState("");
   const [playerQuery, setPlayerQuery] = useState("");
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
@@ -648,6 +692,60 @@ export default function RecommendationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [refreshWarning, setRefreshWarning] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(0);
+  const playerPayloadCacheRef = useRef<PlayerModePayloadCache>({ playerKey: "", modes: {} });
+  const refreshAttemptedPlayersRef = useRef(new Set<string>());
+  const activeDifficultyCacheKey = activeMode === "overall"
+    ? difficultyFilters.overall
+    : ALL_DIFFICULTIES;
+  const activePayloadEntry = playerPayloadCache.playerKey === selectedKey
+    ? playerPayloadCache.modes[activeMode]
+    : undefined;
+  const activePayloadCacheKey = activePayloadEntry
+    ?.activeCacheKeys[activeDifficultyCacheKey];
+  const playerPayload = activePayloadEntry && activePayloadCacheKey
+    ? activePayloadEntry.byCacheKey[activePayloadCacheKey] ?? null
+    : null;
+
+  const cachePlayerPayload = useCallback((
+    playerKey: string,
+    mode: RecommendationModeKey,
+    difficulty: string,
+    payload: PlayerRecommendationsResponse,
+  ): PlayerRecommendationsResponse | null => {
+    const scopedPayload = payloadForMode(payload, mode);
+    if (!scopedPayload) return null;
+    const cacheKey = recommendationPayloadCacheKey(
+      playerKey,
+      mode,
+      difficulty,
+      scopedPayload,
+    );
+    setPlayerPayloadCache((current) => {
+      const currentMode = current.playerKey === playerKey
+        ? current.modes[mode]
+        : undefined;
+      const entry = {
+        activeCacheKeys: {
+          ...currentMode?.activeCacheKeys,
+          [difficulty]: cacheKey,
+        },
+        byCacheKey: {
+          ...currentMode?.byCacheKey,
+          [cacheKey]: scopedPayload,
+        },
+      };
+      const next = {
+        playerKey,
+        modes: {
+          ...(current.playerKey === playerKey ? current.modes : {}),
+          [mode]: entry,
+        },
+      };
+      playerPayloadCacheRef.current = next;
+      return next;
+    });
+    return scopedPayload;
+  }, []);
 
   useEffect(() => {
     setNowMs(Date.now());
@@ -693,28 +791,66 @@ export default function RecommendationsPage() {
 
   useEffect(() => {
     if (!selectedKey) {
-      setPlayerPayload(null);
+      const emptyCache = { playerKey: "", modes: {} };
+      playerPayloadCacheRef.current = emptyCache;
+      setPlayerPayloadCache(emptyCache);
       setRefreshWarning(null);
       return;
     }
     const controller = new AbortController();
-    setPlayerPayload(null);
-    setLoadingPlayer(true);
+    const requestedDifficulty = activeMode === "overall"
+      && difficultyFilters.overall !== ALL_DIFFICULTIES
+      ? difficultyFilters.overall
+      : undefined;
+    const difficultyCacheKey = requestedDifficulty ?? ALL_DIFFICULTIES;
+    const previousCache = playerPayloadCacheRef.current;
+    const playerChanged = previousCache.playerKey !== selectedKey;
+    const cachedMode = playerChanged ? undefined : previousCache.modes[activeMode];
+    const cachedCacheKey = cachedMode?.activeCacheKeys[difficultyCacheKey];
+    const cachedEntry = cachedCacheKey ? cachedMode?.byCacheKey[cachedCacheKey] : undefined;
+    if (playerChanged) {
+      const emptyCache = { playerKey: selectedKey, modes: {} };
+      playerPayloadCacheRef.current = emptyCache;
+      setPlayerPayloadCache(emptyCache);
+      setRefreshWarning(null);
+    }
+    setLoadingPlayer(!cachedEntry);
     setError(null);
-    setRefreshWarning(null);
-    let cachedLoaded = false;
+    let cachedLoaded = Boolean(cachedEntry);
+    let refreshClaimed = false;
 
-    const loadCached = async () => {
+    const loadCached = async (force = false) => {
+      const currentCache = playerPayloadCacheRef.current;
+      const currentMode = currentCache.playerKey === selectedKey
+        ? currentCache.modes[activeMode]
+        : undefined;
+      const currentCacheKey = currentMode?.activeCacheKeys[difficultyCacheKey];
+      const currentEntry = currentCacheKey
+        ? currentMode?.byCacheKey[currentCacheKey]
+        : undefined;
+      if (!force && currentEntry) {
+        return currentEntry;
+      }
+      const params = new URLSearchParams({ playerKey: selectedKey, mode: activeMode });
+      if (requestedDifficulty) params.set("difficulty", requestedDifficulty);
       const response = await fetch(
-        `/api/recommendations?playerKey=${encodeURIComponent(selectedKey)}`,
+        `/api/recommendations?${params.toString()}`,
         { cache: "no-store", signal: controller.signal },
       );
       if (response.status === 404) return null;
       const payload = await readJsonResponse<PlayerRecommendationsResponse>(response);
+      const scopedPayload = cachePlayerPayload(
+        selectedKey,
+        activeMode,
+        difficultyCacheKey,
+        payload,
+      );
+      if (!scopedPayload) {
+        throw new Error(`The ${activeMode} recommendation payload is unavailable.`);
+      }
       cachedLoaded = true;
-      setPlayerPayload(payload);
       setLoadingPlayer(false);
-      return payload;
+      return scopedPayload;
     };
 
     const waitForJob = async (initial: PlayerRefreshJob) => {
@@ -739,19 +875,32 @@ export default function RecommendationsPage() {
 
     const refresh = async () => {
       if (playersPayload?.refreshSupported === false) return;
+      if (refreshAttemptedPlayersRef.current.has(selectedKey)) return;
+      refreshAttemptedPlayersRef.current.add(selectedKey);
+      refreshClaimed = true;
+      const params = new URLSearchParams({ playerKey: selectedKey, mode: activeMode });
+      if (requestedDifficulty) params.set("difficulty", requestedDifficulty);
       const response = await fetch(
-        `/api/recommendations/refresh?playerKey=${encodeURIComponent(selectedKey)}`,
+        `/api/recommendations/refresh?${params.toString()}`,
         { method: "POST", cache: "no-store", signal: controller.signal },
       );
       const started = await readJsonResponse<PlayerRefreshResponse>(response);
       if (started.outcome === "fresh") {
+        const scopedPayload = cachePlayerPayload(
+          selectedKey,
+          activeMode,
+          difficultyCacheKey,
+          started.recommendation,
+        );
+        if (!scopedPayload) {
+          throw new Error(`The refreshed ${activeMode} recommendations are unavailable.`);
+        }
         cachedLoaded = true;
-        setPlayerPayload(started.recommendation);
         setRefreshWarning(null);
         return;
       }
       await waitForJob(started.job);
-      const refreshed = await loadCached();
+      const refreshed = await loadCached(true);
       if (!refreshed) throw new Error("The refreshed recommendations are unavailable.");
       setRefreshWarning(null);
     };
@@ -761,7 +910,10 @@ export default function RecommendationsPage() {
         await loadCached();
         await refresh();
       } catch (caught) {
-        if (caught instanceof DOMException && caught.name === "AbortError") return;
+        if (caught instanceof DOMException && caught.name === "AbortError") {
+          if (refreshClaimed) refreshAttemptedPlayersRef.current.delete(selectedKey);
+          return;
+        }
         const message = caught instanceof Error
           ? caught.message
           : "Could not refresh recommendations.";
@@ -777,11 +929,18 @@ export default function RecommendationsPage() {
       }
     })();
     return () => controller.abort();
-  }, [playersPayload?.refreshSupported, selectedKey]);
+  }, [
+    activeMode,
+    cachePlayerPayload,
+    difficultyFilters.overall,
+    playersPayload?.refreshSupported,
+    selectedKey,
+  ]);
 
   const selectPlayer = (playerKey: string, inputValue = "") => {
     track("recommendation_player_selected", { playerName: inputValue });
     if (playerKey !== selectedKey) {
+      refreshAttemptedPlayersRef.current.delete(playerKey);
       setDifficultyFilters({ ...INITIAL_DIFFICULTY_FILTERS });
     }
     setSelectedKey(playerKey);
@@ -879,11 +1038,14 @@ export default function RecommendationsPage() {
   }, [playerQuery, playersPayload, selectedKey]);
 
   const difficultyOptions = useMemo(
-    () => recommendationDifficultyOptions(
-      activeMode,
-      mode?.filterCandidates ?? [],
-    ),
-    [activeMode, mode?.filterCandidates],
+    () => activeMode === "overall" && mode?.difficultyOptions
+      ? mode.difficultyOptions
+        : recommendationDifficultyOptions(
+          activeMode,
+          mode?.filterCandidates ?? [],
+          mode?.scoringRating,
+        ),
+    [activeMode, mode?.difficultyOptions, mode?.filterCandidates, mode?.scoringRating],
   );
   const selectedDifficulty = difficultyFilters[activeMode];
   const effectiveDifficulty = selectedDifficulty === ALL_DIFFICULTIES
@@ -913,6 +1075,8 @@ export default function RecommendationsPage() {
     || playerPayload?.generatedAtUtc;
 
   const hasSelection = Boolean(selectedKey);
+  const hasAnyPlayerPayload = playerPayloadCache.playerKey === selectedKey
+    && Object.keys(playerPayloadCache.modes).length > 0;
 
   return (
     <main className="recommendations-page">
@@ -1017,9 +1181,9 @@ export default function RecommendationsPage() {
             <h2>Select a username</h2>
             <p>Your internal player ID and raw score history are never returned to the browser.</p>
           </div>
-        ) : loadingPlayer && !playerPayload ? (
+        ) : loadingPlayer && !playerPayload && !hasAnyPlayerPayload ? (
           <div className="recommendation-empty"><span className="spinner" /><h2>Calculating your route</h2></div>
-        ) : playerPayload ? (
+        ) : hasAnyPlayerPayload ? (
           <>
             <div className="recommendation-mode-row">
               <div className="recommendation-mode-tabs" role="tablist" aria-label="Recommendation mode">
@@ -1065,13 +1229,18 @@ export default function RecommendationsPage() {
                     <span>
                       {remaining
                         ? `Need to play ${remaining} more ${label} chart${remaining === 1 ? "" : "s"} to show ${label} recommendations.`
-                        : `${label} recommendations are not available yet. ${playerPayload.player.modes[modeKey].reason || "This mode cannot be rated yet."}`}
+                        : `${label} recommendations are not available yet. This mode cannot be rated yet.`}
                     </span>
                   </div>
                 );
               }) : null}
 
-              {activeMode === "overall" && !mode ? (
+              {loadingPlayer && !playerPayload ? (
+                <div className="recommendation-empty">
+                  <span className="spinner" />
+                  <h2>Loading {activeMode === "coop" ? "Co-op" : activeMode} recommendations</h2>
+                </div>
+              ) : activeMode === "overall" && !mode ? (
                 <div className="recommendation-empty insufficient-state">
                   <span>O</span>
                   <h2>Overall is being prepared</h2>
@@ -1164,7 +1333,7 @@ export default function RecommendationsPage() {
         <p>Co-op recommendations assign a letter-grade goal from each chart&apos;s whole-number estimated difficulty, with the same one-grade boost capped at SSS+: harder charts receive lower goals. The folder lookup is fixed and never rebalanced when charts are added, so every difficulty-17 chart always targets AAA with Fair Game. Completing all current chart goals clears the 16,000 Co-op Rating [CO-OP] Master threshold with extra leeway. Projected gain is additive rather than limited to a top-50 pool; equal gains use the underlying continuous difficulty for ordering.</p>
         <p>The underlying Co-op tier model adjusts miss points for player strength and Phoenix source using all observations, then estimates the conditional 75th-percentile score for a median-strength Phoenix 2 player. The conditional quantile supplies outlier robustness without trimming raw scores or residuals. Chart order anchors the easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24.9, then truncates the published difficulty to a whole-number range from 10 through 24 without forcing a normal distribution.</p>
         <p>The visible skill rating uses top-20 average Pumbility and is expressed as the continuous chart level where an S with Fair Game earns the selected window&apos;s average Pumbility. Phoenix 2 supplies a window once it is complete; otherwise a complete Phoenix 1 window is used, followed by partial Phoenix 2. Singles and Doubles recommendations extend up to 1.0 estimated-difficulty point above that mode&apos;s rating; Overall merges those capped mode lists.</p>
-        <p>Played status, existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2 rather than recomputing historical results. Overall Pumbility is the best 50 values across both modes; Overall recommendations merge each mode&apos;s displayed top 20 and recalculate their deterministic gain against that shared top-50 pool. Official-difficulty filters show every matching level-16+ chart, ordered by projected Pumbility gain. Projections are estimates, not guaranteed results.</p>
+        <p>Played status, existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2 rather than recomputing historical results. Overall Pumbility is the best 50 values across both modes; Overall recommendations merge each mode&apos;s displayed top 50 and recalculate their deterministic gain against that shared top-50 pool. Official-difficulty filters show every matching level-16+ chart, ordered by projected Pumbility gain. Projections are estimates, not guaranteed results.</p>
       </footer>
     </main>
   );

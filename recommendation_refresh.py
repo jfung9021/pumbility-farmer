@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import math
 import threading
@@ -13,6 +14,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import pandas as pd
 
+from recommendation_artifacts import compact_player_recommendation_cache
 from pumbility_contract import (
     PLAYER_REFRESH_STORAGE_SCHEMA_VERSION,
     PLAYER_REFRESH_FRESHNESS,
@@ -58,11 +60,16 @@ from piu_recommendations import (
     SKILL_RATING_REFERENCE_PLATE,
     TOP_PUMBILITY_COUNT,
     ScoreResponseModel,
+    _clean_snapshot_dataframes,
     _clean_snapshot_frames,
+    _clean_snapshot_frames_consuming,
     _prepare_phoenix1_rating_frames,
+    _prepare_phoenix1_rating_frames_from_frames,
+    _records_to_frame_consuming,
     _recommendation_chart_rows,
     build_player_recommendation,
-    fit_score_response_model,
+    fit_score_response_model_mode_from_frames,
+    fit_score_response_model_from_frames,
     public_player_key,
 )
 
@@ -70,6 +77,7 @@ from piu_recommendations import (
 PLAYER_ARTIFACT_SHARD_SIZE = 10
 MODEL_ARTIFACT_SCHEMA_VERSION = 5
 PLAYER_STATE_SCHEMA_VERSION = 1
+COMPACT_PHOENIX1_SHARD_SCHEMA_VERSION = 2
 
 
 class JsonStore(Protocol):
@@ -86,6 +94,21 @@ def _frame_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     import json
 
     return json.loads(frame.to_json(orient="records", double_precision=10))
+
+
+def _columnar_frame_records(
+    frame: pd.DataFrame, *, omitted_columns: frozenset[str] = frozenset()
+) -> tuple[list[str], list[list[Any]]]:
+    """Encode rows without allocating one field-name dictionary per score."""
+    columns = [str(column) for column in frame.columns if column not in omitted_columns]
+    if frame.empty:
+        return columns, []
+    import json
+
+    rows = json.loads(
+        frame[columns].to_json(orient="values", double_precision=10)
+    )
+    return columns, rows
 
 
 def _recommendation_method(
@@ -122,12 +145,17 @@ def _recommendation_method(
         "ratingReferenceMultiplier": SKILL_RATING_REFERENCE_MULTIPLIER,
         "ratingSource": "the displayed rating and recommendation ceiling use Phoenix 2 top 20 at 20 valid scores; otherwise Phoenix 1 top 20 when available, then partial Phoenix 2",
         "projectionRatingSource": "score projections use Phoenix 2 ranks 11-30 at 30 valid scores; otherwise Phoenix 1 ranks 11-30 when all 30 are available",
-        "shortHistoryBaseline": "a mode without a complete 30-score Phoenix 2 or Phoenix 1 source keeps top-20 farm-edge recommendations but does not receive personal projected scores",
+        "shortHistoryBaseline": "a mode without a complete 30-score Phoenix 2 or Phoenix 1 source keeps top-50 farm-edge recommendations but does not receive personal projected scores",
         "candidateUpperRadius": RECOMMENDATION_RADIUS,
         "candidateLowerBound": None,
+        "candidateOfficialLevelWindow": {
+            "center": "floor(scoringRating)",
+            "radius": 3,
+            "minimumOfficialLevel": MIN_TARGET_LEVEL,
+        },
         "topPumbilityCount": TOP_PUMBILITY_COUNT,
         "overallPumbility": "the highest 50 Phoenix 2 Pumbility values from the player's combined Single and Double scores",
-        "overallRecommendations": "merge the displayed top 20 Single and top 20 Double recommendations, recalculate every projected gain against the shared Phoenix 2 S+D top 50, then retain the best 20; official-difficulty filters rank the full level-16+ recommendation catalog",
+        "overallRecommendations": "merge the displayed top 50 Single and top 50 Double recommendations, recalculate every projected gain against the shared Phoenix 2 S+D top 50, then retain the best 50; official-difficulty filters use floor(scoring rating) plus or minus two levels with a level-16 minimum",
         "actualPumbilitySource": "upstream",
         "projection": "median projected raw score converted with the mode-specific Phoenix 2 projection formula and the weighted-median plate",
         "plateProjection": "weighted median of the ordered RG-to-PG hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
@@ -207,6 +235,87 @@ def _model_catalog_records(
     return records
 
 
+def _consume_phoenix1_artifact_inputs(
+    snapshot: dict[str, Any],
+    phoenix2_catalog: pd.DataFrame,
+    score_normalizations: Phoenix1ScoreNormalizations,
+) -> tuple[pd.DataFrame, dict[str, list[dict[str, Any]]]]:
+    """Prepare rating rows while releasing raw P1 rows and compact plate tuples."""
+    raw_charts = snapshot.pop("charts", [])
+    raw_scores = snapshot.pop("scores", [])
+    if not isinstance(raw_charts, list) or not isinstance(raw_scores, list):
+        raise ValueError("A consumed recommendation snapshot is invalid.")
+    valid_chart_ids = set(phoenix2_catalog["chartId"].astype(str))
+    plate_candidates: dict[str, list[tuple[str, Any, Any]]] = defaultdict(list)
+
+    def retain_plate_candidate(row: Mapping[str, Any]) -> None:
+        player_id = str(row.get("playerId") or "").strip()
+        chart_id = str(row.get("chartId") or "").strip()
+        if (
+            not player_id
+            or chart_id not in valid_chart_ids
+            or bool(row.get("isBroken"))
+        ):
+            return
+        plate_candidates[player_id].append(
+            (
+                chart_id,
+                convert_phoenix1_score(
+                    chart_id, row.get("score"), score_normalizations
+                ),
+                row.get("plate"),
+            )
+        )
+
+    phoenix1_scores = _records_to_frame_consuming(
+        raw_scores,
+        included_columns=(
+            "playerId",
+            "chartId",
+            "pumbility",
+            "isBroken",
+            "score",
+            "recordedAt",
+            "plate",
+        ),
+        row_consumer=retain_plate_candidate,
+    )
+    phoenix1_charts = pd.DataFrame(raw_charts)
+    raw_charts.clear()
+    snapshot.clear()
+    phoenix1_charts, phoenix1_scores = _clean_snapshot_dataframes(
+        phoenix1_charts, phoenix1_scores
+    )
+    _, rating_scores = _prepare_phoenix1_rating_frames_from_frames(
+        phoenix1_charts,
+        phoenix1_scores,
+        phoenix2_catalog,
+        normalizations=score_normalizations,
+    )
+    del phoenix1_charts, phoenix1_scores
+    rating_keys = {
+        (str(row.playerId), str(row.chartId))
+        for row in rating_scores[["playerId", "chartId"]].itertuples(index=False)
+    }
+    plate_by_player = {
+        player_id: [
+            {
+                "playerId": player_id,
+                "chartId": chart_id,
+                "score": score,
+                "plate": plate,
+                "isBroken": False,
+            }
+            for chart_id, score, plate in rows
+            if (player_id, chart_id) not in rating_keys
+        ]
+        for player_id, rows in plate_candidates.items()
+    }
+    del plate_candidates, rating_keys
+    gc.collect()
+    return rating_scores, plate_by_player
+
+
 def build_recommendation_model_artifacts(
     phoenix1_snapshot: Mapping[str, Any],
     phoenix2_snapshot: Mapping[str, Any],
@@ -215,6 +324,8 @@ def build_recommendation_model_artifacts(
     phoenix2_slopes: Mapping[str, float],
     generation_key: str,
     generated_at_utc: str,
+    consume_phoenix1_snapshot: bool = False,
+    score_model_artifact: tuple[ScoreResponseModel, Mapping[str, Any]] | None = None,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -224,9 +335,6 @@ def build_recommendation_model_artifacts(
 ]:
     """Build a global model, compact index, and per-player input shards."""
     charts_for_players = _recommendation_chart_rows(combined_charts)
-    score_model, score_metadata = fit_score_response_model(
-        phoenix1_snapshot, phoenix2_snapshot, charts_for_players
-    )
     phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
     score_normalizations = build_phoenix1_score_normalizations(
         [
@@ -240,15 +348,52 @@ def build_recommendation_model_artifacts(
             if isinstance(row, Mapping)
         ],
     )
-    _, phoenix1_scores = _prepare_phoenix1_rating_frames(
-        phoenix1_snapshot, phoenix2_catalog
-    )
     plate_model = PlateProjectionModel(phoenix1_snapshot, phoenix2_snapshot)
+    plate_model_payload = plate_model.global_payload()
+    phoenix1_cap = plate_model.phoenix1_cap
+    del plate_model
+    if consume_phoenix1_snapshot:
+        if not isinstance(phoenix1_snapshot, dict):
+            raise TypeError("An owned Phoenix 1 snapshot must be mutable.")
+        phoenix1_scores, p1_plate_by_player = _consume_phoenix1_artifact_inputs(
+            phoenix1_snapshot,
+            phoenix2_catalog,
+            score_normalizations,
+        )
+    else:
+        _, phoenix1_scores = _prepare_phoenix1_rating_frames(
+            phoenix1_snapshot, phoenix2_catalog
+        )
+        p1_rating_keys = {
+            (str(row.playerId), str(row.chartId))
+            for row in phoenix1_scores[["playerId", "chartId"]].itertuples(
+                index=False
+            )
+        }
+        p1_plate_by_player = _raw_scores_by_player(
+            phoenix1_snapshot,
+            set(phoenix2_catalog["chartId"].astype(str)),
+            compact_plate=True,
+            normalizations=score_normalizations,
+            excluded_score_keys=p1_rating_keys,
+        )
+        del p1_rating_keys
+
+    if score_model_artifact is None:
+        score_model, score_metadata = fit_score_response_model_from_frames(
+            phoenix1_scores,
+            phoenix2_catalog,
+            phoenix2_scores,
+            charts_for_players,
+        )
+    else:
+        score_model, raw_score_metadata = score_model_artifact
+        score_metadata = dict(raw_score_metadata)
     slopes = dict(phoenix2_slopes)
     method = _recommendation_method(
         slopes,
         score_metadata,
-        plate_model.phoenix1_cap,
+        phoenix1_cap,
         score_normalizations,
     )
 
@@ -263,16 +408,14 @@ def build_recommendation_model_artifacts(
         "phoenix2Slopes": slopes,
         "scoreResponseModelPath": recommendation_score_model_path(generation_key),
         "scoreProjectionMetadata": score_metadata,
-        "plateModel": plate_model.global_payload(),
+        "plateModel": plate_model_payload,
         "method": method,
     }
 
     p1_counts = _mode_counts(phoenix1_scores, phoenix2_catalog)
     p2_counts = _mode_counts(phoenix2_scores, phoenix2_catalog)
-    p1_by_player = {
-        str(player_id): _frame_records(group)
-        for player_id, group in phoenix1_scores.groupby("playerId", sort=False)
-    }
+    p1_groups = phoenix1_scores.groupby("playerId", sort=False)
+    p1_group_ids = {str(player_id) for player_id in p1_groups.groups}
     valid_model_chart_ids = {
         str(row.get("chartId") or "") for row in model_catalog
     }
@@ -281,24 +424,6 @@ def build_recommendation_model_artifacts(
         for player_id, group in _raw_scores_by_player(
             phoenix2_snapshot, valid_model_chart_ids
         ).items()
-    }
-    p1_plate_by_player = _raw_scores_by_player(
-        phoenix1_snapshot,
-        set(phoenix2_catalog["chartId"].astype(str)),
-        compact_plate=True,
-        normalizations=score_normalizations,
-    )
-    p1_rating_keys = {
-        (str(row.playerId), str(row.chartId))
-        for row in phoenix1_scores[["playerId", "chartId"]].itertuples(index=False)
-    }
-    p1_plate_by_player = {
-        player_id: [
-            row
-            for row in rows
-            if (player_id, str(row.get("chartId") or "")) not in p1_rating_keys
-        ]
-        for player_id, rows in p1_plate_by_player.items()
     }
     metadata_by_player = {
         str(row.get("playerId") or row.get("userId")): row
@@ -369,10 +494,18 @@ def build_recommendation_model_artifacts(
                     "inputShard": shard_number,
                 }
             )
+            if player_id in p1_group_ids:
+                score_columns, score_rows = _columnar_frame_records(
+                    p1_groups.get_group(player_id),
+                    omitted_columns=frozenset({"playerId"}),
+                )
+            else:
+                score_columns, score_rows = [], []
             p1_players.append(
                 {
                     "playerId": player_id,
-                    "scores": p1_by_player.get(player_id, []),
+                    "scoreColumns": score_columns,
+                    "scoreRows": score_rows,
                     "plateScores": p1_plate_by_player.get(player_id, []),
                 }
             )
@@ -387,7 +520,7 @@ def build_recommendation_model_artifacts(
             )
         p1_shards.append(
             {
-                "schemaVersion": PLAYER_STATE_SCHEMA_VERSION,
+                "schemaVersion": COMPACT_PHOENIX1_SHARD_SCHEMA_VERSION,
                 "generationKey": generation_key,
                 "players": p1_players,
             }
@@ -416,12 +549,58 @@ def build_recommendation_model_artifacts(
     return index, model, score_model.to_npz_bytes(), p1_shards, p2_shards
 
 
+def build_recommendation_score_mode_artifact(
+    phoenix1_snapshot: Mapping[str, Any],
+    phoenix2_snapshot: Mapping[str, Any],
+    *,
+    combined_charts: Sequence[Mapping[str, Any]],
+    chart_type: str,
+    consume_snapshots: bool = False,
+) -> tuple[bytes, dict[str, Any]]:
+    """Fit one mode in isolation for a fresh-process model continuation."""
+    charts_for_players = _recommendation_chart_rows(combined_charts)
+    if consume_snapshots:
+        if not isinstance(phoenix1_snapshot, dict) or not isinstance(
+            phoenix2_snapshot, dict
+        ):
+            raise TypeError("Owned recommendation snapshots must be mutable.")
+        phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames_consuming(
+            phoenix2_snapshot
+        )
+        phoenix1_catalog, raw_phoenix1_scores = _clean_snapshot_frames_consuming(
+            phoenix1_snapshot
+        )
+        _, phoenix1_scores = _prepare_phoenix1_rating_frames_from_frames(
+            phoenix1_catalog,
+            raw_phoenix1_scores,
+            phoenix2_catalog,
+        )
+        del phoenix1_catalog, raw_phoenix1_scores
+        gc.collect()
+    else:
+        phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(
+            phoenix2_snapshot
+        )
+        _, phoenix1_scores = _prepare_phoenix1_rating_frames(
+            phoenix1_snapshot, phoenix2_catalog
+        )
+    score_model, score_metadata = fit_score_response_model_mode_from_frames(
+        phoenix1_scores,
+        phoenix2_catalog,
+        phoenix2_scores,
+        charts_for_players,
+        chart_type,
+    )
+    return score_model.to_npz_bytes(), score_metadata
+
+
 def _raw_scores_by_player(
     snapshot: Mapping[str, Any],
     valid_chart_ids: set[str],
     *,
     compact_plate: bool = False,
     normalizations: Phoenix1ScoreNormalizations | None = None,
+    excluded_score_keys: set[tuple[str, str]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Retain all valid best-score rows, including zero-Pumbility plate history."""
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -431,6 +610,12 @@ def _raw_scores_by_player(
         player_id = str(row.get("playerId") or "").strip()
         chart_id = str(row.get("chartId") or "").strip()
         if not player_id or chart_id not in valid_chart_ids or bool(row.get("isBroken")):
+            continue
+        if excluded_score_keys is not None and (
+            player_id,
+            chart_id,
+        ) in excluded_score_keys:
+            result.setdefault(player_id, [])
             continue
         if compact_plate:
             result[player_id].append(
@@ -490,6 +675,35 @@ def publish_recommendation_model_artifacts(
         store.put_json(index_path, index)
 
 
+def _materialize_shard_player(player: Mapping[str, Any]) -> dict[str, Any]:
+    """Expand compact P1 rows for one selected player; retain legacy payloads."""
+    result = dict(player)
+    raw_rows = result.pop("scoreRows", None)
+    raw_columns = result.pop("scoreColumns", None)
+    if raw_rows is None and raw_columns is None:
+        return result
+    if (
+        not isinstance(raw_columns, list)
+        or not all(isinstance(column, str) for column in raw_columns)
+        or len(set(raw_columns)) != len(raw_columns)
+        or "playerId" in raw_columns
+        or not isinstance(raw_rows, list)
+    ):
+        raise ValueError("A compact Phoenix 1 recommendation shard is invalid.")
+    player_id = str(result.get("playerId") or "").strip()
+    if not player_id:
+        raise ValueError("A compact Phoenix 1 recommendation player is invalid.")
+    scores: list[dict[str, Any]] = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, list) or len(raw_row) != len(raw_columns):
+            raise ValueError("A compact Phoenix 1 recommendation row is invalid.")
+        score = {column: value for column, value in zip(raw_columns, raw_row)}
+        score["playerId"] = player_id
+        scores.append(score)
+    result["scores"] = scores
+    return result
+
+
 def _find_shard_player(
     shard: Mapping[str, Any] | None, player_id: str
 ) -> dict[str, Any] | None:
@@ -497,7 +711,7 @@ def _find_shard_player(
         return None
     return next(
         (
-            dict(row)
+            _materialize_shard_player(row)
             for row in shard.get("players", [])
             if isinstance(row, Mapping) and str(row.get("playerId")) == player_id
         ),
@@ -782,7 +996,10 @@ def refresh_player_recommendations(
     if timings is not None:
         timings["computeMs"] = round((perf_counter() - compute_started) * 1000, 3)
     publish_started = perf_counter()
-    store.put_json(recommendation_player_path(player_key), response)
+    store.put_json(
+        recommendation_player_path(player_key),
+        compact_player_recommendation_cache(response),
+    )
     if timings is not None:
         timings["publishMs"] = round((perf_counter() - publish_started) * 1000, 3)
         timings["totalMs"] = round((perf_counter() - total_started) * 1000, 3)

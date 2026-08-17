@@ -1,0 +1,11 @@
+.codex-remote-attachments/
+.local-data/
+.next/
+.venv/
+.vercel/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+node_modules/
+piu_*_run/
+synthetic_demo/

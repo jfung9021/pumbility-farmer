@@ -71,12 +71,12 @@ function makeWhatIfEstimates(
   estimatedDifficulty: number | null,
   includeUnavailable: boolean,
 ): NonNullable<ChartResult["whatIfEstimates"]> {
-  const minimumLevel = Math.max(16, level - 3);
-  return Array.from({ length: level + 3 - minimumLevel + 1 }, (_, offset) => minimumLevel + offset)
+  const minimumLevel = Math.max(16, level - 1);
+  return Array.from({ length: level + 1 - minimumLevel + 1 }, (_, offset) => minimumLevel + offset)
     .filter((targetLevel) => targetLevel !== level)
     .map((targetLevel) => ({
       level: targetLevel,
-      estimatedDifficulty: estimatedDifficulty === null || (includeUnavailable && targetLevel === level + 3)
+      estimatedDifficulty: estimatedDifficulty === null || (includeUnavailable && targetLevel === level + 1)
         ? null
         : Number((estimatedDifficulty + targetLevel - level).toFixed(6)),
     }));

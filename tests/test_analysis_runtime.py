@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import threading
 import time
 import tomllib
 import unittest
@@ -21,11 +22,16 @@ from analysis_runtime import (
     RUNS_PREFIX,
     STAGING_PREFIX,
     TYPED_CHECKPOINT_ANALYSIS_PHASE,
+    TYPED_CHECKPOINT_COMBINED_PHASE,
     TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
     TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE,
     TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
     TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE,
     TYPED_CHECKPOINT_MODEL_PHASE,
+    TYPED_CHECKPOINT_MODEL_ASSEMBLE_PHASE,
+    TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE,
+    TYPED_CHECKPOINT_MODEL_FIT_SINGLES_PHASE,
+    TYPED_CHECKPOINT_MODEL_PREPARE_PHASE,
     TYPED_CHECKPOINT_SCHEMA_VERSION,
     TYPED_CHECKPOINT_SNAPSHOT_PHASE,
     MemoryBlobStore,
@@ -47,11 +53,14 @@ from analysis_runtime import (
     isoformat_utc,
     new_job,
     latest_blob_path,
+    publish_recommendation_model_artifacts,
     publish_success,
     read_latest_payload,
     request_refresh,
     runs_prefix,
     typed_checkpoint_path,
+    typed_checkpoint_combined_path,
+    typed_checkpoint_model_part_path,
     typed_checkpoint_shard_path,
     update_job,
 )
@@ -68,11 +77,16 @@ from piu_misgrade_analyzer import (
 )
 from piu_recommendations import (
     RECOMMENDATION_SCHEMA_VERSION,
+    ScoreResponseModel,
     combined_tier_blob_path,
+    fit_score_response_model_from_frames,
+    fit_score_response_model_mode_from_frames,
+    merge_score_response_mode_models,
     recommendation_blob_path,
     recommendation_shard_path,
 )
-from pumbility_contract import recommendation_generation_key
+from pumbility_contract import recommendation_generation_key, recommendation_model_path
+from recommendation_artifacts import compact_player_recommendation_cache
 from recommendation_refresh import (
     player_refresh_job_id,
     recommendation_index_path,
@@ -812,6 +826,184 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual(removed_rating.status_code, 400)
         self.assertEqual(no_index.status_code, 404)
 
+    def test_player_recommendations_support_compact_and_mode_filtered_caches(self) -> None:
+        blobs = MemoryBlobStore()
+        index = {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            "storageSchemaVersion": 3,
+            "refreshSupported": True,
+            "generationKey": "daily-generation",
+            "generatedAtUtc": isoformat_utc(NOW),
+            "players": [{"playerKey": "public-key"}],
+        }
+        single = {
+            "chartId": "single-chart",
+            "type": "Single",
+            "level": 16,
+            "songName": "Single song",
+            "projectedGain": 1.25,
+        }
+        double = {
+            "chartId": "double-chart",
+            "type": "Double",
+            "level": 17,
+            "songName": "Double song",
+            "projectedGain": 2.5,
+        }
+        full_cache = {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            "generatedAtUtc": isoformat_utc(NOW),
+            "modelGeneratedAtUtc": isoformat_utc(NOW),
+            "playerSyncedAtUtc": isoformat_utc(NOW),
+            "modelGeneration": "daily-generation",
+            "player": {
+                "playerKey": "public-key",
+                "modes": {
+                    "singles": {
+                        "scoringRating": 16.5,
+                        "filterCandidates": [single],
+                        "topRecommendations": [single],
+                    },
+                    "doubles": {
+                        "scoringRating": 17.5,
+                        "filterCandidates": [double],
+                        "topRecommendations": [double],
+                    },
+                    "coop": {
+                        "filterCandidates": [],
+                        "topRecommendations": [],
+                    },
+                    "overall": {
+                        "currentTop50Pumbility": 1234.5,
+                        "filterCandidates": [
+                            {**double, "projectedGain": 8.75},
+                            {**single, "projectedGain": 6.5},
+                        ],
+                        "topRecommendations": [
+                            {**double, "projectedGain": 8.75},
+                        ],
+                    },
+                },
+            },
+        }
+        compact = compact_player_recommendation_cache(full_cache)
+        blobs.put_json(recommendation_blob_path(), index)
+        blobs.put_json(recommendation_player_path("public-key"), compact)
+
+        with patch("api.recommendations.PrivateBlobStore", return_value=blobs):
+            complete = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key"
+            )
+            overall = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key&mode=overall"
+            )
+            overall_d17 = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key&mode=overall"
+                "&difficulty=D17"
+            )
+            singles = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key&mode=singles"
+            )
+            invalid = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key&mode=invalid"
+            )
+            difficulty_without_overall = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key&difficulty=S16"
+            )
+            malformed_difficulty = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key&mode=overall"
+                "&difficulty=16"
+            )
+            unavailable_difficulty = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key&mode=overall"
+                "&difficulty=S18"
+            )
+        with (
+            patch.dict(
+                "os.environ", {"PLAYER_RECOMMENDATION_REFRESH_ENABLED": "true"}
+            ),
+            patch("api.recommendations.PrivateBlobStore", return_value=blobs),
+            patch("api.recommendations.utc_now", return_value=NOW),
+        ):
+            fresh_overall = API_CLIENT.post(
+                "/api/recommendations/refresh?playerKey=public-key&mode=overall"
+            )
+            fresh_overall_s16 = API_CLIENT.post(
+                "/api/recommendations/refresh?playerKey=public-key&mode=overall"
+                "&difficulty=S16"
+            )
+            invalid_refresh = API_CLIENT.post(
+                "/api/recommendations/refresh?playerKey=public-key&mode=invalid"
+            )
+
+        self.assertEqual(complete.status_code, 200)
+        self.assertEqual(
+            complete.json()["player"]["modes"],
+            full_cache["player"]["modes"],
+        )
+        self.assertEqual(set(overall.json()["player"]["modes"]), {"overall"})
+        self.assertNotIn(
+            "filterCandidates",
+            overall.json()["player"]["modes"]["overall"],
+        )
+        self.assertEqual(
+            overall.json()["player"]["modes"]["overall"]["difficultyOptions"],
+            ["S16", "D17"],
+        )
+        self.assertEqual(
+            overall_d17.json()["player"]["modes"]["overall"]["filterCandidates"],
+            [{**double, "projectedGain": 8.75}],
+        )
+        self.assertEqual(set(singles.json()["player"]["modes"]), {"singles"})
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(difficulty_without_overall.status_code, 400)
+        self.assertEqual(malformed_difficulty.status_code, 400)
+        self.assertEqual(unavailable_difficulty.status_code, 400)
+        self.assertEqual(fresh_overall.json()["outcome"], "fresh")
+        self.assertEqual(
+            set(fresh_overall.json()["recommendation"]["player"]["modes"]),
+            {"overall"},
+        )
+        self.assertNotIn(
+            "filterCandidates",
+            fresh_overall.json()["recommendation"]["player"]["modes"]["overall"],
+        )
+        self.assertEqual(
+            fresh_overall_s16.json()["recommendation"]["player"]["modes"]
+            ["overall"]["filterCandidates"],
+            [{**single, "projectedGain": 6.5}],
+        )
+        self.assertEqual(invalid_refresh.status_code, 400)
+
+        # Existing un-compacted player caches retain the same optional mode API.
+        blobs.put_json(recommendation_player_path("public-key"), full_cache)
+        with patch("api.recommendations.PrivateBlobStore", return_value=blobs):
+            legacy = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key&mode=doubles"
+            )
+            legacy_overall = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key&mode=overall"
+            )
+            legacy_overall_s16 = API_CLIENT.get(
+                "/api/recommendations?playerKey=public-key&mode=overall"
+                "&difficulty=S16"
+            )
+        self.assertEqual(set(legacy.json()["player"]["modes"]), {"doubles"})
+        self.assertNotIn(
+            "filterCandidates",
+            legacy_overall.json()["player"]["modes"]["overall"],
+        )
+        self.assertEqual(
+            legacy_overall.json()["player"]["modes"]["overall"]
+            ["difficultyOptions"],
+            ["S16", "D17"],
+        )
+        self.assertEqual(
+            legacy_overall_s16.json()["player"]["modes"]["overall"]
+            ["filterCandidates"],
+            [{**single, "projectedGain": 6.5}],
+        )
+
     def test_cross_schema_player_cache_handles_forward_and_rollback(self) -> None:
         blobs = MemoryBlobStore()
         index = {
@@ -1082,7 +1274,78 @@ def _combined_tier_payload_fixture(*_args, generated_at_utc: str, **_kwargs):
     return {"generatedAtUtc": generated_at_utc}
 
 
+def _recommendation_mode_artifact_fixture(
+    *_args, chart_type: str, **_kwargs
+):
+    mode = "singles" if chart_type == "Single" else "doubles"
+    model = ScoreResponseModel({}, {}, frozenset())
+    return model.to_npz_bytes(), {
+        "model": "fixture",
+        "phoenix2OverlapRowsRemovedFromPhoenix1": 0,
+        "modes": {mode: {}},
+    }
+
+
 class WorkerTests(unittest.TestCase):
+    def test_recommendation_artifact_publication_bounds_in_flight_writes(self) -> None:
+        class RecordingStore(MemoryBlobStore):
+            def __init__(self) -> None:
+                super().__init__()
+                self.active_writes = 0
+                self.maximum_active_writes = 0
+                self.write_lock = threading.Lock()
+
+            def _start_write(self) -> None:
+                with self.write_lock:
+                    self.active_writes += 1
+                    self.maximum_active_writes = max(
+                        self.maximum_active_writes, self.active_writes
+                    )
+                time.sleep(0.01)
+
+            def _finish_write(self) -> None:
+                with self.write_lock:
+                    self.active_writes -= 1
+
+            def put_json(self, pathname, payload):
+                self._start_write()
+                try:
+                    return super().put_json(pathname, payload)
+                finally:
+                    self._finish_write()
+
+            def put_bytes(self, pathname, payload, *, content_type):
+                self._start_write()
+                try:
+                    return super().put_bytes(
+                        pathname, payload, content_type=content_type
+                    )
+                finally:
+                    self._finish_write()
+
+        store = RecordingStore()
+        generation = "bounded-publication"
+        phoenix1_shards = [{"rows": [shard]} for shard in range(4)]
+        phoenix2_shards = [{"rows": [shard]} for shard in range(3)]
+        publish_recommendation_model_artifacts(
+            store,
+            index={
+                "generationKey": generation,
+                "inputShardCount": 4,
+                "players": [],
+            },
+            model={"generationKey": generation},
+            score_model_bytes=b"model",
+            phoenix1_shards=phoenix1_shards,
+            phoenix2_shards=phoenix2_shards,
+            index_path=recommendation_blob_path(),
+            publish_index=False,
+        )
+
+        self.assertLessEqual(store.maximum_active_writes, 2)
+        self.assertTrue(all(value is None for value in phoenix1_shards))
+        self.assertTrue(all(value is None for value in phoenix2_shards))
+
     def test_queue_visibility_covers_the_full_worker_duration(self) -> None:
         from worker.celery import app
 
@@ -1722,7 +1985,7 @@ class WorkerTests(unittest.TestCase):
             now=lambda: NOW,
             yield_after_typed_checkpoint=True,
         )
-        self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "model")
+        self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "combined")
         pathname = typed_checkpoint_path(job["id"])
         checkpoint = blobs.get_json(pathname)
         checkpoint["resumeAudit"] = {"token": "analysis", "observations": 2}
@@ -1769,13 +2032,35 @@ class WorkerTests(unittest.TestCase):
             now=lambda: NOW,
             yield_after_typed_checkpoint=True,
         )
-        self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "model")
+        self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "combined")
 
         pathname = typed_checkpoint_path(job["id"])
         checkpoint = blobs.get_json(pathname)
-        checkpoint["resumeAudit"] = {"token": "analysis", "observations": 2}
-        blobs.put_json(pathname, checkpoint)
         generated_at = checkpoint["payload"]["generatedAtUtc"]
+        with (
+            patch(
+                "analysis_runtime.build_combined_chart_results",
+                return_value=([], {}, {}),
+            ),
+            patch(
+                "analysis_runtime.build_combined_tier_payload",
+                return_value={"generatedAtUtc": generated_at},
+            ),
+        ):
+            combined = execute_analysis_job(
+                job["id"],
+                blobs=blobs,
+                jobs=jobs,
+                client=WorkerClient(),
+                now=lambda: NOW,
+                yield_after_typed_checkpoint=True,
+            )
+        self.assertEqual(combined[ANALYSIS_CONTINUATION_FIELD], "model-prepare")
+        checkpoint = blobs.get_json(pathname)
+        self.assertEqual(checkpoint["phase"], TYPED_CHECKPOINT_COMBINED_PHASE)
+        self.assertIsNotNone(blobs.get_json(typed_checkpoint_combined_path(job["id"])))
+        checkpoint["resumeAudit"] = {"token": "combined", "observations": 2}
+        blobs.put_json(pathname, checkpoint)
         generation = recommendation_generation_key(job["id"])
         model = {
             "generationKey": generation,
@@ -1910,10 +2195,22 @@ class WorkerTests(unittest.TestCase):
             def __init__(self) -> None:
                 super().__init__()
                 self.persist_phases = []
+                self.persist_calls = []
+                self.byte_reads = []
+                self.json_reads = []
+
+            def get_json(self, pathname):
+                self.json_reads.append(pathname)
+                return super().get_json(pathname)
+
+            def get_bytes(self, pathname):
+                self.byte_reads.append(pathname)
+                return super().get_bytes(pathname)
 
             def persist_typed_generation(self, **kwargs):
                 phase = kwargs["phase"]
                 self.persist_phases.append(phase)
+                self.persist_calls.append(kwargs)
                 if phase == "analysis-start":
                     return "analysis-run", None
                 self.assertEqual(kwargs["analysis_run_id"], "analysis-run")
@@ -1967,7 +2264,7 @@ class WorkerTests(unittest.TestCase):
         generated_at = checkpoint["payload"]["generatedAtUtc"]
         model_artifacts[0]["generatedAtUtc"] = generated_at
         model_artifacts[0]["modelGeneratedAtUtc"] = generated_at
-        self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "model")
+        self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "combined")
         self.assertEqual(checkpoint["phase"], TYPED_CHECKPOINT_ANALYSIS_PHASE)
         self.assertIsNone(blobs.get_json(LATEST_BLOB_PATH))
 
@@ -1985,6 +2282,10 @@ class WorkerTests(unittest.TestCase):
                 "analysis_runtime.build_recommendation_model_artifacts",
                 return_value=model_artifacts,
             ) as build_model,
+            patch(
+                "analysis_runtime.build_recommendation_score_mode_artifact",
+                side_effect=_recommendation_mode_artifact_fixture,
+            ),
         ):
             second = execute_analysis_job(
                 job["id"],
@@ -2025,11 +2326,16 @@ class WorkerTests(unittest.TestCase):
             else:
                 self.fail("bounded checkpoint continuations did not complete")
 
-        self.assertEqual(second[ANALYSIS_CONTINUATION_FIELD], "snapshot")
-        self.assertEqual(third[ANALYSIS_CONTINUATION_FIELD], "database-analysis")
+        self.assertEqual(second[ANALYSIS_CONTINUATION_FIELD], "model-prepare")
+        self.assertEqual(third[ANALYSIS_CONTINUATION_FIELD], "model-fit-singles")
         self.assertEqual(
             [result[ANALYSIS_CONTINUATION_FIELD] for result in continuations],
             [
+                "model-prepare",
+                "model-fit-singles",
+                "model-fit-doubles",
+                "model-assemble-overall",
+                "model",
                 "snapshot",
                 "database-analysis",
                 "database-analysis",
@@ -2044,6 +2350,11 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(
             phases,
             [
+                TYPED_CHECKPOINT_COMBINED_PHASE,
+                TYPED_CHECKPOINT_MODEL_PREPARE_PHASE,
+                TYPED_CHECKPOINT_MODEL_FIT_SINGLES_PHASE,
+                TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE,
+                TYPED_CHECKPOINT_MODEL_ASSEMBLE_PHASE,
                 TYPED_CHECKPOINT_MODEL_PHASE,
                 TYPED_CHECKPOINT_SNAPSHOT_PHASE,
                 TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE,
@@ -2065,6 +2376,24 @@ class WorkerTests(unittest.TestCase):
                 "analysis-finish",
                 "model",
             ],
+        )
+        self.assertEqual(
+            blobs.byte_reads,
+            [
+                typed_checkpoint_model_part_path(job["id"], "singles"),
+                typed_checkpoint_model_part_path(job["id"], "doubles"),
+                typed_checkpoint_model_part_path(job["id"], "overall"),
+            ],
+        )
+        self.assertNotIn(recommendation_model_path(generation), blobs.json_reads)
+        model_call = next(
+            call
+            for call in blobs.persist_calls
+            if call["phase"] == "model"
+        )
+        self.assertIsNone(model_call["model_artifacts"])
+        self.assertEqual(
+            model_call["model_metadata"]["artifactManifest"]["artifactCount"], 3
         )
         self.assertIsNone(blobs.get_json(typed_checkpoint_path(job["id"])))
         self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
@@ -2206,7 +2535,14 @@ class WorkerTests(unittest.TestCase):
 
         def observed_model(*_args, **_kwargs):
             jobs.handle.assert_active()
-            return ({}, {}, b"", [], [])
+            generation = str(_kwargs["generation_key"])
+            return (
+                {"generationKey": generation, "players": [], "inputShardCount": 0},
+                {"generationKey": generation},
+                b"",
+                [],
+                [],
+            )
 
         def observed_model_publish(*_args, **_kwargs):
             jobs.handle.assert_active()
@@ -2458,6 +2794,68 @@ class WorkerTests(unittest.TestCase):
 
 
 class EquivalenceTests(unittest.TestCase):
+    def test_split_score_model_is_byte_exact_with_monolithic_fit(self) -> None:
+        catalog_rows = []
+        combined_rows = []
+        for chart_type in ("Single", "Double"):
+            prefix = "s" if chart_type == "Single" else "d"
+            for index in range(32):
+                chart_id = f"{prefix}-{index:02d}"
+                catalog_rows.append(
+                    {
+                        "chartId": chart_id,
+                        "songName": chart_id,
+                        "type": chart_type,
+                        "level": 18 + index % 4,
+                    }
+                )
+                combined_rows.append(
+                    {
+                        "chartId": chart_id,
+                        "type": chart_type,
+                        "level": 18 + index % 4,
+                        "estimatedDifficulty": 18.2 + index % 4,
+                    }
+                )
+
+        def scores(source: str) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {
+                        "playerId": f"{source}-player-{player}",
+                        "chartId": chart["chartId"],
+                        "pumbility": 420.0 - index - player,
+                        "score": 985_000 - index * 500 - player * 100,
+                        "plate": "Fair Game",
+                    }
+                    for player in range(6)
+                    for index, chart in enumerate(catalog_rows)
+                ]
+            )
+
+        catalog = pd.DataFrame(catalog_rows)
+        phoenix1_scores = scores("p1")
+        phoenix2_scores = scores("p2")
+        monolithic, monolithic_metadata = fit_score_response_model_from_frames(
+            phoenix1_scores,
+            catalog,
+            phoenix2_scores,
+            combined_rows,
+        )
+        parts = {}
+        for mode, chart_type in (("singles", "Single"), ("doubles", "Double")):
+            parts[mode] = fit_score_response_model_mode_from_frames(
+                phoenix1_scores,
+                catalog,
+                phoenix2_scores,
+                combined_rows,
+                chart_type,
+            )
+        merged, merged_metadata = merge_score_response_mode_models(parts)
+
+        self.assertEqual(merged_metadata, monolithic_metadata)
+        self.assertEqual(merged.to_npz_bytes(), monolithic.to_npz_bytes())
+
     def test_optimized_and_full_snapshot_payloads_are_identical(self) -> None:
         players, charts, scores, _ = make_synthetic_snapshot(players_per_folder=2)
         stamp = "2026-08-07T06:30:00Z"
