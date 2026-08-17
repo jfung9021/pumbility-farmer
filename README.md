@@ -37,16 +37,24 @@ difficulty difference = -0.4 × shrunk Pumbility residual / Pumbility per level
 estimated scoring difficulty = official level + 0.5 + difficulty difference
 ```
 
-Two frozen Phoenix 1 charts need raw-score corrections before they enter any
-analysis or recommendation model. Phoenix 1 scores use these formulas:
+Before Phoenix 1 evidence enters a cross-version analysis or recommendation
+model, matching Phoenix 1 and Phoenix 2 chart catalogs are compared by stable
+chart ID. When both catalogs provide positive but different note counts for the
+same chart and mode, the Phoenix 1 score is normalized to the Phoenix 2 note
+denominator:
 
-- `Solve My Hurt - SHORT CUT - D26`:
-  `(((score / 1,000,000 × 1,566) - 540) / 1,026) × 1,000,000`
-- `Slam D24`:
-  `(((score / 1,000,000 × 1,004) - 300) / 704) × 1,000,000`
+```text
+normalized score = 1,000,000
+                   - (1,000,000 - Phoenix 1 score)
+                   × Phoenix 1 note count / Phoenix 2 note count
+```
 
-Phoenix 2 scores and every other chart are unchanged. Each corrected score also
-selects the corresponding Phoenix 1 Pumbility band for combined tier evidence.
+This catalog-derived rule exactly reproduces the former hand-authored
+corrections for `Solve My Hurt - SHORT CUT - D26` and `Slam D24`, and applies
+the same treatment automatically to every comparable chart. Missing, invalid,
+unchanged, or cross-mode note-count pairs are left unchanged. Phoenix 2 scores
+are never converted. Each normalized score also selects the corresponding
+Phoenix 1 Pumbility band for combined tier evidence.
 
 A negative value is easier to score than the typical chart in the same mode and official level. Continuous estimates are not hard-clamped to the official folder, but the `L + 0.5` center and evidence shrinkage mean that an estimate below `L` requires an unusually strong within-folder signal.
 

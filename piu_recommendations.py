@@ -32,6 +32,8 @@ from pumbility_contract import (
 )
 
 from phoenix1_score_overrides import (
+    Phoenix1ScoreNormalizations,
+    build_phoenix1_score_normalizations,
     convert_phoenix1_pumbility,
     convert_phoenix1_score,
     phoenix1_score_overrides_metadata,
@@ -782,18 +784,33 @@ def _clean_snapshot_frames(
     return charts, scores
 
 
-def _apply_phoenix1_score_overrides(scores: pd.DataFrame) -> pd.DataFrame:
-    """Convert the exceptional Phoenix 1 chart score and its Pumbility band."""
+def _normalizations_from_frames(
+    phoenix1_charts: pd.DataFrame,
+    phoenix2_charts: pd.DataFrame,
+) -> dict[str, Any]:
+    return build_phoenix1_score_normalizations(
+        phoenix1_charts.to_dict(orient="records"),
+        phoenix2_charts.to_dict(orient="records"),
+    )
+
+
+def _apply_phoenix1_score_overrides(
+    scores: pd.DataFrame,
+    normalizations: Phoenix1ScoreNormalizations | None = None,
+) -> pd.DataFrame:
+    """Normalize Phoenix 1 score and Pumbility rows from catalog note counts."""
     result = scores.copy()
     original_scores = result["score"].copy()
     result["score"] = [
-        convert_phoenix1_score(chart_id, raw_score)
+        convert_phoenix1_score(chart_id, raw_score, normalizations)
         for chart_id, raw_score in zip(
             result["chartId"], original_scores, strict=True
         )
     ]
     result["pumbility"] = [
-        convert_phoenix1_pumbility(chart_id, raw_score, pumbility)
+        convert_phoenix1_pumbility(
+            chart_id, raw_score, pumbility, normalizations
+        )
         for chart_id, raw_score, pumbility in zip(
             result["chartId"],
             original_scores,
@@ -899,7 +916,12 @@ def _source_contributions(
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     charts, scores = _clean_snapshot_frames(snapshot)
     if source == "phoenix1":
-        scores = _apply_phoenix1_score_overrides(scores)
+        normalizations = (
+            _normalizations_from_frames(charts, authoritative_catalog)
+            if authoritative_catalog is not None
+            else {}
+        )
+        scores = _apply_phoenix1_score_overrides(scores, normalizations)
     if authoritative_catalog is not None:
         authoritative_ids = set(authoritative_catalog["chartId"].astype(str))
         charts, scores = retain_catalog_source_rows(charts, scores, authoritative_ids)
@@ -1411,6 +1433,7 @@ def _coop_snapshot_observations(
     allowed_chart_ids: set[str],
     *,
     source: str,
+    normalizations: Phoenix1ScoreNormalizations | None = None,
 ) -> list[dict[str, Any]]:
     """Clean raw Co-op scores without requiring a positive Pumbility value."""
     by_key: dict[tuple[str, str], dict[str, Any]] = {}
@@ -1423,7 +1446,9 @@ def _coop_snapshot_observations(
             continue
         raw_score = raw.get("score")
         if source == "phoenix1":
-            raw_score = convert_phoenix1_score(chart_id, raw_score)
+            raw_score = convert_phoenix1_score(
+                chart_id, raw_score, normalizations
+            )
         if isinstance(raw_score, bool):
             continue
         try:
@@ -1474,8 +1499,23 @@ def build_coop_observations(
     """Return the P2 Co-op catalog and merged raw scores with P2 precedence."""
     catalog = _coop_catalog_rows(phoenix2_snapshot)
     allowed_ids = {str(row["chartId"]) for row in catalog}
+    normalizations = build_phoenix1_score_normalizations(
+        [
+            row
+            for row in (phoenix1_snapshot or {}).get("charts", [])
+            if isinstance(row, Mapping)
+        ],
+        [
+            row
+            for row in phoenix2_snapshot.get("charts", [])
+            if isinstance(row, Mapping)
+        ],
+    )
     phoenix1 = _coop_snapshot_observations(
-        phoenix1_snapshot or {}, allowed_ids, source="phoenix1"
+        phoenix1_snapshot or {},
+        allowed_ids,
+        source="phoenix1",
+        normalizations=normalizations,
     )
     phoenix2 = _coop_snapshot_observations(
         phoenix2_snapshot, allowed_ids, source="phoenix2"
@@ -1503,6 +1543,7 @@ def _coop_player_ability_percentiles(
     snapshot: Mapping[str, Any] | None,
     *,
     source: str,
+    normalizations: Phoenix1ScoreNormalizations | None = None,
 ) -> dict[str, float]:
     """Return source-local 0..1 ability percentiles from top-20 S/D PBs."""
     if not snapshot:
@@ -1512,7 +1553,7 @@ def _coop_player_ability_percentiles(
     except ValueError:
         return {}
     if source == "phoenix1":
-        scores = _apply_phoenix1_score_overrides(scores)
+        scores = _apply_phoenix1_score_overrides(scores, normalizations)
     scored = scores.merge(
         charts[["chartId", "type"]],
         on="chartId",
@@ -1574,9 +1615,23 @@ def _coop_adjusted_difficulty_signals(
             "phoenix2SourceCoefficient": 0.0,
         }
 
+    normalizations = build_phoenix1_score_normalizations(
+        [
+            row
+            for row in (phoenix1_snapshot or {}).get("charts", [])
+            if isinstance(row, Mapping)
+        ],
+        [
+            row
+            for row in phoenix2_snapshot.get("charts", [])
+            if isinstance(row, Mapping)
+        ],
+    )
     abilities = {
         "phoenix1": _coop_player_ability_percentiles(
-            phoenix1_snapshot, source="phoenix1"
+            phoenix1_snapshot,
+            source="phoenix1",
+            normalizations=normalizations,
         ),
         "phoenix2": _coop_player_ability_percentiles(
             phoenix2_snapshot, source="phoenix2"
@@ -1939,6 +1994,18 @@ def build_combined_chart_results(
 ) -> tuple[list[dict[str, Any]], dict[str, float], dict[str, Any]]:
     """Build Phoenix 2-catalog chart estimates from normalized two-version evidence."""
     del bootstrap_samples  # Normal-approximation intervals keep full refreshes bounded.
+    score_normalizations = build_phoenix1_score_normalizations(
+        [
+            row
+            for row in phoenix1_snapshot.get("charts", [])
+            if isinstance(row, Mapping)
+        ],
+        [
+            row
+            for row in phoenix2_snapshot.get("charts", [])
+            if isinstance(row, Mapping)
+        ],
+    )
     phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
     phoenix2_chart_ids = set(phoenix2_catalog["chartId"].astype(str))
     phoenix1, _ = _source_contributions(
@@ -2129,6 +2196,9 @@ def build_combined_chart_results(
             coop_metadata["phoenix1Observations"]
             + coop_metadata["phoenix2Observations"]
         ),
+        "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(
+            score_normalizations
+        ),
     }
     return records, phoenix2_slopes, metadata
 
@@ -2304,7 +2374,7 @@ def build_combined_tier_payload(
         "method": {
             "catalog": "Phoenix 2 authoritative catalog",
             "overlapRule": "Phoenix 2 replaces Phoenix 1 for the same player and chart",
-            "crossVersionNormalization": "version- and mode-specific Pumbility residuals converted to level units",
+            "crossVersionNormalization": "Phoenix 1 raw scores use PIUScores catalog-derived note-count normalization before version- and mode-specific Pumbility residuals are converted to level units",
             "observationWeighting": {
                 "sourceWeights": {"phoenix1": 1, "phoenix2": 2},
                 "playerAbility": "per-mode S+FG-equivalent rating from Pumbility ranks 11-30, leave-one-chart-out",
@@ -2357,7 +2427,9 @@ def build_combined_tier_payload(
                 "formula": "min(1, expectedNormalMax(reference) / expectedNormalMax(measured charts in folder))",
                 "expandsFolders": False,
             },
-            "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(),
+            "phoenix1ScoreOverrides": list(
+                metadata.get("phoenix1ScoreOverrides", [])
+            ),
             "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
             "whatIfEstimates": {
                 "calculation": "chart-only weighted contribution revaluation against frozen target-folder models",
@@ -3205,9 +3277,10 @@ def _prepare_phoenix1_rating_frames(
     phoenix2_catalog: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     charts, scores = _clean_snapshot_frames(phoenix1_snapshot)
+    normalizations = _normalizations_from_frames(charts, phoenix2_catalog)
     allowed_ids = set(phoenix2_catalog["chartId"].astype(str))
     charts, scores = retain_catalog_source_rows(charts, scores, allowed_ids)
-    scores = _apply_phoenix1_score_overrides(scores)
+    scores = _apply_phoenix1_score_overrides(scores, normalizations)
     retained_ids = set(charts["chartId"].astype(str))
     rating_catalog = phoenix2_catalog[
         phoenix2_catalog["chartId"].astype(str).isin(retained_ids)
@@ -4052,6 +4125,9 @@ def build_recommendation_index(
         charts_for_players,
     )
     prepared_phoenix2 = _clean_snapshot_frames(phoenix2_snapshot)
+    score_normalizations = _normalizations_from_frames(
+        _clean_snapshot_frames(phoenix1_snapshot)[0], prepared_phoenix2[0]
+    )
     prepared_phoenix1 = _prepare_phoenix1_rating_frames(
         phoenix1_snapshot, prepared_phoenix2[0]
     )
@@ -4149,7 +4225,7 @@ def build_recommendation_index(
             "catalog": "Phoenix 2 authoritative catalog",
             "overlapRule": "best Phoenix 2 score always replaces Phoenix 1 for the same player and chart",
             "phoenix1RerateHandling": "Phoenix 1 rating rows use current Phoenix 2 chart levels and recompute Pumbility from the raw score, Phoenix 2 grade boundaries, and recorded plate",
-            "crossVersionNormalization": "chart-difficulty evidence uses version- and mode-normalized residuals; player ratings use Phoenix 2-formula Pumbility in both versions",
+            "crossVersionNormalization": "Phoenix 1 raw scores use PIUScores catalog-derived note-count normalization; chart-difficulty evidence then uses version- and mode-normalized residuals, and player ratings use Phoenix 2-formula Pumbility in both versions",
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
             "folderRangeNormalization": {
                 "method": "one-sided expected-normal-maximum order-statistic compression",
@@ -4157,7 +4233,9 @@ def build_recommendation_index(
                 "formula": "min(1, expectedNormalMax(reference) / expectedNormalMax(measured charts in folder))",
                 "expandsFolders": False,
             },
-            "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(),
+            "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(
+                score_normalizations
+            ),
             "pumbilityPerLevel": slopes,
             "scoreProjectionCoverage": score_projection_metadata,
             "scoreProjectionData": "joined Phoenix 1 + Phoenix 2 scores normalized with the Phoenix 2 chart catalog and grade-and-plate Pumbility formula, with Phoenix 2 precedence for overlapping player/chart rows",

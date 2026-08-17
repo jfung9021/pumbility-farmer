@@ -57,7 +57,7 @@ Vercel Queues/Celery remains the execution layer:
 | `lib/data/nevsister-chart-videos.json` | Validated chart-to-video catalog; test contract currently requires 2,712 Singles, Doubles, and Co-op mappings. |
 | `lib/data/nevsister-chart-video-overrides.json` | Manual mappings, aliases, and notes. |
 | `public/images/phoenix2-ranks/*.webp` | Thirty-seven vendored Overall rank emblems. |
-| `phoenix1_score_overrides.py` | Two Phoenix 1-only score transformations and reband behavior. |
+| `phoenix1_score_overrides.py` | Catalog-derived Phoenix 1-to-Phoenix 2 note-count normalization and reband behavior. |
 | `phoenix2_pumbility.py` | Current grade, plate, formula, and projection constants. |
 
 ## Private local store

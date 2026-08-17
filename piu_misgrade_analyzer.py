@@ -65,11 +65,6 @@ from pumbility_contract import SCRIPT_VERSION
 import requests
 
 from mix_registry import DEFAULT_MIX_KEY, resolve_mix
-from phoenix1_score_overrides import (
-    convert_phoenix1_pumbility,
-    convert_phoenix1_score,
-    phoenix1_score_overrides_metadata,
-)
 from phoenix2_sync import attach_song_bpm_metadata
 
 
@@ -834,23 +829,6 @@ def analyze_snapshot(
     if "score" not in score_df.columns:
         score_df["score"] = np.nan
     score_df["score"] = pd.to_numeric(score_df["score"], errors="coerce")
-    if resolve_mix(config.mix).key == "phoenix1":
-        original_scores = score_df["score"].copy()
-        score_df["score"] = [
-            convert_phoenix1_score(chart_id, raw_score)
-            for chart_id, raw_score in zip(
-                score_df["chartId"], original_scores, strict=True
-            )
-        ]
-        score_df["pumbility"] = [
-            convert_phoenix1_pumbility(chart_id, raw_score, pumbility)
-            for chart_id, raw_score, pumbility in zip(
-                score_df["chartId"],
-                original_scores,
-                score_df["pumbility"],
-                strict=True,
-            )
-        ]
     score_df["isBroken"] = score_df["isBroken"].fillna(False).astype(bool)
     if "recordedAt" not in score_df.columns:
         score_df["recordedAt"] = ""
@@ -1185,11 +1163,7 @@ def analyze_snapshot(
                 "formula": "min(1, expectedNormalMax(reference) / expectedNormalMax(measured charts in folder))",
                 "expandsFolders": False,
             },
-            "phoenix1ScoreOverrides": (
-                phoenix1_score_overrides_metadata()
-                if resolve_mix(config.mix).key == "phoenix1"
-                else []
-            ),
+            "phoenix1ScoreOverrides": [],
             "modeSeparation": "Singles and Doubles use independent eligibility, baselines, calibration, and ranks",
             "usesExistingPiuScoresTierList": False,
             "shrinkage": "mode-wide empirical-Bayes variance ratio" if config.shrinkage_k is None else "configured override",
