@@ -30,7 +30,12 @@ from pumbility_contract import (
     with_staleness,
 )
 
-from phoenix1_score_overrides import phoenix1_score_overrides_metadata
+from phoenix1_score_overrides import (
+    Phoenix1ScoreNormalizations,
+    build_phoenix1_score_normalizations,
+    convert_phoenix1_score,
+    phoenix1_score_overrides_metadata,
+)
 from phoenix2_pumbility import PlateProjectionModel
 from phoenix2_sync import isoformat_utc, merge_best_scores, parse_utc, utc_now
 from piu_recommendations import (
@@ -87,14 +92,17 @@ def _recommendation_method(
     slopes: Mapping[str, float],
     score_projection_metadata: Mapping[str, Any],
     phoenix1_cap: int,
+    score_normalizations: Phoenix1ScoreNormalizations,
 ) -> dict[str, Any]:
     return {
         "catalog": "Phoenix 2 authoritative catalog",
         "overlapRule": "best Phoenix 2 score always replaces Phoenix 1 for the same player and chart",
         "phoenix1RerateHandling": "Phoenix 1 rating rows use current Phoenix 2 chart levels and recompute Pumbility from the raw score, Phoenix 2 grade boundaries, and recorded plate",
-        "crossVersionNormalization": "chart-difficulty evidence uses version- and mode-normalized residuals; player ratings use Phoenix 2-formula Pumbility in both versions",
+        "crossVersionNormalization": "Phoenix 1 raw scores use PIUScores catalog-derived note-count normalization; chart-difficulty evidence then uses version- and mode-normalized residuals, and player ratings use Phoenix 2-formula Pumbility in both versions",
         "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
-        "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(),
+        "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(
+            score_normalizations
+        ),
         "pumbilityPerLevel": dict(slopes),
         "scoreProjectionCoverage": dict(score_projection_metadata),
         "scoreProjectionData": "joined Phoenix 1 + Phoenix 2 scores normalized with the Phoenix 2 chart catalog and grade-and-plate Pumbility formula, with Phoenix 2 precedence for overlapping player/chart rows",
@@ -220,12 +228,29 @@ def build_recommendation_model_artifacts(
         phoenix1_snapshot, phoenix2_snapshot, charts_for_players
     )
     phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
+    score_normalizations = build_phoenix1_score_normalizations(
+        [
+            row
+            for row in phoenix1_snapshot.get("charts", [])
+            if isinstance(row, Mapping)
+        ],
+        [
+            row
+            for row in phoenix2_snapshot.get("charts", [])
+            if isinstance(row, Mapping)
+        ],
+    )
     _, phoenix1_scores = _prepare_phoenix1_rating_frames(
         phoenix1_snapshot, phoenix2_catalog
     )
     plate_model = PlateProjectionModel(phoenix1_snapshot, phoenix2_snapshot)
     slopes = dict(phoenix2_slopes)
-    method = _recommendation_method(slopes, score_metadata, plate_model.phoenix1_cap)
+    method = _recommendation_method(
+        slopes,
+        score_metadata,
+        plate_model.phoenix1_cap,
+        score_normalizations,
+    )
 
     model_catalog = _model_catalog_records(phoenix2_snapshot, phoenix2_catalog)
     model = {
@@ -261,6 +286,7 @@ def build_recommendation_model_artifacts(
         phoenix1_snapshot,
         set(phoenix2_catalog["chartId"].astype(str)),
         compact_plate=True,
+        normalizations=score_normalizations,
     )
     p1_rating_keys = {
         (str(row.playerId), str(row.chartId))
@@ -395,6 +421,7 @@ def _raw_scores_by_player(
     valid_chart_ids: set[str],
     *,
     compact_plate: bool = False,
+    normalizations: Phoenix1ScoreNormalizations | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Retain all valid best-score rows, including zero-Pumbility plate history."""
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -410,7 +437,9 @@ def _raw_scores_by_player(
                 {
                     "playerId": player_id,
                     "chartId": chart_id,
-                    "score": row.get("score"),
+                    "score": convert_phoenix1_score(
+                        chart_id, row.get("score"), normalizations
+                    ),
                     "plate": row.get("plate"),
                     "isBroken": False,
                 }

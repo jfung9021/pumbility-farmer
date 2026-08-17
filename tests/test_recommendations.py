@@ -18,8 +18,7 @@ from phoenix2_pumbility import (
     skill_rating_for_pumbility,
 )
 from phoenix1_score_overrides import (
-    SLAM_D24_CHART_ID,
-    SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID,
+    build_phoenix1_score_normalizations,
     convert_phoenix1_pumbility,
     convert_phoenix1_score,
     phoenix1_score_overrides_metadata,
@@ -91,7 +90,108 @@ except ModuleNotFoundError as exc:
     get_recommendation_players = None
 
 
+SLAM_D24_CHART_ID = "f9cf82a5-d7ac-4ef8-85e4-92e7c7d88870"
+SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID = "24228275-4be2-492c-827d-afd6e38f2d8e"
+
+
+def score_normalizations(
+    chart_id: str,
+    song_name: str,
+    source_notes: int,
+    target_notes: int,
+    *,
+    source_difficulty: str = "D24",
+    target_difficulty: str = "D24",
+) -> dict[str, object]:
+    return build_phoenix1_score_normalizations(
+        [{
+            "id": chart_id,
+            "songName": song_name,
+            "type": "Double",
+            "difficulty": source_difficulty,
+            "noteCount": source_notes,
+        }],
+        [{
+            "id": chart_id,
+            "songName": song_name,
+            "type": "Double",
+            "difficulty": target_difficulty,
+            "noteCount": target_notes,
+        }],
+    )
+
+
 class CombinedEvidenceTests(unittest.TestCase):
+    def test_note_count_normalizations_are_derived_from_matching_catalogs(self) -> None:
+        phoenix1 = [
+            {
+                "id": "destination",
+                "songName": "Destination - SHORT CUT -",
+                "type": "Double",
+                "difficulty": "D21",
+                "noteCount": 1186,
+            },
+            {
+                "id": "same",
+                "songName": "Same",
+                "type": "Single",
+                "difficulty": "S20",
+                "noteCount": 900,
+            },
+            {
+                "id": "missing",
+                "songName": "Missing",
+                "type": "Single",
+                "difficulty": "S20",
+                "noteCount": 800,
+            },
+        ]
+        phoenix2 = [
+            {
+                "id": "destination",
+                "songName": "Destination - SHORT CUT -",
+                "type": "Double",
+                "difficulty": "D22",
+                "noteCount": 826,
+            },
+            {
+                "id": "same",
+                "songName": "Same",
+                "type": "Single",
+                "difficulty": "S20",
+                "noteCount": 900,
+            },
+            {
+                "id": "missing",
+                "songName": "Missing",
+                "type": "Single",
+                "difficulty": "S20",
+                "noteCount": None,
+            },
+        ]
+
+        normalizations = build_phoenix1_score_normalizations(phoenix1, phoenix2)
+
+        self.assertEqual(list(normalizations), ["destination"])
+        self.assertEqual(normalizations["destination"]["sourceNoteCount"], 1186)
+        self.assertEqual(normalizations["destination"]["targetNoteCount"], 826)
+        self.assertEqual(normalizations["destination"]["sourceDifficulty"], "D21")
+        self.assertEqual(normalizations["destination"]["targetDifficulty"], "D22")
+        self.assertAlmostEqual(
+            convert_phoenix1_score("destination", 950_000, normalizations),
+            928_208.2324455206,
+        )
+
+    def test_added_notes_reduce_the_normalized_score_deficit(self) -> None:
+        normalizations = score_normalizations(
+            "added-notes", "Added Notes", 1200, 1400
+        )
+
+        self.assertAlmostEqual(
+            convert_phoenix1_score("added-notes", 950_000, normalizations),
+            957_142.8571428572,
+        )
+
     def test_source_and_ability_weights_use_strict_midpoint_boundaries(self) -> None:
         self.assertEqual(_observation_weight("phoenix1", 23.5, 24), 1.0)
         self.assertEqual(_observation_weight("phoenix2", 25.5, 24), 2.0)
@@ -116,12 +216,22 @@ class CombinedEvidenceTests(unittest.TestCase):
 
     def test_solve_my_hurt_shortcut_converts_only_phoenix1_score_rows(self) -> None:
         chart_id = SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID
+        normalizations = score_normalizations(
+            chart_id, "Solve My Hurt - SHORT CUT -", 1566, 1026,
+            source_difficulty="D26", target_difficulty="D26",
+        )
         self.assertAlmostEqual(
-            convert_phoenix1_score(chart_id, 950_000),
+            convert_phoenix1_score(chart_id, 950_000, normalizations),
             923_684.2105263158,
         )
-        self.assertEqual(convert_phoenix1_score(chart_id, 1_000_000), 1_000_000)
-        self.assertEqual(convert_phoenix1_score("another-chart", 950_000), 950_000)
+        self.assertEqual(
+            convert_phoenix1_score(chart_id, 1_000_000, normalizations),
+            1_000_000,
+        )
+        self.assertEqual(
+            convert_phoenix1_score("another-chart", 950_000, normalizations),
+            950_000,
+        )
 
         rows = pd.DataFrame([
             {
@@ -137,7 +247,7 @@ class CombinedEvidenceTests(unittest.TestCase):
                 "pumbility": 1_927.2,
             },
         ])
-        adjusted = _apply_phoenix1_score_overrides(rows)
+        adjusted = _apply_phoenix1_score_overrides(rows, normalizations)
 
         special = adjusted[adjusted["chartId"] == chart_id].iloc[0]
         ordinary = adjusted[adjusted["chartId"] == "another-chart"].iloc[0]
@@ -147,20 +257,31 @@ class CombinedEvidenceTests(unittest.TestCase):
         self.assertEqual(float(ordinary["pumbility"]), 1_927.2)
 
     def test_slam_d24_converts_and_rebands_phoenix1_score_rows(self) -> None:
+        normalizations = score_normalizations(
+            SLAM_D24_CHART_ID, "Slam", 1004, 704
+        )
         self.assertAlmostEqual(
-            convert_phoenix1_score(SLAM_D24_CHART_ID, 950_000),
+            convert_phoenix1_score(
+                SLAM_D24_CHART_ID, 950_000, normalizations
+            ),
             928_693.1818181818,
         )
         self.assertEqual(
-            convert_phoenix1_score(SLAM_D24_CHART_ID, 1_000_000),
+            convert_phoenix1_score(
+                SLAM_D24_CHART_ID, 1_000_000, normalizations
+            ),
             1_000_000,
         )
         self.assertAlmostEqual(
-            convert_phoenix1_score(SLAM_D24_CHART_ID, 909_322),
+            convert_phoenix1_score(
+                SLAM_D24_CHART_ID, 909_322, normalizations
+            ),
             870_680.8068181819,
         )
         self.assertEqual(
-            convert_phoenix1_pumbility(SLAM_D24_CHART_ID, 909_322, 1_150),
+            convert_phoenix1_pumbility(
+                SLAM_D24_CHART_ID, 909_322, 1_150, normalizations
+            ),
             1_035,
         )
 
@@ -178,7 +299,7 @@ class CombinedEvidenceTests(unittest.TestCase):
                 "pumbility": 1_150,
             },
         ])
-        adjusted = _apply_phoenix1_score_overrides(rows)
+        adjusted = _apply_phoenix1_score_overrides(rows, normalizations)
 
         slam = adjusted[adjusted["chartId"] == SLAM_D24_CHART_ID].iloc[0]
         ordinary = adjusted[adjusted["chartId"] == "another-chart"].iloc[0]
@@ -187,14 +308,14 @@ class CombinedEvidenceTests(unittest.TestCase):
         self.assertEqual(float(ordinary["score"]), 909_322)
         self.assertEqual(float(ordinary["pumbility"]), 1_150)
 
-        metadata = phoenix1_score_overrides_metadata()
+        metadata = phoenix1_score_overrides_metadata(normalizations)
         self.assertEqual(
             [item["chartId"] for item in metadata],
-            [SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID, SLAM_D24_CHART_ID],
+            [SLAM_D24_CHART_ID],
         )
         self.assertEqual(
-            metadata[1]["formula"],
-            "(((score / 1000000 * 1004) - 300) / 704) * 1000000",
+            metadata[0]["formula"],
+            "1000000 - ((1000000 - score) * 1004 / 704)",
         )
 
     def test_phoenix1_ratings_recompute_pumbility_with_current_phoenix2_rules(self) -> None:
@@ -255,6 +376,8 @@ class CombinedEvidenceTests(unittest.TestCase):
                 "songName": "Solve My Hurt - SHORT CUT -",
                 "type": "Double",
                 "level": 26,
+                "difficulty": "D26",
+                "noteCount": 1566,
             }],
             "scores": [{
                 "playerId": "p",
@@ -266,7 +389,14 @@ class CombinedEvidenceTests(unittest.TestCase):
             }],
         }
         catalog = pd.DataFrame([
-            {"chartId": chart_id, "type": "Double", "level": 26}
+            {
+                "chartId": chart_id,
+                "songName": "Solve My Hurt - SHORT CUT -",
+                "type": "Double",
+                "level": 26,
+                "difficulty": "D26",
+                "noteCount": 1026,
+            }
         ])
 
         _, scores = _prepare_phoenix1_rating_frames(snapshot, catalog)
@@ -284,6 +414,8 @@ class CombinedEvidenceTests(unittest.TestCase):
                 "songName": "Slam",
                 "type": "Double",
                 "level": 24,
+                "difficulty": "D24",
+                "noteCount": 1004,
             }],
             "scores": [{
                 "playerId": "p",
@@ -296,8 +428,11 @@ class CombinedEvidenceTests(unittest.TestCase):
         }
         catalog = pd.DataFrame([{
             "chartId": SLAM_D24_CHART_ID,
+            "songName": "Slam",
             "type": "Double",
             "level": 24,
+            "difficulty": "D24",
+            "noteCount": 704,
         }])
 
         _, scores = _prepare_phoenix1_rating_frames(snapshot, catalog)

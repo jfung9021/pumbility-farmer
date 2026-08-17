@@ -1,6 +1,6 @@
 import unittest
 
-from phoenix1_score_overrides import SLAM_D24_CHART_ID
+from phoenix1_score_overrides import build_phoenix1_score_normalizations
 from phoenix2_pumbility import (
     PLATE_CODES,
     SKILL_RATING_REFERENCE_MULTIPLIER,
@@ -13,6 +13,9 @@ from phoenix2_pumbility import (
     phoenix2_pumbility,
     skill_rating_for_pumbility,
 )
+
+
+SLAM_D24_CHART_ID = "f9cf82a5-d7ac-4ef8-85e4-92e7c7d88870"
 
 
 def snapshot(scores):
@@ -58,9 +61,28 @@ class Phoenix2PumbilityTests(unittest.TestCase):
             }]
         }
         catalog_types = {SLAM_D24_CHART_ID: "Double"}
+        normalizations = build_phoenix1_score_normalizations(
+            [{
+                "id": SLAM_D24_CHART_ID,
+                "songName": "Slam",
+                "type": "Double",
+                "difficulty": "D24",
+                "noteCount": 1004,
+            }],
+            [{
+                "id": SLAM_D24_CHART_ID,
+                "songName": "Slam",
+                "type": "Double",
+                "difficulty": "D24",
+                "noteCount": 704,
+            }],
+        )
 
         phoenix1, _ = _snapshot_observations(
-            source, catalog_types, phoenix1=True
+            source,
+            catalog_types,
+            phoenix1=True,
+            normalizations=normalizations,
         )
         phoenix2, _ = _snapshot_observations(source, catalog_types)
 

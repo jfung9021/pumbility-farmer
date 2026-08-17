@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
-from phoenix1_score_overrides import convert_phoenix1_score
+from phoenix1_score_overrides import (
+    Phoenix1ScoreNormalizations,
+    build_phoenix1_score_normalizations,
+    convert_phoenix1_score,
+)
 
 
 GRADE_BANDS: tuple[tuple[int, str, int], ...] = (
@@ -207,6 +211,7 @@ def _snapshot_observations(
     catalog_types: Mapping[str, str],
     *,
     phoenix1: bool = False,
+    normalizations: Phoenix1ScoreNormalizations | None = None,
 ) -> tuple[list[tuple[str, str, str, str, str]], set[tuple[str, str]]]:
     observations: list[tuple[str, str, str, str, str]] = []
     score_keys: set[tuple[str, str]] = set()
@@ -219,7 +224,9 @@ def _snapshot_observations(
             continue
         score_keys.add((player_id, chart_id))
         score = (
-            convert_phoenix1_score(chart_id, raw.get("score"))
+            convert_phoenix1_score(
+                chart_id, raw.get("score"), normalizations
+            )
             if phoenix1
             else raw.get("score")
         )
@@ -272,8 +279,23 @@ class PlateProjectionModel:
             if isinstance(row, Mapping)
             and str(row.get("type")) in {"Single", "Double"}
         }
+        normalizations = build_phoenix1_score_normalizations(
+            [
+                row
+                for row in phoenix1_snapshot.get("charts", [])
+                if isinstance(row, Mapping)
+            ],
+            [
+                row
+                for row in phoenix2_snapshot.get("charts", [])
+                if isinstance(row, Mapping)
+            ],
+        )
         p1_rows, _ = _snapshot_observations(
-            phoenix1_snapshot, catalog_types, phoenix1=True
+            phoenix1_snapshot,
+            catalog_types,
+            phoenix1=True,
+            normalizations=normalizations,
         )
         p2_rows, p2_keys = _snapshot_observations(phoenix2_snapshot, catalog_types)
         p1_rows = [row for row in p1_rows if (row[0], row[1]) not in p2_keys]

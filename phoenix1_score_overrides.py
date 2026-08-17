@@ -1,49 +1,30 @@
-"""Chart-specific corrections for frozen Phoenix 1 raw-score evidence."""
+"""PIUScores catalog-derived Phoenix 1 to Phoenix 2 score normalization."""
 
 from __future__ import annotations
 
 import math
-from typing import Any, TypedDict
+from typing import Any, Mapping, Sequence, TypedDict
 
 
-SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID = "24228275-4be2-492c-827d-afd6e38f2d8e"
-SOLVE_MY_HURT_SHORTCUT_D26_NAME = "Solve My Hurt - SHORT CUT - D26"
-SOLVE_MY_HURT_SHORTCUT_D26_FORMULA = (
-    "(((score / 1000000 * 1566) - 540) / 1026) * 1000000"
-)
-SLAM_D24_CHART_ID = "f9cf82a5-d7ac-4ef8-85e4-92e7c7d88870"
-SLAM_D24_NAME = "Slam D24"
-SLAM_D24_FORMULA = "(((score / 1000000 * 1004) - 300) / 704) * 1000000"
+MAX_SCORE = 1_000_000.0
 
 
-class _Phoenix1ScoreOverride(TypedDict):
+class Phoenix1ScoreNormalization(TypedDict):
     chart: str
-    formula: str
-    scale: int
-    offset: int
-    divisor: int
+    sourceDifficulty: str
+    targetDifficulty: str
+    sourceNoteCount: int
+    targetNoteCount: int
+    sourceType: str
+    targetType: str
 
 
-_PHOENIX1_SCORE_OVERRIDES: dict[str, _Phoenix1ScoreOverride] = {
-    SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID: {
-        "chart": SOLVE_MY_HURT_SHORTCUT_D26_NAME,
-        "formula": SOLVE_MY_HURT_SHORTCUT_D26_FORMULA,
-        "scale": 1566,
-        "offset": 540,
-        "divisor": 1026,
-    },
-    SLAM_D24_CHART_ID: {
-        "chart": SLAM_D24_NAME,
-        "formula": SLAM_D24_FORMULA,
-        "scale": 1004,
-        "offset": 300,
-        "divisor": 704,
-    },
-}
+Phoenix1ScoreNormalizations = Mapping[str, Phoenix1ScoreNormalization]
 
-# The frozen Phoenix 1 API rows establish these score-band multipliers. Every
-# existing score for the corrected charts, before and after conversion, is at
-# least 825,000, so no unobserved lower band is inferred here.
+
+# The frozen Phoenix 1 API rows establish these score-band multipliers. Current
+# rows affected by a catalog-derived normalization, before and after conversion,
+# are all at least 825,000, so no unobserved lower band is inferred here.
 _PHOENIX1_PUMBILITY_MULTIPLIERS = (
     (995_000, 1.00),
     (990_000, 0.96),
@@ -69,21 +50,85 @@ def _finite_number(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def convert_phoenix1_score(chart_id: object, score: object) -> float | None:
-    """Apply chart-specific conversions to frozen Phoenix 1 scores."""
+def _positive_integer(value: object) -> int | None:
+    number = _finite_number(value)
+    if number is None or number <= 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
+def _chart_id(row: Mapping[str, Any]) -> str:
+    return str(row.get("id") or row.get("chartId") or "").strip()
+
+
+def build_phoenix1_score_normalizations(
+    phoenix1_charts: Sequence[Mapping[str, Any]],
+    phoenix2_charts: Sequence[Mapping[str, Any]],
+) -> dict[str, Phoenix1ScoreNormalization]:
+    """Derive score conversions from stable IDs with changed positive note counts."""
+    source_by_id = {
+        chart_id: row
+        for row in phoenix1_charts
+        if (chart_id := _chart_id(row))
+    }
+    target_by_id = {
+        chart_id: row
+        for row in phoenix2_charts
+        if (chart_id := _chart_id(row))
+    }
+    result: dict[str, Phoenix1ScoreNormalization] = {}
+    for chart_id in sorted(source_by_id.keys() & target_by_id.keys()):
+        source = source_by_id[chart_id]
+        target = target_by_id[chart_id]
+        source_type = str(source.get("type") or "").strip()
+        target_type = str(target.get("type") or "").strip()
+        source_notes = _positive_integer(source.get("noteCount"))
+        target_notes = _positive_integer(target.get("noteCount"))
+        if (
+            not source_type
+            or source_type != target_type
+            or source_notes is None
+            or target_notes is None
+            or source_notes == target_notes
+        ):
+            continue
+        song_name = str(target.get("songName") or source.get("songName") or chart_id)
+        source_difficulty = str(source.get("difficulty") or "")
+        target_difficulty = str(target.get("difficulty") or "")
+        result[chart_id] = {
+            "chart": f"{song_name} {target_difficulty}".strip(),
+            "sourceDifficulty": source_difficulty,
+            "targetDifficulty": target_difficulty,
+            "sourceNoteCount": source_notes,
+            "targetNoteCount": target_notes,
+            "sourceType": source_type,
+            "targetType": target_type,
+        }
+    return result
+
+
+def convert_phoenix1_score(
+    chart_id: object,
+    score: object,
+    normalizations: Phoenix1ScoreNormalizations | None = None,
+) -> float | None:
+    """Normalize one Phoenix 1 score to the Phoenix 2 chart note denominator."""
     value = _finite_number(score)
     if value is None:
         return None
-    override = _PHOENIX1_SCORE_OVERRIDES.get(str(chart_id))
-    if override is None:
+    normalization = (normalizations or {}).get(str(chart_id))
+    if normalization is None:
         return value
-    return (
+    source_notes = normalization["sourceNoteCount"]
+    target_notes = normalization["targetNoteCount"]
+    converted = (
         (
-            (value / 1_000_000 * override["scale"])
-            - override["offset"]
+            (value / MAX_SCORE * source_notes)
+            - (source_notes - target_notes)
         )
-        / override["divisor"]
-    ) * 1_000_000
+        / target_notes
+    ) * MAX_SCORE
+    return min(MAX_SCORE, max(0.0, converted))
 
 
 def _phoenix1_pumbility_multiplier(score: object) -> float | None:
@@ -91,8 +136,11 @@ def _phoenix1_pumbility_multiplier(score: object) -> float | None:
     if value is None:
         return None
     return next(
-        (multiplier for threshold, multiplier in _PHOENIX1_PUMBILITY_MULTIPLIERS
-         if value >= threshold),
+        (
+            multiplier
+            for threshold, multiplier in _PHOENIX1_PUMBILITY_MULTIPLIERS
+            if value >= threshold
+        ),
         None,
     )
 
@@ -101,14 +149,17 @@ def convert_phoenix1_pumbility(
     chart_id: object,
     original_score: object,
     pumbility: object,
+    normalizations: Phoenix1ScoreNormalizations | None = None,
 ) -> float | None:
-    """Re-band frozen Phoenix 1 Pumbility after the chart score conversion."""
+    """Re-band frozen Phoenix 1 Pumbility after score normalization."""
     value = _finite_number(pumbility)
     if value is None:
         return None
-    if str(chart_id) not in _PHOENIX1_SCORE_OVERRIDES:
+    if str(chart_id) not in (normalizations or {}):
         return value
-    converted_score = convert_phoenix1_score(chart_id, original_score)
+    converted_score = convert_phoenix1_score(
+        chart_id, original_score, normalizations
+    )
     original_multiplier = _phoenix1_pumbility_multiplier(original_score)
     converted_multiplier = _phoenix1_pumbility_multiplier(converted_score)
     if original_multiplier is None or converted_multiplier is None:
@@ -116,13 +167,24 @@ def convert_phoenix1_pumbility(
     return value * converted_multiplier / original_multiplier
 
 
-def phoenix1_score_overrides_metadata() -> list[dict[str, Any]]:
+def phoenix1_score_overrides_metadata(
+    normalizations: Phoenix1ScoreNormalizations | None = None,
+) -> list[dict[str, Any]]:
+    """Return deterministic provenance for compatibility with public schemas."""
     return [
         {
             "chartId": chart_id,
-            "chart": str(override["chart"]),
-            "formula": str(override["formula"]),
-            "source": "phoenix1 only",
+            "chart": str(normalization["chart"]),
+            "formula": (
+                "1000000 - ((1000000 - score) * "
+                f"{normalization['sourceNoteCount']} / "
+                f"{normalization['targetNoteCount']})"
+            ),
+            "sourceDifficulty": normalization["sourceDifficulty"],
+            "targetDifficulty": normalization["targetDifficulty"],
+            "sourceNoteCount": normalization["sourceNoteCount"],
+            "targetNoteCount": normalization["targetNoteCount"],
+            "source": "PIUScores Phoenix 1 and Phoenix 2 chart catalogs",
         }
-        for chart_id, override in _PHOENIX1_SCORE_OVERRIDES.items()
+        for chart_id, normalization in sorted((normalizations or {}).items())
     ]

@@ -23,7 +23,11 @@ from mix_registry import MIX_SPECS, resolve_mix  # noqa: E402
 from phoenix2_sync import sanitize_snapshot  # noqa: E402
 from piu_misgrade_analyzer import load_snapshot  # noqa: E402
 from piu_recommendations import public_player_key  # noqa: E402
-from phoenix1_score_overrides import phoenix1_score_overrides_metadata  # noqa: E402
+from phoenix1_score_overrides import (  # noqa: E402
+    Phoenix1ScoreNormalizations,
+    build_phoenix1_score_normalizations,
+    phoenix1_score_overrides_metadata,
+)
 from pumbility_store import _assert_schema, require_loopback_database_url  # noqa: E402
 from scripts.capture_private_score_snapshot import validate_snapshot_directory  # noqa: E402
 
@@ -134,7 +138,10 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _import_reference_rows(connection: Any) -> tuple[Any, dict[str, int]]:
+def _import_reference_rows(
+    connection: Any,
+    score_normalizations: Phoenix1ScoreNormalizations,
+) -> tuple[Any, dict[str, int]]:
     """Import immutable archive/reference provenance separately from live analysis."""
     from psycopg.types.json import Jsonb
 
@@ -220,7 +227,7 @@ def _import_reference_rows(connection: Any) -> tuple[Any, dict[str, int]]:
             (override_code_hash, Jsonb({"source": "phoenix1_score_overrides.py"})),
         )
         override_methodology_id = cursor.fetchone()[0]
-        override_rows = phoenix1_score_overrides_metadata()
+        override_rows = phoenix1_score_overrides_metadata(score_normalizations)
         cursor.executemany(
             """
             insert into pumbility.score_overrides (
@@ -814,6 +821,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     mixes = args.mix or sorted(MIX_SPECS)
     loaded = {mix: _validated_snapshot(args.source_root, mix) for mix in mixes}
+    score_normalizations = (
+        build_phoenix1_score_normalizations(
+            loaded["phoenix1"][1]["charts"],
+            loaded["phoenix2"][1]["charts"],
+        )
+        if {"phoenix1", "phoenix2"}.issubset(loaded)
+        else {}
+    )
     if args.dry_run:
         print(
             json.dumps(
@@ -847,7 +862,9 @@ def main(argv: list[str] | None = None) -> int:
             with connection.transaction():
                 results[mix] = _import_mix(connection, mix, manifest, snapshot)
         with connection.transaction():
-            archive_run_id, reference_counts = _import_reference_rows(connection)
+            archive_run_id, reference_counts = _import_reference_rows(
+                connection, score_normalizations
+            )
             artifact_count = _import_json_artifacts(
                 connection, args.source_root.resolve(), archive_run_id
             )

@@ -107,7 +107,9 @@ Required statistical invariants are implemented and tested in `tests/test_analyz
 - Singles and Doubles remain limited to official level 16+ and retain their existing independent models.
 - Co-op adds a separate `coop` array containing the current Phoenix 2 2x, 3x, 4x, and 5x catalog without an official-level gate.
 - Phoenix 1 rerates are presentation provenance, not inputs that mutate the frozen public analysis.
-- Two Phoenix 1 score overrides are applied only to Phoenix 1 evidence.
+- Phoenix 1 raw scores are normalized only when matching Phoenix 1 and Phoenix 2
+  chart IDs have valid, different note counts in the PIUScores catalogs. The
+  generated profiles apply only to Phoenix 1 evidence; Phoenix 2 is unchanged.
 - Every Single and Double chart contains `whatIfEstimates`, ordered by alternative official level. Each entry has `level` and an `estimatedDifficulty` rounded to six decimal digits or `null` when the target folder has no measured reference or the chart has no usable observations. Co-op does not use these folder what-if estimates.
 - Alternatives cover the three official levels below and above the chart, omit its current level, and never go below level 16. Near the floor the list is correspondingly shorter.
 - What-if values are chart-only projections, not tier-list recalculations. They preserve the selected contribution set, player baselines, reliability/shrinkage, target-folder reference and range compression, ranks, percentiles, and tier membership.
