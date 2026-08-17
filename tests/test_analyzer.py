@@ -48,6 +48,51 @@ def score(player_id: str, chart_id: str, pumbility: float) -> dict:
 
 
 class AnalyzerTests(unittest.TestCase):
+    def test_phoenix2_requires_fifty_mode_scores_and_phoenix1_retains_thirty(
+        self,
+    ) -> None:
+        charts = [
+            chart(f"threshold-{index:02d}", "Single", 18 + index % 3)
+            for index in range(50)
+        ]
+        scores = [
+            score(player_id, row["id"], 800.0 - index)
+            for player_id, count in (
+                ("at-threshold", 50),
+                ("below-threshold", 49),
+                ("phoenix1-minimum", 30),
+            )
+            for index, row in enumerate(charts[:count])
+        ]
+        players = [
+            {"userId": player_id}
+            for player_id in (
+                "at-threshold",
+                "below-threshold",
+                "phoenix1-minimum",
+            )
+        ]
+
+        phoenix2_config = AnalysisConfig(
+            mix="phoenix2", bootstrap_samples=0, pumbility_per_level=7.3
+        )
+        _, phoenix2_baselines, phoenix2_summary, _ = analyze_snapshot(
+            players, charts, scores, phoenix2_config
+        )
+        phoenix1_config = AnalysisConfig(
+            mix="phoenix1", bootstrap_samples=0, pumbility_per_level=7.3
+        )
+        _, phoenix1_baselines, phoenix1_summary, _ = analyze_snapshot(
+            players, charts, scores, phoenix1_config
+        )
+
+        self.assertEqual(phoenix2_config.minimum_scores_per_player, 50)
+        self.assertEqual(len(phoenix2_baselines), 1)
+        self.assertEqual(phoenix2_summary["method"]["minimumScoresPerPlayer"], 50)
+        self.assertEqual(phoenix1_config.minimum_scores_per_player, 30)
+        self.assertEqual(len(phoenix1_baselines), 3)
+        self.assertEqual(phoenix1_summary["method"]["minimumScoresPerPlayer"], 30)
+
     def test_payload_identifies_the_analyzed_mix(self) -> None:
         players, charts, scores, _ = make_synthetic_snapshot(players_per_folder=2)
         results, _, summary, _ = analyze_snapshot(
@@ -335,7 +380,7 @@ class AnalyzerTests(unittest.TestCase):
         scores = []
         for mode, base in (("Single", 500.0), ("Double", 900.0)):
             prefix = "s" if mode == "Single" else "d"
-            for index in range(30):
+            for index in range(50):
                 row = chart(f"{prefix}-{index:02d}", mode, 20 + (index % 2))
                 charts.append(row)
                 scores.append(score("dual-mode-player", row["id"], base - index))
@@ -352,7 +397,7 @@ class AnalyzerTests(unittest.TestCase):
     def test_zero_pumbility_scores_do_not_qualify_a_player(self) -> None:
         charts = [
             chart(f"chart-{index:02d}", "Single", 16 + index % 5)
-            for index in range(37)
+            for index in range(50)
         ]
         scores = []
         for index, row in enumerate(charts):
@@ -373,7 +418,7 @@ class AnalyzerTests(unittest.TestCase):
         singles = baselines[baselines["mode"] == "Singles"]
         self.assertEqual(len(singles), 1)
         self.assertGreater(float(singles.iloc[0]["baselinePumbility"]), 0)
-        self.assertEqual(summary["coverage"]["nonpositivePumbilityRowsExcluded"], 27)
+        self.assertEqual(summary["coverage"]["nonpositivePumbilityRowsExcluded"], 40)
         self.assertTrue((results["nContributors"] <= 1).all())
         self.assertEqual(contributions["playerHash"].nunique(), 1)
 

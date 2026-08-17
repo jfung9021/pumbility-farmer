@@ -20,14 +20,17 @@ def main() -> int:
     snapshot = PrivateBlobStore().get_json(current_snapshot_path(mix_spec))
     if snapshot is None:
         raise RuntimeError(f"The current private {mix_spec.label} snapshot was not found.")
+    config = AnalysisConfig(mix=mix_spec.key, bootstrap_samples=0)
     players, charts, scores = analyzer_input(
-        snapshot, minimum_scores_per_mode=30, eligible_only=True
+        snapshot,
+        minimum_scores_per_mode=config.minimum_scores_per_player,
+        eligible_only=True,
     )
     results, _, summary, _ = analyze_snapshot(
         players,
         charts,
         scores,
-        AnalysisConfig(mix=mix_spec.key, bootstrap_samples=0),
+        config,
     )
     payload = build_web_payload(results, summary)
     measured = results[results["difficultyDelta"].notna()]

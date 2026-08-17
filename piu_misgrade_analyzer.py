@@ -61,7 +61,7 @@ from urllib.parse import urljoin, urlparse
 import numpy as np
 import pandas as pd
 
-from pumbility_contract import SCRIPT_VERSION
+from pumbility_contract import PHOENIX2_MINIMUM_ANALYSIS_SCORES, SCRIPT_VERSION
 import requests
 
 from mix_registry import DEFAULT_MIX_KEY, resolve_mix
@@ -119,6 +119,11 @@ class AnalysisConfig:
 
     @property
     def minimum_scores_per_player(self) -> int:
+        if resolve_mix(self.mix).key == "phoenix2":
+            return max(
+                self.baseline_end_rank,
+                PHOENIX2_MINIMUM_ANALYSIS_SCORES,
+            )
         return self.baseline_end_rank
 
 
@@ -1145,6 +1150,7 @@ def analyze_snapshot(
         "mix": resolve_mix(config.mix).as_payload(),
         "method": {
             "baselineRanks": [config.baseline_start_rank, config.baseline_end_rank],
+            "minimumScoresPerPlayer": config.minimum_scores_per_player,
             "contributionSelection": {
                 "method": "deduplicated union of Pumbility and recency windows",
                 "windows": ["top Pumbility", "most recent recordedAt"],
@@ -1386,8 +1392,9 @@ def make_synthetic_snapshot(
                     }
                 )
 
-            # Twenty stable same-mode scores become ranks 11-30.
-            for bg in background_charts[chart_type][:20]:
+            # Forty stable same-mode scores fill ranks 11-50, including the
+            # ranks 11-30 baseline and Phoenix 2's 50-score eligibility gate.
+            for bg in background_charts[chart_type][:40]:
                 background_level = int(bg["level"])
                 pumbility = (
                     base

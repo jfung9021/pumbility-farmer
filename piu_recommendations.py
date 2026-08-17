@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from pumbility_contract import (
+    PHOENIX2_MINIMUM_ANALYSIS_SCORES,
     RECOMMENDATION_SCHEMA_VERSION,
     combined_tier_blob_path,
     phoenix1_snapshot_path,
@@ -69,7 +70,7 @@ from phoenix2_pumbility import (
 
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
-COMBINED_TIER_SCHEMA_VERSION = 8
+COMBINED_TIER_SCHEMA_VERSION = 9
 RECOMMENDATION_RADIUS = 1.0
 WHAT_IF_LEVEL_RADIUS = 1
 CANDIDATE_OFFICIAL_LEVEL_RADIUS = 2
@@ -863,6 +864,26 @@ def _clean_snapshot_frames_consuming(
     return _clean_snapshot_dataframes(charts, scores)
 
 
+def _retain_player_modes_with_minimum_scores(
+    charts: pd.DataFrame,
+    scores: pd.DataFrame,
+    minimum_score_count: int,
+) -> pd.DataFrame:
+    """Keep S/D score rows only for player modes meeting an evidence minimum."""
+    if scores.empty:
+        return scores.copy()
+    chart_types = dict(zip(charts["chartId"].astype(str), charts["type"]))
+    eligible = scores.copy()
+    eligible["_analysisMode"] = eligible["chartId"].astype(str).map(chart_types)
+    eligible = eligible[eligible["_analysisMode"].isin(MODE_TYPES)].copy()
+    counts = eligible.groupby(
+        ["playerId", "_analysisMode"], sort=False
+    )["chartId"].transform("size")
+    return eligible.loc[counts >= int(minimum_score_count)].drop(
+        columns="_analysisMode"
+    )
+
+
 def _normalizations_from_frames(
     phoenix1_charts: pd.DataFrame,
     phoenix2_charts: pd.DataFrame,
@@ -994,6 +1015,7 @@ def _source_contributions(
     authoritative_catalog: pd.DataFrame | None = None,
     prepared_frames: tuple[pd.DataFrame, pd.DataFrame] | None = None,
     phoenix1_normalizations: Phoenix1ScoreNormalizations | None = None,
+    minimum_score_count: int = BASELINE_END_RANK,
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     charts, scores = (
         prepared_frames
@@ -1047,6 +1069,11 @@ def _source_contributions(
         mode = merged[merged["type"] == chart_type].copy()
         if mode.empty:
             continue
+        counts = mode.groupby("playerId", sort=False).size()
+        eligible_ids = counts[counts >= int(minimum_score_count)].index
+        mode = mode[mode["playerId"].isin(eligible_ids)].copy()
+        if mode.empty:
+            continue
         mode = mode.sort_values(
             ["playerId", "pumbility", "score", "chartId"],
             ascending=[True, False, False, True],
@@ -1063,7 +1090,7 @@ def _source_contributions(
         baselines["validScoreCount"] = baselines.index.map(counts)
         baselines = baselines[
             (baselines["baselineCount"] == BASELINE_END_RANK - BASELINE_START_RANK + 1)
-            & (baselines["validScoreCount"] >= BASELINE_END_RANK)
+            & (baselines["validScoreCount"] >= int(minimum_score_count))
             & (baselines["baselinePumbility"] > 0)
         ]
         if baselines.empty:
@@ -2131,6 +2158,11 @@ def build_combined_chart_results(
     )
     phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
     phoenix2_chart_ids = set(phoenix2_catalog["chartId"].astype(str))
+    eligible_phoenix2_scores = _retain_player_modes_with_minimum_scores(
+        phoenix2_catalog,
+        phoenix2_scores,
+        PHOENIX2_MINIMUM_ANALYSIS_SCORES,
+    )
     # Preserve Co-op's raw-score observations before releasing Phoenix 1. Its
     # large ability calculation can then reuse the cleaned S/D frames below.
     coop_inputs = build_coop_observations(phoenix1_snapshot, phoenix2_snapshot)
@@ -2178,9 +2210,11 @@ def build_combined_chart_results(
         phoenix2_snapshot,
         "phoenix2",
         allowed_chart_ids=phoenix2_chart_ids,
+        prepared_frames=(phoenix2_catalog, eligible_phoenix2_scores),
+        minimum_score_count=PHOENIX2_MINIMUM_ANALYSIS_SCORES,
     )
     type_by_chart = dict(zip(phoenix2_catalog["chartId"], phoenix2_catalog["type"]))
-    phoenix2_score_keys = phoenix2_scores[["playerId", "chartId"]].copy()
+    phoenix2_score_keys = eligible_phoenix2_scores[["playerId", "chartId"]].copy()
     phoenix2_score_keys["mode"] = phoenix2_score_keys["chartId"].map(type_by_chart).map(
         MODE_LABELS
     )
@@ -2196,7 +2230,7 @@ def build_combined_chart_results(
     combined = _attach_contribution_weights(
         combined,
         None,
-        phoenix2_scores,
+        eligible_phoenix2_scores,
         catalog,
         phoenix1_rating_scores=phoenix1_rating_scores,
     )
@@ -2540,6 +2574,10 @@ def build_combined_tier_payload(
         "method": {
             "catalog": "Phoenix 2 authoritative catalog",
             "overlapRule": "Phoenix 2 replaces Phoenix 1 for the same player and chart",
+            "sourceMinimumScoresPerPlayer": {
+                "phoenix1": BASELINE_END_RANK,
+                "phoenix2": PHOENIX2_MINIMUM_ANALYSIS_SCORES,
+            },
             "crossVersionNormalization": "Phoenix 1 raw scores use PIUScores catalog-derived note-count normalization before version- and mode-specific Pumbility residuals are converted to level units",
             "observationWeighting": {
                 "sourceWeights": {"phoenix1": 1, "phoenix2": 2},

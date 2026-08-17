@@ -28,6 +28,7 @@ from piu_recommendations import (
     COMBINED_TIER_SCHEMA_VERSION,
     COOP_GOAL_GRADE_BY_DIFFICULTY,
     COOP_SCORE_PROJECTION_MODEL_NAME,
+    PHOENIX2_MINIMUM_ANALYSIS_SCORES,
     PHOENIX2_RATING_SCORE_THRESHOLD,
     RECOMMENDATION_SCHEMA_VERSION,
     SCORE_PROJECTION_MODEL_NAME,
@@ -51,6 +52,8 @@ from piu_recommendations import (
     _projected_gain_sort_key,
     _rating_lookup,
     _recommendation_chart_rows,
+    _retain_player_modes_with_minimum_scores,
+    _source_contributions,
     _top50_marginal_gain,
     _weighted_residual_statistics,
     _what_if_residual_shift,
@@ -646,6 +649,62 @@ class CombinedEvidenceTests(unittest.TestCase):
 
         self.assertEqual(retained_charts["chartId"].tolist(), ["current"])
         self.assertEqual(retained_scores["chartId"].tolist(), ["current"])
+
+    def test_combined_tier_uses_only_fifty_score_phoenix2_player_modes(self) -> None:
+        charts = pd.DataFrame(
+            [
+                {
+                    "chartId": f"minimum-{index:02d}",
+                    "type": "Single",
+                    "level": 18 + index % 3,
+                }
+                for index in range(PHOENIX2_MINIMUM_ANALYSIS_SCORES)
+            ]
+        )
+        scores = pd.DataFrame(
+            [
+                {
+                    "playerId": player_id,
+                    "chartId": row["chartId"],
+                    "pumbility": 500.0 + 10.0 * row["level"] - index / 100,
+                    "score": 950_000,
+                    "recordedAt": "2026-08-17T00:00:00Z",
+                }
+                for player_id, count in (
+                    ("at-threshold", 50),
+                    ("below-threshold", 49),
+                    ("phoenix1-minimum", 30),
+                )
+                for index, row in enumerate(charts.iloc[:count].to_dict("records"))
+            ]
+        )
+
+        eligible_phoenix2 = _retain_player_modes_with_minimum_scores(
+            charts,
+            scores,
+            PHOENIX2_MINIMUM_ANALYSIS_SCORES,
+        )
+        phoenix2, _ = _source_contributions(
+            {},
+            "phoenix2",
+            prepared_frames=(charts, eligible_phoenix2),
+            minimum_score_count=PHOENIX2_MINIMUM_ANALYSIS_SCORES,
+        )
+        phoenix1, _ = _source_contributions(
+            {},
+            "phoenix1",
+            prepared_frames=(charts, scores),
+        )
+
+        self.assertEqual(
+            set(eligible_phoenix2["playerId"]),
+            {"at-threshold"},
+        )
+        self.assertEqual(set(phoenix2["playerId"]), {"at-threshold"})
+        self.assertEqual(
+            set(phoenix1["playerId"]),
+            {"at-threshold", "below-threshold", "phoenix1-minimum"},
+        )
 
 
 class ScoreProjectionFitTests(unittest.TestCase):
@@ -3281,7 +3340,7 @@ class CombinedTierPayloadTests(unittest.TestCase):
 
         self.assertEqual(payload["mix"]["key"], "combined")
         self.assertEqual(payload["schemaVersion"], COMBINED_TIER_SCHEMA_VERSION)
-        self.assertEqual(payload["schemaVersion"], 8)
+        self.assertEqual(payload["schemaVersion"], 9)
         self.assertEqual(
             [row["chartId"] for row in payload["singles"]],
             ["easier", "current"],
@@ -3309,6 +3368,10 @@ class CombinedTierPayloadTests(unittest.TestCase):
             payload["summary"]["method"]["displayMinimumOfficialLevel"], 16
         )
         self.assertEqual(payload["summary"]["method"]["difficultyDeltaScale"], 0.4)
+        self.assertEqual(
+            payload["summary"]["method"]["sourceMinimumScoresPerPlayer"],
+            {"phoenix1": 30, "phoenix2": 50},
+        )
         self.assertEqual(
             payload["summary"]["method"]["observationWeighting"],
             {
