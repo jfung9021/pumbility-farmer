@@ -9,7 +9,8 @@ Each mode is processed separately:
 1. Deduplicate to a player's best score per chart.
 2. Exclude broken, non-finite, zero, and negative Pumbility rows, then rank the
    remaining scores within Singles or Doubles.
-3. Require at least 30 positive-Pumbility scores in that mode.
+3. Require at least 50 positive-Pumbility scores in that mode for Phoenix 2.
+   The frozen Phoenix 1 source retains its historical 30-score minimum.
 4. Use the mean of ranks 11–30 as the player's mode-specific skill baseline.
 5. Select both the top 20% of that player's valid scores by Pumbility and the
    most recent 20% by `recordedAt` within the mode. The two windows use the same
@@ -521,7 +522,7 @@ when the same player and model were refreshed less than 60 seconds ago, so repea
 browser refreshes do not create duplicate upstream work. Upstream `Retry-After` delays are honored;
 those explicit rate-limit waits are outside the healthy-path latency target.
 
-Valid rows are merged deterministically by player/chart within the selected version, retaining the best Pumbility/score. Players with no rows for that version are excluded, and only players with at least 30 valid Singles or 30 valid Doubles scores are passed to the analyzer. Calibration and shrinkage are recalculated independently for each version and mode. No `minLevel` score filter is used.
+Valid rows are merged deterministically by player/chart within the selected version, retaining the best Pumbility/score. Players with no rows for that version are excluded. Phoenix 2 players need at least 50 valid Singles or 50 valid Doubles scores before that mode can influence scoring-difficulty analysis; the frozen Phoenix 1 source retains its historical 30-score minimum. Calibration and shrinkage are recalculated independently for each version and mode. No `minLevel` score filter is used.
 
 ## Verification
 

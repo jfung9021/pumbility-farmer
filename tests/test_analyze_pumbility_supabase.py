@@ -97,7 +97,7 @@ class AnalyzeSupabaseConfigurationTests(unittest.TestCase):
 
         analyzer_input.assert_called_once_with(
             database_input.snapshot,
-            minimum_scores_per_mode=30,
+            minimum_scores_per_mode=50,
             eligible_only=True,
         )
         analyze_snapshot.assert_called_once_with(

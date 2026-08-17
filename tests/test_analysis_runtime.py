@@ -1238,14 +1238,14 @@ class WorkerClient:
         if path == "api/v2/players":
             return [{"userId": "player", "username": "private"}]
         if path == "api/v2/charts":
-            return [chart(index) for index in range(30)]
+            return [chart(index) for index in range(50)]
         if path == "api/v2/songs":
             return [
                 {"name": f"Chart {index}", "bpm": {"min": 120, "max": 180}}
-                for index in range(30)
+                for index in range(50)
             ]
         if path == "api/v2/players/player/scores":
-            return [score(index) for index in range(30)]
+            return [score(index) for index in range(50)]
         raise AssertionError(path)
 
 
@@ -2646,10 +2646,10 @@ class WorkerTests(unittest.TestCase):
                     "lastSyncedAtUtc": isoformat_utc(NOW - timedelta(hours=1)),
                 }
             ],
-            "charts": [chart(index) for index in range(30)],
+            "charts": [chart(index) for index in range(50)],
             "scores": [
                 {**score(index), "playerId": "player"}
-                for index in range(30)
+                for index in range(50)
             ],
         }
         blobs.put_json(CURRENT_SNAPSHOT_PATH, stored_snapshot)
