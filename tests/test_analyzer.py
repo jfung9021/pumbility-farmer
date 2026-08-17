@@ -199,6 +199,19 @@ class AnalyzerTests(unittest.TestCase):
             0.4 * 29.5 * expected,
         )
 
+        uncompressed = apply_within_level_difficulty(
+            frame,
+            1.0,
+            AnalysisConfig(bootstrap_samples=0, shrinkage_k=0),
+            compress_large_folders=False,
+        )
+        self.assertTrue((uncompressed["folderMeasuredCharts"] == 60).all())
+        self.assertTrue((uncompressed["folderRangeCompression"] == 1.0).all())
+        self.assertAlmostEqual(
+            float(uncompressed["difficultyDelta"].abs().max()),
+            0.4 * 29.5,
+        )
+
     def test_calibration_accepts_legacy_mix_scale_and_rejects_negative_slope(self) -> None:
         rows = []
         for player_index, base in enumerate((100.0, 300.0, 500.0, 700.0)):

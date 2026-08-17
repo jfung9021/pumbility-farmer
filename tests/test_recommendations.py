@@ -3281,7 +3281,7 @@ class CombinedTierPayloadTests(unittest.TestCase):
 
         self.assertEqual(payload["mix"]["key"], "combined")
         self.assertEqual(payload["schemaVersion"], COMBINED_TIER_SCHEMA_VERSION)
-        self.assertEqual(payload["schemaVersion"], 7)
+        self.assertEqual(payload["schemaVersion"], 8)
         self.assertEqual(
             [row["chartId"] for row in payload["singles"]],
             ["easier", "current"],
@@ -3322,10 +3322,13 @@ class CombinedTierPayloadTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            payload["summary"]["method"]["folderRangeNormalization"][
-                "referenceMeasuredCharts"
-            ],
-            30,
+            payload["summary"]["method"]["folderRangeNormalization"],
+            {
+                "method": "disabled for the nearby-ability weighted combined estimator",
+                "referenceMeasuredCharts": None,
+                "formula": "1.0",
+                "expandsFolders": False,
+            },
         )
 
 

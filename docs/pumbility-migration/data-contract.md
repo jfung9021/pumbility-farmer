@@ -99,7 +99,7 @@ Required statistical invariants are implemented and tested in `tests/test_analyz
 
 ## Combined tier contract
 
-`piu_recommendations.COMBINED_TIER_SCHEMA_VERSION` is 7.
+`piu_recommendations.COMBINED_TIER_SCHEMA_VERSION` is 8.
 
 - Phoenix 2 charts are the strict target allowlist.
 - Phoenix 2 replaces Phoenix 1 for an overlapping player/chart observation.
@@ -108,6 +108,9 @@ Required statistical invariants are implemented and tested in `tests/test_analyz
   the official-level midpoint `L + 0.5`. Ability weight follows
   `1 / (1 + abs(playerAbility - midpoint)^2)`, giving half weight one level
   from the midpoint; the result is multiplied by the Phoenix source weight.
+- The combined Single/Double estimator uses a unit folder range scale. The
+  legacy large-folder range compression remains available to standalone mix
+  analyses but is not stacked on top of nearby-ability weighting.
 - Singles and Doubles remain limited to official level 16+ and retain their existing independent models.
 - Co-op adds a separate `coop` array containing the current Phoenix 2 2x, 3x, 4x, and 5x catalog without an official-level gate.
 - Phoenix 1 rerates are presentation provenance, not inputs that mutate the frozen public analysis.
