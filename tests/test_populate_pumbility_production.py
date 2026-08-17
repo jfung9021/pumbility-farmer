@@ -111,9 +111,9 @@ class HostedPopulationSafetyTests(unittest.TestCase):
 
     def test_active_generation_requires_adjacent_what_if_schema(self) -> None:
         current_combined = {
-            "schemaVersion": 7,
+            "schemaVersion": 8,
             "summary": {
-                "scriptVersion": "6.0+combined-tier-v7",
+                "scriptVersion": "6.0+combined-tier-v8",
                 "method": {"catalog": "same", "whatIfEstimates": {"radius": 1}},
             },
             "singles": [{"chartId": "a", "whatIfEstimates": []}],

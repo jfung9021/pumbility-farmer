@@ -69,7 +69,7 @@ from phoenix2_pumbility import (
 
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
-COMBINED_TIER_SCHEMA_VERSION = 7
+COMBINED_TIER_SCHEMA_VERSION = 8
 RECOMMENDATION_RADIUS = 1.0
 WHAT_IF_LEVEL_RADIUS = 1
 CANDIDATE_OFFICIAL_LEVEL_RADIUS = 2
@@ -2295,7 +2295,12 @@ def build_combined_chart_results(
             ["Published", "Provisional", "Insufficient"],
             default="Unrated",
         )
-        result = apply_within_level_difficulty(result, 1.0, config)
+        result = apply_within_level_difficulty(
+            result,
+            1.0,
+            config,
+            compress_large_folders=False,
+        )
         result["whatIfEstimates"] = build_chart_what_if_estimates(
             result,
             mode_observations,
@@ -2584,9 +2589,9 @@ def build_combined_tier_payload(
             "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
             "effectBands": "seven fixed absolute bands with Overrated and Underrated beyond +/-0.5",
             "folderRangeNormalization": {
-                "method": "one-sided expected-normal-maximum order-statistic compression",
-                "referenceMeasuredCharts": FOLDER_RANGE_REFERENCE_CHARTS,
-                "formula": "min(1, expectedNormalMax(reference) / expectedNormalMax(measured charts in folder))",
+                "method": "disabled for the nearby-ability weighted combined estimator",
+                "referenceMeasuredCharts": None,
+                "formula": "1.0",
                 "expandsFolders": False,
             },
             "phoenix1ScoreOverrides": list(
@@ -2600,7 +2605,7 @@ def build_combined_tier_payload(
                 "frozen": [
                     "player baselines",
                     "contribution selection",
-                    "target-folder reference and range compression",
+                    "target-folder reference and unit range scale",
                     "ranks and tier membership",
                 ],
                 "recalculated": [

@@ -710,6 +710,8 @@ def apply_within_level_difficulty(
     result: pd.DataFrame,
     pumbility_per_level: float,
     config: AnalysisConfig,
+    *,
+    compress_large_folders: bool = True,
 ) -> pd.DataFrame:
     """Center estimates and tier categories within each exact mode-level folder."""
     result = result.copy()
@@ -754,9 +756,11 @@ def apply_within_level_difficulty(
         result["folder"], sort=False
     ).transform("sum").astype(int)
     result["folderMeasuredCharts"] = measured_chart_count
-    result["folderRangeCompression"] = measured_chart_count.map(
-        folder_range_compression
-    ).astype(float)
+    result["folderRangeCompression"] = (
+        measured_chart_count.map(folder_range_compression).astype(float)
+        if compress_large_folders
+        else 1.0
+    )
     result["pumbilityPerLevel"] = pumbility_per_level
     result["averageDifficulty"] = result["level"].astype(float) + 0.5
     result["difficultyDelta"] = (

@@ -7,7 +7,7 @@ import { COMBINED_MIX, DEFAULT_MIX, isMixKey, MIXES, type MixKey } from "./mixes
 
 const SECRET_PATTERN = /(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}/i;
 const FORBIDDEN_KEYS = new Set(["playerId", "username", "gameTag", "authorization", "apiKey", "token"]);
-export const LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION = 7;
+export const LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION = 8;
 
 export const LEGACY_LOCAL_RESULTS_PATH = path.join(
   process.cwd(),

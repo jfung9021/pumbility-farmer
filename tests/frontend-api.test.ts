@@ -1118,7 +1118,7 @@ test("validates local aggregates against the requested Phoenix version", async (
 
 test("accepts the combined tier-list identity", () => {
   const payload = {
-    schemaVersion: 7,
+    schemaVersion: 8,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     mix: { key: "combined", apiValue: "Phoenix+Phoenix2", label: "Phoenix 1 + 2" },
     summary: { scriptVersion: "test", method: {}, coverage: {}, modes: {} },

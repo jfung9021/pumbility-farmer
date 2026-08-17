@@ -75,6 +75,10 @@ hypothetical folder midpoint.
 
 A negative value is easier to score than the typical chart in the same mode and official level. Continuous estimates are not hard-clamped to the official folder, but the `L + 0.5` center and evidence shrinkage mean that an estimate below `L` requires an unusually strong within-folder signal.
 
+The combined Singles/Doubles estimator does not apply the legacy large-folder
+range compression on top of nearby-ability weighting. Its folder range scale is
+always `1.0`; standalone Phoenix analyses retain their existing compression.
+
 The tier-list What-if selector stores and displays only the adjacent official folders, one level
 below and one level above the chart, with level 16 as the minimum. These are chart-only projections;
 they do not rerank or regroup the tier list.
