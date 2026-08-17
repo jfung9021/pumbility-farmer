@@ -11,6 +11,7 @@ import os
 import re
 import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -78,6 +79,12 @@ def build_combined_tier_payload(*args: Any, **kwargs: Any) -> Any:
     return implementation(*args, **kwargs)
 
 
+def recommendation_model_chart_rows(*args: Any, **kwargs: Any) -> Any:
+    from piu_recommendations import recommendation_model_chart_rows as implementation
+
+    return implementation(*args, **kwargs)
+
+
 def build_recommendation_model_artifacts(*args: Any, **kwargs: Any) -> Any:
     from recommendation_refresh import (
         build_recommendation_model_artifacts as implementation,
@@ -86,12 +93,95 @@ def build_recommendation_model_artifacts(*args: Any, **kwargs: Any) -> Any:
     return implementation(*args, **kwargs)
 
 
-def publish_recommendation_model_artifacts(*args: Any, **kwargs: Any) -> Any:
+def build_recommendation_score_mode_artifact(*args: Any, **kwargs: Any) -> Any:
     from recommendation_refresh import (
-        publish_recommendation_model_artifacts as implementation,
+        build_recommendation_score_mode_artifact as implementation,
     )
 
     return implementation(*args, **kwargs)
+
+
+def publish_recommendation_model_artifacts(
+    store: Any,
+    *,
+    index: Mapping[str, Any],
+    model: Mapping[str, Any],
+    score_model_bytes: bytes,
+    phoenix1_shards: Sequence[Mapping[str, Any]],
+    phoenix2_shards: Sequence[Mapping[str, Any]],
+    index_path: str,
+    publish_index: bool = True,
+    artifact_manifest: Mapping[str, Any] | None = None,
+) -> None:
+    """Publish one model generation with no more than two writes in flight."""
+    generation = str(index.get("generationKey") or "").strip()
+    if not generation:
+        raise ValueError("A recommendation model generation key is required.")
+    manifest = (
+        dict(artifact_manifest)
+        if isinstance(artifact_manifest, Mapping)
+        else _recommendation_artifact_manifest(
+            index=index,
+            model=model,
+            score_model_bytes=score_model_bytes,
+            phoenix1_shards=phoenix1_shards,
+            phoenix2_shards=phoenix2_shards,
+        )
+    )
+    sections = manifest.get("sections")
+    if not isinstance(sections, Mapping):
+        raise ValueError("The recommendation artifact manifest is invalid.")
+
+    pending: set[Future[Any]] = set()
+
+    def await_one() -> None:
+        nonlocal pending
+        completed, pending = wait(pending, return_when=FIRST_COMPLETED)
+        for future in completed:
+            future.result()
+
+    def submit(
+        executor: ThreadPoolExecutor,
+        function: Callable[..., None],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        pending.add(executor.submit(function, *args, **kwargs))
+        if len(pending) >= 2:
+            await_one()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        submit(
+            executor,
+            store.put_json,
+            recommendation_model_path(generation),
+            model,
+        )
+        submit(
+            executor,
+            store.put_bytes,
+            recommendation_score_model_path(generation),
+            score_model_bytes,
+            content_type="application/x-npz",
+        )
+        for source, path_builder in (
+            (phoenix1_shards, recommendation_phoenix1_shard_path),
+            (phoenix2_shards, recommendation_phoenix2_shard_path),
+        ):
+            for shard in range(len(source)):
+                payload = source[shard]
+                submit(executor, store.put_json, path_builder(generation, shard), payload)
+                # The builder transfers ownership of mutable shard lists to publication.
+                # Drop submitted entries so completed writes release their payloads.
+                if isinstance(source, list):
+                    source[shard] = None  # type: ignore[list-item]
+        while pending:
+            await_one()
+
+    # This versioned index is the generation commit marker and must be written last.
+    store.put_json(recommendation_index_path(generation), index)
+    if publish_index:
+        store.put_json(index_path, index)
 
 
 LEGACY_LATEST_BLOB_PATH = "analysis/latest.json"
@@ -157,6 +247,22 @@ def typed_checkpoint_snapshot_path(
     return f"{typed_checkpoint_shard_prefix(job_id, mix)}snapshot.json"
 
 
+def typed_checkpoint_combined_path(
+    job_id: str, mix: str | MixSpec = DEFAULT_MIX_KEY
+) -> str:
+    return f"{typed_checkpoint_shard_prefix(job_id, mix)}combined.json"
+
+
+def typed_checkpoint_model_part_path(
+    job_id: str,
+    mode: str,
+    mix: str | MixSpec = DEFAULT_MIX_KEY,
+) -> str:
+    if mode not in {"singles", "doubles", "overall"}:
+        raise ValueError("A typed model checkpoint mode is invalid.")
+    return f"{typed_checkpoint_shard_prefix(job_id, mix)}model-{mode}.npz"
+
+
 # Backward-compatible constants refer to the default Phoenix 2 dataset.
 LATEST_BLOB_PATH = latest_blob_path()
 CURRENT_SNAPSHOT_PATH = current_snapshot_path()
@@ -168,10 +274,17 @@ FRESHNESS = timedelta(0)
 FAILED_RETRY_DELAY = timedelta(minutes=5)
 ACTIVE_JOB_STALE_AFTER = timedelta(minutes=5)
 STAGING_MAX_AGE = timedelta(hours=24)
-TYPED_CHECKPOINT_SCHEMA_VERSION = 4
+TYPED_CHECKPOINT_SCHEMA_VERSION = 5
+LEGACY_TYPED_CHECKPOINT_SCHEMA_VERSION = 4
 TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION = 1
+TYPED_CHECKPOINT_COMBINED_SCHEMA_VERSION = 2
 TYPED_CHECKPOINT_ROW_LIMIT = 5_000
 TYPED_CHECKPOINT_ANALYSIS_PHASE = "analysis"
+TYPED_CHECKPOINT_COMBINED_PHASE = "combined"
+TYPED_CHECKPOINT_MODEL_PREPARE_PHASE = "model-prepare"
+TYPED_CHECKPOINT_MODEL_FIT_SINGLES_PHASE = "model-fit-singles"
+TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE = "model-fit-doubles"
+TYPED_CHECKPOINT_MODEL_ASSEMBLE_PHASE = "model-assemble-overall"
 TYPED_CHECKPOINT_MODEL_PHASE = "model"
 TYPED_CHECKPOINT_SNAPSHOT_PHASE = "snapshot"
 TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE = "database-analysis-shards"
@@ -1463,15 +1576,95 @@ def _checkpoint_records(value: Any, *, field: str) -> list[dict[str, Any]]:
     return [dict(row) for row in value]
 
 
-def _canonical_json_sha256(value: Any) -> str:
-    body = json.dumps(
-        value,
+def _canonical_json_metadata(value: Any) -> tuple[str, int]:
+    """Hash canonical JSON incrementally without retaining a second full payload."""
+    encoder = json.JSONEncoder(
         ensure_ascii=False,
         allow_nan=False,
         separators=(",", ":"),
         sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(body).hexdigest()
+    )
+    digest = hashlib.sha256()
+    byte_size = 0
+    for part in encoder.iterencode(value):
+        encoded = part.encode("utf-8")
+        digest.update(encoded)
+        byte_size += len(encoded)
+    return digest.hexdigest(), byte_size
+
+
+def _canonical_json_sha256(value: Any) -> str:
+    return _canonical_json_metadata(value)[0]
+
+
+def _json_artifact_descriptor(
+    pathname: str, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    digest, byte_size = _canonical_json_metadata(payload)
+    return {"pathname": pathname, "sha256": digest, "byteSize": byte_size}
+
+
+def _artifact_group(items: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "count": len(items),
+        "byteSize": sum(int(item["byteSize"]) for item in items),
+        "sha256": _canonical_json_sha256(items),
+        "items": items,
+    }
+
+
+def _recommendation_artifact_manifest(
+    *,
+    index: Mapping[str, Any],
+    model: Mapping[str, Any],
+    score_model_bytes: bytes,
+    phoenix1_shards: Sequence[Mapping[str, Any]],
+    phoenix2_shards: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    generation = str(index.get("generationKey") or "").strip()
+    if not generation:
+        raise ValueError("A recommendation model generation key is required.")
+    phoenix1_items = [
+        _json_artifact_descriptor(
+            recommendation_phoenix1_shard_path(generation, shard), payload
+        )
+        for shard, payload in enumerate(phoenix1_shards)
+    ]
+    phoenix2_items = [
+        _json_artifact_descriptor(
+            recommendation_phoenix2_shard_path(generation, shard), payload
+        )
+        for shard, payload in enumerate(phoenix2_shards)
+    ]
+    score_descriptor = {
+        "pathname": recommendation_score_model_path(generation),
+        "sha256": hashlib.sha256(score_model_bytes).hexdigest(),
+        "byteSize": len(score_model_bytes),
+    }
+    sections = {
+        "index": _json_artifact_descriptor(
+            recommendation_index_path(generation), index
+        ),
+        "model": _json_artifact_descriptor(
+            recommendation_model_path(generation), model
+        ),
+        "scoreModel": score_descriptor,
+        "phoenix1Shards": _artifact_group(phoenix1_items),
+        "phoenix2Shards": _artifact_group(phoenix2_items),
+    }
+    artifact_count = 3 + len(phoenix1_items) + len(phoenix2_items)
+    byte_size = sum(
+        int(sections[name]["byteSize"])
+        for name in ("index", "model", "scoreModel", "phoenix1Shards", "phoenix2Shards")
+    )
+    return {
+        "schemaVersion": 1,
+        "generationKey": generation,
+        "artifactCount": artifact_count,
+        "byteSize": byte_size,
+        "sha256": _canonical_json_sha256(sections),
+        "sections": sections,
+    }
 
 
 def _write_typed_frame_shards(
@@ -1712,6 +1905,163 @@ def _load_typed_checkpoint_snapshot(
     return snapshot
 
 
+def _write_typed_checkpoint_combined(
+    blob_store: JsonBlobStore,
+    *,
+    job_id: str,
+    mix_spec: MixSpec,
+    generated_at_utc: str,
+    combined_tier: Mapping[str, Any],
+    model_charts: Sequence[Mapping[str, Any]],
+    phoenix2_slopes: Mapping[str, float],
+    source_hashes: Mapping[str, str],
+    snapshot_hashes: Mapping[str, str],
+    input_sha256: str,
+) -> dict[str, Any]:
+    """Persist the compact boundary between combined analysis and model fitting."""
+    value = {
+        "schemaVersion": TYPED_CHECKPOINT_COMBINED_SCHEMA_VERSION,
+        "jobId": job_id,
+        "mix": mix_spec.key,
+        "generatedAtUtc": generated_at_utc,
+        "combinedTier": dict(combined_tier),
+        "modelCharts": [dict(row) for row in model_charts],
+        "phoenix2Slopes": {
+            str(mode): float(slope) for mode, slope in phoenix2_slopes.items()
+        },
+        "sourceHashes": dict(source_hashes),
+        "snapshotHashes": dict(snapshot_hashes),
+        "inputSha256": input_sha256,
+    }
+    digest, byte_size = _canonical_json_metadata(value)
+    pathname = typed_checkpoint_combined_path(job_id, mix_spec)
+    blob_store.put_json(
+        pathname,
+        {
+            "schemaVersion": TYPED_CHECKPOINT_COMBINED_SCHEMA_VERSION,
+            "jobId": job_id,
+            "mix": mix_spec.key,
+            "sha256": digest,
+            "combined": value,
+        },
+    )
+    return {"pathname": pathname, "sha256": digest, "byteSize": byte_size}
+
+
+def _load_typed_checkpoint_combined(
+    blob_store: JsonBlobStore,
+    *,
+    checkpoint: Mapping[str, Any],
+    reference: Mapping[str, Any],
+    mix_spec: MixSpec,
+) -> dict[str, Any]:
+    expected_path = typed_checkpoint_combined_path(
+        str(checkpoint.get("jobId") or ""), mix_spec
+    )
+    if reference.get("pathname") != expected_path:
+        raise ValueError("The typed combined checkpoint reference is invalid.")
+    payload = blob_store.get_json(expected_path)
+    raw_combined = payload.get("combined") if isinstance(payload, Mapping) else None
+    if not isinstance(raw_combined, Mapping):
+        raise RuntimeError("The typed combined checkpoint is unavailable.")
+    value = dict(raw_combined)
+    digest, byte_size = _canonical_json_metadata(value)
+    combined_tier = value.get("combinedTier")
+    model_charts = value.get("modelCharts")
+    slopes = value.get("phoenix2Slopes")
+    source_hashes = value.get("sourceHashes")
+    snapshot_hashes = value.get("snapshotHashes")
+    if (
+        int(payload.get("schemaVersion") or 0)
+        != TYPED_CHECKPOINT_COMBINED_SCHEMA_VERSION
+        or int(value.get("schemaVersion") or 0)
+        != TYPED_CHECKPOINT_COMBINED_SCHEMA_VERSION
+        or payload.get("jobId") != checkpoint.get("jobId")
+        or value.get("jobId") != checkpoint.get("jobId")
+        or payload.get("mix") != mix_spec.key
+        or value.get("mix") != mix_spec.key
+        or payload.get("sha256") != digest
+        or reference.get("sha256") != digest
+        or int(reference.get("byteSize") or -1) != byte_size
+        or not isinstance(combined_tier, Mapping)
+        or not isinstance(model_charts, list)
+        or not all(isinstance(row, Mapping) for row in model_charts)
+        or not isinstance(slopes, Mapping)
+        or not isinstance(source_hashes, Mapping)
+        or set(source_hashes) != {"phoenix1", "phoenix2"}
+        or not isinstance(snapshot_hashes, Mapping)
+        or set(snapshot_hashes) != {"phoenix1", "phoenix2"}
+        or not all(
+            re.fullmatch(r"[0-9a-f]{64}", str(raw_hashes.get(mix) or ""))
+            for raw_hashes in (source_hashes, snapshot_hashes)
+            for mix in ("phoenix1", "phoenix2")
+        )
+        or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("inputSha256") or ""))
+    ):
+        raise ValueError("The typed combined checkpoint failed validation.")
+    return value
+
+
+def _write_typed_checkpoint_model_part(
+    blob_store: JsonBlobStore,
+    *,
+    job_id: str,
+    mix_spec: MixSpec,
+    mode: str,
+    input_sha256: str,
+    score_model_bytes: bytes,
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    pathname = typed_checkpoint_model_part_path(job_id, mode, mix_spec)
+    digest = hashlib.sha256(score_model_bytes).hexdigest()
+    blob_store.put_bytes(
+        pathname,
+        score_model_bytes,
+        content_type="application/x-npz",
+    )
+    return {
+        "pathname": pathname,
+        "sha256": digest,
+        "byteSize": len(score_model_bytes),
+        "mode": mode,
+        "inputSha256": input_sha256,
+        "metadata": dict(metadata),
+    }
+
+
+def _load_typed_checkpoint_model_part(
+    blob_store: JsonBlobStore,
+    *,
+    checkpoint: Mapping[str, Any],
+    reference: Mapping[str, Any],
+    mix_spec: MixSpec,
+    mode: str,
+    input_sha256: str,
+) -> tuple[bytes, dict[str, Any]]:
+    pathname = typed_checkpoint_model_part_path(
+        str(checkpoint.get("jobId") or ""), mode, mix_spec
+    )
+    metadata = reference.get("metadata")
+    if (
+        reference.get("pathname") != pathname
+        or reference.get("mode") != mode
+        or reference.get("inputSha256") != input_sha256
+        or not isinstance(metadata, Mapping)
+        or not isinstance(reference.get("byteSize"), int)
+        or int(reference["byteSize"]) < 0
+        or not re.fullmatch(r"[0-9a-f]{64}", str(reference.get("sha256") or ""))
+    ):
+        raise ValueError("A typed score-response mode checkpoint is invalid.")
+    payload = blob_store.get_bytes(pathname)
+    if (
+        payload is None
+        or len(payload) != int(reference["byteSize"])
+        or hashlib.sha256(payload).hexdigest() != reference.get("sha256")
+    ):
+        raise RuntimeError("A typed score-response mode artifact is unavailable.")
+    return payload, dict(metadata)
+
+
 def _database_cursor_token(checkpoint: Mapping[str, Any]) -> str:
     cursor = checkpoint.get("databaseCursor")
     if isinstance(cursor, Mapping):
@@ -1803,6 +2153,7 @@ def _recover_published_model_checkpoint(
     job_id: str,
     snapshot: Mapping[str, Any],
     payload: Mapping[str, Any],
+    combined_inputs: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
     """Recover model output whose generation commit marker preceded a redelivery."""
     generation = recommendation_generation_key(job_id)
@@ -1838,29 +2189,101 @@ def _recover_published_model_checkpoint(
         phoenix2_count=raw_shard_count,
     )
 
-    frozen_phoenix1 = blobs.get_json(phoenix1_snapshot_path())
-    if frozen_phoenix1 is None:
-        raise RuntimeError(
-            "The Phoenix 1 snapshot for the durable recommendation model is unavailable."
+    if combined_inputs is None:
+        frozen_phoenix1 = blobs.get_json(phoenix1_snapshot_path())
+        if frozen_phoenix1 is None:
+            raise RuntimeError(
+                "The Phoenix 1 snapshot for the durable recommendation model is unavailable."
+            )
+        phoenix1_snapshot = sanitize_snapshot(frozen_phoenix1, mix="phoenix1")
+        combined_charts, _, combined_metadata = build_combined_chart_results(
+            phoenix1_snapshot, snapshot
         )
-    phoenix1_snapshot = sanitize_snapshot(frozen_phoenix1, mix="phoenix1")
-    combined_charts, _, combined_metadata = build_combined_chart_results(
-        phoenix1_snapshot, snapshot
+        combined_tier = build_combined_tier_payload(
+            combined_charts,
+            combined_metadata,
+            generated_at_utc=generated_at,
+        )
+        source_hashes, snapshot_hashes, input_sha256 = (
+            _recommendation_source_identity(
+                phoenix1_snapshot,
+                snapshot,
+                phoenix2_source_sha256=None,
+            )
+        )
+    else:
+        if (
+            combined_inputs.get("generatedAtUtc") != generated_at
+            or combined_inputs.get("snapshotHashes", {}).get("phoenix2")
+            != _canonical_json_sha256(snapshot)
+        ):
+            raise ValueError("The durable model combined checkpoint is invalid.")
+        combined_tier = dict(combined_inputs["combinedTier"])
+        source_hashes = dict(combined_inputs["sourceHashes"])
+        snapshot_hashes = dict(combined_inputs["snapshotHashes"])
+        input_sha256 = str(combined_inputs["inputSha256"])
+    index_descriptor = _json_artifact_descriptor(
+        recommendation_index_path(generation), index
     )
-    combined_tier = build_combined_tier_payload(
-        combined_charts,
-        combined_metadata,
-        generated_at_utc=generated_at,
+    model_descriptor = _json_artifact_descriptor(
+        recommendation_model_path(generation), model
     )
+    score_descriptor = {
+        "pathname": recommendation_score_model_path(generation),
+        "sha256": hashlib.sha256(score_model).hexdigest(),
+        "byteSize": len(score_model),
+    }
+    phoenix1_items = [{"pathname": pathname} for pathname in phoenix1_paths]
+    phoenix2_items = [{"pathname": pathname} for pathname in phoenix2_paths]
+    sections = {
+        "index": index_descriptor,
+        "model": model_descriptor,
+        "scoreModel": score_descriptor,
+        # A recovery checkpoint can prove the exact committed path set without
+        # downloading every private shard. The typed store revalidates the
+        # database-owned digest and size for each path during registration.
+        "phoenix1Shards": {
+            "count": len(phoenix1_items),
+            "items": phoenix1_items,
+        },
+        "phoenix2Shards": {
+            "count": len(phoenix2_items),
+            "items": phoenix2_items,
+        },
+    }
+    artifact_manifest = {
+        "schemaVersion": 0,
+        "generationKey": generation,
+        "artifactCount": 3 + len(phoenix1_items) + len(phoenix2_items),
+        "byteSize": (
+            int(index_descriptor["byteSize"])
+            + int(model_descriptor["byteSize"])
+            + int(score_descriptor["byteSize"])
+        ),
+        "sha256": _canonical_json_sha256(sections),
+        "sections": sections,
+    }
     metadata = {
         "generationKey": generation,
+        "playerCount": len(index.get("players", [])),
         "phoenix1ShardCount": raw_shard_count,
         "phoenix2ShardCount": raw_shard_count,
-        "indexSha256": _canonical_json_sha256(index),
-        "modelSha256": _canonical_json_sha256(model),
-        "scoreModelSha256": hashlib.sha256(score_model).hexdigest(),
+        "sourceHashes": source_hashes,
+        "snapshotHashes": snapshot_hashes,
+        "inputSha256": input_sha256,
+        "outputSha256": _canonical_json_sha256(
+            {
+                "index": index,
+                "model": model,
+                "numericModelSha256": score_descriptor["sha256"],
+            }
+        ),
+        "indexSha256": index_descriptor["sha256"],
+        "modelSha256": model_descriptor["sha256"],
+        "scoreModelSha256": score_descriptor["sha256"],
         "phoenix1ShardsSha256": _canonical_json_sha256(phoenix1_paths),
         "phoenix2ShardsSha256": _canonical_json_sha256(phoenix2_paths),
+        "artifactManifest": artifact_manifest,
     }
     return dict(combined_tier), dict(index), metadata
 
@@ -1954,42 +2377,247 @@ def _load_checkpoint_recommendation_index(
     return dict(index)
 
 
+def _load_checkpoint_model_registration(
+    blobs: JsonBlobStore, metadata: Mapping[str, Any] | None
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Validate registration metadata without loading the model JSON or NPZ."""
+    if metadata is None:
+        return None, None
+    value = dict(metadata)
+    generation = str(value.get("generationKey") or "").strip()
+    phoenix1_count = int(value.get("phoenix1ShardCount") or 0)
+    phoenix2_count = int(value.get("phoenix2ShardCount") or 0)
+    source_hashes = value.get("sourceHashes")
+    manifest = value.get("artifactManifest")
+    if (
+        not generation
+        or phoenix1_count < 0
+        or phoenix2_count < 0
+        or not isinstance(source_hashes, Mapping)
+        or set(source_hashes) != {"phoenix1", "phoenix2"}
+        or not all(
+            re.fullmatch(r"[0-9a-f]{64}", str(source_hashes.get(mix) or ""))
+            for mix in ("phoenix1", "phoenix2")
+        )
+        or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("inputSha256") or ""))
+        or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("outputSha256") or ""))
+        or not isinstance(manifest, Mapping)
+    ):
+        raise ValueError("The typed analysis checkpoint has invalid model metadata.")
+    sections = manifest.get("sections")
+    manifest_schema = int(manifest.get("schemaVersion") or 0)
+    if (
+        manifest.get("generationKey") != generation
+        or manifest_schema not in {0, 1}
+        or not isinstance(sections, Mapping)
+        or manifest.get("sha256") != _canonical_json_sha256(sections)
+    ):
+        raise ValueError("The typed analysis checkpoint artifact manifest is invalid.")
+    expected_main_paths = {
+        "index": recommendation_index_path(generation),
+        "model": recommendation_model_path(generation),
+        "scoreModel": recommendation_score_model_path(generation),
+    }
+    for name, expected_path in expected_main_paths.items():
+        descriptor = sections.get(name)
+        if (
+            not isinstance(descriptor, Mapping)
+            or descriptor.get("pathname") != expected_path
+            or not re.fullmatch(
+                r"[0-9a-f]{64}", str(descriptor.get("sha256") or "")
+            )
+            or not isinstance(descriptor.get("byteSize"), int)
+            or int(descriptor["byteSize"]) < 0
+        ):
+            raise ValueError("The typed analysis checkpoint artifact manifest is invalid.")
+    for name, count, path_builder in (
+        ("phoenix1Shards", phoenix1_count, recommendation_phoenix1_shard_path),
+        ("phoenix2Shards", phoenix2_count, recommendation_phoenix2_shard_path),
+    ):
+        group = sections.get(name)
+        items = group.get("items") if isinstance(group, Mapping) else None
+        if (
+            not isinstance(group, Mapping)
+            or int(group.get("count") or 0) != count
+            or not isinstance(items, list)
+            or len(items) != count
+        ):
+            raise ValueError("The typed analysis checkpoint artifact manifest is invalid.")
+        group_descriptors: list[dict[str, Any]] = []
+        for shard, descriptor in enumerate(items):
+            if (
+                not isinstance(descriptor, Mapping)
+                or descriptor.get("pathname") != path_builder(generation, shard)
+            ):
+                raise ValueError(
+                    "The typed analysis checkpoint artifact manifest is invalid."
+                )
+            descriptor_value = dict(descriptor)
+            if manifest_schema >= 1 and (
+                not re.fullmatch(
+                    r"[0-9a-f]{64}", str(descriptor_value.get("sha256") or "")
+                )
+                or not isinstance(descriptor_value.get("byteSize"), int)
+                or int(descriptor_value["byteSize"]) < 0
+            ):
+                raise ValueError(
+                    "The typed analysis checkpoint artifact manifest is invalid."
+                )
+            group_descriptors.append(descriptor_value)
+        if manifest_schema >= 1 and (
+            group.get("sha256") != _canonical_json_sha256(group_descriptors)
+            or int(group.get("byteSize") or 0)
+            != sum(int(item["byteSize"]) for item in group_descriptors)
+        ):
+            raise ValueError("The typed analysis checkpoint artifact manifest is invalid.")
+    expected_artifact_count = 3 + phoenix1_count + phoenix2_count
+    known_byte_size = sum(
+        int(sections[name]["byteSize"])
+        for name in ("index", "model", "scoreModel")
+    ) + sum(
+        int(item.get("byteSize") or 0)
+        for name in ("phoenix1Shards", "phoenix2Shards")
+        for item in sections[name]["items"]
+    )
+    if (
+        int(manifest.get("artifactCount") or 0) != expected_artifact_count
+        or int(manifest.get("byteSize") or 0) != known_byte_size
+        or value.get("indexSha256") != sections["index"]["sha256"]
+        or value.get("modelSha256") != sections["model"]["sha256"]
+        or value.get("scoreModelSha256") != sections["scoreModel"]["sha256"]
+    ):
+        raise ValueError("The typed analysis checkpoint artifact manifest is invalid.")
+    _committed_model_shard_paths(
+        blobs,
+        generation=generation,
+        phoenix1_count=phoenix1_count,
+        phoenix2_count=phoenix2_count,
+    )
+    index = _load_checkpoint_recommendation_index(blobs, value)
+    return index, value
+
+
+def _recommendation_source_identity(
+    phoenix1_snapshot: Mapping[str, Any],
+    phoenix2_snapshot: Mapping[str, Any],
+    *,
+    phoenix2_source_sha256: str | None,
+) -> tuple[dict[str, str], dict[str, str], str]:
+    phoenix1_snapshot_sha256 = _canonical_json_sha256(phoenix1_snapshot)
+    actual_phoenix2_source_sha256 = _canonical_json_sha256(phoenix2_snapshot)
+    if (
+        phoenix2_source_sha256 is not None
+        and phoenix2_source_sha256 != actual_phoenix2_source_sha256
+    ):
+        raise ValueError("The typed recommendation source snapshot changed during modeling.")
+    snapshot_hashes = {
+        "phoenix1": phoenix1_snapshot_sha256,
+        "phoenix2": actual_phoenix2_source_sha256,
+    }
+    source_inputs = {
+        "phoenix1": {**phoenix1_snapshot, "generatedAtUtc": ""},
+        "phoenix2": {**phoenix2_snapshot, "generatedAtUtc": ""},
+    }
+    source_hashes = {
+        mix: _canonical_json_sha256(source_inputs[mix])
+        for mix in ("phoenix1", "phoenix2")
+    }
+    input_sha256 = _canonical_json_sha256(source_inputs)
+    del source_inputs
+    return source_hashes, snapshot_hashes, input_sha256
+
+
+def _build_combined_analysis_checkpoint(
+    *,
+    blob_store: JsonBlobStore,
+    job_store: JobStore,
+    job_id: str,
+    mix_spec: MixSpec,
+    snapshot: Mapping[str, Any],
+    phoenix2_source_sha256: str | None,
+    payload: Mapping[str, Any],
+    eligible_player_count: int,
+    lease_heartbeat: Any | None,
+) -> dict[str, Any] | None:
+    """Build and persist compact combined inputs without fitting the model."""
+    frozen_phoenix1 = blob_store.get_json(phoenix1_snapshot_path())
+    if frozen_phoenix1 is None:
+        return None
+    update_job(
+        job_store,
+        job_id,
+        status="running",
+        stage="analyzing",
+        progress={
+            "current": eligible_player_count,
+            "total": eligible_player_count,
+            "percent": 100,
+            "message": "Combining Phoenix 1 and Phoenix 2 recommendation evidence.",
+        },
+    )
+    phoenix1_snapshot = sanitize_snapshot(frozen_phoenix1, mix="phoenix1")
+    del frozen_phoenix1
+    source_hashes, snapshot_hashes, input_sha256 = _recommendation_source_identity(
+        phoenix1_snapshot,
+        snapshot,
+        phoenix2_source_sha256=phoenix2_source_sha256,
+    )
+    combined_charts, combined_slopes, combined_metadata = (
+        build_combined_chart_results(
+            phoenix1_snapshot,
+            snapshot,
+            consume_phoenix1_snapshot=True,
+        )
+    )
+    combined_tier = build_combined_tier_payload(
+        combined_charts,
+        combined_metadata,
+        generated_at_utc=payload.get("generatedAtUtc"),
+    )
+    reference = _write_typed_checkpoint_combined(
+        blob_store,
+        job_id=job_id,
+        mix_spec=mix_spec,
+        generated_at_utc=str(payload.get("generatedAtUtc") or ""),
+        combined_tier=combined_tier,
+        model_charts=recommendation_model_chart_rows(combined_charts),
+        phoenix2_slopes=combined_slopes,
+        source_hashes=source_hashes,
+        snapshot_hashes=snapshot_hashes,
+        input_sha256=input_sha256,
+    )
+    del combined_charts, combined_tier, combined_metadata
+    gc.collect()
+    _pulse_job_lease(lease_heartbeat)
+    return reference
+
+
 def _build_analysis_model_artifacts(
     *,
     blob_store: JsonBlobStore,
     job_store: JobStore,
     job_id: str,
     snapshot: Mapping[str, Any],
+    phoenix2_source_sha256: str | None,
     payload: Mapping[str, Any],
     eligible_player_count: int,
     lease_heartbeat: Any | None,
+    combined_inputs: Mapping[str, Any] | None = None,
+    score_model_artifact: tuple[Any, Mapping[str, Any]] | None = None,
 ) -> tuple[
     dict[str, Any] | None,
     dict[str, Any] | None,
-    tuple[
-        dict[str, Any],
-        dict[str, Any],
-        bytes,
-        list[dict[str, Any]],
-        list[dict[str, Any]],
-    ]
-    | None,
+    dict[str, Any] | None,
 ]:
     recommendation_payload: dict[str, Any] | None = None
     combined_tier_payload: dict[str, Any] | None = None
-    recommendation_model_artifacts: tuple[
-        dict[str, Any],
-        dict[str, Any],
-        bytes,
-        list[dict[str, Any]],
-        list[dict[str, Any]],
-    ] | None = None
+    recommendation_model_metadata: dict[str, Any] | None = None
     frozen_phoenix1 = blob_store.get_json(phoenix1_snapshot_path())
     if frozen_phoenix1 is None:
         return (
             combined_tier_payload,
             recommendation_payload,
-            recommendation_model_artifacts,
+            recommendation_model_metadata,
         )
 
     update_job(
@@ -2005,14 +2633,39 @@ def _build_analysis_model_artifacts(
         },
     )
     phoenix1_snapshot = sanitize_snapshot(frozen_phoenix1, mix="phoenix1")
-    combined_charts, combined_slopes, combined_metadata = (
-        build_combined_chart_results(phoenix1_snapshot, snapshot)
+    del frozen_phoenix1
+    source_hashes, snapshot_hashes, input_sha256 = _recommendation_source_identity(
+        phoenix1_snapshot,
+        snapshot,
+        phoenix2_source_sha256=phoenix2_source_sha256,
     )
-    combined_tier_payload = build_combined_tier_payload(
-        combined_charts,
-        combined_metadata,
-        generated_at_utc=payload.get("generatedAtUtc"),
-    )
+    if combined_inputs is None:
+        combined_charts, combined_slopes, combined_metadata = (
+            build_combined_chart_results(phoenix1_snapshot, snapshot)
+        )
+        combined_tier_payload = build_combined_tier_payload(
+            combined_charts,
+            combined_metadata,
+            generated_at_utc=payload.get("generatedAtUtc"),
+        )
+    else:
+        if (
+            combined_inputs.get("generatedAtUtc") != payload.get("generatedAtUtc")
+            or combined_inputs.get("sourceHashes") != source_hashes
+            or combined_inputs.get("snapshotHashes") != snapshot_hashes
+            or combined_inputs.get("inputSha256") != input_sha256
+        ):
+            raise ValueError("The typed combined checkpoint source identity changed.")
+        combined_tier_payload = dict(combined_inputs["combinedTier"])
+        combined_charts = _checkpoint_records(
+            combined_inputs.get("modelCharts"), field="combined model charts"
+        )
+        raw_slopes = combined_inputs.get("phoenix2Slopes")
+        if not isinstance(raw_slopes, Mapping):
+            raise ValueError("The typed combined checkpoint slopes are invalid.")
+        combined_slopes = {
+            str(mode): float(slope) for mode, slope in raw_slopes.items()
+        }
     recommendation_generation = recommendation_generation_key(job_id)
     (
         recommendation_payload,
@@ -2027,14 +2680,42 @@ def _build_analysis_model_artifacts(
         combined_charts=combined_charts,
         phoenix2_slopes=combined_slopes,
         generation_key=recommendation_generation,
+        consume_phoenix1_snapshot=True,
+        score_model_artifact=score_model_artifact,
     )
-    recommendation_model_artifacts = (
-        recommendation_payload,
-        recommendation_model,
-        recommendation_score_model,
-        recommendation_phoenix1_shards,
-        recommendation_phoenix2_shards,
+    output_sha256 = _canonical_json_sha256(
+        {
+            "index": recommendation_payload,
+            "model": recommendation_model,
+            "numericModelSha256": hashlib.sha256(
+                recommendation_score_model
+            ).hexdigest(),
+        }
     )
+    artifact_manifest = _recommendation_artifact_manifest(
+        index=recommendation_payload,
+        model=recommendation_model,
+        score_model_bytes=recommendation_score_model,
+        phoenix1_shards=recommendation_phoenix1_shards,
+        phoenix2_shards=recommendation_phoenix2_shards,
+    )
+    artifact_sections = artifact_manifest["sections"]
+    recommendation_model_metadata = {
+        "generationKey": recommendation_generation,
+        "playerCount": len(recommendation_payload.get("players", [])),
+        "phoenix1ShardCount": len(recommendation_phoenix1_shards),
+        "phoenix2ShardCount": len(recommendation_phoenix2_shards),
+        "sourceHashes": source_hashes,
+        "snapshotHashes": snapshot_hashes,
+        "inputSha256": input_sha256,
+        "outputSha256": output_sha256,
+        "indexSha256": artifact_sections["index"]["sha256"],
+        "modelSha256": artifact_sections["model"]["sha256"],
+        "scoreModelSha256": artifact_sections["scoreModel"]["sha256"],
+        "phoenix1ShardsSha256": artifact_sections["phoenix1Shards"]["sha256"],
+        "phoenix2ShardsSha256": artifact_sections["phoenix2Shards"]["sha256"],
+        "artifactManifest": artifact_manifest,
+    }
     publish_recommendation_model_artifacts(
         blob_store,
         index=recommendation_payload,
@@ -2044,13 +2725,88 @@ def _build_analysis_model_artifacts(
         phoenix2_shards=recommendation_phoenix2_shards,
         index_path=recommendation_blob_path(),
         publish_index=False,
+        artifact_manifest=artifact_manifest,
+    )
+    del (
+        recommendation_model,
+        recommendation_score_model,
+        recommendation_phoenix1_shards,
+        recommendation_phoenix2_shards,
     )
     _pulse_job_lease(lease_heartbeat)
     return (
         combined_tier_payload,
         recommendation_payload,
-        recommendation_model_artifacts,
+        recommendation_model_metadata,
     )
+
+
+def _build_analysis_model_mode_artifact(
+    *,
+    blob_store: JsonBlobStore,
+    job_store: JobStore,
+    job_id: str,
+    mix_spec: MixSpec,
+    snapshot: Mapping[str, Any],
+    phoenix2_source_sha256: str | None,
+    combined_inputs: Mapping[str, Any],
+    mode: str,
+    consume_snapshots: bool,
+    lease_heartbeat: Any | None,
+) -> dict[str, Any]:
+    chart_type = {"singles": "Single", "doubles": "Double"}.get(mode)
+    if chart_type is None:
+        raise ValueError("A recommendation model mode is invalid.")
+    frozen_phoenix1 = blob_store.get_json(phoenix1_snapshot_path())
+    if frozen_phoenix1 is None:
+        raise RuntimeError("The Phoenix 1 recommendation source is unavailable.")
+    phoenix1_snapshot = sanitize_snapshot(frozen_phoenix1, mix="phoenix1")
+    del frozen_phoenix1
+    source_hashes, snapshot_hashes, input_sha256 = _recommendation_source_identity(
+        phoenix1_snapshot,
+        snapshot,
+        phoenix2_source_sha256=phoenix2_source_sha256,
+    )
+    if (
+        combined_inputs.get("sourceHashes") != source_hashes
+        or combined_inputs.get("snapshotHashes") != snapshot_hashes
+        or combined_inputs.get("inputSha256") != input_sha256
+    ):
+        raise ValueError("The typed model mode source identity changed.")
+    update_job(
+        job_store,
+        job_id,
+        status="running",
+        stage="analyzing",
+        progress={
+            "current": 1 if mode == "singles" else 2,
+            "total": 2,
+            "percent": 50 if mode == "singles" else 100,
+            "message": f"Fitting the {mode} recommendation score model.",
+        },
+    )
+    score_bytes, metadata = build_recommendation_score_mode_artifact(
+        phoenix1_snapshot,
+        snapshot,
+        combined_charts=_checkpoint_records(
+            combined_inputs.get("modelCharts"), field="combined model charts"
+        ),
+        chart_type=chart_type,
+        consume_snapshots=consume_snapshots,
+    )
+    reference = _write_typed_checkpoint_model_part(
+        blob_store,
+        job_id=job_id,
+        mix_spec=mix_spec,
+        mode=mode,
+        input_sha256=input_sha256,
+        score_model_bytes=score_bytes,
+        metadata=metadata,
+    )
+    del score_bytes
+    gc.collect()
+    _pulse_job_lease(lease_heartbeat)
+    return reference
 
 
 def _checkpoint_continuation(
@@ -2100,7 +2856,11 @@ def _resume_typed_analysis_checkpoint(
     from piu_misgrade_analyzer import AnalysisConfig
 
     if (
-        int(checkpoint.get("schemaVersion") or 0) != TYPED_CHECKPOINT_SCHEMA_VERSION
+        int(checkpoint.get("schemaVersion") or 0)
+        not in {
+            LEGACY_TYPED_CHECKPOINT_SCHEMA_VERSION,
+            TYPED_CHECKPOINT_SCHEMA_VERSION,
+        }
         or str(checkpoint.get("jobId") or "") != job_id
         or resolve_mix(checkpoint.get("mix")).key != mix_spec.key
     ):
@@ -2108,12 +2868,19 @@ def _resume_typed_analysis_checkpoint(
     raw_snapshot_reference = checkpoint.get("snapshot")
     raw_config = checkpoint.get("config")
     raw_payload = checkpoint.get("payload")
+    raw_combined_reference = checkpoint.get("combined")
     raw_combined_tier = checkpoint.get("combinedTier")
     raw_model = checkpoint.get("model")
+    raw_model_parts = checkpoint.get("modelParts")
     checkpoint_phase = str(checkpoint.get("phase") or "")
     eligible_player_count = checkpoint.get("eligiblePlayerCount")
     checkpoint_phases = {
         TYPED_CHECKPOINT_ANALYSIS_PHASE,
+        TYPED_CHECKPOINT_COMBINED_PHASE,
+        TYPED_CHECKPOINT_MODEL_PREPARE_PHASE,
+        TYPED_CHECKPOINT_MODEL_FIT_SINGLES_PHASE,
+        TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE,
+        TYPED_CHECKPOINT_MODEL_ASSEMBLE_PHASE,
         TYPED_CHECKPOINT_MODEL_PHASE,
         TYPED_CHECKPOINT_SNAPSHOT_PHASE,
         TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE,
@@ -2128,8 +2895,13 @@ def _resume_typed_analysis_checkpoint(
         or checkpoint_phase not in checkpoint_phases
         or not isinstance(eligible_player_count, int)
         or eligible_player_count < 0
+        or (
+            raw_combined_reference is not None
+            and not isinstance(raw_combined_reference, Mapping)
+        )
         or (raw_combined_tier is not None and not isinstance(raw_combined_tier, Mapping))
         or (raw_model is not None and not isinstance(raw_model, Mapping))
+        or (raw_model_parts is not None and not isinstance(raw_model_parts, Mapping))
     ):
         raise ValueError("The typed analysis checkpoint payload is invalid.")
     snapshot = _load_typed_checkpoint_snapshot(
@@ -2145,13 +2917,37 @@ def _resume_typed_analysis_checkpoint(
     if parse_utc(payload.get("generatedAtUtc")) is None:
         raise ValueError("The typed analysis checkpoint timestamp is invalid.")
     manifest = _typed_manifest(checkpoint)
+    combined_inputs: dict[str, Any] | None = None
+    if checkpoint_phase in {
+        TYPED_CHECKPOINT_COMBINED_PHASE,
+        TYPED_CHECKPOINT_MODEL_PREPARE_PHASE,
+        TYPED_CHECKPOINT_MODEL_FIT_SINGLES_PHASE,
+        TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE,
+        TYPED_CHECKPOINT_MODEL_ASSEMBLE_PHASE,
+    }:
+        if not isinstance(raw_combined_reference, Mapping):
+            raise ValueError("The typed combined checkpoint reference is missing.")
+        combined_inputs = _load_typed_checkpoint_combined(
+            blob_store,
+            checkpoint=checkpoint,
+            reference=raw_combined_reference,
+            mix_spec=mix_spec,
+        )
     recovered_model_checkpoint = False
-    if checkpoint_phase == TYPED_CHECKPOINT_ANALYSIS_PHASE and raw_model is None:
+    if checkpoint_phase in {
+        TYPED_CHECKPOINT_ANALYSIS_PHASE,
+        TYPED_CHECKPOINT_COMBINED_PHASE,
+        TYPED_CHECKPOINT_MODEL_PREPARE_PHASE,
+        TYPED_CHECKPOINT_MODEL_FIT_SINGLES_PHASE,
+        TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE,
+        TYPED_CHECKPOINT_MODEL_ASSEMBLE_PHASE,
+    } and raw_model is None:
         recovered_model = _recover_published_model_checkpoint(
             blob_store,
             job_id=job_id,
             snapshot=snapshot,
             payload=payload,
+            combined_inputs=combined_inputs,
         )
         if recovered_model is not None:
             recovered_combined_tier, _, recovered_metadata = recovered_model
@@ -2185,6 +2981,262 @@ def _resume_typed_analysis_checkpoint(
         )
 
     if checkpoint_phase == TYPED_CHECKPOINT_ANALYSIS_PHASE:
+        combined_reference = _build_combined_analysis_checkpoint(
+            blob_store=blob_store,
+            job_store=job_store,
+            job_id=job_id,
+            mix_spec=mix_spec,
+            snapshot=snapshot,
+            phoenix2_source_sha256=str(raw_snapshot_reference.get("sha256") or ""),
+            payload=payload,
+            eligible_player_count=eligible_player_count,
+            lease_heartbeat=lease_heartbeat,
+        )
+        next_phase = (
+            TYPED_CHECKPOINT_COMBINED_PHASE
+            if combined_reference is not None
+            else TYPED_CHECKPOINT_MODEL_PHASE
+        )
+        checkpoint = {
+            **checkpoint,
+            "phase": next_phase,
+            "combined": combined_reference,
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = next_phase
+        raw_combined_reference = combined_reference
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation=(
+                    "model-prepare"
+                    if combined_reference is not None
+                    else "snapshot"
+                ),
+                stage=(
+                    "analyzing"
+                    if combined_reference is not None
+                    else "publishing"
+                ),
+                message=(
+                    "Combined recommendation inputs checkpointed; queued for model fitting."
+                    if combined_reference is not None
+                    else "No Phoenix 1 model source is available; queued for snapshot persistence."
+                ),
+                lease_heartbeat=lease_heartbeat,
+            )
+
+    if checkpoint_phase == TYPED_CHECKPOINT_COMBINED_PHASE:
+        if combined_inputs is None:
+            if not isinstance(raw_combined_reference, Mapping):
+                raise ValueError("The typed combined checkpoint reference is missing.")
+            combined_inputs = _load_typed_checkpoint_combined(
+                blob_store,
+                checkpoint=checkpoint,
+                reference=raw_combined_reference,
+                mix_spec=mix_spec,
+            )
+        if not yield_after_checkpoint:
+            (
+                combined_tier_payload,
+                _recommendation_payload,
+                model_artifacts,
+            ) = _build_analysis_model_artifacts(
+                blob_store=blob_store,
+                job_store=job_store,
+                job_id=job_id,
+                snapshot=snapshot,
+                phoenix2_source_sha256=str(
+                    raw_snapshot_reference.get("sha256") or ""
+                ),
+                payload=payload,
+                eligible_player_count=eligible_player_count,
+                lease_heartbeat=lease_heartbeat,
+                combined_inputs=combined_inputs,
+            )
+            checkpoint = {
+                **checkpoint,
+                "schemaVersion": TYPED_CHECKPOINT_SCHEMA_VERSION,
+                "phase": TYPED_CHECKPOINT_MODEL_PHASE,
+                "combinedTier": combined_tier_payload,
+                "model": model_artifacts,
+            }
+            blob_store.put_json(checkpoint_path, checkpoint)
+            return _resume_typed_analysis_checkpoint(
+                checkpoint,
+                blob_store=blob_store,
+                job_store=job_store,
+                job_id=job_id,
+                mix_spec=mix_spec,
+                staging_path=staging_path,
+                checkpoint_path=checkpoint_path,
+                lease_heartbeat=lease_heartbeat,
+                yield_after_checkpoint=False,
+            )
+        checkpoint = {
+            **checkpoint,
+            "schemaVersion": TYPED_CHECKPOINT_SCHEMA_VERSION,
+            "phase": TYPED_CHECKPOINT_MODEL_PREPARE_PHASE,
+            "modelParts": {},
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_MODEL_PREPARE_PHASE
+        raw_model_parts = {}
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="model-fit-singles",
+                stage="analyzing",
+                message="Recommendation model inputs prepared; queued for Singles fitting.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
+    if checkpoint_phase == TYPED_CHECKPOINT_MODEL_PREPARE_PHASE:
+        if combined_inputs is None:
+            raise ValueError("The typed combined checkpoint inputs are missing.")
+        singles_reference = _build_analysis_model_mode_artifact(
+            blob_store=blob_store,
+            job_store=job_store,
+            job_id=job_id,
+            mix_spec=mix_spec,
+            snapshot=snapshot,
+            phoenix2_source_sha256=str(raw_snapshot_reference.get("sha256") or ""),
+            combined_inputs=combined_inputs,
+            mode="singles",
+            consume_snapshots=yield_after_checkpoint,
+            lease_heartbeat=lease_heartbeat,
+        )
+        checkpoint = {
+            **checkpoint,
+            "schemaVersion": TYPED_CHECKPOINT_SCHEMA_VERSION,
+            "phase": TYPED_CHECKPOINT_MODEL_FIT_SINGLES_PHASE,
+            "modelParts": {"singles": singles_reference},
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_MODEL_FIT_SINGLES_PHASE
+        raw_model_parts = checkpoint["modelParts"]
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="model-fit-doubles",
+                stage="analyzing",
+                message="Singles model checkpointed; queued for Doubles fitting.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
+    if checkpoint_phase == TYPED_CHECKPOINT_MODEL_FIT_SINGLES_PHASE:
+        if combined_inputs is None or not isinstance(raw_model_parts, Mapping):
+            raise ValueError("The typed model checkpoint inputs are missing.")
+        doubles_reference = _build_analysis_model_mode_artifact(
+            blob_store=blob_store,
+            job_store=job_store,
+            job_id=job_id,
+            mix_spec=mix_spec,
+            snapshot=snapshot,
+            phoenix2_source_sha256=str(raw_snapshot_reference.get("sha256") or ""),
+            combined_inputs=combined_inputs,
+            mode="doubles",
+            consume_snapshots=yield_after_checkpoint,
+            lease_heartbeat=lease_heartbeat,
+        )
+        checkpoint = {
+            **checkpoint,
+            "schemaVersion": TYPED_CHECKPOINT_SCHEMA_VERSION,
+            "phase": TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE,
+            "modelParts": {**dict(raw_model_parts), "doubles": doubles_reference},
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE
+        raw_model_parts = checkpoint["modelParts"]
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="model-assemble-overall",
+                stage="analyzing",
+                message="Doubles model checkpointed; queued for Overall assembly.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
+    if checkpoint_phase == TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE:
+        if combined_inputs is None or not isinstance(raw_model_parts, Mapping):
+            raise ValueError("The typed model checkpoint parts are missing.")
+        from piu_recommendations import (
+            ScoreResponseModel,
+            merge_score_response_mode_models,
+        )
+
+        mode_parts: dict[str, tuple[Any, Mapping[str, Any]]] = {}
+        for mode in ("singles", "doubles"):
+            reference = raw_model_parts.get(mode)
+            if not isinstance(reference, Mapping):
+                raise ValueError("A typed model mode checkpoint is missing.")
+            score_bytes, score_metadata = _load_typed_checkpoint_model_part(
+                blob_store,
+                checkpoint=checkpoint,
+                reference=reference,
+                mix_spec=mix_spec,
+                mode=mode,
+                input_sha256=str(combined_inputs.get("inputSha256") or ""),
+            )
+            mode_parts[mode] = (
+                ScoreResponseModel.from_npz_bytes(score_bytes),
+                score_metadata,
+            )
+        overall_model, overall_metadata = merge_score_response_mode_models(mode_parts)
+        overall_reference = _write_typed_checkpoint_model_part(
+            blob_store,
+            job_id=job_id,
+            mix_spec=mix_spec,
+            mode="overall",
+            input_sha256=str(combined_inputs.get("inputSha256") or ""),
+            score_model_bytes=overall_model.to_npz_bytes(),
+            metadata=overall_metadata,
+        )
+        checkpoint = {
+            **checkpoint,
+            "schemaVersion": TYPED_CHECKPOINT_SCHEMA_VERSION,
+            "phase": TYPED_CHECKPOINT_MODEL_ASSEMBLE_PHASE,
+            "modelParts": {**dict(raw_model_parts), "overall": overall_reference},
+        }
+        blob_store.put_json(checkpoint_path, checkpoint)
+        _pulse_job_lease(lease_heartbeat)
+        checkpoint_phase = TYPED_CHECKPOINT_MODEL_ASSEMBLE_PHASE
+        raw_model_parts = checkpoint["modelParts"]
+        if yield_after_checkpoint:
+            return _checkpoint_continuation(
+                job_store=job_store,
+                job_id=job_id,
+                continuation="model",
+                stage="analyzing",
+                message="Overall model assembled; queued for artifact publication.",
+                lease_heartbeat=lease_heartbeat,
+            )
+
+    if checkpoint_phase == TYPED_CHECKPOINT_MODEL_ASSEMBLE_PHASE:
+        if combined_inputs is None or not isinstance(raw_model_parts, Mapping):
+            raise ValueError("The typed Overall model checkpoint is missing.")
+        overall_reference = raw_model_parts.get("overall")
+        if not isinstance(overall_reference, Mapping):
+            raise ValueError("The typed Overall model artifact is missing.")
+        overall_bytes, overall_metadata = _load_typed_checkpoint_model_part(
+            blob_store,
+            checkpoint=checkpoint,
+            reference=overall_reference,
+            mix_spec=mix_spec,
+            mode="overall",
+            input_sha256=str(combined_inputs.get("inputSha256") or ""),
+        )
+        from piu_recommendations import ScoreResponseModel
+
+        overall_model = ScoreResponseModel.from_npz_bytes(overall_bytes)
         (
             combined_tier_payload,
             recommendation_payload,
@@ -2194,37 +3246,25 @@ def _resume_typed_analysis_checkpoint(
             job_store=job_store,
             job_id=job_id,
             snapshot=snapshot,
+            phoenix2_source_sha256=str(raw_snapshot_reference.get("sha256") or ""),
             payload=payload,
             eligible_player_count=eligible_player_count,
             lease_heartbeat=lease_heartbeat,
+            combined_inputs=combined_inputs,
+            score_model_artifact=(overall_model, overall_metadata),
         )
-        model_checkpoint = None
-        if model_artifacts is not None:
-            model_checkpoint = {
-                "generationKey": model_artifacts[0].get("generationKey"),
-                "phoenix1ShardCount": len(model_artifacts[3]),
-                "phoenix2ShardCount": len(model_artifacts[4]),
-                "indexSha256": _canonical_json_sha256(model_artifacts[0]),
-                "modelSha256": _canonical_json_sha256(model_artifacts[1]),
-                "scoreModelSha256": hashlib.sha256(model_artifacts[2]).hexdigest(),
-                "phoenix1ShardsSha256": _canonical_json_sha256(
-                    [_canonical_json_sha256(value) for value in model_artifacts[3]]
-                ),
-                "phoenix2ShardsSha256": _canonical_json_sha256(
-                    [_canonical_json_sha256(value) for value in model_artifacts[4]]
-                ),
-            }
         checkpoint = {
             **checkpoint,
+            "schemaVersion": TYPED_CHECKPOINT_SCHEMA_VERSION,
             "phase": TYPED_CHECKPOINT_MODEL_PHASE,
             "combinedTier": combined_tier_payload,
-            "model": model_checkpoint,
+            "model": model_artifacts,
         }
         blob_store.put_json(checkpoint_path, checkpoint)
         _pulse_job_lease(lease_heartbeat)
         checkpoint_phase = TYPED_CHECKPOINT_MODEL_PHASE
         raw_combined_tier = combined_tier_payload
-        raw_model = model_checkpoint
+        raw_model = model_artifacts
         if yield_after_checkpoint:
             return _checkpoint_continuation(
                 job_store=job_store,
@@ -2440,7 +3480,7 @@ def _resume_typed_analysis_checkpoint(
 
     recommendation_payload: dict[str, Any] | None = None
     if checkpoint_phase == TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE:
-        recommendation_payload, model_artifacts = _load_checkpoint_model_artifacts(
+        recommendation_payload, model_metadata = _load_checkpoint_model_registration(
             blob_store, dict(raw_model) if raw_model is not None else None
         )
         update_job(
@@ -2457,7 +3497,8 @@ def _resume_typed_analysis_checkpoint(
         )
         _, model_generation_id = typed_publisher(
             **typed_kwargs,
-            model_artifacts=model_artifacts,
+            model_artifacts=None,
+            model_metadata=model_metadata,
             phase="model",
             analysis_run_id=analysis_run_id,
         )
@@ -2576,6 +3617,10 @@ def _resume_typed_analysis_checkpoint(
             staging_path,
             checkpoint_path,
             typed_checkpoint_snapshot_path(job_id, mix_spec),
+            typed_checkpoint_combined_path(job_id, mix_spec),
+            typed_checkpoint_model_part_path(job_id, "singles", mix_spec),
+            typed_checkpoint_model_part_path(job_id, "doubles", mix_spec),
+            typed_checkpoint_model_part_path(job_id, "overall", mix_spec),
             *_typed_checkpoint_shard_paths(manifest),
         ],
     )
@@ -2878,6 +3923,7 @@ def execute_analysis_job(
                 "config": asdict(config),
                 "payload": payload,
                 "typedShards": typed_shards,
+                "combined": None,
                 "combinedTier": None,
                 "model": None,
             }
@@ -2887,9 +3933,9 @@ def execute_analysis_job(
                 return _checkpoint_continuation(
                     job_store=job_store,
                     job_id=job_id,
-                    continuation="model",
+                    continuation="combined",
                     stage="analyzing",
-                    message="Base analysis checkpointed; queued for recommendation modeling.",
+                    message="Base analysis checkpointed; queued for combined recommendation analysis.",
                     lease_heartbeat=lease_heartbeat,
                 )
             return _resume_typed_analysis_checkpoint(
@@ -2912,6 +3958,7 @@ def execute_analysis_job(
             job_store=job_store,
             job_id=job_id,
             snapshot=snapshot,
+            phoenix2_source_sha256=None,
             payload=payload,
             eligible_player_count=eligible_player_count,
             lease_heartbeat=lease_heartbeat,

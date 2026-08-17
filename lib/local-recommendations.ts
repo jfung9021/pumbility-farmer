@@ -1,17 +1,158 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  chartMatchesRecommendationLevelRange,
+  officialDifficulty,
+  RECOMMENDATION_DISPLAY_COUNT,
+  recommendationDifficultyOptions,
+} from "./recommendation-filters.ts";
 import type {
   ModeKey,
   PlayerRecommendationsResponse,
   RecommendationChart,
   RecommendationChartEstimate,
+  RecommendationModeKey,
   RecommendationModeResult,
   RecommendationPlayer,
   RecommendationPlayersResponse,
   RecommendationScoreProgress,
   RecommendationTopScore,
 } from "./types";
+
+
+function boundedStandardMode(
+  modeKey: Exclude<ModeKey, "coop">,
+  mode: RecommendationModeResult,
+): RecommendationModeResult {
+  const bounded = (charts: RecommendationChart[] | undefined) => (charts ?? [])
+    .filter((chart) => chartMatchesRecommendationLevelRange(
+      chart,
+      modeKey,
+      mode.scoringRating,
+    ));
+  const filterCandidates = bounded(mode.filterCandidates);
+  const topRecommendations = bounded(mode.topRecommendations)
+    .slice(0, RECOMMENDATION_DISPLAY_COUNT);
+  const maximumEstimatedDifficulty = typeof mode.scoringRating === "number"
+    ? mode.scoringRating + RECOMMENDATION_UPPER_RADIUS
+    : Number.NEGATIVE_INFINITY;
+  return {
+    ...mode,
+    candidateCount: filterCandidates.filter(
+      (chart) => chart.estimatedDifficulty <= maximumEstimatedDifficulty,
+    ).length,
+    filterCandidateCount: filterCandidates.length,
+    filterCandidates,
+    topRecommendations,
+  };
+}
+
+function boundedRecommendationPlayer(
+  player: PlayerRecommendationsResponse["player"],
+): PlayerRecommendationsResponse["player"] {
+  if (!player.modes.singles || !player.modes.doubles) return player;
+  const singles = boundedStandardMode("singles", player.modes.singles);
+  const doubles = boundedStandardMode("doubles", player.modes.doubles);
+  const sourceCandidates = new Map(
+    [
+      ...(singles.filterCandidates ?? []),
+      ...(doubles.filterCandidates ?? []),
+    ].map((candidate) => [candidate.chartId, candidate] as const),
+  );
+  const sourceTopIds = new Set([
+    ...singles.topRecommendations.map((candidate) => candidate.chartId),
+    ...doubles.topRecommendations.map((candidate) => candidate.chartId),
+  ]);
+  const rawOverall = player.modes.overall;
+  const overall = rawOverall
+    ? {
+        ...rawOverall,
+        candidateCount: sourceTopIds.size,
+        filterCandidateCount: (rawOverall.filterCandidates ?? []).filter(
+          (candidate) => sourceCandidates.has(candidate.chartId),
+        ).length,
+        sourceRecommendationCounts: {
+          singles: singles.topRecommendations.length,
+          doubles: doubles.topRecommendations.length,
+        },
+        filterCandidates: (rawOverall.filterCandidates ?? []).flatMap((candidate) => {
+          const source = sourceCandidates.get(candidate.chartId);
+          return source
+            ? [{ ...source, projectedGain: candidate.projectedGain }]
+            : [];
+        }),
+        topRecommendations: rawOverall.topRecommendations.flatMap((candidate) => {
+          const source = sourceCandidates.get(candidate.chartId);
+          return source && sourceTopIds.has(candidate.chartId)
+            ? [{ ...source, projectedGain: candidate.projectedGain }]
+            : [];
+        }).slice(0, RECOMMENDATION_DISPLAY_COUNT),
+      }
+    : undefined;
+  return {
+    ...player,
+    modes: {
+      ...player.modes,
+      singles,
+      doubles,
+      ...(overall ? { overall } : {}),
+    },
+  };
+}
+
+function boundedRecommendationResponse(
+  payload: PlayerRecommendationsResponse,
+): PlayerRecommendationsResponse {
+  return {
+    ...payload,
+    player: boundedRecommendationPlayer(payload.player),
+  };
+}
+
+
+export function recommendationsForMode(
+  payload: PlayerRecommendationsResponse,
+  mode: RecommendationModeKey,
+  difficulty = "",
+): PlayerRecommendationsResponse {
+  const boundedPayload = boundedRecommendationResponse(payload);
+  const modePayload = boundedPayload.player.modes[mode];
+  let selectedMode = modePayload;
+  if (mode === "overall" && modePayload) {
+    const difficultyOptions = recommendationDifficultyOptions(
+      "overall",
+      modePayload.filterCandidates ?? [],
+    );
+    const selectedDifficulty = difficulty
+      ? difficultyOptions.find(
+          (option) => option.toLocaleLowerCase() === difficulty.toLocaleLowerCase(),
+        )
+      : undefined;
+    if (difficulty && !selectedDifficulty) {
+      throw new RangeError("The requested Overall difficulty is unavailable.");
+    }
+    const { filterCandidates: allFilterCandidates, ...compactMode } = modePayload;
+    selectedMode = {
+      ...compactMode,
+      difficultyOptions,
+      ...(selectedDifficulty
+        ? {
+            filterCandidates: (allFilterCandidates ?? []).filter(
+              (chart) => officialDifficulty(chart) === selectedDifficulty,
+            ),
+          }
+        : {}),
+    };
+  }
+  return {
+    ...boundedPayload,
+    player: {
+      ...boundedPayload.player,
+      modes: selectedMode ? { [mode]: selectedMode } : {},
+    },
+  };
+}
 
 
 export const LOCAL_RECOMMENDATIONS_PATH = path.join(
@@ -73,7 +214,7 @@ const COOP_TOP_SCORE_KEYS = new Set([
 ]);
 const DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL = 16;
 const RECOMMENDATION_UPPER_RADIUS = 1.0;
-const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 23;
+const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 25;
 
 export type LocalRecommendationIndex = {
   schemaVersion?: number;
@@ -362,6 +503,7 @@ function manualMode(
   const filterCandidates: RecommendationChart[] = charts
     .filter(
       (chart) => chart.type === chartType
+        && chartMatchesRecommendationLevelRange(chart, modeKey, scoringRating),
     )
     .map((chart) => {
       const farmEdge = chart.level + 0.5 - chart.estimatedDifficulty;
@@ -403,7 +545,7 @@ function manualMode(
       || left.songName.localeCompare(right.songName)
       || left.chartId.localeCompare(right.chartId),
     )
-    .slice(0, 20);
+    .slice(0, 50);
   return {
     eligible: true,
     manual: true,
@@ -446,7 +588,7 @@ function manualOverallMode(
       || left.songName.localeCompare(right.songName)
       || left.chartId.localeCompare(right.chartId),
     )
-    .slice(0, 20);
+    .slice(0, 50);
   return {
     eligible: true,
     manual: true,
@@ -582,7 +724,7 @@ export function recommendationsForPlayer(
     indexedPlayer && "modes" in indexedPlayer ? indexedPlayer : null
   );
   return player
-    ? {
+    ? boundedRecommendationResponse({
         generatedAtUtc: payload.generatedAtUtc,
         recommendationsGeneratedAtUtc: payload.generatedAtUtc,
         modelGeneratedAtUtc: payload.generatedAtUtc,
@@ -590,6 +732,6 @@ export function recommendationsForPlayer(
         legacySnapshot: true,
         method: payload.method,
         player,
-      }
+      })
     : null;
 }

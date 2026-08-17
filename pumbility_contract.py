@@ -18,7 +18,7 @@ from phoenix2_sync import parse_utc, utc_now
 SCRIPT_VERSION = "6.5.0-catalog-note-count-normalized-folder-normalized-0.4-scale"
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)
-RECOMMENDATION_SCHEMA_VERSION = 23
+RECOMMENDATION_SCHEMA_VERSION = 25
 PLAYER_REFRESH_STORAGE_SCHEMA_VERSION = 3
 
 

@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -138,6 +139,7 @@ _PUBLIC_RECOMMENDATION_METHOD_FIELDS = (
     "shortHistoryBaseline",
     "candidateUpperRadius",
     "candidateLowerBound",
+    "candidateOfficialLevelWindow",
     "topPumbilityCount",
     "overallPumbility",
     "overallRecommendations",
@@ -167,7 +169,6 @@ _PUBLIC_RECOMMENDATION_PLAYER_FIELDS = (
     "scoreProgress",
     "inputShard",
 )
-LEGACY_COMBINED_TIER_SCHEMA_VERSION = 2
 _LIVE_RECOMMENDATION_INDEX_FIELDS = frozenset(
     {"method", "players", "inputShardCount"}
 )
@@ -583,66 +584,9 @@ def _combined_payload_for_active_generation(
     result = dict(payload)
     if active_schema == COMBINED_TIER_SCHEMA_VERSION:
         return result
-    if COMBINED_TIER_SCHEMA_VERSION != 5 or active_schema not in {
-        3,
-        LEGACY_COMBINED_TIER_SCHEMA_VERSION,
-    }:
-        raise RuntimeError("The active combined-tier schema is not supported for population.")
-
-    summary = dict(result.get("summary") or {})
-    current_script_version = str(summary.get("scriptVersion") or "")
-    current_suffix = f"+combined-tier-v{COMBINED_TIER_SCHEMA_VERSION}"
-    if not current_script_version.endswith(current_suffix):
-        raise RuntimeError("The current combined-tier script version is inconsistent.")
-    summary["scriptVersion"] = current_script_version[: -len(current_suffix)] + "+combined-tier-v3"
-    method = dict(summary.get("method") or {})
-    method.pop("coop", None)
-    if "modeSeparation" in method:
-        method["modeSeparation"] = (
-            "Singles and Doubles use independent baselines, calibration, and ranks"
-        )
-    summary["method"] = method
-    coop_rows = [row for row in result.get("coop", []) if isinstance(row, Mapping)]
-    if isinstance(summary.get("modes"), Mapping):
-        modes = dict(summary["modes"])
-        modes.pop("coop", None)
-        summary["modes"] = modes
-    if isinstance(summary.get("coverage"), Mapping):
-        coverage = dict(summary["coverage"])
-        coverage["targetCatalogCharts"] = max(
-            0, int(coverage.get("targetCatalogCharts") or 0) - len(coop_rows)
-        )
-        coverage["targetChartsMeasured"] = max(
-            0,
-            int(coverage.get("targetChartsMeasured") or 0)
-            - sum(row.get("estimatedDifficulty") is not None for row in coop_rows),
-        )
-        coverage["targetChartsPublished"] = max(
-            0,
-            int(coverage.get("targetChartsPublished") or 0)
-            - sum(row.get("evidenceStatus") == "Published" for row in coop_rows),
-        )
-        summary["coverage"] = coverage
-    result.pop("coop", None)
-    result["schemaVersion"] = 3
-    result["summary"] = summary
-    if active_schema == LEGACY_COMBINED_TIER_SCHEMA_VERSION:
-        summary["scriptVersion"] = (
-            current_script_version[: -len(current_suffix)]
-            + f"+combined-tier-v{LEGACY_COMBINED_TIER_SCHEMA_VERSION}"
-        )
-        method.pop("whatIfEstimates", None)
-        result["schemaVersion"] = LEGACY_COMBINED_TIER_SCHEMA_VERSION
-        for field in ("singles", "doubles"):
-            result[field] = [
-                {
-                    key: value
-                    for key, value in dict(chart).items()
-                    if key != "whatIfEstimates"
-                }
-                for chart in result.get(field, [])
-            ]
-    return result
+    raise RuntimeError(
+        "The active combined-tier schema cannot represent adjacent-level What-if data."
+    )
 
 
 def _recommendation_index_for_active_generation(
@@ -931,47 +875,187 @@ def _persist_model_generation(
     connection: Any,
     *,
     analysis_run_id: Any,
-    inputs: Mapping[str, DatabaseInput],
+    inputs: Mapping[str, DatabaseInput] | None = None,
     artifacts: tuple[
-        dict[str, Any],
-        dict[str, Any],
-        bytes,
-        int,
-        int,
-    ],
+        dict[str, Any], dict[str, Any], bytes, int, int
+    ] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> Any:
     from psycopg.types.json import Jsonb
 
-    (
-        index,
-        model,
-        score_bytes,
-        phoenix1_shard_count,
-        phoenix2_shard_count,
-    ) = artifacts
-    generation = str(index["generationKey"])
-    input_hash = _sha256(
-        {mix: inputs[mix].snapshot for mix in ("phoenix1", "phoenix2")}
-    )
-    output_hash = _sha256(
-        {
-            "index": index,
-            "model": model,
-            "numericModelSha256": hashlib.sha256(score_bytes).hexdigest(),
+    expected_artifacts: list[dict[str, Any]]
+    source_hashes: dict[str, str] | None
+    artifact_manifest_hash: str | None
+    artifact_byte_size: int | None
+    if metadata is not None:
+        def valid_digest(value: object) -> bool:
+            return bool(re.fullmatch(r"[0-9a-f]{64}", str(value or "")))
+
+        generation = str(metadata.get("generationKey") or "").strip()
+        phoenix1_shard_count = int(metadata.get("phoenix1ShardCount") or 0)
+        phoenix2_shard_count = int(metadata.get("phoenix2ShardCount") or 0)
+        player_count = int(metadata.get("playerCount") or 0)
+        input_hash = str(metadata.get("inputSha256") or "")
+        output_hash = str(metadata.get("outputSha256") or "")
+        raw_source_hashes = metadata.get("sourceHashes")
+        raw_manifest = metadata.get("artifactManifest")
+        if (
+            not generation
+            or phoenix1_shard_count < 0
+            or phoenix2_shard_count < 0
+            or player_count < 0
+            or not isinstance(raw_source_hashes, Mapping)
+            or set(raw_source_hashes) != {"phoenix1", "phoenix2"}
+            or not all(
+                valid_digest(raw_source_hashes.get(mix))
+                for mix in ("phoenix1", "phoenix2")
+            )
+            or not valid_digest(input_hash)
+            or not valid_digest(output_hash)
+            or not isinstance(raw_manifest, Mapping)
+        ):
+            raise ValueError("Typed model registration metadata is invalid.")
+        source_hashes = {
+            mix: str(raw_source_hashes[mix]) for mix in ("phoenix1", "phoenix2")
         }
-    )
+        sections = raw_manifest.get("sections")
+        if (
+            raw_manifest.get("generationKey") != generation
+            or not isinstance(sections, Mapping)
+            or int(raw_manifest.get("schemaVersion") or 0) not in {0, 1}
+            or raw_manifest.get("sha256") != _sha256(sections)
+        ):
+            raise ValueError("Typed model artifact metadata is invalid.")
+        manifest_schema = int(raw_manifest.get("schemaVersion") or 0)
+        expected_artifacts = []
+        for name, expected_path in (
+            ("index", recommendation_index_path(generation)),
+            ("model", recommendation_model_path(generation)),
+            ("scoreModel", recommendation_score_model_path(generation)),
+        ):
+            descriptor = sections.get(name)
+            if (
+                not isinstance(descriptor, Mapping)
+                or descriptor.get("pathname") != expected_path
+                or not valid_digest(descriptor.get("sha256"))
+                or not isinstance(descriptor.get("byteSize"), int)
+                or int(descriptor["byteSize"]) < 0
+            ):
+                raise ValueError("Typed model artifact metadata is invalid.")
+            expected_artifacts.append(dict(descriptor))
+        for name, count, path_builder in (
+            (
+                "phoenix1Shards",
+                phoenix1_shard_count,
+                recommendation_phoenix1_shard_path,
+            ),
+            (
+                "phoenix2Shards",
+                phoenix2_shard_count,
+                recommendation_phoenix2_shard_path,
+            ),
+        ):
+            group = sections.get(name)
+            items = group.get("items") if isinstance(group, Mapping) else None
+            if (
+                not isinstance(group, Mapping)
+                or int(group.get("count") or 0) != count
+                or not isinstance(items, list)
+                or len(items) != count
+            ):
+                raise ValueError("Typed model artifact metadata is invalid.")
+            group_descriptors: list[dict[str, Any]] = []
+            for shard, descriptor in enumerate(items):
+                if (
+                    not isinstance(descriptor, Mapping)
+                    or descriptor.get("pathname") != path_builder(generation, shard)
+                ):
+                    raise ValueError("Typed model artifact metadata is invalid.")
+                descriptor_value = dict(descriptor)
+                if manifest_schema >= 1 and (
+                    not valid_digest(descriptor_value.get("sha256"))
+                    or not isinstance(descriptor_value.get("byteSize"), int)
+                    or int(descriptor_value["byteSize"]) < 0
+                ):
+                    raise ValueError("Typed model artifact metadata is invalid.")
+                group_descriptors.append(descriptor_value)
+                expected_artifacts.append(descriptor_value)
+            if manifest_schema >= 1 and (
+                group.get("sha256") != _sha256(group_descriptors)
+                or int(group.get("byteSize") or 0)
+                != sum(int(item["byteSize"]) for item in group_descriptors)
+            ):
+                raise ValueError("Typed model artifact metadata is invalid.")
+        if len(expected_artifacts) != int(raw_manifest.get("artifactCount") or 0):
+            raise ValueError("Typed model artifact metadata is invalid.")
+        expected_paths = [str(item["pathname"]) for item in expected_artifacts]
+        if len(set(expected_paths)) != len(expected_paths):
+            raise ValueError("Typed model artifact metadata is invalid.")
+        known_byte_size = sum(
+            int(item.get("byteSize") or 0) for item in expected_artifacts
+        )
+        if int(raw_manifest.get("byteSize") or 0) != known_byte_size:
+            raise ValueError("Typed model artifact metadata is invalid.")
+        artifact_manifest_hash = str(raw_manifest["sha256"])
+        artifact_byte_size = int(raw_manifest.get("byteSize") or 0)
+    else:
+        if inputs is None or artifacts is None:
+            raise ValueError("Model persistence requires artifacts or registration metadata.")
+        (
+            index,
+            model,
+            score_bytes,
+            phoenix1_shard_count,
+            phoenix2_shard_count,
+        ) = artifacts
+        generation = str(index["generationKey"])
+        player_count = len(index.get("players", []))
+        input_hash = _sha256(
+            {mix: inputs[mix].snapshot for mix in ("phoenix1", "phoenix2")}
+        )
+        output_hash = _sha256(
+            {
+                "index": index,
+                "model": model,
+                "numericModelSha256": hashlib.sha256(score_bytes).hexdigest(),
+            }
+        )
+        expected_artifacts = [{"pathname": recommendation_model_path(generation)}]
+        source_hashes = None
+        artifact_manifest_hash = None
+        artifact_byte_size = None
     with connection.transaction(), connection.cursor() as cursor:
         cursor.execute(
             """
-            select id from pumbility.artifacts
-            where object_key = %s and validated_at is not null
+            select id, object_key, sha256, byte_size from pumbility.artifacts
+            where object_key = any(%s) and validated_at is not null
             """,
-            (recommendation_model_path(generation),),
+            ([str(item["pathname"]) for item in expected_artifacts],),
         )
-        artifact = cursor.fetchone()
-        if artifact is None:
+        artifact_rows = cursor.fetchall()
+        artifacts_by_path = {str(row[1]): row for row in artifact_rows}
+        if len(artifacts_by_path) != len(expected_artifacts):
+            raise RuntimeError("The validated hosted model artifact set is unavailable.")
+        for expected in expected_artifacts:
+            pathname = str(expected["pathname"])
+            actual = artifacts_by_path.get(pathname)
+            if actual is None:
+                raise RuntimeError("The validated hosted model artifact set is unavailable.")
+            expected_digest = expected.get("sha256")
+            expected_size = expected.get("byteSize")
+            if (
+                expected_digest is not None
+                and str(actual[2]) != str(expected_digest)
+            ) or (
+                expected_size is not None and int(actual[3]) != int(expected_size)
+            ):
+                raise RuntimeError(
+                    "The hosted model artifact metadata changed before registration."
+                )
+        model_artifact = artifacts_by_path.get(recommendation_model_path(generation))
+        if model_artifact is None:
             raise RuntimeError("The validated hosted model artifact is unavailable.")
-        artifact_id = artifact[0]
+        artifact_id = model_artifact[0]
         cursor.execute(
             """
             insert into pumbility.model_generations (
@@ -991,9 +1075,19 @@ def _persist_model_generation(
                 Jsonb(
                     {
                         "parity": "exact",
-                        "playerCount": len(index.get("players", [])),
+                        "playerCount": player_count,
                         "inputShardCount": phoenix1_shard_count,
                         "phoenix2InputShardCount": phoenix2_shard_count,
+                        **(
+                            {
+                                "sourceHashes": source_hashes,
+                                "artifactManifestSha256": artifact_manifest_hash,
+                                "artifactCount": len(expected_artifacts),
+                                "artifactByteSize": artifact_byte_size,
+                            }
+                            if metadata is not None
+                            else {}
+                        ),
                     }
                 ),
             ),

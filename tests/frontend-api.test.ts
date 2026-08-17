@@ -32,6 +32,7 @@ import {
 import { pumbilityProgress } from "../lib/pumbility-progress.ts";
 import {
   recommendationDifficultyOptions,
+  recommendationOfficialLevelRange,
   visibleRecommendations,
 } from "../lib/recommendation-filters.ts";
 import {
@@ -42,6 +43,7 @@ import type { AnalysisPayload, RecommendationChartEstimate } from "../lib/types.
 import {
   LocalRecommendationsValidationError,
   recommendationPlayerList,
+  recommendationsForMode,
   recommendationsForPlayer,
   recommendationsForRating,
   validateLocalRecommendationIndex,
@@ -99,7 +101,7 @@ test("homepage leads with feature cards and explains the external score sync", a
   assert.match(syncLink, /target="_blank"/);
 });
 
-test("recommendation methodology separates top-50 Pumbility from top-20 display and ranks 11-30 projection", async () => {
+test("recommendation methodology keeps top-20 rating and ranks 11-30 projection with a top-50 display", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
@@ -123,6 +125,7 @@ test("recommendation methodology separates top-50 Pumbility from top-20 display 
   assert.match(page, /Expected Pumbility is then calculated once from that goal grade/);
   assert.match(page, /existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2/);
   assert.match(page, /Overall Pumbility is the best 50 values across both modes/);
+  assert.match(page, /displayed top 50/);
   assert.match(page, /Skill title progress/);
   assert.doesNotMatch(page, /every likely grade-plate outcome/);
   assert.doesNotMatch(page, /chart difficulty fields are averaged for the skill rating/);
@@ -405,7 +408,7 @@ test("recommendation page renders cache before a deduplicated player refresh", a
   );
 
   assert.match(page, /await loadCached\(\);\s*await refresh\(\);/);
-  assert.match(page, /\/api\/recommendations\/refresh\?playerKey=/);
+  assert.match(page, /\/api\/recommendations\/refresh\?\$\{params\.toString\(\)\}/);
   assert.match(page, /\/api\/recommendations\/refresh\?jobId=/);
   assert.match(page, /Showing cached recommendations because score refresh failed/);
   assert.match(page, /if \(cachedLoaded\) \{\s*setRefreshWarning/);
@@ -414,6 +417,25 @@ test("recommendation page renders cache before a deduplicated player refresh", a
   assert.match(page, /const deadline = Date\.now\(\) \+ 30_000/);
   assert.doesNotMatch(page, /Legacy snapshot generated/);
   assert.doesNotMatch(page, /Unknown generation time/);
+});
+
+test("recommendation page lazy-loads and generation-caches one mode at a time", async () => {
+  const [page, route] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "api", "recommendations", "route.ts"), "utf8"),
+  ]);
+
+  assert.match(page, /new URLSearchParams\(\{ playerKey: selectedKey, mode: activeMode \}\)/);
+  assert.match(page, /if \(requestedDifficulty\) params\.set\("difficulty", requestedDifficulty\)/);
+  assert.match(page, /recommendationPayloadCacheKey/);
+  assert.match(page, /payload\.modelGeneration/);
+  assert.match(page, /payload\.recommendationsGeneratedAtUtc/);
+  assert.match(page, /return currentEntry/);
+  assert.match(page, /modes: \{ \[mode\]: modePayload \}/);
+  assert.match(page, /refreshAttemptedPlayersRef\.current\.delete\(playerKey\)/);
+  assert.match(page, /loadingPlayer && !playerPayload && !hasAnyPlayerPayload/);
+  assert.match(route, /mode must be one of overall, singles, doubles, or coop/);
+  assert.match(route, /difficulty is only valid with mode=overall/);
 });
 
 test("legacy local player responses carry a complete generation timestamp contract", () => {
@@ -440,6 +462,21 @@ test("legacy local player responses carry a complete generation timestamp contra
   assert.equal(response?.player.modes.overall, undefined);
 });
 
+test("local recommendation mode projection preserves the envelope and returns one mode", () => {
+  const response = recommendationsForRating({
+    generatedAtUtc: "2026-08-08T00:00:00Z",
+    method: {},
+    charts: [],
+    players: [],
+  }, 20);
+  const selected = recommendationsForMode(response, "singles");
+
+  assert.equal(selected.generatedAtUtc, response.generatedAtUtc);
+  assert.equal(selected.method, response.method);
+  assert.deepEqual(Object.keys(selected.player.modes), ["singles"]);
+  assert.deepEqual(selected.player.modes.singles, response.player.modes.singles);
+});
+
 test("local recommendations reject stale schemas before rendering", () => {
   const payload = {
     schemaVersion: 20,
@@ -452,7 +489,7 @@ test("local recommendations reject stale schemas before rendering", () => {
   assert.throws(
     () => validateLocalRecommendationIndex(payload),
     (error: unknown) => error instanceof LocalRecommendationsValidationError
-      && /Regenerate schema 23 recommendations/.test(error.message),
+      && /Regenerate schema 25 recommendations/.test(error.message),
   );
 });
 
@@ -484,7 +521,7 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
   };
   const { pumbility: _pumbility, ...topScoreWithoutPumbility } = topScore;
   const payload = {
-    schemaVersion: 23,
+    schemaVersion: 25,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: [],
@@ -508,7 +545,7 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
     }],
   };
 
-  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 23);
+  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 25);
   const privatePayload = structuredClone(payload);
   Object.assign(privatePayload.players[0].modes.singles.topScores[0], { rawScore: 1_000_000 });
   assert.throws(
@@ -657,10 +694,11 @@ test("tier list compact layout uses art-only buttons and a details dialog", asyn
 });
 
 test("tier list chart details provide local mode-specific what-if estimates", async () => {
-  const [page, types, css] = await Promise.all([
+  const [page, types, css, demo] = await Promise.all([
     readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "lib", "types.ts"), "utf8"),
     readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+    readFile(path.join(process.cwd(), "lib", "demo-data.ts"), "utf8"),
   ]);
   const whatIfComponent = page.slice(
     page.indexOf("function WhatIfDifficulty"),
@@ -673,11 +711,18 @@ test("tier list chart details provide local mode-specific what-if estimates", as
 
   assert.match(types, /whatIfEstimates\?: Array<\{\s*level: number;\s*estimatedDifficulty: number \| null;\s*\}> \| null;/);
   assert.match(whatIfComponent, /const prefix = chart\.type === "Single" \? "S" : "D";/);
-  assert.match(whatIfComponent, /<option value="">\{prefix\}\?\?<\/option>/);
+  assert.match(whatIfComponent, /const estimates = chart\.whatIfEstimates \?\? fallbackWhatIfEstimates\(chart\);/);
   assert.match(whatIfComponent, /disabled=\{estimate\.estimatedDifficulty === null\}/);
+  assert.match(whatIfComponent, /<option value="">\{prefix\}\?\?<\/option>/);
   assert.match(whatIfComponent, /unavailable/);
   assert.match(whatIfComponent, /formatEstimatedDifficulty\(selectedEstimate\)/);
   assert.doesNotMatch(whatIfComponent, /fetch\s*\(/);
+  assert.match(page, /const minimumLevel = Math\.max\(16, chart\.level - 1\);/);
+  assert.match(page, /chart\.level \+ 1 - minimumLevel \+ 1/);
+  assert.match(page, /\.filter\(\(level\) => level !== chart\.level\)/);
+  assert.match(demo, /const minimumLevel = Math\.max\(16, level - 1\);/);
+  assert.match(demo, /level \+ 1 - minimumLevel \+ 1/);
+  assert.match(demo, /\.filter\(\(targetLevel\) => targetLevel !== level\)/);
   assert.match(chartDetails, /<WhatIfDifficulty chart=\{chart\} \/>/);
 
   assert.match(css, /\.chart-card \{[^}]*grid-template-columns: 58px minmax\(0, 1fr\) 104px;[^}]*min-height: 86px;[^}]*padding: 13px 18px;/);
@@ -1073,7 +1118,7 @@ test("validates local aggregates against the requested Phoenix version", async (
 
 test("accepts the combined tier-list identity", () => {
   const payload = {
-    schemaVersion: 5,
+    schemaVersion: 7,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     mix: { key: "combined", apiValue: "Phoenix+Phoenix2", label: "Phoenix 1 + 2" },
     summary: { scriptVersion: "test", method: {}, coverage: {}, modes: {} },
@@ -1085,7 +1130,7 @@ test("accepts the combined tier-list identity", () => {
   };
   assert.equal(validateLocalAnalysisPayload(payload, "combined").mix.key, "combined");
   assert.throws(
-    () => validateLocalAnalysisPayload({ ...payload, schemaVersion: 4 }, "combined"),
+    () => validateLocalAnalysisPayload({ ...payload, schemaVersion: 6 }, "combined"),
     /unsupported schema/,
   );
   assert.throws(
@@ -1197,23 +1242,23 @@ test("manual recommendations cap chart difficulty at 1.0 above the scoring ratin
     players: [],
   }, 20.5);
 
-  const singles = response.player.modes.singles;
+  const singles = response.player.modes.singles!;
   const overall = response.player.modes.overall;
   assert.ok(overall);
   assert.equal(singles.projectionAvailable, false);
   assert.deepEqual(singles.candidateRange, [null, 21.5]);
   assert.deepEqual(
     (singles.filterCandidates ?? []).map((candidate) => candidate.chartId),
-    ["level-16", "level-15", "rating-edge", "upper-edge", "too-hard"],
+    ["rating-edge", "upper-edge", "too-hard"],
   );
-  assert.equal(singles.topRecommendations[0].chartId, "level-16");
+  assert.equal(singles.topRecommendations[0].chartId, "rating-edge");
   assert.equal(singles.topRecommendations[0].expectedPumbility, null);
   assert.equal(singles.topRecommendations[0].projectedGain, null);
-  assert.equal(overall.sourceRecommendationCounts?.singles, 3);
+  assert.equal(overall.sourceRecommendationCounts?.singles, 2);
   assert.equal(overall.sourceRecommendationCounts?.doubles, 0);
   assert.deepEqual(
     overall.topRecommendations.map((candidate) => candidate.chartId),
-    ["level-16", "rating-edge", "upper-edge"],
+    ["rating-edge", "upper-edge"],
   );
 
   const configuredFloor = recommendationsForRating({
@@ -1221,25 +1266,31 @@ test("manual recommendations cap chart difficulty at 1.0 above the scoring ratin
     method: { displayMinimumOfficialLevel: 17 },
     charts: [chart("level-16", 10, 16), chart("level-17", 10, 17)],
     players: [],
-  }, 20.5);
+  }, 19.5);
   assert.deepEqual(
-    (configuredFloor.player.modes.singles.filterCandidates ?? []).map((candidate) => candidate.chartId),
-    ["level-17", "level-16"],
+    (configuredFloor.player.modes.singles!.filterCandidates ?? []).map((candidate) => candidate.chartId),
+    ["level-17"],
   );
   assert.deepEqual(
-    configuredFloor.player.modes.singles.topRecommendations.map((candidate) => candidate.chartId),
+    configuredFloor.player.modes.singles!.topRecommendations.map((candidate) => candidate.chartId),
     ["level-17"],
   );
 
-  const twentyOfFiftyFive = recommendationsForRating({
+  const fiftyOfFiftyFive = recommendationsForRating({
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: Array.from({ length: 55 }, (_, index) =>
-      chart(`chart-${String(index).padStart(2, "0")}`, 16 + index / 100, 16),
+      chart(`chart-${String(index).padStart(2, "0")}`, 16 + index / 100, 20),
     ),
     players: [],
-  }, 20.5).player.modes.singles.topRecommendations;
-  assert.equal(twentyOfFiftyFive.length, 20);
+  }, 20.5).player.modes.singles!.topRecommendations;
+  assert.equal(fiftyOfFiftyFive.length, 50);
+});
+
+test("recommendation official-level bounds use floor(skill) plus or minus two", () => {
+  assert.deepEqual(recommendationOfficialLevelRange(20.999), [18, 22]);
+  assert.deepEqual(recommendationOfficialLevelRange(16.999), [16, 18]);
+  assert.equal(recommendationOfficialLevelRange(undefined), null);
 });
 
 test("official difficulty filters use the full mode-specific chart pools", () => {
@@ -1278,9 +1329,8 @@ test("official difficulty filters use the full mode-specific chart pools", () =>
       chart("double-10", "Double", 10),
       chart("double-15", "Double", 15),
       chart("double-16", "Double", 16),
-      chart("double-23", "Double", 23),
       ...Array.from({ length: 25 }, (_, index) =>
-        chart(`double-24-${String(index).padStart(2, "0")}`, "Double", 24)),
+        chart(`double-22-${String(index).padStart(2, "0")}`, "Double", 22)),
       chart("double-26", "Double", 26),
     ],
     players: [],
@@ -1290,26 +1340,42 @@ test("official difficulty filters use the full mode-specific chart pools", () =>
   assert.ok(overall);
 
   assert.deepEqual(
-    recommendationDifficultyOptions("singles", modes.singles.filterCandidates ?? []),
-    ["S16", "S18", "S26"],
+    recommendationDifficultyOptions(
+      "singles",
+      modes.singles!.filterCandidates ?? [],
+      modes.singles!.scoringRating,
+    ),
+    ["S18"],
   );
   assert.deepEqual(
-    recommendationDifficultyOptions("doubles", modes.doubles.filterCandidates ?? []),
-    ["D16", "D23", "D24", "D26"],
+    recommendationDifficultyOptions(
+      "doubles",
+      modes.doubles!.filterCandidates ?? [],
+      modes.doubles!.scoringRating,
+    ),
+    ["D22"],
   );
   assert.deepEqual(
     recommendationDifficultyOptions("overall", overall.filterCandidates ?? []),
-    ["S16", "S18", "S26", "D16", "D23", "D24", "D26"],
+    ["S18", "D22"],
   );
   assert.deepEqual(visibleRecommendations("overall", overall, "S10"), []);
-  assert.equal(overall.topRecommendations.some((row) => row.level === 24), false);
-  const filtered = visibleRecommendations("overall", overall, "D24");
+  const compactOverall = recommendationsForMode(response, "overall");
+  assert.deepEqual(compactOverall.player.modes.overall?.difficultyOptions, [
+    "S18", "D22",
+  ]);
+  assert.equal("filterCandidates" in compactOverall.player.modes.overall!, false);
+  const slicedOverall = recommendationsForMode(response, "overall", "d22");
+  assert.equal(slicedOverall.player.modes.overall?.filterCandidates?.length, 25);
+  assert.throws(() => recommendationsForMode(response, "overall", "S10"), RangeError);
+  assert.equal(overall.topRecommendations.some((row) => row.level === 22), false);
+  const filtered = visibleRecommendations("overall", overall, "D22");
   assert.equal(filtered.length, 25);
-  assert.equal(filtered.every((row) => row.type === "Double" && row.level === 24), true);
+  assert.equal(filtered.every((row) => row.type === "Double" && row.level === 22), true);
   const gains = new Map([
-    ["double-24-00", 1],
-    ["double-24-01", 5],
-    ["double-24-02", 3],
+    ["double-22-00", 1],
+    ["double-22-01", 5],
+    ["double-22-02", 3],
   ]);
   const ranked = visibleRecommendations("overall", {
     ...overall,
@@ -1317,14 +1383,14 @@ test("official difficulty filters use the full mode-specific chart pools", () =>
       ...row,
       projectedGain: gains.get(row.chartId) ?? null,
     })),
-  }, "D24");
+  }, "D22");
   assert.deepEqual(
     ranked.slice(0, 3).map((row) => row.chartId),
-    ["double-24-01", "double-24-02", "double-24-00"],
+    ["double-22-01", "double-22-02", "double-22-00"],
   );
 
   const coopChart = {
-    ...(modes.singles.filterCandidates ?? [])[0],
+    ...(modes.singles!.filterCandidates ?? [])[0],
     mode: "Co-op" as const,
     difficulty: "CoOp2",
     type: "CoOp" as const,
@@ -1333,7 +1399,7 @@ test("official difficulty filters use the full mode-specific chart pools", () =>
   };
   assert.deepEqual(recommendationDifficultyOptions("coop", [coopChart]), ["2x"]);
   assert.equal(visibleRecommendations("coop", {
-    ...modes.singles,
+    ...modes.singles!,
     topRecommendations: [coopChart],
   }, "All").length, 1);
 });

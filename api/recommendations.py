@@ -13,6 +13,12 @@ from fastapi.responses import JSONResponse
 from analysis_runtime import PrivateBlobStore, RuntimeJobStore, update_job
 from api.cron import cron_authorized
 from phoenix2_sync import isoformat_utc, parse_utc, utc_now
+from recommendation_artifacts import (
+    RECOMMENDATION_MODE_KEYS,
+    RecommendationArtifactQueryError,
+    materialize_player_recommendation_cache,
+    normalize_recommendation_difficulty,
+)
 from pumbility_contract import (
     PLAYER_REFRESH_FRESHNESS,
     cached_player_is_fresh,
@@ -184,6 +190,8 @@ def get_recommendation_players():
 @router.get("/api/recommendations")
 def get_player_recommendations(
     player_key: str = Query(default="", alias="playerKey"),
+    mode: str = Query(default=""),
+    difficulty: str = Query(default=""),
 ):
     normalized_key = player_key.strip()
     if not normalized_key:
@@ -191,6 +199,24 @@ def get_player_recommendations(
             status_code=400,
             content={"error": "A playerKey is required."},
         )
+    normalized_mode = mode.strip().lower()
+    if normalized_mode and normalized_mode not in RECOMMENDATION_MODE_KEYS:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    "mode must be one of overall, singles, doubles, or coop."
+                )
+            },
+        )
+    selected_mode = normalized_mode or None
+    try:
+        selected_difficulty = normalize_recommendation_difficulty(
+            selected_mode,
+            difficulty,
+        )
+    except RecommendationArtifactQueryError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
     try:
         payload = _read_index(canary_domain="recommendation-player")
         if payload is None:
@@ -224,8 +250,13 @@ def get_player_recommendations(
                         },
                         headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
                     )
+                public_cache = materialize_player_recommendation_cache(
+                    cached,
+                    mode=selected_mode,
+                    difficulty=selected_difficulty,
+                )
                 return JSONResponse(
-                    content=with_staleness(cached, payload),
+                    content=with_staleness(public_cache, payload),
                     headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
                 )
         else:
@@ -236,18 +267,26 @@ def get_player_recommendations(
                 content={"error": "The selected recommendation player was not found."},
             )
         generated = payload.get("generatedAtUtc")
+        response = {
+            "generatedAtUtc": generated,
+            "recommendationsGeneratedAtUtc": generated,
+            "modelGeneratedAtUtc": generated,
+            "playerSyncedAtUtc": generated,
+            "legacySnapshot": True,
+            "method": payload.get("method", {}),
+            "player": player,
+        }
+        response = materialize_player_recommendation_cache(
+            response,
+            mode=selected_mode,
+            difficulty=selected_difficulty,
+        )
         return JSONResponse(
-            content={
-                "generatedAtUtc": generated,
-                "recommendationsGeneratedAtUtc": generated,
-                "modelGeneratedAtUtc": generated,
-                "playerSyncedAtUtc": generated,
-                "legacySnapshot": True,
-                "method": payload.get("method", {}),
-                "player": player,
-            },
+            content=response,
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
+    except RecommendationArtifactQueryError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
     except (RuntimeError, json.JSONDecodeError):
         return JSONResponse(
             status_code=503,
@@ -263,12 +302,37 @@ def get_player_recommendations(
 @router.post("/api/recommendations/refresh")
 def start_player_recommendation_refresh(
     player_key: str = Query(default="", alias="playerKey"),
+    mode: str = Query(default=""),
+    difficulty: str = Query(default=""),
 ):
     normalized_key = player_key.strip()
     if not normalized_key:
         return JSONResponse(
             status_code=400,
             content={"error": "A playerKey is required."},
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
+    normalized_mode = mode.strip().lower()
+    if normalized_mode and normalized_mode not in RECOMMENDATION_MODE_KEYS:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    "mode must be one of overall, singles, doubles, or coop."
+                )
+            },
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
+    selected_mode = normalized_mode or None
+    try:
+        selected_difficulty = normalize_recommendation_difficulty(
+            selected_mode,
+            difficulty,
+        )
+    except RecommendationArtifactQueryError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"error": str(exc)},
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
     try:
@@ -291,10 +355,15 @@ def start_player_recommendation_refresh(
         if cached_player_is_fresh(cached, index, now=effective_now):
             synced = cached.get("playerSyncedAtUtc")
             synced_at = parse_utc(synced) or effective_now
+            public_cache = materialize_player_recommendation_cache(
+                cached,
+                mode=selected_mode,
+                difficulty=selected_difficulty,
+            )
             return JSONResponse(
                 content={
                     "outcome": "fresh",
-                    "recommendation": with_staleness(cached, index),
+                    "recommendation": with_staleness(public_cache, index),
                     "refreshEligibleAtUtc": isoformat_utc(
                         synced_at + PLAYER_REFRESH_FRESHNESS
                     ),
@@ -360,6 +429,12 @@ def start_player_recommendation_refresh(
         return JSONResponse(
             status_code=202,
             content={"outcome": "started", "job": jobs.get(job_id) or job},
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
+    except RecommendationArtifactQueryError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"error": str(exc)},
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
     except (RuntimeError, json.JSONDecodeError) as exc:

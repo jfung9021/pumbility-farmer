@@ -99,11 +99,15 @@ Required statistical invariants are implemented and tested in `tests/test_analyz
 
 ## Combined tier contract
 
-`piu_recommendations.COMBINED_TIER_SCHEMA_VERSION` is 5.
+`piu_recommendations.COMBINED_TIER_SCHEMA_VERSION` is 7.
 
 - Phoenix 2 charts are the strict target allowlist.
 - Phoenix 2 replaces Phoenix 1 for an overlapping player/chart observation.
 - Version/mode residuals are normalized to level units before joining.
+- Single/Double observations use source-specific ranks 11–30 player ability and
+  the official-level midpoint `L + 0.5`. Ability weight follows
+  `1 / (1 + abs(playerAbility - midpoint)^2)`, giving half weight one level
+  from the midpoint; the result is multiplied by the Phoenix source weight.
 - Singles and Doubles remain limited to official level 16+ and retain their existing independent models.
 - Co-op adds a separate `coop` array containing the current Phoenix 2 2x, 3x, 4x, and 5x catalog without an official-level gate.
 - Phoenix 1 rerates are presentation provenance, not inputs that mutate the frozen public analysis.
@@ -111,7 +115,7 @@ Required statistical invariants are implemented and tested in `tests/test_analyz
   chart IDs have valid, different note counts in the PIUScores catalogs. The
   generated profiles apply only to Phoenix 1 evidence; Phoenix 2 is unchanged.
 - Every Single and Double chart contains `whatIfEstimates`, ordered by alternative official level. Each entry has `level` and an `estimatedDifficulty` rounded to six decimal digits or `null` when the target folder has no measured reference or the chart has no usable observations. Co-op does not use these folder what-if estimates.
-- Alternatives cover the three official levels below and above the chart, omit its current level, and never go below level 16. Near the floor the list is correspondingly shorter.
+- Alternatives cover the adjacent official level below and above the chart, omit its current level, and never go below level 16. A level-16 chart therefore contains only level 17.
 - What-if values are chart-only projections, not tier-list recalculations. They preserve the selected contribution set, player baselines, reliability/shrinkage, target-folder reference and range compression, ranks, percentiles, and tier membership.
 - Phoenix 2 observations are revalued at the hypothetical level with the existing score-derived grade, recorded plate, and Phoenix 2 Pumbility formula. Phoenix 1 observations, and Phoenix 2 observations without sufficient grade/plate data, retain the existing normalized one-level residual shift.
 - The hypothetical chart residual is recomputed from the frozen observations and compared with the frozen target-folder model using the existing 0.4 difficulty-delta scale. No hypothetical confidence interval, rank, percentile, or effect band is published.

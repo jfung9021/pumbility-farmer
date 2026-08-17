@@ -6,13 +6,21 @@ import {
   LocalRecommendationsValidationError,
   readLocalRecommendationIndex,
   readLocalRecommendationPlayer,
+  recommendationsForMode,
   recommendationsForPlayer,
   recommendationsForRating,
 } from "../../../lib/local-recommendations";
+import type { RecommendationModeKey } from "../../../lib/types";
 
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+const RECOMMENDATION_MODE_KEYS = new Set<RecommendationModeKey>([
+  "overall",
+  "singles",
+  "doubles",
+  "coop",
+]);
 
 export async function GET(request: NextRequest) {
   if (!localAnalysisEnabled()) {
@@ -22,6 +30,21 @@ export async function GET(request: NextRequest) {
     );
   }
   const playerKey = request.nextUrl.searchParams.get("playerKey")?.trim() || "";
+  const modeValue = request.nextUrl.searchParams.get("mode")?.trim().toLowerCase() || "";
+  if (modeValue && !RECOMMENDATION_MODE_KEYS.has(modeValue as RecommendationModeKey)) {
+    return NextResponse.json(
+      { error: "mode must be one of overall, singles, doubles, or coop." },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+  const mode = modeValue as RecommendationModeKey | "";
+  const difficulty = request.nextUrl.searchParams.get("difficulty")?.trim() || "";
+  if (difficulty && mode !== "overall") {
+    return NextResponse.json(
+      { error: "difficulty is only valid with mode=overall." },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
+  }
   const ratingValue = request.nextUrl.searchParams.get("rating")?.trim() || "";
   const rating = ratingValue ? Number(ratingValue) : Number.NaN;
   if (!playerKey && (!Number.isFinite(rating) || rating < 1 || rating > 40)) {
@@ -33,7 +56,8 @@ export async function GET(request: NextRequest) {
   try {
     const payload = await readLocalRecommendationIndex();
     if (!playerKey) {
-      return NextResponse.json(recommendationsForRating(payload, rating), {
+      const response = recommendationsForRating(payload, rating);
+      return NextResponse.json(mode ? recommendationsForMode(response, mode, difficulty) : response, {
         headers: { "Cache-Control": "no-store, max-age=0" },
       });
     }
@@ -45,10 +69,16 @@ export async function GET(request: NextRequest) {
         { status: 404, headers: { "Cache-Control": "no-store" } },
       );
     }
-    return NextResponse.json(response, {
+    return NextResponse.json(mode ? recommendationsForMode(response, mode, difficulty) : response, {
       headers: { "Cache-Control": "no-store, max-age=0" },
     });
   } catch (error) {
+    if (error instanceof RangeError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400, headers: { "Cache-Control": "no-store" } },
+      );
+    }
     if (error instanceof LocalRecommendationsNotFoundError) {
       return NextResponse.json(
         { error: "No local recommendations yet. Run npm run analyze:recommendations." },

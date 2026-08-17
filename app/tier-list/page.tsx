@@ -73,8 +73,8 @@ function LimitedDataWarning({ chart, compact = false }: { chart: ChartResult; co
 }
 
 function fallbackWhatIfEstimates(chart: ChartResult): NonNullable<ChartResult["whatIfEstimates"]> {
-  const minimumLevel = Math.max(16, chart.level - 3);
-  return Array.from({ length: chart.level + 3 - minimumLevel + 1 }, (_, offset) => minimumLevel + offset)
+  const minimumLevel = Math.max(16, chart.level - 1);
+  return Array.from({ length: chart.level + 1 - minimumLevel + 1 }, (_, offset) => minimumLevel + offset)
     .filter((level) => level !== chart.level)
     .map((level) => ({ level, estimatedDifficulty: null }));
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import unittest
+from copy import deepcopy
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
@@ -38,7 +39,9 @@ from piu_recommendations import (
     _PeerScoreCohort,
     _ScoreSurface,
     _apply_phoenix1_score_overrides,
+    _ability_weight_from_distance,
     _build_score_surface,
+    _clean_snapshot_frames,
     _coop_continuous_estimated_difficulties,
     _effective_sample_size,
     _coop_estimated_difficulties,
@@ -52,6 +55,7 @@ from piu_recommendations import (
     _weighted_residual_statistics,
     _what_if_residual_shift,
     build_chart_what_if_estimates,
+    build_combined_chart_results,
     build_combined_tier_payload,
     build_coop_chart_results,
     build_manual_recommendation_mode,
@@ -60,6 +64,7 @@ from piu_recommendations import (
     coop_master_goal_for_estimated_difficulty,
     build_recommendation_index,
     fit_score_response_model,
+    fit_score_response_model_from_frames,
     merge_source_contributions,
     public_player_key,
     rebase_source_rows_to_catalog,
@@ -67,7 +72,19 @@ from piu_recommendations import (
     retain_phoenix2_catalog_contributions,
     what_if_levels,
 )
+from recommendation_artifacts import (
+    OVERALL_FILTER_REFS_FIELD,
+    OVERALL_TOP_REFS_FIELD,
+    PLAYER_CACHE_STORAGE_SCHEMA_FIELD,
+    PLAYER_CACHE_STORAGE_SCHEMA_VERSION,
+    RecommendationArtifactQueryError,
+    compact_player_recommendation_cache,
+    materialize_player_recommendation_cache,
+    recommendation_official_level_range,
+)
 from recommendation_refresh import (
+    _find_shard_player,
+    _raw_scores_by_player,
     build_recommendation_model_artifacts,
     cached_player_is_fresh,
     player_refresh_enabled,
@@ -81,12 +98,14 @@ from recommendation_refresh import (
 try:
     from api.recommendations import (
         PLAYER_LIST_CACHE_CONTROL,
+        get_player_recommendations,
         get_recommendation_players,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "fastapi":
         raise
     PLAYER_LIST_CACHE_CONTROL = ""
+    get_player_recommendations = None
     get_recommendation_players = None
 
 
@@ -122,6 +141,62 @@ def score_normalizations(
 
 
 class CombinedEvidenceTests(unittest.TestCase):
+    def test_consuming_combined_builder_preserves_exact_output(self) -> None:
+        charts = [
+            {
+                "id": f"chart-{index:02d}",
+                "songName": f"Chart {index:02d}",
+                "type": "Single",
+                "level": 16 + index % 10,
+                "difficulty": f"S{16 + index % 10}",
+                "noteCount": 500 + index,
+            }
+            for index in range(40)
+        ]
+
+        def snapshot(source: str) -> dict[str, object]:
+            scores = []
+            for player in range(6):
+                for index, chart in enumerate(charts):
+                    scores.append(
+                        {
+                            "playerId": f"{source}-player-{player}",
+                            "chartId": chart["id"],
+                            "pumbility": (
+                                float(chart["level"]) * 100.0
+                                + float(index % 7) * 3.0
+                                + float(player)
+                            ),
+                            "score": 920_000 + index * 1_000 + player,
+                            "plate": "RG",
+                            "recordedAt": f"2026-01-{1 + index % 28:02d}T00:00:00Z",
+                            "isBroken": False,
+                        }
+                    )
+            return {
+                "mix": source,
+                "players": [],
+                "charts": deepcopy(charts),
+                "scores": scores,
+            }
+
+        phoenix1 = snapshot("phoenix1")
+        phoenix2 = snapshot("phoenix2")
+        expected = build_combined_chart_results(
+            deepcopy(phoenix1),
+            phoenix2,
+        )
+        consumed = deepcopy(phoenix1)
+
+        actual = build_combined_chart_results(
+            consumed,
+            phoenix2,
+            consume_phoenix1_snapshot=True,
+        )
+
+        self.assertEqual(actual, expected)
+        self.assertEqual(consumed, {})
+
     def test_note_count_normalizations_are_derived_from_matching_catalogs(self) -> None:
         phoenix1 = [
             {
@@ -192,12 +267,19 @@ class CombinedEvidenceTests(unittest.TestCase):
             957_142.8571428572,
         )
 
-    def test_source_and_ability_weights_use_strict_midpoint_boundaries(self) -> None:
-        self.assertEqual(_observation_weight("phoenix1", 23.5, 24), 1.0)
-        self.assertEqual(_observation_weight("phoenix2", 25.5, 24), 2.0)
-        self.assertEqual(_observation_weight("phoenix1", 23.499, 24), 0.5)
-        self.assertEqual(_observation_weight("phoenix2", 25.501, 24), 1.0)
-        self.assertEqual(_observation_weight("phoenix2", None, 24), 2.0)
+    def test_source_and_ability_weights_decay_smoothly_from_the_midpoint(self) -> None:
+        np.testing.assert_allclose(
+            _ability_weight_from_distance(
+                np.asarray([0.0, -0.5, 0.5, -1.0, 1.0, 2.0, 3.0, np.nan])
+            ),
+            np.asarray([1.0, 0.8, 0.8, 0.5, 0.5, 0.2, 0.1, 1.0]),
+        )
+        self.assertEqual(_observation_weight("phoenix1", 20.5, 20), 1.0)
+        self.assertEqual(_observation_weight("phoenix1", 20.0, 20), 0.8)
+        self.assertEqual(_observation_weight("phoenix1", 19.5, 20), 0.5)
+        self.assertEqual(_observation_weight("phoenix1", 18.5, 20), 0.2)
+        self.assertEqual(_observation_weight("phoenix2", 17.5, 20), 0.2)
+        self.assertEqual(_observation_weight("phoenix2", None, 20), 2.0)
 
     def test_weighted_chart_statistics_favor_phoenix2_and_keep_effective_support(self) -> None:
         statistics = _weighted_residual_statistics(
@@ -1296,6 +1378,121 @@ class PlayerRecommendationTests(unittest.TestCase):
         }
         self.combined = combined
 
+    def test_compact_plate_scan_excludes_rating_rows_before_conversion(self) -> None:
+        snapshot = {
+            "scores": [
+                {"playerId": "one", "chartId": "a", "score": 900000},
+                {"playerId": "one", "chartId": "b", "score": 910000},
+                {"playerId": "one", "chartId": "c", "score": 920000},
+                {"playerId": "two", "chartId": "b", "score": 930000},
+            ]
+        }
+        with patch(
+            "recommendation_refresh.convert_phoenix1_score",
+            side_effect=lambda chart_id, score, _normalizations: (
+                chart_id,
+                score,
+            ),
+        ) as convert:
+            result = _raw_scores_by_player(
+                snapshot,
+                {"a", "b", "c"},
+                compact_plate=True,
+                excluded_score_keys={("one", "a")},
+            )
+
+        self.assertEqual(
+            [row["chartId"] for row in result["one"]],
+            ["b", "c"],
+        )
+        self.assertEqual(
+            [row["chartId"] for row in result["two"]],
+            ["b"],
+        )
+        self.assertEqual(
+            [call.args[:2] for call in convert.call_args_list],
+            [("b", 910000), ("c", 920000), ("b", 930000)],
+        )
+
+    def test_prepared_fitter_and_consuming_builder_preserve_exact_artifacts(self) -> None:
+        charts = _recommendation_chart_rows(self.combined)
+        old_model, old_metadata = fit_score_response_model(
+            self.snapshot, self.snapshot, charts
+        )
+        phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(self.snapshot)
+        _, phoenix1_scores = _prepare_phoenix1_rating_frames(
+            self.snapshot, phoenix2_catalog
+        )
+        prepared_model, prepared_metadata = fit_score_response_model_from_frames(
+            phoenix1_scores,
+            phoenix2_catalog,
+            phoenix2_scores,
+            charts,
+        )
+
+        self.assertEqual(prepared_metadata, old_metadata)
+        self.assertEqual(prepared_model.to_npz_bytes(), old_model.to_npz_bytes())
+
+        preserved_snapshot = json.loads(json.dumps(self.snapshot))
+        owned_snapshot = json.loads(json.dumps(self.snapshot))
+        expected = build_recommendation_model_artifacts(
+            preserved_snapshot,
+            self.snapshot,
+            combined_charts=self.combined,
+            phoenix2_slopes={"singles": 10.0},
+            generation_key="prepared-parity",
+            generated_at_utc="2026-08-09T06:00:00Z",
+        )
+        actual = build_recommendation_model_artifacts(
+            owned_snapshot,
+            self.snapshot,
+            combined_charts=self.combined,
+            phoenix2_slopes={"singles": 10.0},
+            generation_key="prepared-parity",
+            generated_at_utc="2026-08-09T06:00:00Z",
+            consume_phoenix1_snapshot=True,
+        )
+
+        self.assertEqual(preserved_snapshot, self.snapshot)
+        self.assertEqual(owned_snapshot, {})
+        self.assertEqual(actual, expected)
+
+    def test_shard_player_reader_supports_compact_and_legacy_scores(self) -> None:
+        expected = {
+            "playerId": "player",
+            "chartId": "chart",
+            "score": 990000,
+            "pumbility": 321.5,
+            "isBroken": False,
+        }
+        compact = {
+            "players": [
+                {
+                    "playerId": "player",
+                    "scoreColumns": [
+                        "chartId",
+                        "score",
+                        "pumbility",
+                        "isBroken",
+                    ],
+                    "scoreRows": [["chart", 990000, 321.5, False]],
+                    "plateScores": [],
+                }
+            ]
+        }
+        legacy = {
+            "players": [
+                {
+                    "playerId": "player",
+                    "scores": [expected],
+                    "plateScores": [],
+                }
+            ]
+        }
+
+        self.assertEqual(_find_shard_player(compact, "player")["scores"], [expected])
+        self.assertEqual(_find_shard_player(legacy, "player")["scores"], [expected])
+
     def test_sharded_index_keeps_full_players_out_of_the_dropdown_blob(self) -> None:
         players = [
             {"playerId": "player", "username": "PLAYER"},
@@ -1333,7 +1530,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertEqual([len(shards[number]["players"]) for number in shards], [2, 1])
         self.assertIn("modes", shards[0]["players"][0])
 
-    def test_player_only_refresh_publishes_full_filter_pool_and_top_twenty(self) -> None:
+    def test_player_only_refresh_publishes_full_filter_pool_and_top_fifty(self) -> None:
         generated = "2026-08-09T06:00:00Z"
         index, model, score_model_bytes, phoenix1_shards, phoenix2_shards = (
             build_recommendation_model_artifacts(
@@ -1408,16 +1605,31 @@ class PlayerRecommendationTests(unittest.TestCase):
             self.assertGreaterEqual(
                 len(mode["filterCandidates"]), len(mode["topRecommendations"])
             )
-            self.assertLessEqual(len(mode["topRecommendations"]), 20)
+            self.assertLessEqual(len(mode["topRecommendations"]), 50)
             self.assertTrue(
                 all(
                     not any(str(key).startswith("_") for key in row)
                     for row in mode["filterCandidates"]
                 )
             )
+        stored = store.get_json(recommendation_player_path(player_key))
+        self.assertIsNotNone(stored)
         self.assertEqual(
-            store.get_json(recommendation_player_path(player_key)), response
+            stored[PLAYER_CACHE_STORAGE_SCHEMA_FIELD],
+            PLAYER_CACHE_STORAGE_SCHEMA_VERSION,
         )
+        stored_overall = stored["player"]["modes"]["overall"]
+        self.assertNotIn("filterCandidates", stored_overall)
+        self.assertNotIn("topRecommendations", stored_overall)
+        self.assertEqual(
+            len(stored_overall[OVERALL_FILTER_REFS_FIELD]),
+            len(response["player"]["modes"]["overall"]["filterCandidates"]),
+        )
+        self.assertEqual(
+            len(stored_overall[OVERALL_TOP_REFS_FIELD]),
+            len(response["player"]["modes"]["overall"]["topRecommendations"]),
+        )
+        self.assertEqual(materialize_player_recommendation_cache(stored), response)
 
     def test_binary_score_model_round_trips_without_json_bloat(self) -> None:
         model, _ = fit_score_response_model(
@@ -1598,7 +1810,12 @@ class PlayerRecommendationTests(unittest.TestCase):
             artifact_response["method"]["coopGoalGradeByDifficulty"]["17"],
             "AAA",
         )
-        stored_player = p1_shards[0]["players"][0]
+        raw_stored_player = p1_shards[0]["players"][0]
+        self.assertNotIn("scores", raw_stored_player)
+        self.assertIn("scoreColumns", raw_stored_player)
+        self.assertIn("scoreRows", raw_stored_player)
+        stored_player = _find_shard_player(p1_shards[0], "player")
+        self.assertIsNotNone(stored_player)
         self.assertTrue(
             any(row["chartId"] == "chart-30" for row in stored_player["plateScores"])
         )
@@ -1695,15 +1912,9 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertIn("chart-00", ids)
         self.assertIn("chart-30", ids)
         self.assertIn("chart-31", ids)
-        self.assertIn("chart-32", ids)
-        self.assertEqual(
-            next(row for row in result["filterCandidates"] if row["chartId"] == "chart-32")[
-                "level"
-            ],
-            16,
-        )
+        self.assertNotIn("chart-32", ids)
         self.assertIn("chart-33", ids)
-        self.assertIn("chart-34", ids)
+        self.assertNotIn("chart-34", ids)
         displayed_ids = {row["chartId"] for row in result["topRecommendations"]}
         self.assertIn("chart-33", displayed_ids)
         self.assertNotIn("chart-34", displayed_ids)
@@ -1733,18 +1944,10 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertEqual(easy["projectedGain"], easy["expectedPumbility"])
         self.assertIsNone(result["currentTop50CutoffPumbility"])
-        far_easier = next(
-            row for row in result["filterCandidates"] if row["chartId"] == "chart-32"
-        )
-        self.assertEqual(far_easier["projectedScore"], 975_000)
-        self.assertEqual(far_easier["projectedGrade"], "S+")
-        self.assertEqual(far_easier["scoreProjectionSource"], "population-crossfit")
-        self.assertEqual(far_easier["scoreProjectionSupportCount"], 75)
-        self.assertEqual(far_easier["scoreProjectionConfidence"], "medium")
         self.assertEqual(result["scoreProjectionModel"], SCORE_PROJECTION_MODEL_NAME)
         self.assertEqual(TOP_PUMBILITY_COUNT, 50)
-        self.assertEqual(TOP_RECOMMENDATION_COUNT, 20)
-        self.assertLessEqual(len(result["topRecommendations"]), 20)
+        self.assertEqual(TOP_RECOMMENDATION_COUNT, 50)
+        self.assertLessEqual(len(result["topRecommendations"]), 50)
 
     def test_current_pumbility_uses_the_authoritative_phoenix2_value(self) -> None:
         authoritative = 123.456
@@ -1975,7 +2178,7 @@ class PlayerRecommendationTests(unittest.TestCase):
             if row["chartId"] == "chart-33"
         )
         self.assertIsNone(unrated_top_score["estimatedDifficulty"])
-        self.assertIn(
+        self.assertNotIn(
             "chart-34",
             {row["chartId"] for row in modes["singles"]["filterCandidates"]},
         )
@@ -2076,7 +2279,7 @@ class PlayerRecommendationTests(unittest.TestCase):
             {row["chartId"] for row in overall["filterCandidates"]},
             filter_source_ids,
         )
-        self.assertLessEqual(len(overall["topRecommendations"]), 20)
+        self.assertLessEqual(len(overall["topRecommendations"]), 50)
         self.assertTrue(
             {row["type"] for row in overall["topRecommendations"]}
             .issubset({"Single", "Double"})
@@ -2123,11 +2326,11 @@ class PlayerRecommendationTests(unittest.TestCase):
             [row["chartId"] for row in modes["singles"]["topRecommendations"]],
         )
 
-    def test_top_twenty_controls_display_and_candidates_while_ranks_eleven_to_thirty_control_projection(self) -> None:
+    def test_top_fifty_controls_display_while_top_twenty_rates_and_ranks_eleven_to_thirty_project(self) -> None:
         scores = [
             {
                 **row,
-                "pumbility": 400.0 if index < 10 else 344.85,
+                "pumbility": 375.0 if index < 10 else 344.85,
             }
             for index, row in enumerate(self.snapshot["scores"])
         ]
@@ -2142,7 +2345,7 @@ class PlayerRecommendationTests(unittest.TestCase):
 
         self.assertEqual(
             mode["scoringRating"],
-            round(skill_rating_for_pumbility("Single", 372.425), 3),
+            round(skill_rating_for_pumbility("Single", 359.925), 3),
         )
         self.assertEqual(mode["projectionRating"], 20.5)
         self.assertIn("chart-33", {row["chartId"] for row in mode["filterCandidates"]})
@@ -2253,7 +2456,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         self.assertIsNone(mode["baselinePumbility"])
         self.assertIsNone(mode["projectionRating"])
 
-    def test_level_fifteen_scores_inform_rating_and_remain_filterable(self) -> None:
+    def test_level_fifteen_scores_inform_rating_but_are_not_filterable(self) -> None:
         low_score = {
             **self.snapshot["scores"][0],
             "chartId": "chart-34",
@@ -2266,7 +2469,7 @@ class PlayerRecommendationTests(unittest.TestCase):
 
         self.assertTrue(mode["eligible"])
         self.assertEqual(mode["scoringRating"], 15.0)
-        self.assertIn(
+        self.assertNotIn(
             "chart-34", {row["chartId"] for row in mode["filterCandidates"]}
         )
         self.assertNotIn(
@@ -2369,10 +2572,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         )
         self.assertEqual(below_mode["ratingBaselineRanks"], [1, 20])
         self.assertEqual(below_mode["ratingBaselineLabel"], "top 20 scores")
-        p1_only_chart = next(
-            row for row in below_mode["filterCandidates"] if row["chartId"] == "source-chart-59"
-        )
-        self.assertFalse(p1_only_chart["played"])
+        self.assertEqual(below_mode["filterCandidates"], [])
 
         at_threshold = {**snapshot, "scores": snapshot["scores"][:20]}
         threshold_mode = build_player_recommendation(
@@ -2558,9 +2758,9 @@ class PlayerRecommendationTests(unittest.TestCase):
 
 
 class WhatIfDifficultyTests(unittest.TestCase):
-    def test_levels_include_three_each_side_and_stop_at_sixteen(self) -> None:
-        self.assertEqual(what_if_levels(19), [16, 17, 18, 20, 21, 22])
-        self.assertEqual(what_if_levels(16), [17, 18, 19])
+    def test_levels_include_one_each_side_and_stop_at_sixteen(self) -> None:
+        self.assertEqual(what_if_levels(19), [18, 20])
+        self.assertEqual(what_if_levels(16), [17])
 
     def test_phoenix2_shift_revalues_pumbility_across_formula_breakpoint(
         self,
@@ -2682,9 +2882,10 @@ class WhatIfDifficultyTests(unittest.TestCase):
         estimates = build_chart_what_if_estimates(result, observations).iloc[0]
         target = next(item for item in estimates if item["level"] == 20)
 
-        # At D20 the P1 row is full weight and the P2 row is 2 * 0.5, so the
-        # shifted residuals [0, 2] have location 1 and effective support 2.
-        self.assertEqual(target["estimatedDifficulty"], 20.3)
+        # At D20 the P1 row is at the 20.5 midpoint. The P2 row is 1.1 levels
+        # away, so the shifted residuals [0, 2] and reliability use the smooth
+        # inverse-square weights against the hypothetical level.
+        self.assertEqual(target["estimatedDifficulty"], 20.310212)
 
     def test_missing_target_model_and_no_observations_are_unavailable(self) -> None:
         result = pd.DataFrame(
@@ -3080,7 +3281,7 @@ class CombinedTierPayloadTests(unittest.TestCase):
 
         self.assertEqual(payload["mix"]["key"], "combined")
         self.assertEqual(payload["schemaVersion"], COMBINED_TIER_SCHEMA_VERSION)
-        self.assertEqual(payload["schemaVersion"], 5)
+        self.assertEqual(payload["schemaVersion"], 7)
         self.assertEqual(
             [row["chartId"] for row in payload["singles"]],
             ["easier", "current"],
@@ -3109,11 +3310,170 @@ class CombinedTierPayloadTests(unittest.TestCase):
         )
         self.assertEqual(payload["summary"]["method"]["difficultyDeltaScale"], 0.4)
         self.assertEqual(
+            payload["summary"]["method"]["observationWeighting"],
+            {
+                "sourceWeights": {"phoenix1": 1, "phoenix2": 2},
+                "playerAbility": "per-mode S+FG-equivalent rating from Pumbility ranks 11-30, leave-one-chart-out",
+                "curve": "inverse-square distance decay",
+                "formula": "1 / (1 + (abs(playerAbility - midpoint) / halfWeightDistance)^2)",
+                "halfWeightDistance": 1.0,
+                "midpoint": "official chart level + 0.5",
+                "missingAbilityWeight": 1,
+            },
+        )
+        self.assertEqual(
             payload["summary"]["method"]["folderRangeNormalization"][
                 "referenceMeasuredCharts"
             ],
             30,
         )
+
+
+class RecommendationArtifactBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def _candidate(chart_id: str, chart_type: str, level: int) -> dict[str, object]:
+        prefix = "S" if chart_type == "Single" else "D"
+        return {
+            "chartId": chart_id,
+            "songName": chart_id,
+            "mode": "Singles" if chart_type == "Single" else "Doubles",
+            "difficulty": f"{prefix}{level}",
+            "type": chart_type,
+            "level": level,
+            "estimatedDifficulty": float(level),
+            "farmEdge": 0.5,
+            "projectedGain": float(level),
+        }
+
+    @classmethod
+    def _payload(cls) -> dict[str, object]:
+        singles = [
+            cls._candidate("s17", "Single", 17),
+            cls._candidate("s18", "Single", 18),
+            cls._candidate("s22", "Single", 22),
+            cls._candidate("s23", "Single", 23),
+        ]
+        doubles = [
+            cls._candidate("d15", "Double", 15),
+            cls._candidate("d16", "Double", 16),
+            cls._candidate("d20", "Double", 20),
+            cls._candidate("d21", "Double", 21),
+        ]
+        all_candidates = singles + doubles
+        overall_candidates = [
+            {**candidate, "projectedGain": float(index) / 10.0}
+            for index, candidate in enumerate(all_candidates)
+        ]
+        return {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            "generatedAtUtc": "2026-08-17T00:00:00Z",
+            "modelGeneration": "bounded-test",
+            "method": {},
+            "player": {
+                "playerKey": "bounded-player",
+                "username": "PLAYER",
+                "displayName": "PLAYER",
+                "modes": {
+                    "singles": {
+                        "eligible": True,
+                        "scoringRating": 20.999,
+                        "candidateCount": len(singles),
+                        "filterCandidateCount": len(singles),
+                        "filterCandidates": singles,
+                        "topScores": [],
+                        "topRecommendations": singles,
+                    },
+                    "doubles": {
+                        "eligible": True,
+                        "scoringRating": 18.2,
+                        "candidateCount": len(doubles),
+                        "filterCandidateCount": len(doubles),
+                        "filterCandidates": doubles,
+                        "topScores": [],
+                        "topRecommendations": doubles,
+                    },
+                    "overall": {
+                        "eligible": True,
+                        "candidateCount": len(all_candidates),
+                        "filterCandidateCount": len(all_candidates),
+                        "filterCandidates": overall_candidates,
+                        "topScores": [],
+                        "topRecommendations": overall_candidates,
+                    },
+                    "coop": {
+                        "eligible": False,
+                        "topScores": [],
+                        "topRecommendations": [],
+                    },
+                },
+            },
+        }
+
+    def test_compact_v3_and_legacy_caches_clip_to_the_same_public_payload(self) -> None:
+        payload = self._payload()
+        expected = materialize_player_recommendation_cache(payload)
+        compact = compact_player_recommendation_cache(payload)
+
+        self.assertEqual(recommendation_official_level_range(20.999), (18, 22))
+        self.assertEqual(recommendation_official_level_range(16.999), (16, 18))
+        self.assertEqual(
+            [row["chartId"] for row in expected["player"]["modes"]["singles"]["filterCandidates"]],
+            ["s18", "s22"],
+        )
+        self.assertEqual(
+            [row["chartId"] for row in expected["player"]["modes"]["doubles"]["filterCandidates"]],
+            ["d16", "d20"],
+        )
+        stored_overall = compact["player"]["modes"]["overall"]
+        self.assertNotIn("filterCandidates", stored_overall)
+        self.assertNotIn("topRecommendations", stored_overall)
+        self.assertEqual(
+            [row["chartId"] for row in stored_overall[OVERALL_FILTER_REFS_FIELD]],
+            ["s18", "s22", "d16", "d20"],
+        )
+        self.assertEqual(
+            [row["chartId"] for row in stored_overall[OVERALL_TOP_REFS_FIELD]],
+            ["s18", "s22", "d16", "d20"],
+        )
+        self.assertEqual(materialize_player_recommendation_cache(compact), expected)
+
+        schema_two = deepcopy(compact)
+        schema_two[PLAYER_CACHE_STORAGE_SCHEMA_FIELD] = 2
+        schema_two_overall = schema_two["player"]["modes"]["overall"]
+        schema_two_overall.pop(OVERALL_TOP_REFS_FIELD)
+        schema_two_overall["topRecommendations"] = payload["player"]["modes"]["overall"]["topRecommendations"]
+        self.assertEqual(materialize_player_recommendation_cache(schema_two), expected)
+
+    def test_mode_projection_is_bounded_and_overall_requires_an_available_slice(self) -> None:
+        compact = compact_player_recommendation_cache(self._payload())
+        singles = materialize_player_recommendation_cache(compact, mode="singles")
+        self.assertEqual(set(singles["player"]["modes"]), {"singles"})
+        self.assertEqual(
+            [row["chartId"] for row in singles["player"]["modes"]["singles"]["filterCandidates"]],
+            ["s18", "s22"],
+        )
+
+        overall = materialize_player_recommendation_cache(compact, mode="overall")
+        self.assertEqual(
+            overall["player"]["modes"]["overall"]["difficultyOptions"],
+            ["S18", "S22", "D16", "D20"],
+        )
+        self.assertNotIn("filterCandidates", overall["player"]["modes"]["overall"])
+        selected = materialize_player_recommendation_cache(
+            compact,
+            mode="overall",
+            difficulty="s18",
+        )
+        self.assertEqual(
+            [row["chartId"] for row in selected["player"]["modes"]["overall"]["filterCandidates"]],
+            ["s18"],
+        )
+        with self.assertRaises(RecommendationArtifactQueryError):
+            materialize_player_recommendation_cache(
+                compact,
+                mode="overall",
+                difficulty="S17",
+            )
 
 
 class RecommendationChartBoundaryTests(unittest.TestCase):
@@ -3129,7 +3489,7 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
 
         self.assertEqual([row["chartId"] for row in rows], ["sixteen", "fifteen"])
 
-    def test_manual_recommendations_keep_all_charts_for_filters(self) -> None:
+    def test_manual_recommendations_keep_only_bounded_charts_for_filters(self) -> None:
         mode = build_manual_recommendation_mode(
             [
                 {
@@ -3174,7 +3534,7 @@ class RecommendationChartBoundaryTests(unittest.TestCase):
 
         self.assertEqual(
             [row["chartId"] for row in mode["filterCandidates"]],
-            ["fifteen", "rating-edge", "sixteen", "above-rating", "above-upper-bound"],
+            ["rating-edge", "sixteen", "above-rating", "above-upper-bound"],
         )
         self.assertEqual(
             [row["chartId"] for row in mode["topRecommendations"]],
@@ -3246,6 +3606,67 @@ class RecommendationPlayerListRouteTests(unittest.TestCase):
         self.assertEqual(missing.headers["cache-control"], "no-store")
         self.assertEqual(unavailable.status_code, 503)
         self.assertEqual(unavailable.headers["cache-control"], "no-store")
+
+    def test_player_mode_routes_apply_bounds_and_overall_difficulty_slices(self) -> None:
+        cached = compact_player_recommendation_cache(
+            RecommendationArtifactBoundaryTests._payload()
+        )
+        index = {
+            "schemaVersion": cached["schemaVersion"],
+            "storageSchemaVersion": 3,
+            "generationKey": "bounded-test",
+            "generatedAtUtc": "2026-08-17T00:00:00Z",
+            "players": [{"playerKey": "bounded-player"}],
+        }
+        store = Mock()
+        store.get_json.return_value = cached
+        with (
+            patch("api.recommendations._read_index", return_value=index),
+            patch("api.recommendations.PrivateBlobStore", return_value=store),
+        ):
+            singles = get_player_recommendations(
+                player_key="bounded-player",
+                mode="singles",
+                difficulty="",
+            )
+            overall = get_player_recommendations(
+                player_key="bounded-player",
+                mode="overall",
+                difficulty="",
+            )
+            selected = get_player_recommendations(
+                player_key="bounded-player",
+                mode="overall",
+                difficulty="S18",
+            )
+            unsupported = get_player_recommendations(
+                player_key="bounded-player",
+                mode="overall",
+                difficulty="S17",
+            )
+
+        self.assertEqual(singles.status_code, 200)
+        singles_body = json.loads(singles.body)
+        self.assertEqual(set(singles_body["player"]["modes"]), {"singles"})
+        self.assertEqual(
+            [row["chartId"] for row in singles_body["player"]["modes"]["singles"]["filterCandidates"]],
+            ["s18", "s22"],
+        )
+        overall_body = json.loads(overall.body)
+        self.assertNotIn(
+            "filterCandidates",
+            overall_body["player"]["modes"]["overall"],
+        )
+        self.assertEqual(
+            overall_body["player"]["modes"]["overall"]["difficultyOptions"],
+            ["S18", "S22", "D16", "D20"],
+        )
+        selected_body = json.loads(selected.body)
+        self.assertEqual(
+            [row["chartId"] for row in selected_body["player"]["modes"]["overall"]["filterCandidates"]],
+            ["s18"],
+        )
+        self.assertEqual(unsupported.status_code, 400)
 
 
 if __name__ == "__main__":

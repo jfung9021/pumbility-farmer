@@ -980,6 +980,7 @@ class PumbilityArtifactStore:
             Sequence[Mapping[str, Any]] | int,
         ]
         | None = None,
+        model_metadata: Mapping[str, Any] | None = None,
         phase: str = "all",
         analysis_run_id: Any | None = None,
     ) -> tuple[Any, Any | None]:
@@ -1577,34 +1578,48 @@ class PumbilityArtifactStore:
             )
 
         model_generation_id = None
-        if phase in {"all", "model"} and model_artifacts is not None:
-            phoenix1_shard_count = (
-                model_artifacts[3]
-                if isinstance(model_artifacts[3], int)
-                else len(model_artifacts[3])
+        if phase == "model" and model_metadata is None:
+            raise ValueError(
+                "Typed model persistence requires checkpoint registration metadata."
             )
-            phoenix2_shard_count = (
-                model_artifacts[4]
-                if isinstance(model_artifacts[4], int)
-                else len(model_artifacts[4])
-            )
+        if phase in {"all", "model"} and (
+            model_artifacts is not None or model_metadata is not None
+        ):
             with _connect(self.database_url) as connection:
-                inputs = {
-                    mix: _read_database_input(connection, mix)
-                    for mix in ("phoenix1", "phoenix2")
-                }
-                model_generation_id = _persist_model_generation(
-                    connection,
-                    analysis_run_id=analysis_run_id,
-                    inputs=inputs,
-                    artifacts=(
-                        model_artifacts[0],
-                        model_artifacts[1],
-                        model_artifacts[2],
-                        phoenix1_shard_count,
-                        phoenix2_shard_count,
-                    ),
-                )
+                if model_metadata is not None:
+                    model_generation_id = _persist_model_generation(
+                        connection,
+                        analysis_run_id=analysis_run_id,
+                        metadata=model_metadata,
+                    )
+                else:
+                    if model_artifacts is None:  # pragma: no cover - narrowed above
+                        raise AssertionError("Typed model artifacts disappeared.")
+                    phoenix1_shard_count = (
+                        model_artifacts[3]
+                        if isinstance(model_artifacts[3], int)
+                        else len(model_artifacts[3])
+                    )
+                    phoenix2_shard_count = (
+                        model_artifacts[4]
+                        if isinstance(model_artifacts[4], int)
+                        else len(model_artifacts[4])
+                    )
+                    model_generation_id = _persist_model_generation(
+                        connection,
+                        analysis_run_id=analysis_run_id,
+                        inputs={
+                            mix: _read_database_input(connection, mix)
+                            for mix in ("phoenix1", "phoenix2")
+                        },
+                        artifacts=(
+                            model_artifacts[0],
+                            model_artifacts[1],
+                            model_artifacts[2],
+                            phoenix1_shard_count,
+                            phoenix2_shard_count,
+                        ),
+                    )
         return analysis_run_id, model_generation_id
 
     def put_json_bundle(self, payloads: Mapping[str, Mapping[str, Any]]) -> None:

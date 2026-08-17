@@ -1211,20 +1211,17 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
         connection = Mock()
         connection.__enter__ = Mock(return_value=connection)
         connection.__exit__ = Mock(return_value=False)
-        artifacts = (
-            {"generationKey": "generation"},
-            {"generationKey": "generation"},
-            b"model",
-            [],
-            [],
-        )
-        database_input = SimpleNamespace(snapshot={})
+        model_metadata = {
+            "generationKey": "generation",
+            "inputSha256": "a" * 64,
+            "outputSha256": "b" * 64,
+        }
 
         with (
             patch("pumbility_store._connect", return_value=connection),
             patch(
                 "scripts.analyze_pumbility_supabase._read_database_input",
-                return_value=database_input,
+                side_effect=AssertionError("model registration must not read snapshots"),
             ) as read_input,
             patch(
                 "scripts.analyze_pumbility_supabase._persist_analysis"
@@ -1245,18 +1242,107 @@ class PumbilityArtifactStoreTests(unittest.TestCase):
                 baselines=[],
                 contributions=[],
                 chart_results=[],
-                model_artifacts=artifacts,
+                model_metadata=model_metadata,
                 phase="model",
                 analysis_run_id="analysis-run",
             )
 
         self.assertEqual(result, ("analysis-run", "model-generation"))
-        self.assertEqual(read_input.call_count, 2)
+        read_input.assert_not_called()
         persist_analysis.assert_not_called()
         self.assertEqual(
             persist_model.call_args.kwargs["analysis_run_id"], "analysis-run"
         )
-        self.assertEqual(persist_model.call_args.kwargs["artifacts"][3:], (0, 0))
+        self.assertEqual(
+            persist_model.call_args.kwargs["metadata"], model_metadata
+        )
+
+    def test_model_registration_uses_validated_artifact_metadata_only(self) -> None:
+        from recommendation_refresh import (
+            recommendation_index_path,
+            recommendation_model_path,
+            recommendation_score_model_path,
+        )
+        from scripts.analyze_pumbility_supabase import _sha256
+        from scripts.populate_pumbility_production import _persist_model_generation
+
+        generation = "metadata-only-generation"
+        descriptors = {
+            "index": {
+                "pathname": recommendation_index_path(generation),
+                "sha256": "1" * 64,
+                "byteSize": 11,
+            },
+            "model": {
+                "pathname": recommendation_model_path(generation),
+                "sha256": "2" * 64,
+                "byteSize": 22,
+            },
+            "scoreModel": {
+                "pathname": recommendation_score_model_path(generation),
+                "sha256": "3" * 64,
+                "byteSize": 33,
+            },
+            "phoenix1Shards": {
+                "count": 0,
+                "byteSize": 0,
+                "sha256": _sha256([]),
+                "items": [],
+            },
+            "phoenix2Shards": {
+                "count": 0,
+                "byteSize": 0,
+                "sha256": _sha256([]),
+                "items": [],
+            },
+        }
+        manifest = {
+            "schemaVersion": 1,
+            "generationKey": generation,
+            "artifactCount": 3,
+            "byteSize": 66,
+            "sha256": _sha256(descriptors),
+            "sections": descriptors,
+        }
+        metadata = {
+            "generationKey": generation,
+            "playerCount": 7,
+            "phoenix1ShardCount": 0,
+            "phoenix2ShardCount": 0,
+            "sourceHashes": {"phoenix1": "a" * 64, "phoenix2": "b" * 64},
+            "inputSha256": "c" * 64,
+            "outputSha256": "d" * 64,
+            "artifactManifest": manifest,
+        }
+        cursor = Mock()
+        cursor.__enter__ = Mock(return_value=cursor)
+        cursor.__exit__ = Mock(return_value=False)
+        cursor.fetchall.return_value = [
+            (f"artifact-{name}", value["pathname"], value["sha256"], value["byteSize"])
+            for name, value in descriptors.items()
+            if name in {"index", "model", "scoreModel"}
+        ]
+        cursor.fetchone.return_value = ("model-generation",)
+        connection = Mock()
+        connection.cursor.return_value = cursor
+        transaction = Mock()
+        transaction.__enter__ = Mock(return_value=transaction)
+        transaction.__exit__ = Mock(return_value=False)
+        connection.transaction.return_value = transaction
+
+        result = _persist_model_generation(
+            connection,
+            analysis_run_id="analysis-run",
+            metadata=metadata,
+        )
+
+        self.assertEqual(result, "model-generation")
+        executed_sql = "\n".join(
+            str(call.args[0]).casefold() for call in cursor.execute.call_args_list
+        )
+        self.assertNotIn("payload_json", executed_sql)
+        self.assertIn("sha256", executed_sql)
+        self.assertIn("byte_size", executed_sql)
 
     def test_resumable_typed_chunk_hashes_a_real_row_list(self) -> None:
         manifest = {

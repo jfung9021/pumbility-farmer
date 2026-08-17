@@ -109,12 +109,12 @@ class HostedPopulationSafetyTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _assert_versioned_index_timestamp_variance(active, too_old)
 
-    def test_active_generation_compatibility_removes_only_pending_fields(self) -> None:
+    def test_active_generation_requires_adjacent_what_if_schema(self) -> None:
         current_combined = {
-            "schemaVersion": 5,
+            "schemaVersion": 7,
             "summary": {
-                "scriptVersion": "6.0+combined-tier-v5",
-                "method": {"catalog": "same", "whatIfEstimates": {"radius": 3}},
+                "scriptVersion": "6.0+combined-tier-v7",
+                "method": {"catalog": "same", "whatIfEstimates": {"radius": 1}},
             },
             "singles": [{"chartId": "a", "whatIfEstimates": []}],
             "doubles": [{"chartId": "b", "whatIfEstimates": []}],
@@ -139,13 +139,12 @@ class HostedPopulationSafetyTests(unittest.TestCase):
             "doubles": [{"chartId": "b", "whatIfEstimates": []}],
         }
         self.assertEqual(
-            _combined_payload_for_active_generation(current_combined, active_v3),
-            active_v3,
+            _combined_payload_for_active_generation(current_combined, current_combined),
+            current_combined,
         )
-        self.assertEqual(
-            _combined_payload_for_active_generation(current_combined, active_combined),
-            active_combined,
-        )
+        for legacy_payload in (active_combined, active_v3):
+            with self.assertRaisesRegex(RuntimeError, "adjacent-level What-if"):
+                _combined_payload_for_active_generation(current_combined, legacy_payload)
         active_v4 = {
             "schemaVersion": 4,
             "summary": {"scriptVersion": "6.0+combined-tier-v4"},
@@ -153,7 +152,7 @@ class HostedPopulationSafetyTests(unittest.TestCase):
             "doubles": [],
             "coop": [],
         }
-        with self.assertRaisesRegex(RuntimeError, "not supported"):
+        with self.assertRaisesRegex(RuntimeError, "adjacent-level What-if"):
             _combined_payload_for_active_generation(current_combined, active_v4)
 
         current_index = {
