@@ -25,7 +25,6 @@ OFFICIAL_DIFFICULTY_RE = re.compile(r"^[SD][1-9][0-9]?$", re.IGNORECASE)
 MIN_RECOMMENDATION_LEVEL = 16
 RECOMMENDATION_OFFICIAL_LEVEL_RADIUS = 2
 RECOMMENDATION_DISPLAY_COUNT = 50
-RECOMMENDATION_ESTIMATED_DIFFICULTY_UPPER_RADIUS = 1.0
 
 
 class RecommendationArtifactQueryError(ValueError):
@@ -154,22 +153,9 @@ def _bounded_standard_mode(
         mode[field] = candidates
     if "filterCandidateCount" in raw_mode:
         mode["filterCandidateCount"] = len(bounded_lists["filterCandidates"])
-    rating = mode.get("scoringRating")
-    maximum_estimated = (
-        float(rating) + RECOMMENDATION_ESTIMATED_DIFFICULTY_UPPER_RADIUS
-        if bounds is not None
-        else None
-    )
-    if "candidateCount" in raw_mode:
-        mode["candidateCount"] = sum(
-            1
-            for candidate in bounded_lists["filterCandidates"]
-            if maximum_estimated is not None
-            and isinstance(candidate.get("estimatedDifficulty"), (int, float))
-            and not isinstance(candidate.get("estimatedDifficulty"), bool)
-            and math.isfinite(float(candidate["estimatedDifficulty"]))
-            and float(candidate["estimatedDifficulty"]) <= maximum_estimated
-        )
+    # Current payloads have already counted the standard ceiling plus qualifying
+    # Phoenix 1 top-50 exceptions. That exception flag is intentionally private,
+    # so preserve the authoritative count rather than trying to infer it here.
     return mode
 
 
@@ -230,17 +216,6 @@ def compact_player_recommendation_cache(
         )
 
     source_by_chart = _standard_candidate_index(modes)
-    source_top_ids: set[str] = set()
-    for mode_key in ("singles", "doubles"):
-        source_mode = modes.get(mode_key)
-        if not isinstance(source_mode, Mapping):
-            continue
-        source_top_ids.update(
-            str(candidate.get("chartId") or "").strip()
-            for candidate in source_mode.get("topRecommendations", [])
-            if isinstance(candidate, Mapping)
-        )
-
     def references_for(
         candidates: list[Any],
         *,
@@ -286,7 +261,6 @@ def compact_player_recommendation_cache(
     filter_references = references_for(raw_candidates)
     top_references = references_for(
         raw_top,
-        allowed_ids=source_top_ids,
         limit=RECOMMENDATION_DISPLAY_COUNT,
     )
 
@@ -296,8 +270,6 @@ def compact_player_recommendation_cache(
     overall[OVERALL_TOP_REFS_FIELD] = top_references
     if "filterCandidateCount" in raw_overall:
         overall["filterCandidateCount"] = len(filter_references)
-    if "candidateCount" in raw_overall:
-        overall["candidateCount"] = len(source_top_ids)
     if "sourceRecommendationCounts" in raw_overall:
         overall["sourceRecommendationCounts"] = {
             mode_key: len(modes.get(mode_key, {}).get("topRecommendations", []))
@@ -327,16 +299,6 @@ def _materialized_overall(
     if not isinstance(raw_references, list):
         raise ValueError("A compact Overall recommendation pool is invalid.")
     source_by_chart = _standard_candidate_index(modes)
-    source_top_ids: set[str] = set()
-    for mode_key in ("singles", "doubles"):
-        source_mode = modes.get(mode_key)
-        if not isinstance(source_mode, Mapping):
-            continue
-        source_top_ids.update(
-            str(candidate.get("chartId") or "").strip()
-            for candidate in source_mode.get("topRecommendations", [])
-            if isinstance(candidate, Mapping)
-        )
     difficulty_options = _overall_difficulty_options(source_by_chart)
     if difficulty is not None and difficulty not in difficulty_options:
         raise RecommendationArtifactQueryError(
@@ -391,7 +353,6 @@ def _materialized_overall(
             )
         overall["topRecommendations"] = materialize_references(
             raw_top_references,
-            allowed_ids=source_top_ids,
             limit=RECOMMENDATION_DISPLAY_COUNT,
         )
     else:
@@ -403,7 +364,7 @@ def _materialized_overall(
         overall["topRecommendations"] = [
             dict(candidate)
             for candidate in raw_top
-            if str(candidate.get("chartId") or "").strip() in source_top_ids
+            if str(candidate.get("chartId") or "").strip() in source_by_chart
         ][:RECOMMENDATION_DISPLAY_COUNT]
 
     valid_filter_reference_ids = {
@@ -419,8 +380,6 @@ def _materialized_overall(
             else 0
             for mode_key in ("singles", "doubles")
         }
-    if "candidateCount" in raw_overall:
-        overall["candidateCount"] = len(source_top_ids)
     if difficulty is None and not include_full_pool:
         if "filterCandidateCount" in raw_overall:
             overall["filterCandidateCount"] = len(valid_filter_reference_ids)
@@ -451,13 +410,6 @@ def _project_legacy_overall(
     ):
         raise ValueError("A cached Overall recommendation pool is invalid.")
     source_by_chart = _standard_candidate_index(modes)
-    source_top_ids = {
-        str(candidate.get("chartId") or "").strip()
-        for mode_key in ("singles", "doubles")
-        if isinstance(modes.get(mode_key), Mapping)
-        for candidate in modes[mode_key].get("topRecommendations", [])
-        if isinstance(candidate, Mapping)
-    }
     difficulty_options = _overall_difficulty_options(source_by_chart)
     if difficulty is not None and difficulty not in difficulty_options:
         raise RecommendationArtifactQueryError(
@@ -467,7 +419,7 @@ def _project_legacy_overall(
         dict(candidate)
         for candidate in overall.get("topRecommendations", [])
         if isinstance(candidate, Mapping)
-        and str(candidate.get("chartId") or "").strip() in source_top_ids
+        and str(candidate.get("chartId") or "").strip() in source_by_chart
     ][:RECOMMENDATION_DISPLAY_COUNT]
     if "sourceRecommendationCounts" in raw_overall:
         overall["sourceRecommendationCounts"] = {
@@ -476,8 +428,6 @@ def _project_legacy_overall(
             else 0
             for mode_key in ("singles", "doubles")
         }
-    if "candidateCount" in raw_overall:
-        overall["candidateCount"] = len(source_top_ids)
     bounded_candidates = [
         dict(candidate)
         for candidate in raw_candidates
