@@ -755,14 +755,13 @@ test("chart art uses mode-colored borders in every rendering layout", async () =
   assert.match(css, /\.recommendation-jacket \.chart-difficulty-coop \{ background: #d5a91b; color: #171207; \}/);
 });
 
-test("recommendation cards show a compact grade-only goal", async () => {
+test("recommendation cards show a compact grade and plate goal", async () => {
   const [page, css] = await Promise.all([
     readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
   ]);
 
-  assert.match(page, /`Goal: \$\{chart\.projectedGrade\}`/);
-  assert.doesNotMatch(page, /`Goal: \$\{chart\.projectedGrade\} \$\{chart\.projectedPlateCode\}`/);
+  assert.match(page, /`Goal: \$\{chart\.projectedGrade\} \$\{chart\.projectedPlateCode\}`/);
   assert.match(page, /className="recommendation-goal"/);
   assert.match(page, /<b>\{goal\}<\/b>/);
   assert.doesNotMatch(page, /GRADE_GOAL_SCORES|PLATE_CRITERIA|misses|goal\.criterion|goal\.summary/);
