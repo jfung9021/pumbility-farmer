@@ -287,8 +287,8 @@ function RecommendationCard({
   const estimate = isCoop
     ? formatCoopEstimatedDifficulty(chart.estimatedDifficulty)
     : `${chart.type === "Single" ? "S" : "D"}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
-  const goal = chart.projectedGrade
-    ? `Goal: ${chart.projectedGrade}`
+  const goal = chart.projectedGrade && chart.projectedPlateCode
+    ? `Goal: ${chart.projectedGrade} ${chart.projectedPlateCode}`
     : null;
   const [pumbilityOpen, setPumbilityOpen] = useState(false);
   const pumbilityPopupId = useId();
