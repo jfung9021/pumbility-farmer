@@ -102,12 +102,13 @@ the median measured chart is anchored at 16 while the hardest chart can retain a
 rating. This is a calibration of observed chart order, not a percentile quota: it does not force a
 normal distribution, and any number of charts may share an integer difficulty.
 
-Co-op recommendation goals are assigned from that whole-number tier difficulty rather than from a
-chart's population score. Harder difficulties receive progressively lower letter-grade goals, and
-each goal receives the same one-grade recommendation boost capped at `SSS+`. Every goal uses a Fair
-Game plate, and one goal contribution from every current chart clears the 16,000 Co-op Rating
-`[CO-OP] Master` threshold with extra leeway. The raw per-chart q75 result remains analysis
-provenance and is not used as the recommendation target.
+Co-op recommendation base goals are assigned from that whole-number tier difficulty rather than
+from a chart's population score. Harder difficulties receive progressively lower letter-grade
+goals. A player's note-count-normalized Phoenix 1 personal best is truncated to the lower score
+boundary of its achieved Phoenix 2 grade and supersedes the base goal when it is higher. Every goal
+uses a Fair Game plate, and one base-goal contribution from every current chart clears the 16,000
+Co-op Rating `[CO-OP] Master` threshold with extra leeway. The raw per-chart q75 result remains
+analysis provenance and is not used as the recommendation target.
 
 ## Magnitude bands and relative ranks
 
@@ -380,11 +381,12 @@ Rating sums the contribution from every unique Phoenix 2 Co-op chart PB rather t
 50. Its title ladder runs from no title through `[CO-OP] Lv.1`-`Lv.10`, Advanced at 12,000,
 Expert at 14,000, and Master at 16,000.
 
-The suggested-chart list retains the 1.0 estimated-difficulty ceiling above the player's scoring
-rating and is additionally bounded by official folder: `floor(scoring rating) ±2`, never below
-level 16. The default list and exact official-difficulty filters use that same five-level window
-and order matching charts by projected Pumbility gain from highest to lowest. Overall is the union
-of the independently bounded Singles and Doubles pools.
+The suggested-chart list normally retains the 1.0 estimated-difficulty ceiling above the player's
+scoring rating and is additionally bounded by official folder: `floor(scoring rating) ±2`, never
+below level 16. A Phoenix 1 personal best may bypass only the 1.0 ceiling when its own normalized,
+grade-boundary result would improve the active Single, Double, or shared Overall Phoenix 2 top-50
+pool. The default list and exact official-difficulty filters use the same five-level official-folder
+window and order matching charts by projected Pumbility gain from highest to lowest.
 
 Projected raw scores target the unweighted median (50th percentile) among all other players with a
 similar ranks 11-30 projection rating and a normalized result on the exact chart. Phoenix 1 and Phoenix 2 observations are joined with Phoenix 2
@@ -396,8 +398,11 @@ narrowest successful radius participates in the ordinary median; peers are not t
 support target or weighted by distance. Below five peers at the maximum radius, the player-balanced
 nonlinear population response model is used.
 
-Projected raw scores are converted to Phoenix 2 letter grades, then raised by one grade (capped at
-`SSS+`) to set the recommendation goal score. The plate distribution combines
+Projected raw scores and the selected player's note-count-normalized Phoenix 1 personal best are
+each truncated to the lower score boundary of their achieved Phoenix 2 letter grade. The higher
+boundary sets the recommendation goal: for example, 982k targets SS and 992k targets SSS. A
+Phoenix 1 personal best can supply the goal when the peer model has no estimate. The plate
+distribution combines
 Phoenix 2 player history with a held-out-tuned, capped Phoenix 1 prior and population smoothing;
 Phoenix 2 wins for an overlapping player/chart observation. The projected plate is the weighted
 median in the ordered Rough Game-to-Perfect Game ladder, with an exact 50% tie selecting the lower
@@ -409,8 +414,9 @@ Overall uses the shared S+D pool. Existing chart Pumbility and all current top-5
 authoritative values supplied by Phoenix 2; Phoenix 1 Pumbility totals never enter that pool.
 
 Co-op projections do not use the Singles/Doubles peer-rating model. The whole-number Co-op estimated
-difficulty selects a monotonic letter-grade goal with the same one-grade boost capped at `SSS+`,
-while every goal uses a Fair Game plate. One goal contribution from all 140 current charts clears
+difficulty selects a monotonic base letter-grade goal, which a higher normalized Phoenix 1
+grade-boundary result supersedes, while every goal uses a Fair Game plate. One base-goal
+contribution from all 140 current charts clears
 the 16,000 Co-op Rating `[CO-OP] Master` threshold with extra leeway. Projected gain is the nonnegative
 increase over the player's current contribution on that chart, and Co-op Rating remains an all-chart
 sum with no top-50 cutoff. Equal gains are ordered by the underlying continuous difficulty signal,

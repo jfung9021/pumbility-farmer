@@ -34,14 +34,11 @@ function boundedStandardMode(
   const filterCandidates = bounded(mode.filterCandidates);
   const topRecommendations = bounded(mode.topRecommendations)
     .slice(0, RECOMMENDATION_DISPLAY_COUNT);
-  const maximumEstimatedDifficulty = typeof mode.scoringRating === "number"
-    ? mode.scoringRating + RECOMMENDATION_UPPER_RADIUS
-    : Number.NEGATIVE_INFINITY;
   return {
     ...mode,
-    candidateCount: filterCandidates.filter(
-      (chart) => chart.estimatedDifficulty <= maximumEstimatedDifficulty,
-    ).length,
+    candidateCount: typeof mode.candidateCount === "number"
+      ? Math.min(mode.candidateCount, filterCandidates.length)
+      : mode.candidateCount,
     filterCandidateCount: filterCandidates.length,
     filterCandidates,
     topRecommendations,
@@ -60,22 +57,21 @@ function boundedRecommendationPlayer(
       ...(doubles.filterCandidates ?? []),
     ].map((candidate) => [candidate.chartId, candidate] as const),
   );
-  const sourceTopIds = new Set([
-    ...singles.topRecommendations.map((candidate) => candidate.chartId),
-    ...doubles.topRecommendations.map((candidate) => candidate.chartId),
-  ]);
   const rawOverall = player.modes.overall;
   const overall = rawOverall
     ? {
         ...rawOverall,
-        candidateCount: sourceTopIds.size,
+        candidateCount: typeof rawOverall.candidateCount === "number"
+          ? Math.min(
+              rawOverall.candidateCount,
+              (rawOverall.filterCandidates ?? []).filter(
+                (candidate) => sourceCandidates.has(candidate.chartId),
+              ).length,
+            )
+          : rawOverall.candidateCount,
         filterCandidateCount: (rawOverall.filterCandidates ?? []).filter(
           (candidate) => sourceCandidates.has(candidate.chartId),
         ).length,
-        sourceRecommendationCounts: {
-          singles: singles.topRecommendations.length,
-          doubles: doubles.topRecommendations.length,
-        },
         filterCandidates: (rawOverall.filterCandidates ?? []).flatMap((candidate) => {
           const source = sourceCandidates.get(candidate.chartId);
           return source
@@ -84,7 +80,7 @@ function boundedRecommendationPlayer(
         }),
         topRecommendations: rawOverall.topRecommendations.flatMap((candidate) => {
           const source = sourceCandidates.get(candidate.chartId);
-          return source && sourceTopIds.has(candidate.chartId)
+          return source
             ? [{ ...source, projectedGain: candidate.projectedGain }]
             : [];
         }).slice(0, RECOMMENDATION_DISPLAY_COUNT),
@@ -214,7 +210,7 @@ const COOP_TOP_SCORE_KEYS = new Set([
 ]);
 const DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL = 16;
 const RECOMMENDATION_UPPER_RADIUS = 1.0;
-const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 25;
+const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 26;
 
 export type LocalRecommendationIndex = {
   schemaVersion?: number;

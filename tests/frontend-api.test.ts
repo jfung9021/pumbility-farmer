@@ -119,13 +119,15 @@ test("recommendation methodology keeps top-20 rating and ranks 11-30 projection 
   assert.match(page, /ranks 11–30 Pumbility rating/);
   assert.match(page, /S with Fair Game/);
   assert.match(page, /visible skill rating uses top-20 average Pumbility/);
-  assert.match(page, /up to 1\.0 estimated-difficulty point above that mode/);
+  assert.match(page, /normally extend up to 1\.0 estimated-difficulty point above that mode/);
+  assert.match(page, /Phoenix 1 personal best alone would improve the active mode or Overall top-50 pool/);
   assert.match(page, /projected plate is the weighted median/);
-  assert.match(page, /projected result is raised by one letter grade, capped at SSS\+/);
-  assert.match(page, /Expected Pumbility is then calculated once from that goal grade/);
+  assert.match(page, /engine estimate and the normalized Phoenix 1 personal best are truncated to the lower score boundary/);
+  assert.match(page, /982k targets SS and 992k targets SSS/);
+  assert.match(page, /Expected Pumbility is calculated once from the selected goal grade/);
   assert.match(page, /existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2/);
   assert.match(page, /Overall Pumbility is the best 50 values across both modes/);
-  assert.match(page, /displayed top 50/);
+  assert.match(page, /every eligible Single and Double candidate&apos;s deterministic gain/);
   assert.match(page, /Skill title progress/);
   assert.doesNotMatch(page, /every likely grade-plate outcome/);
   assert.doesNotMatch(page, /chart difficulty fields are averaged for the skill rating/);
@@ -221,17 +223,17 @@ test("Co-op methodology derives Master-title goals from tier difficulty", async 
     assert.match(content, /median(?: measured)? chart/);
     assert.match(content, /normal distribution/);
   }
-  assert.match(recommendations, /completing all current chart goals clears the 16,000 Co-op Rating \[CO-OP\] Master threshold with extra leeway/i);
+  assert.match(recommendations, /completing all current base chart goals clears the 16,000 Co-op Rating \[CO-OP\] Master threshold with extra leeway/i);
   assert.match(recommendations, /folder lookup is fixed and never rebalanced when charts are added/);
-  assert.match(recommendations, /every difficulty-17 chart always targets AAA with Fair Game/);
+  assert.match(recommendations, /every difficulty-17 chart has a base target of AAA with Fair Game/);
   assert.match(tierList, /recommendation letter-grade goals are assigned from these whole-number difficulties/);
   assert.match(tierList, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24\.9/);
   assert.match(tierList, /const continuous = chart\.difficultyModelContinuous/);
   assert.match(tierList, /chart\.estimatedDifficulty\)\.toFixed\(1\)/);
   assert.match(recommendations, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24\.9/);
-  assert.match(readme, /clears the 16,000 Co-op Rating\s+`\[CO-OP\] Master` threshold with extra leeway/);
-  assert.match(readme, /one-grade recommendation boost capped at `SSS\+`/);
-  assert.match(readme, /raw per-chart\s*q75 result remains analysis\s+provenance/);
+  assert.match(readme, /clears the 16,000\s+Co-op Rating `\[CO-OP\] Master` threshold with extra leeway/);
+  assert.match(readme, /note-count-normalized Phoenix 1 personal best is truncated to the lower score\s+boundary/);
+  assert.match(readme, /raw per-chart\s*q75 result remains\s+analysis provenance/i);
   assert.match(readme, /whole-number buckets from 10 through 24/);
   assert.match(readme, /hardest chart can retain a 24\.9 internal\s+rating/);
 });
@@ -489,7 +491,7 @@ test("local recommendations reject stale schemas before rendering", () => {
   assert.throws(
     () => validateLocalRecommendationIndex(payload),
     (error: unknown) => error instanceof LocalRecommendationsValidationError
-      && /Regenerate schema 25 recommendations/.test(error.message),
+      && /Regenerate schema 26 recommendations/.test(error.message),
   );
 });
 
@@ -521,7 +523,7 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
   };
   const { pumbility: _pumbility, ...topScoreWithoutPumbility } = topScore;
   const payload = {
-    schemaVersion: 25,
+    schemaVersion: 26,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: [],
@@ -545,7 +547,7 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
     }],
   };
 
-  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 25);
+  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 26);
   const privatePayload = structuredClone(payload);
   Object.assign(privatePayload.players[0].modes.singles.topScores[0], { rawScore: 1_000_000 });
   assert.throws(
@@ -753,13 +755,14 @@ test("chart art uses mode-colored borders in every rendering layout", async () =
   assert.match(css, /\.recommendation-jacket \.chart-difficulty-coop \{ background: #d5a91b; color: #171207; \}/);
 });
 
-test("recommendation cards show a compact grade and plate goal", async () => {
+test("recommendation cards show a compact grade-only goal", async () => {
   const [page, css] = await Promise.all([
     readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
   ]);
 
-  assert.match(page, /`Goal: \$\{chart\.projectedGrade\} \$\{chart\.projectedPlateCode\}`/);
+  assert.match(page, /`Goal: \$\{chart\.projectedGrade\}`/);
+  assert.doesNotMatch(page, /`Goal: \$\{chart\.projectedGrade\} \$\{chart\.projectedPlateCode\}`/);
   assert.match(page, /className="recommendation-goal"/);
   assert.match(page, /<b>\{goal\}<\/b>/);
   assert.doesNotMatch(page, /GRADE_GOAL_SCORES|PLATE_CRITERIA|misses|goal\.criterion|goal\.summary/);

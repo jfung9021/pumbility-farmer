@@ -284,7 +284,8 @@ export interface RecommendationModeResult {
     | "estimated-difficulty-master-grade-ladder-v1"
     | "estimated-difficulty-master-grade-ladder-v2"
     | "estimated-difficulty-master-grade-ladder-v3"
-    | "estimated-difficulty-master-grade-ladder-v4";
+    | "estimated-difficulty-master-grade-ladder-v4"
+    | "estimated-difficulty-master-grade-ladder-v5";
   pumbilityPerLevel?: number | null;
   currentTop50Pumbility?: number;
   currentTop50CutoffPumbility?: number | null;

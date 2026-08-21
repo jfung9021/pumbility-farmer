@@ -2478,12 +2478,12 @@ class PlayerRecommendationTests(unittest.TestCase):
             if row["chartId"] == "chart-00"
         )
         self.assertGreater(existing_score, played["projectedScore"])
-        self.assertEqual(played["projectedScore"], 900_000)
+        self.assertEqual(played["projectedScore"], 800_000)
 
-    def test_recommendation_goals_raise_one_grade_and_cap_at_sss_plus(self) -> None:
+    def test_recommendation_goals_truncate_to_the_earned_grade_boundary(self) -> None:
         cases = (
-            (990_000, 995_000, "SSS+"),
-            (940_000, 950_000, "AAA"),
+            (982_000, 980_000, "SS"),
+            (992_000, 990_000, "SSS"),
             (995_000, 995_000, "SSS+"),
         )
         for projection, expected_score, expected_grade in cases:
@@ -2502,6 +2502,176 @@ class PlayerRecommendationTests(unittest.TestCase):
                 )
                 self.assertEqual(goal["projectedScore"], expected_score)
                 self.assertEqual(goal["projectedGrade"], expected_grade)
+
+    def test_phoenix1_personal_best_floors_and_supersedes_the_engine(self) -> None:
+        phoenix1 = {
+            "charts": self.snapshot["charts"],
+            "scores": [
+                {
+                    "playerId": "player",
+                    "chartId": "chart-30",
+                    "pumbility": 1.0,
+                    "score": 992_000,
+                    "plate": "Fair Game",
+                    "isBroken": False,
+                }
+            ],
+        }
+        mode = build_player_recommendation(
+            "player",
+            self.snapshot,
+            self.combined,
+            {"singles": 10.0},
+            self._fixed_score_model(982_000),
+            phoenix1_snapshot=phoenix1,
+        )["modes"]["singles"]
+        target = next(
+            row for row in mode["filterCandidates"] if row["chartId"] == "chart-30"
+        )
+
+        self.assertEqual(target["projectedScore"], 990_000)
+        self.assertEqual(target["projectedGrade"], "SSS")
+        self.assertEqual(target["scoreProjectionSource"], "phoenix1-personal-best")
+        self.assertEqual(target["scoreProjectionSupportCount"], 1)
+        self.assertEqual(target["scoreProjectionConfidence"], "high")
+        self.assertEqual(
+            target["expectedPumbility"],
+            phoenix2_pumbility(
+                "Single", 20, "SSS", str(target["projectedPlate"])
+            ),
+        )
+
+    def test_engine_retains_provenance_when_it_beats_or_ties_phoenix1(self) -> None:
+        for phoenix1_score in (982_000, 992_000):
+            with self.subTest(phoenix1_score=phoenix1_score):
+                phoenix1 = {
+                    "charts": self.snapshot["charts"],
+                    "scores": [
+                        {
+                            "playerId": "player",
+                            "chartId": "chart-30",
+                            "pumbility": 1.0,
+                            "score": phoenix1_score,
+                            "plate": "Fair Game",
+                            "isBroken": False,
+                        }
+                    ],
+                }
+                mode = build_player_recommendation(
+                    "player",
+                    self.snapshot,
+                    self.combined,
+                    {"singles": 10.0},
+                    self._fixed_score_model(992_000),
+                    phoenix1_snapshot=phoenix1,
+                )["modes"]["singles"]
+                target = next(
+                    row
+                    for row in mode["filterCandidates"]
+                    if row["chartId"] == "chart-30"
+                )
+
+                self.assertEqual(target["projectedScore"], 990_000)
+                self.assertEqual(target["projectedGrade"], "SSS")
+                self.assertEqual(target["scoreProjectionSource"], "population-crossfit")
+
+    def test_phoenix1_goal_is_normalized_before_grade_flooring(self) -> None:
+        phoenix1_chart = {
+            **self.snapshot["charts"][31],
+            "noteCount": 800,
+        }
+        phoenix1 = {
+            "charts": [phoenix1_chart],
+            "scores": [
+                {
+                    "playerId": "player",
+                    "chartId": "chart-31",
+                    "pumbility": 1.0,
+                    "score": 984_000,
+                    "plate": "Fair Game",
+                    "isBroken": False,
+                }
+            ],
+        }
+        mode = build_player_recommendation(
+            "player",
+            self.snapshot,
+            self.combined,
+            {"singles": 10.0},
+            self._fixed_score_model(982_000),
+            phoenix1_snapshot=phoenix1,
+        )["modes"]["singles"]
+        target = next(
+            row for row in mode["filterCandidates"] if row["chartId"] == "chart-31"
+        )
+
+        self.assertEqual(target["projectedScore"], 985_000)
+        self.assertEqual(target["projectedGrade"], "SS+")
+        self.assertEqual(target["scoreProjectionSource"], "phoenix1-personal-best")
+
+    def test_phoenix1_goal_can_be_the_only_projection_and_bypass_upper_radius(self) -> None:
+        combined = [dict(row) for row in self.combined]
+        combined[30]["estimatedDifficulty"] = 22.0
+        combined[31]["estimatedDifficulty"] = 22.0
+        phoenix1 = {
+            "charts": self.snapshot["charts"],
+            "scores": [
+                {
+                    "playerId": "player",
+                    "chartId": "chart-31",
+                    "pumbility": 1.0,
+                    "score": 992_000,
+                    "plate": "Fair Game",
+                    "isBroken": False,
+                }
+            ],
+        }
+        mode = build_player_recommendation(
+            "player",
+            self.snapshot,
+            combined,
+            {"singles": 10.0},
+            phoenix1_snapshot=phoenix1,
+        )["modes"]["singles"]
+        displayed_ids = {row["chartId"] for row in mode["topRecommendations"]}
+
+        self.assertTrue(mode["projectionAvailable"])
+        self.assertIn("chart-31", displayed_ids)
+        self.assertNotIn("chart-30", displayed_ids)
+        target = next(
+            row for row in mode["topRecommendations"] if row["chartId"] == "chart-31"
+        )
+        self.assertGreater(target["estimatedDifficulty"], mode["candidateRange"][1])
+        self.assertEqual(target["scoreProjectionSource"], "phoenix1-personal-best")
+        self.assertGreater(target["projectedGain"], 0)
+
+    def test_phoenix1_upper_radius_exception_requires_positive_personal_gain(self) -> None:
+        combined = [dict(row) for row in self.combined]
+        combined[0]["estimatedDifficulty"] = 22.0
+        phoenix1 = {
+            "charts": self.snapshot["charts"],
+            "scores": [
+                {
+                    "playerId": "player",
+                    "chartId": "chart-00",
+                    "pumbility": 1.0,
+                    "score": 0,
+                    "plate": "Fair Game",
+                    "isBroken": False,
+                }
+            ],
+        }
+        mode = build_player_recommendation(
+            "player",
+            self.snapshot,
+            combined,
+            {"singles": 10.0},
+            phoenix1_snapshot=phoenix1,
+        )["modes"]["singles"]
+
+        self.assertNotIn(
+            "chart-00", {row["chartId"] for row in mode["topRecommendations"]}
+        )
 
     def test_single_score_uses_that_score_as_baseline(self) -> None:
         snapshot = {**self.snapshot, "scores": self.snapshot["scores"][:1]}
@@ -2809,10 +2979,10 @@ class PlayerRecommendationTests(unittest.TestCase):
         )["modes"]["singles"]
 
         self.assertEqual(mode["ratingSource"], "phoenix1")
-        self.assertTrue(mode["projectionAvailable"])
+        self.assertFalse(mode["projectionAvailable"])
         self.assertEqual(mode["currentTop50Pumbility"], 0.0)
         self.assertTrue(all(not row["played"] for row in mode["filterCandidates"]))
-        self.assertTrue(all(row["projectedScore"] == 975_000 for row in mode["filterCandidates"]))
+        self.assertTrue(all(row["projectedScore"] == 970_000 for row in mode["filterCandidates"]))
         self.assertTrue(all(float(row["projectedGain"]) > 0 for row in mode["filterCandidates"]))
 
 
@@ -3216,10 +3386,38 @@ class CoopRecommendationTests(unittest.TestCase):
         self.assertEqual(candidate["plateProjectionSource"], "fixed-fair-game")
         self.assertEqual(
             current["scoreProjectionModel"],
-            "estimated-difficulty-master-grade-ladder-v4",
+            "estimated-difficulty-master-grade-ladder-v5",
         )
         self.assertEqual(len(current["topScores"]), 2)
         self.assertTrue(all("pumbility" not in row for row in current["topScores"]))
+
+    def test_phoenix1_personal_best_can_supersede_coop_ladder_goal(self) -> None:
+        catalog = [self._chart("target", 3)]
+        analysis = [
+            {
+                **catalog[0],
+                "chartId": "target",
+                "estimatedDifficulty": 17,
+                "difficultyModelContinuous": 17.0,
+            }
+        ]
+        mode = build_player_coop_mode(
+            "player",
+            {"charts": catalog, "scores": []},
+            analysis,
+            phoenix1_goals={"target": (990_000, "SSS")},
+        )
+        target = mode["topRecommendations"][0]
+
+        self.assertEqual(target["projectedScore"], 990_000)
+        self.assertEqual(target["projectedGrade"], "SSS")
+        self.assertEqual(target["scoreProjectionSource"], "phoenix1-personal-best")
+        self.assertEqual(target["scoreProjectionSupportCount"], 1)
+        self.assertEqual(target["projectedPlate"], "Fair Game")
+        self.assertEqual(
+            target["expectedCoopRating"],
+            phoenix2_coop_rating("SSS", "Fair Game"),
+        )
 
     def test_coop_goal_ladder_is_monotonic_and_provides_master_leeway(self) -> None:
         expected_grades = {
@@ -3540,6 +3738,32 @@ class RecommendationArtifactBoundaryTests(unittest.TestCase):
                 mode="overall",
                 difficulty="S17",
             )
+
+    def test_overall_top_can_reference_a_source_filter_candidate_not_in_mode_top(self) -> None:
+        payload = self._payload()
+        modes = payload["player"]["modes"]
+        modes["singles"]["topRecommendations"] = [
+            candidate
+            for candidate in modes["singles"]["topRecommendations"]
+            if candidate["chartId"] == "s18"
+        ]
+        modes["overall"]["topRecommendations"] = [
+            candidate
+            for candidate in modes["overall"]["filterCandidates"]
+            if candidate["chartId"] == "s22"
+        ]
+        modes["overall"]["candidateCount"] = 7
+
+        materialized = materialize_player_recommendation_cache(
+            compact_player_recommendation_cache(payload)
+        )
+        overall = materialized["player"]["modes"]["overall"]
+
+        self.assertEqual(
+            [candidate["chartId"] for candidate in overall["topRecommendations"]],
+            ["s22"],
+        )
+        self.assertEqual(overall["candidateCount"], 7)
 
 
 class RecommendationChartBoundaryTests(unittest.TestCase):
