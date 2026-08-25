@@ -48,14 +48,14 @@ const DOUBLE_TITLE_LADDER: ProgressRung[] = [
   { label: "Double Beginner", threshold: 0 },
   ...numberedRungs("Double Intermediate", SHARED_INTERMEDIATE_THRESHOLDS),
   ...numberedRungs("Double Advanced", [
-    15_000, 15_250, 15_500, 15_750, 16_000,
-    16_250, 16_500, 16_750, 17_000, 17_250,
+    15_000, 15_300, 15_600, 15_900, 16_200,
+    16_500, 16_800, 17_100, 17_400, 17_700,
   ]),
   ...numberedRungs("Double Expert", [
-    17_500, 17_700, 17_900, 18_100, 18_300,
-    18_500, 18_600, 18_700, 18_800, 18_900,
+    18_000, 18_200, 18_400, 18_600, 18_800,
+    19_000, 19_100, 19_200, 19_300, 19_400,
   ]),
-  { label: "Double Master", threshold: 19_000 },
+  { label: "Double Master", threshold: 19_500 },
 ];
 
 const OVERALL_RANK_LADDER: ProgressRung[] = [

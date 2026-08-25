@@ -15,7 +15,7 @@ from typing import Any, Mapping
 from phoenix2_sync import parse_utc, utc_now
 
 
-SCRIPT_VERSION = "6.6.0-phoenix2-50-score-minimum"
+SCRIPT_VERSION = "6.7.0-public-top-score-display"
 PHOENIX2_MINIMUM_ANALYSIS_SCORES = 50
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)

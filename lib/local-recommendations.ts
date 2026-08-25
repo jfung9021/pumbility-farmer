@@ -192,6 +192,7 @@ const TOP_SCORE_KEYS = new Set([
   "phoenix1Contributors",
   "phoenix2Contributors",
   "evidenceStatus",
+  "score",
   "pumbility",
   "grade",
   "plate",
@@ -288,6 +289,10 @@ function isRecommendationTopScore(value: unknown): value is RecommendationTopSco
       || score.evidenceStatus === "Insufficient"
       || score.evidenceStatus === "Unrated"
     )
+    && typeof score.score === "number"
+    && Number.isInteger(score.score)
+    && score.score >= 0
+    && score.score <= 1_000_000
     && (score.type === "CoOp"
       ? typeof score.coopRating === "number"
         && Number.isFinite(score.coopRating)

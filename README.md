@@ -327,7 +327,7 @@ Every continuation validates immutable generation and input digests before reusi
 - `analysis/recommendations/models/<generation>.npz` — compressed, non-pickle population score surfaces and chart-indexed all-score peer cohorts.
 - `analysis/private/recommendation-inputs/<generation>/{phoenix1,phoenix2}/*.json` — private ten-player input shards used by player-only refreshes.
 - `analysis/private/recommendation-player-state/<playerKey>.json` — newest incrementally merged Phoenix 2 state for one player.
-- `analysis/recommendations/players/<playerKey>.json` — cached public-safe top-50 result and bounded mode-specific chart pools for one player; Overall stores ordered references to the canonical Singles and Doubles rows rather than duplicate chart objects. Private IDs and raw scores are not stored.
+- `analysis/recommendations/players/<playerKey>.json` — cached public-safe top-50 result and bounded mode-specific chart pools for one player; Overall stores ordered references to the canonical Singles and Doubles rows rather than duplicate chart objects. Each bounded Top 50 row includes its exact display score, while private IDs and complete raw score histories are not stored.
 - `analysis/phoenix2/staging/<job>.json` — resumable 50-player checkpoints.
 - `analysis/phoenix2/runs/*.json` — the latest ten immutable Phoenix 2 aggregate runs.
 
@@ -371,7 +371,7 @@ participates in the Overall total.
 
 The current top-50 total also drives the progress indicator. Single and Double use their separate
 Phoenix 2 skill-title ladders (Beginner, Intermediate, Advanced, Expert, and the mode-specific
-Master title at 19,000). Overall uses the Phoenix 2 Pumbility rank ladder from Unranked through the five
+Single Master title at 19,000 and Double Master title at 19,500). Overall uses the Phoenix 2 Pumbility rank ladder from Unranked through the five
 divisions of Bronze, Silver, Gold, Platinum, Diamond, Red Beryl, and Alexandrite, followed by
 Phoenix at 20,000. Phoenix 1 may supply an existing rating or projection fallback, but never a
 current Pumbility total or progress value.
