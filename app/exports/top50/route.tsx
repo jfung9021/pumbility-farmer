@@ -1,5 +1,15 @@
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  cloneElement,
+  isValidElement,
+  type CSSProperties,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import sharp from "sharp";
 
 import {
   hasExactTop50Scores,
@@ -27,11 +37,66 @@ export const maxDuration = 60;
 
 const API_TIMEOUT_MS = 15_000;
 const JACKET_TIMEOUT_MS = 3_000;
+const JACKET_TOTAL_TIMEOUT_MS = 8_000;
 const JACKET_MAX_BYTES = 800_000;
 const JACKET_CONCURRENCY = 8;
+const JACKET_RENDER_WIDTH = 212;
+const JACKET_RENDER_HEIGHT = 108;
+const POSTER_RENDER_SCALE = 0.75;
+const POSTER_RENDER_WIDTH = Math.round(TOP50_EXPORT_WIDTH * POSTER_RENDER_SCALE);
+const POSTER_RENDER_HEIGHT = Math.round(TOP50_EXPORT_HEIGHT * POSTER_RENDER_SCALE);
 const PLAYER_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const SCALED_POSTER_STYLE_PROPERTIES = new Set([
+  "bottom",
+  "fontSize",
+  "gap",
+  "height",
+  "left",
+  "letterSpacing",
+  "marginLeft",
+  "marginRight",
+  "marginTop",
+  "padding",
+  "paddingBottom",
+  "right",
+  "top",
+  "width",
+]);
+
+const posterFontData = Promise.all([
+  readFile(join(process.cwd(), "assets", "fonts", "NotoSans-Regular.ttf")),
+  readFile(join(process.cwd(), "assets", "fonts", "NotoSans-Bold.ttf")),
+  readFile(join(process.cwd(), "assets", "fonts", "NotoSansSymbols2-Regular.ttf")),
+]);
 
 type PosterScore = RecommendationTopScore & { jacketDataUrl: string | null };
+
+function scalePosterStyle(style: CSSProperties): CSSProperties {
+  return Object.fromEntries(Object.entries(style).map(([property, value]) => {
+    if (!SCALED_POSTER_STYLE_PROPERTIES.has(property)) return [property, value];
+    if (typeof value === "number") return [property, value * POSTER_RENDER_SCALE];
+    if (typeof value === "string") {
+      return [
+        property,
+        value.replace(/(-?\d+(?:\.\d+)?)px/g, (_, pixels: string) => (
+          `${Number(pixels) * POSTER_RENDER_SCALE}px`
+        )),
+      ];
+    }
+    return [property, value];
+  })) as CSSProperties;
+}
+
+function scalePosterTree(node: ReactNode): ReactNode {
+  if (Array.isArray(node)) return node.map(scalePosterTree);
+  if (!isValidElement(node)) return node;
+  const element = node as ReactElement<{ children?: ReactNode; style?: CSSProperties }>;
+  const children = scalePosterTree(element.props.children);
+  const props = element.props.style ? { style: scalePosterStyle(element.props.style) } : {};
+  return element.props.children === undefined
+    ? cloneElement(element, props)
+    : cloneElement(element, props, children);
+}
 
 function jsonError(message: string, status: number): Response {
   return Response.json(
@@ -143,10 +208,13 @@ function detectedImageContentType(image: Uint8Array): string | null {
   return null;
 }
 
-async function loadJacketDataUrl(value: string): Promise<string | null> {
+async function loadJacketDataUrl(
+  value: string,
+  timeoutMs: number,
+): Promise<string | null> {
   if (!isSafeTop50JacketUrl(value)) return null;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), JACKET_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(value, {
       cache: "force-cache",
@@ -155,9 +223,15 @@ async function loadJacketDataUrl(value: string): Promise<string | null> {
     });
     if (!response.ok) return null;
     const image = await readBoundedImage(response);
-    const contentType = detectedImageContentType(image);
-    if (!contentType) return null;
-    return `data:${contentType};base64,${Buffer.from(image).toString("base64")}`;
+    if (!detectedImageContentType(image)) return null;
+    const optimized = await sharp(image, {
+      failOn: "error",
+      limitInputPixels: 16_000_000,
+    })
+      .resize(JACKET_RENDER_WIDTH, JACKET_RENDER_HEIGHT, { fit: "cover" })
+      .jpeg({ quality: 82 })
+      .toBuffer();
+    return `data:image/jpeg;base64,${optimized.toString("base64")}`;
   } catch {
     return null;
   } finally {
@@ -190,7 +264,12 @@ async function attachJackets(scores: RecommendationTopScore[]): Promise<PosterSc
   const urls = [...new Set(scores
     .map((score) => score.imageUrl)
     .filter(isSafeTop50JacketUrl))];
-  const loaded = await mapWithConcurrency(urls, JACKET_CONCURRENCY, loadJacketDataUrl);
+  const deadline = Date.now() + JACKET_TOTAL_TIMEOUT_MS;
+  const loaded = await mapWithConcurrency(urls, JACKET_CONCURRENCY, async (url) => {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return null;
+    return loadJacketDataUrl(url, Math.min(JACKET_TIMEOUT_MS, remainingMs));
+  });
   const jacketByUrl = new Map(urls.map((url, index) => [url, loaded[index]]));
   return scores.map((score) => ({
     ...score,
@@ -412,19 +491,20 @@ export async function GET(request: NextRequest): Promise<Response> {
     const generatedAt = value.playerSyncedAtUtc
       || value.recommendationsGeneratedAtUtc
       || value.generatedAtUtc;
+    const [notoSansRegular, notoSansBold, notoSansSymbols] = await posterFontData;
 
-    return new ImageResponse(
-      (
+    const renderedPoster = new ImageResponse(
+      scalePosterTree(
         <div
           style={{
             background: "linear-gradient(145deg, #0b100c 0%, #111a12 52%, #07100a 100%)",
             color: "#f4f7ee",
             display: "flex",
             flexDirection: "column",
-            fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-            height: "100%",
+            fontFamily: '"Noto Sans", "Noto Sans Symbols 2", sans-serif',
+            height: TOP50_EXPORT_HEIGHT,
             padding: 28,
-            width: "100%",
+            width: TOP50_EXPORT_WIDTH,
           }}
         >
           <div
@@ -498,12 +578,12 @@ export async function GET(request: NextRequest): Promise<Response> {
                 key={`row-${rowIndex}`}
                 style={{ display: "flex", gap: 10, height: 166, width: "100%" }}
               >
-                {row.map((score, columnIndex) => (
-                  <PosterCard
-                    key={score?.chartId || `empty-${rowIndex}-${columnIndex}`}
-                    rank={(rowIndex * 5) + columnIndex + 1}
-                    score={score}
-                  />
+                {row.map((score, columnIndex) => cloneElement(
+                  PosterCard({
+                    rank: (rowIndex * 5) + columnIndex + 1,
+                    score,
+                  }),
+                  { key: score?.chartId || `empty-${rowIndex}-${columnIndex}` },
                 ))}
               </div>
             ))}
@@ -525,17 +605,44 @@ export async function GET(request: NextRequest): Promise<Response> {
             <div style={{ color: "#c8ff2e", display: "flex", fontWeight: 800 }}>PUMBILITY FARMER</div>
           </div>
         </div>
-      ),
+      ) as ReactElement,
       {
-        height: TOP50_EXPORT_HEIGHT,
-        width: TOP50_EXPORT_WIDTH,
-        headers: {
-          "Cache-Control": "private, no-store, max-age=0",
-          "Content-Disposition": `attachment; filename="${top50ExportFilename(modeValue)}"`,
-          "X-Content-Type-Options": "nosniff",
-        },
+        height: POSTER_RENDER_HEIGHT,
+        width: POSTER_RENDER_WIDTH,
+        fonts: [
+          {
+            name: "Noto Sans",
+            data: notoSansRegular,
+            style: "normal",
+            weight: 400,
+          },
+          {
+            name: "Noto Sans",
+            data: notoSansBold,
+            style: "normal",
+            weight: 700,
+          },
+          {
+            name: "Noto Sans Symbols 2",
+            data: notoSansSymbols,
+            style: "normal",
+            weight: 400,
+          },
+        ],
       },
     );
+    const poster = await sharp(Buffer.from(await renderedPoster.arrayBuffer()))
+      .resize(TOP50_EXPORT_WIDTH, TOP50_EXPORT_HEIGHT, { kernel: sharp.kernel.lanczos3 })
+      .png({ compressionLevel: 6 })
+      .toBuffer();
+    return new Response(poster, {
+      headers: {
+        "Cache-Control": "private, no-store, max-age=0",
+        "Content-Disposition": `attachment; filename="${top50ExportFilename(modeValue)}"`,
+        "Content-Type": "image/png",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       return jsonError("The recommendation service took too long to respond.", 504);
