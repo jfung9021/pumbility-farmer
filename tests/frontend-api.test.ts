@@ -36,6 +36,18 @@ import {
   visibleRecommendations,
 } from "../lib/recommendation-filters.ts";
 import {
+  isSafeTop50JacketUrl,
+  isTop50ExportMode,
+  splitPumbility,
+  TOP50_EXPORT_HEIGHT,
+  TOP50_EXPORT_SITE,
+  TOP50_EXPORT_WIDTH,
+  top50ExportApiOrigin,
+  top50ExportDownloadFilename,
+  top50ExportFilename,
+  top50ExportRows,
+} from "../lib/top50-export.ts";
+import {
   applyPhoenix1Rerates,
   type Phoenix1ReratePayload,
 } from "../lib/phoenix1-rerates.ts";
@@ -68,13 +80,16 @@ test("turns platform-generated text into a useful error", async () => {
   );
 });
 
-test("mobile styles keep desktop information visible", async () => {
+test("mobile styles only hide decorative and desktop-only score fields", async () => {
   const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
   const mobileStyles = css.slice(css.indexOf("@media (max-width: 820px)"));
   const hiddenSelectors = [...mobileStyles.matchAll(/([^{}]+)\{[^{}]*display:\s*none/g)]
     .map((match) => match[1].trim());
 
-  assert.deepEqual(hiddenSelectors, [".feature-card > b"]);
+  assert.deepEqual(hiddenSelectors, [
+    ".top-score-score",
+    ".feature-card > b",
+  ]);
 });
 
 test("homepage leads with feature cards and explains the external score sync", async () => {
@@ -101,37 +116,17 @@ test("homepage leads with feature cards and explains the external score sync", a
   assert.match(syncLink, /target="_blank"/);
 });
 
-test("recommendation methodology keeps top-20 rating and ranks 11-30 projection with a top-50 display", async () => {
+test("recommendations remove the methodology footer and state the Top 50 privacy boundary", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
   );
 
-  assert.match(page, /median \(50th percentile\) from all other players/);
-  assert.match(page, /plus or minus 0\.2 through 0\.5 rating in 0\.1 steps seeking 20 peers/);
-  assert.match(page, /repeats those radii seeking 10, then repeats seeking five/);
-  assert.match(page, /Every peer within the narrowest successful radius is used/);
-  assert.match(page, /below five peers, the player-balanced population model uses the same Phoenix weighting/);
-  assert.match(page, /giving Phoenix 2 results twice the weight of Phoenix 1/);
-  assert.doesNotMatch(page, /top 100 at plus or minus/);
-  assert.doesNotMatch(page, /through 1\.0/);
-  assert.match(page, /top-20 average Pumbility/);
-  assert.match(page, /ranks 11–30 Pumbility rating/);
-  assert.match(page, /S with Fair Game/);
-  assert.match(page, /visible skill rating uses top-20 average Pumbility/);
-  assert.match(page, /normally extend up to 1\.0 estimated-difficulty point above that mode/);
-  assert.match(page, /Phoenix 1 personal best alone would improve the active mode or Overall top-50 pool/);
-  assert.match(page, /projected plate is the weighted median/);
-  assert.match(page, /engine estimate and the normalized Phoenix 1 personal best are truncated to the lower score boundary/);
-  assert.match(page, /982k targets SS and 992k targets SSS/);
-  assert.match(page, /Expected Pumbility is calculated once from the selected goal grade/);
-  assert.match(page, /existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2/);
-  assert.match(page, /Overall Pumbility is the best 50 values across both modes/);
-  assert.match(page, /every eligible Single and Double candidate&apos;s deterministic gain/);
+  assert.doesNotMatch(page, /<footer>/);
+  assert.doesNotMatch(page, /How the merge works/);
+  assert.match(page, /Only scores in the displayed Top 50 are returned to the browser/);
+  assert.match(page, /internal player ID and full score history stay private/);
   assert.match(page, /Skill title progress/);
-  assert.doesNotMatch(page, /every likely grade-plate outcome/);
-  assert.doesNotMatch(page, /chart difficulty fields are averaged for the skill rating/);
-  assert.doesNotMatch(page, /reaches 50 valid Phoenix 2 scores/);
 });
 
 test("recommendation modes put Overall first and select it by default", async () => {
@@ -214,7 +209,7 @@ test("Co-op methodology derives Master-title goals from tier difficulty", async 
     readFile(path.join(process.cwd(), "README.md"), "utf8"),
   ]);
 
-  for (const content of [tierList, recommendations, readme]) {
+  for (const content of [tierList, readme]) {
     assert.match(content, /player[- ]strength/);
     assert.match(content, /Phoenix source/);
     assert.match(content, /robust/);
@@ -223,17 +218,15 @@ test("Co-op methodology derives Master-title goals from tier difficulty", async 
     assert.match(content, /median(?: measured)? chart/);
     assert.match(content, /normal distribution/);
   }
-  assert.match(recommendations, /completing all current base chart goals clears the 16,000 Co-op Rating \[CO-OP\] Master threshold with extra leeway/i);
-  assert.match(recommendations, /folder lookup is fixed and never rebalanced when charts are added/);
-  assert.match(recommendations, /every difficulty-17 chart has a base target of AAA with Fair Game/);
+  assert.doesNotMatch(recommendations, /<footer>/);
+  assert.doesNotMatch(recommendations, /How the merge works/);
   assert.match(tierList, /recommendation letter-grade goals are assigned from these whole-number difficulties/);
   assert.match(tierList, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24\.9/);
   assert.match(tierList, /const continuous = chart\.difficultyModelContinuous/);
   assert.match(tierList, /chart\.estimatedDifficulty\)\.toFixed\(1\)/);
-  assert.match(recommendations, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24\.9/);
   assert.match(readme, /clears the 16,000\s+Co-op Rating `\[CO-OP\] Master` threshold with extra leeway/);
-  assert.match(readme, /note-count-normalized Phoenix 1 personal best is truncated to the lower score\s+boundary/);
-  assert.match(readme, /raw per-chart\s*q75 result remains\s+analysis provenance/i);
+  assert.match(readme, /note-count-normalized Phoenix 1 personal best are\s+each truncated to the lower score boundary/);
+  assert.match(readme, /raw nearest-rank q75 result remains provenance/);
   assert.match(readme, /whole-number buckets from 10 through 24/);
   assert.match(readme, /hardest chart can retain a 24\.9 internal\s+rating/);
 });
@@ -255,38 +248,127 @@ test("recommendation player clicks are tracked by display name", async () => {
   );
 });
 
-test("Pumbility progress uses the Phoenix 2 title and rank boundaries", () => {
-  const singleExpert = pumbilityProgress("singles", 17_500);
-  assert.equal(singleExpert.label, "Single Expert Lv. 1");
-  assert.equal(singleExpert.nextThreshold, 17_700);
-  assert.equal(singleExpert.percent, 0);
+test("Pumbility progress uses every Phoenix 2 title and rank boundary", () => {
+  type ExpectedRung = { label: string; threshold: number };
+  type ProgressMode = Parameters<typeof pumbilityProgress>[0];
 
-  const doubleMaster = pumbilityProgress("doubles", 19_000);
-  assert.equal(doubleMaster.label, "Double Master");
-  assert.equal(doubleMaster.nextThreshold, null);
-  assert.equal(doubleMaster.percent, 100);
+  const numberedRungs = (
+    prefix: string,
+    thresholds: readonly number[],
+  ): ExpectedRung[] => thresholds.map((threshold, index) => ({
+    label: `${prefix} Lv. ${index + 1}`,
+    threshold,
+  }));
 
-  const alexandrite = pumbilityProgress("overall", 19_300);
-  assert.equal(alexandrite.label, "Alexandrite Lv. 2");
-  assert.equal(alexandrite.nextLabel, "Alexandrite Lv. 3");
-  assert.equal(alexandrite.percent, 50);
+  const sharedIntermediate = [
+    5_000, 6_000, 7_000, 8_000, 9_000,
+    10_000, 11_000, 12_000, 13_000, 14_000,
+  ];
+  const ladders: Array<{ mode: ProgressMode; rungs: ExpectedRung[] }> = [
+    {
+      mode: "singles",
+      rungs: [
+        { label: "Single Beginner", threshold: 0 },
+        ...numberedRungs("Single Intermediate", sharedIntermediate),
+        ...numberedRungs("Single Advanced", [
+          15_000, 15_250, 15_500, 15_750, 16_000,
+          16_250, 16_500, 16_750, 17_000, 17_250,
+        ]),
+        ...numberedRungs("Single Expert", [
+          17_500, 17_700, 17_900, 18_100, 18_300,
+          18_500, 18_600, 18_700, 18_800, 18_900,
+        ]),
+        { label: "Single Master", threshold: 19_000 },
+      ],
+    },
+    {
+      mode: "doubles",
+      rungs: [
+        { label: "Double Beginner", threshold: 0 },
+        ...numberedRungs("Double Intermediate", sharedIntermediate),
+        ...numberedRungs("Double Advanced", [
+          15_000, 15_300, 15_600, 15_900, 16_200,
+          16_500, 16_800, 17_100, 17_400, 17_700,
+        ]),
+        ...numberedRungs("Double Expert", [
+          18_000, 18_200, 18_400, 18_600, 18_800,
+          19_000, 19_100, 19_200, 19_300, 19_400,
+        ]),
+        { label: "Double Master", threshold: 19_500 },
+      ],
+    },
+    {
+      mode: "overall",
+      rungs: [
+        { label: "Unranked", threshold: 0 },
+        ...numberedRungs("Bronze", [10_000, 10_500, 11_000, 11_500, 12_000]),
+        ...numberedRungs("Silver", [12_500, 13_000, 13_500, 14_000, 14_500]),
+        ...numberedRungs("Gold", [15_000, 15_200, 15_400, 15_600, 15_800]),
+        ...numberedRungs("Platinum", [16_000, 16_200, 16_400, 16_600, 16_800]),
+        ...numberedRungs("Diamond", [17_000, 17_200, 17_400, 17_600, 17_800]),
+        ...numberedRungs("Red Beryl", [18_000, 18_200, 18_400, 18_600, 18_800]),
+        ...numberedRungs("Alexandrite", [19_000, 19_200, 19_400, 19_600, 19_800]),
+        { label: "Phoenix", threshold: 20_000 },
+      ],
+    },
+    {
+      mode: "coop",
+      rungs: [
+        { label: "No Co-op title", threshold: 0 },
+        ...[
+          1_000, 2_000, 3_000, 4_000, 5_000,
+          6_000, 7_000, 8_000, 9_000, 10_000,
+        ].map((threshold, index) => ({
+          label: `[CO-OP] Lv.${index + 1}`,
+          threshold,
+        })),
+        { label: "[CO-OP] Advanced", threshold: 12_000 },
+        { label: "[CO-OP] Expert", threshold: 14_000 },
+        { label: "[CO-OP] Master", threshold: 16_000 },
+      ],
+    },
+  ];
 
-  const phoenix = pumbilityProgress("overall", 20_000);
-  assert.equal(phoenix.label, "Phoenix");
-  assert.equal(phoenix.nextThreshold, null);
+  for (const { mode, rungs } of ladders) {
+    for (const [index, rung] of rungs.entries()) {
+      const next = rungs[index + 1] ?? null;
+      const exact = pumbilityProgress(mode, rung.threshold);
+      assert.equal(exact.label, rung.label, `${mode} at ${rung.threshold}`);
+      assert.equal(exact.rungIndex, index, `${mode} rung at ${rung.threshold}`);
+      assert.equal(exact.threshold, rung.threshold, `${mode} threshold at ${rung.threshold}`);
+      assert.equal(exact.nextLabel, next?.label ?? null, `${mode} next title at ${rung.threshold}`);
+      assert.equal(exact.nextThreshold, next?.threshold ?? null, `${mode} next threshold at ${rung.threshold}`);
+      assert.equal(exact.remaining, next ? next.threshold - rung.threshold : 0);
+      assert.equal(exact.percent, next ? 0 : 100);
 
-  const noCoopTitle = pumbilityProgress("coop", 999);
-  assert.equal(noCoopTitle.label, "No Co-op title");
-  assert.equal(noCoopTitle.nextLabel, "[CO-OP] Lv.1");
+      const below = pumbilityProgress(mode, rung.threshold - 0.01);
+      if (index === 0) {
+        assert.equal(below.label, rung.label, `${mode} clamps below zero`);
+        assert.equal(below.rungIndex, 0, `${mode} first rung below zero`);
+        assert.equal(below.threshold, 0, `${mode} first threshold below zero`);
+      } else {
+        const previous = rungs[index - 1];
+        assert.equal(below.label, previous.label, `${mode} below ${rung.threshold}`);
+        assert.equal(below.rungIndex, index - 1, `${mode} rung below ${rung.threshold}`);
+        assert.equal(below.nextLabel, rung.label, `${mode} next title below ${rung.threshold}`);
+        assert.equal(below.nextThreshold, rung.threshold, `${mode} next threshold below ${rung.threshold}`);
+        assert.ok(
+          Math.abs(below.remaining - 0.01) < 1e-8,
+          `${mode} remaining below ${rung.threshold}`,
+        );
+        assert.ok(below.percent < 100, `${mode} percent below ${rung.threshold}`);
+      }
+    }
 
-  const coopLevelTen = pumbilityProgress("coop", 10_000);
-  assert.equal(coopLevelTen.label, "[CO-OP] Lv.10");
-  assert.equal(coopLevelTen.nextLabel, "[CO-OP] Advanced");
-  assert.equal(coopLevelTen.nextThreshold, 12_000);
-
-  const coopMaster = pumbilityProgress("coop", 16_000);
-  assert.equal(coopMaster.label, "[CO-OP] Master");
-  assert.equal(coopMaster.percent, 100);
+    const maximum = rungs.at(-1)!;
+    const aboveMaximum = pumbilityProgress(mode, maximum.threshold + 100_000);
+    assert.equal(aboveMaximum.label, maximum.label, `${mode} above maximum`);
+    assert.equal(aboveMaximum.rungIndex, rungs.length - 1, `${mode} maximum rung`);
+    assert.equal(aboveMaximum.nextLabel, null, `${mode} has no title above maximum`);
+    assert.equal(aboveMaximum.nextThreshold, null, `${mode} has no threshold above maximum`);
+    assert.equal(aboveMaximum.remaining, 0, `${mode} remaining above maximum`);
+    assert.equal(aboveMaximum.percent, 100, `${mode} percent above maximum`);
+  }
 });
 
 test("recommendation page keeps the filterable recommendation list beside the Top 50 view", async () => {
@@ -516,6 +598,7 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
     phoenix1Contributors: null,
     phoenix2Contributors: null,
     evidenceStatus: null,
+    score: 999_500,
     pumbility: 350.25,
     grade: "SSS+",
     plate: "Perfect Game",
@@ -548,12 +631,36 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
   };
 
   assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 26);
+  for (const exactScore of [0, 1_000_000]) {
+    const boundaryPayload = structuredClone(payload);
+    boundaryPayload.players[0].modes.singles.topScores[0].score = exactScore;
+    assert.equal(validateLocalRecommendationIndex(boundaryPayload).schemaVersion, 26);
+  }
   const privatePayload = structuredClone(payload);
   Object.assign(privatePayload.players[0].modes.singles.topScores[0], { rawScore: 1_000_000 });
   assert.throws(
     () => validateLocalRecommendationIndex(privatePayload),
     LocalRecommendationsValidationError,
   );
+  for (const invalidScore of [
+    -1,
+    1_000_001,
+    999_999.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    true,
+    null,
+  ]) {
+    const invalidScorePayload = structuredClone(payload);
+    Object.assign(
+      invalidScorePayload.players[0].modes.singles.topScores[0],
+      { score: invalidScore },
+    );
+    assert.throws(
+      () => validateLocalRecommendationIndex(invalidScorePayload),
+      LocalRecommendationsValidationError,
+    );
+  }
   const oversizedPayload = structuredClone(payload);
   oversizedPayload.players[0].modes.singles.topScores = Array.from(
     { length: 51 },
@@ -852,13 +959,15 @@ test("Top 50 cards expose PIU result data and open an accessible detail dialog",
   assert.match(page, /function TopScoreCard/);
   assert.match(page, /className="top-score-rank">#\{rank\}/);
   assert.match(page, /\{score\.songName\}/);
-  assert.doesNotMatch(page, /className="top-score-copy"/);
+  assert.match(page, /className="top-score-copy"/);
+  assert.match(page, /function topScoreValue\(score: RecommendationTopScore\)/);
+  assert.match(page, /score\.score === undefined \? "—"/);
   assert.match(page, /\{score\.grade \|\| "—"\}/);
   assert.match(page, /\{score\.plateCode \|\| "—"\}/);
-  assert.match(
-    page,
-    /className="top-score-result">\s*<span>\s*<b>\{score\.grade \|\| "—"\}<\/b>\s*<small>\{score\.plateCode \|\| "—"\}<\/small>/,
-  );
+  assert.doesNotMatch(page, /className="top-score-copy-score"/);
+  assert.match(page, /className="top-score-score">\{scoreValue\}<\/b>/);
+  assert.match(page, /className="top-score-grade">/);
+  assert.match(page, /<small>Score<\/small><strong>\{topScoreValue\(score\)\}<\/strong>/);
   assert.match(page, /function topScoreRating\(score: RecommendationTopScore\)/);
   assert.match(page, /pumbilityLabel\(rating\)/);
   assert.match(page, /className="chart-dialog top-score-dialog"/);
@@ -871,13 +980,102 @@ test("Top 50 cards expose PIU result data and open an accessible detail dialog",
   assert.match(page, /<ChartVideoLink[\s\S]*variant="dialog"/);
   assert.match(css, /\.top-score-grid \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\);/);
   assert.match(css, /\.top-score-card \{[^}]*border-radius: 0;/);
-  assert.match(css, /\.top-score-result > span \{[^}]*display: flex;[^}]*gap: 4px;/);
+  assert.match(css, /@media \(min-width: 821px\)[\s\S]*\.top-score-card \{ aspect-ratio: 1; \}/);
+  assert.match(css, /@media \(min-width: 821px\)[\s\S]*\.top-score-jacket \{[^}]*aspect-ratio: auto;[^}]*flex: 1 1 auto;/);
+  assert.match(css, /\.top-score-score \{[^}]*font-size: 13px;[^}]*font-variant-numeric: tabular-nums;/);
+  assert.match(css, /\.top-score-copy \{[^}]*justify-content: flex-start;[^}]*padding: 8px 9px 2px;[^}]*text-align: left;/);
+  assert.match(css, /\.top-score-result-summary \{[^}]*gap: 4px;/);
+  assert.match(css, /\.top-score-grade \{[^}]*gap: 4px;/);
+  assert.match(css, /\.top-score-copy > strong \{[^}]*text-align: left;/);
+  assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.top-score-score \{ display: none; \}/);
   assert.match(css, /\.top-score-rank \{[^}]*font-size: 11px;/);
   assert.match(css, /\.top-score-jacket \.chart-difficulty-badge \{[^}]*font-size: 11px;/);
-  assert.match(css, /\.top-score-result > span b \{[^}]*font-size: 13px;/);
-  assert.match(css, /\.top-score-result > span small \{[^}]*font-size: 10px;/);
+  assert.match(css, /\.top-score-grade b \{[^}]*font-size: 13px;/);
+  assert.match(css, /\.top-score-grade small \{[^}]*font-size: 10px;/);
   assert.match(css, /\.top-score-result > strong \{[^}]*font-size: 13px;/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.top-score-grid \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
+});
+
+test("Top 50 export uses a bounded canonical poster route and centered control", async () => {
+  const [page, route, css] = await Promise.all([
+    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "exports", "top50", "route.tsx"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(page, /className="top50-export-button"/);
+  assert.match(page, /fetch\(`\/exports\/top50\?\$\{params\.toString\(\)\}`/);
+  assert.match(page, /top50ExportDownloadFilename\([\s\S]*content-disposition/);
+  assert.match(page, /scores\.every\(\(score\) => Number\.isInteger\(score\.score\)\)/);
+  assert.match(page, /!isCoop && scores\.length/);
+  assert.match(page, /Exact Top 50 scores are still being prepared/);
+  assert.match(css, /\.top50-export-control \{[^}]*align-items: center;[^}]*flex-direction: column;/);
+  assert.match(route, /new ImageResponse/);
+  assert.match(route, /top50ExportApiOrigin\(request\.nextUrl\.origin\)/);
+  assert.match(route, /JACKET_MAX_BYTES = 800_000/);
+  assert.match(route, /JACKET_CONCURRENCY = 8/);
+  assert.match(route, /background: difficultyColor/);
+  assert.match(route, /Generated by \{TOP50_EXPORT_SITE\}/);
+  assert.match(route, /fontSize: 24[\s\S]*\{total\.fraction\}/);
+  assert.match(route, /alignItems: "flex-end"[\s\S]*height: 45[\s\S]*lineHeight: 1/);
+  assert.match(route, /padding: "8px 9px 2px"[\s\S]*fontSize: 10[\s\S]*lineHeight: 1\.3/);
+  assert.match(route, /alignItems: "baseline"[\s\S]*gap: 7[\s\S]*padding: "5px 9px 8px"/);
+  assert.match(route, /alignItems: "baseline"[\s\S]*gap: 4[\s\S]*fontVariantNumeric: "tabular-nums"/);
+  assert.match(route, /fontSize: 13[\s\S]*fontWeight: 700[\s\S]*fontSize: 10[\s\S]*lineHeight: 1/);
+  assert.match(route, /fontFamily: 'Inter, ui-sans-serif, system-ui/);
+  assert.match(route, /Content-Disposition[\s\S]*top50ExportFilename\(modeValue\)/);
+});
+
+test("Top 50 export helpers enforce dimensions, modes, origins, and jacket allowlisting", () => {
+  assert.equal(TOP50_EXPORT_WIDTH, 1156);
+  assert.equal(TOP50_EXPORT_HEIGHT, 2048);
+  assert.equal(TOP50_EXPORT_SITE, "pumbility-farmer.vercel.app");
+  assert.equal(isTop50ExportMode("overall"), true);
+  assert.equal(isTop50ExportMode("coop"), false);
+  assert.deepEqual(splitPumbility(15_309), { integer: "15,309", fraction: ".00" });
+  assert.deepEqual(splitPumbility(15_309.126), { integer: "15,309", fraction: ".13" });
+  const exportDate = new Date("2026-08-25T04:30:00Z");
+  assert.equal(
+    top50ExportFilename("overall", exportDate),
+    "pumbility-top50-overall-2026-08-25.png",
+  );
+  assert.equal(
+    top50ExportDownloadFilename(
+      'attachment; filename="pumbility-top50-doubles-2026-08-25.png"',
+      "doubles",
+      exportDate,
+    ),
+    "pumbility-top50-doubles-2026-08-25.png",
+  );
+  assert.equal(
+    top50ExportDownloadFilename("attachment; filename=unsafe.png", "singles", exportDate),
+    "pumbility-top50-singles-2026-08-25.png",
+  );
+  assert.equal(
+    isSafeTop50JacketUrl("https://piuimages.arroweclip.se/songs/GoodNight.png"),
+    true,
+  );
+  assert.equal(isSafeTop50JacketUrl("http://piuimages.arroweclip.se/songs/a.png"), false);
+  assert.equal(isSafeTop50JacketUrl("https://example.com/songs/a.png"), false);
+  assert.equal(isSafeTop50JacketUrl("https://piuimages.arroweclip.se/songs/a.png?x=1"), false);
+  assert.equal(
+    top50ExportApiOrigin("http://localhost:3000", { PIU_LOCAL_ANALYSIS: "1" }).origin,
+    "http://localhost:3000",
+  );
+  assert.equal(
+    top50ExportApiOrigin("https://preview.example", {}).origin,
+    "https://pumbility-farmer.vercel.app",
+  );
+  assert.throws(
+    () => top50ExportApiOrigin("http://localhost:3000", {
+      PUMBILITY_EXPORT_API_ORIGIN: "http://example.com",
+    }),
+    /must be an HTTPS origin or a loopback HTTP origin/,
+  );
+  const rows = top50ExportRows([1, 2, 3]);
+  assert.equal(rows.length, 10);
+  assert.equal(rows.every((row) => row.length === 5), true);
+  assert.deepEqual(rows[0], [1, 2, 3, null, null]);
 });
 
 test("limited-data presentation uses the shared 20-player boundary", async () => {

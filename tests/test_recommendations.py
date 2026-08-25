@@ -50,6 +50,7 @@ from piu_recommendations import (
     _peer_cohort_key,
     _prepare_phoenix1_rating_frames,
     _projected_gain_sort_key,
+    _public_top_score_value,
     _rating_lookup,
     _recommendation_chart_rows,
     _retain_player_modes_with_minimum_scores,
@@ -1650,7 +1651,7 @@ class PlayerRecommendationTests(unittest.TestCase):
         refreshed_top_scores = response["player"]["modes"]["singles"]["topScores"]
         self.assertEqual(refreshed_top_scores[0]["chartId"], "chart-00")
         self.assertEqual(refreshed_top_scores[0]["pumbility"], 999.0)
-        self.assertNotIn("score", refreshed_top_scores[0])
+        self.assertEqual(refreshed_top_scores[0]["score"], 990_000)
         self.assertNotIn("playerId", refreshed_top_scores[0])
         self.assertAlmostEqual(
             sum(row["pumbility"] for row in refreshed_top_scores),
@@ -2086,12 +2087,14 @@ class PlayerRecommendationTests(unittest.TestCase):
                 "phoenix1Contributors",
                 "phoenix2Contributors",
                 "evidenceStatus",
+                "score",
                 "pumbility",
                 "grade",
                 "plate",
                 "plateCode",
             },
         )
+        self.assertEqual(first["score"], 990_000)
         self.assertEqual(first["grade"], "SSS")
         self.assertEqual(first["plate"], "Talented Game")
         self.assertEqual(first["plateCode"], "TG")
@@ -2107,13 +2110,21 @@ class PlayerRecommendationTests(unittest.TestCase):
         ):
             self.assertIsNone(first[field])
         for private_field in (
-            "score",
+            "rawScore",
             "playerId",
             "recordedAt",
             "isBroken",
             "scores",
         ):
             self.assertNotIn(private_field, first)
+
+    def test_public_top_score_value_requires_an_exact_bounded_integer(self) -> None:
+        self.assertEqual(_public_top_score_value(0), 0)
+        self.assertEqual(_public_top_score_value(1_000_000.0), 1_000_000)
+        for value in (True, -1, 1_000_001, 999_999.5, None, np.nan, np.inf):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "integer from 0 to 1000000"):
+                    _public_top_score_value(value)
 
     def test_top_scores_cap_at_fifty_with_deterministic_tie_breaks(self) -> None:
         charts = []
@@ -3389,6 +3400,10 @@ class CoopRecommendationTests(unittest.TestCase):
             "estimated-difficulty-master-grade-ladder-v5",
         )
         self.assertEqual(len(current["topScores"]), 2)
+        self.assertEqual(
+            [row["score"] for row in current["topScores"]],
+            [995_000, 0],
+        )
         self.assertTrue(all("pumbility" not in row for row in current["topScores"]))
 
     def test_phoenix1_personal_best_can_supersede_coop_ladder_goal(self) -> None:
@@ -3707,6 +3722,23 @@ class RecommendationArtifactBoundaryTests(unittest.TestCase):
         schema_two_overall.pop(OVERALL_TOP_REFS_FIELD)
         schema_two_overall["topRecommendations"] = payload["player"]["modes"]["overall"]["topRecommendations"]
         self.assertEqual(materialize_player_recommendation_cache(schema_two), expected)
+
+    def test_compact_cache_preserves_public_top_score_values(self) -> None:
+        payload = self._payload()
+        expected_scores = [{"chartId": "top-score", "score": 987_654}]
+        for mode_key in ("overall", "singles", "doubles", "coop"):
+            payload["player"]["modes"][mode_key]["topScores"] = deepcopy(
+                expected_scores
+            )
+
+        compact = compact_player_recommendation_cache(payload)
+        materialized = materialize_player_recommendation_cache(compact)
+
+        for mode_key in ("overall", "singles", "doubles", "coop"):
+            self.assertEqual(
+                materialized["player"]["modes"][mode_key]["topScores"],
+                expected_scores,
+            )
 
     def test_mode_projection_is_bounded_and_overall_requires_an_available_slice(self) -> None:
         compact = compact_player_recommendation_cache(self._payload())

@@ -53,7 +53,7 @@ export default function HomePage() {
       </section>
 
       <footer className="home-footer">
-        <p>Built from consented score data. Player IDs and raw score histories stay private.</p>
+        <p>Built from consented score data. Top 50 display scores are public; player IDs and complete score histories stay private.</p>
         <p>Phoenix 2 is authoritative for every recommendation chart and overlapping score.</p>
       </footer>
     </main>

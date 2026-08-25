@@ -2790,6 +2790,26 @@ def _json_safe_scalar(value: Any) -> Any:
     return value.item() if isinstance(value, np.generic) else value
 
 
+def _public_top_score_value(value: Any) -> int:
+    """Return one exact, bounded score that is safe for a public Top 50 row."""
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError("A public Top 50 score must be an integer from 0 to 1000000.")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "A public Top 50 score must be an integer from 0 to 1000000."
+        ) from exc
+    if (
+        not math.isfinite(numeric)
+        or not numeric.is_integer()
+        or numeric < 0
+        or numeric > MAX_RAW_SCORE
+    ):
+        raise ValueError("A public Top 50 score must be an integer from 0 to 1000000.")
+    return int(numeric)
+
+
 def _public_top_scores(
     ordered_scores: pd.DataFrame,
     catalog_by_id: Mapping[str, Mapping[str, Any]],
@@ -2815,6 +2835,7 @@ def _public_top_scores(
         if not difficulty and chart_type in MODE_TYPES and level > 0:
             difficulty = _folder(chart_type, level)
         normalized_plate = normalize_plate(score.get("plate"))
+        public_score = _public_top_score_value(score.get("score"))
 
         def chart_value(field: str) -> Any:
             if field in analysis_chart:
@@ -2830,8 +2851,9 @@ def _public_top_scores(
                 "type": chart_type,
                 "level": level,
                 "chartId": chart_id,
+                "score": public_score,
                 "pumbility": float(score["pumbility"]),
-                "grade": grade_for_score(score.get("score")),
+                "grade": grade_for_score(public_score),
                 "plate": normalized_plate,
                 "plateCode": (
                     PLATE_CODES[normalized_plate]
@@ -3934,9 +3956,10 @@ def build_player_coop_mode(
         chart_id = str(score["chartId"])
         chart = analysis_by_id.get(chart_id, catalog_by_id.get(chart_id, {}))
         plate = str(score["plate"])
+        public_score = _public_top_score_value(score.get("score"))
         sortable_top_scores.append(
             (
-                int(score["score"]),
+                public_score,
                 {
                     **{
                         field: _json_safe_scalar(chart.get(field))
@@ -3949,6 +3972,7 @@ def build_player_coop_mode(
                     "type": "CoOp",
                     "level": int(chart.get("level") or 0),
                     "chartId": chart_id,
+                    "score": public_score,
                     "grade": str(score["grade"]),
                     "plate": plate,
                     "plateCode": PLATE_CODES[plate],

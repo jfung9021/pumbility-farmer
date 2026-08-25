@@ -27,6 +27,7 @@ import {
   type RecommendationView,
 } from "../../lib/page-view-state";
 import { pumbilityProgress } from "../../lib/pumbility-progress";
+import { top50ExportDownloadFilename } from "../../lib/top50-export";
 import {
   ALL_DIFFICULTIES,
   recommendationDifficultyOptions,
@@ -421,6 +422,10 @@ function topScoreRating(score: RecommendationTopScore): number | null {
     : score.pumbility ?? null;
 }
 
+function topScoreValue(score: RecommendationTopScore): string {
+  return score.score === undefined ? "—" : score.score.toLocaleString("en-US");
+}
+
 function TopScoreCard({
   rank,
   score,
@@ -434,10 +439,11 @@ function TopScoreCard({
     && hasLimitedData(score.nContributors);
   const result = [score.grade, score.plateCode].filter(Boolean).join(" ") || "Result unavailable";
   const rating = topScoreRating(score);
+  const scoreValue = topScoreValue(score);
   return (
     <article className="top-score-card">
       <button
-        aria-label={`View details for rank ${rank}, ${score.songName}, ${score.difficulty}, ${result}`}
+        aria-label={`View details for rank ${rank}, ${score.songName}, ${score.difficulty}, score ${scoreValue}, ${result}`}
         className="top-score-card-button"
         onClick={() => onSelect(score, rank)}
         type="button"
@@ -462,10 +468,16 @@ function TopScoreCard({
             {score.type === "CoOp" ? `${score.level}x` : score.level}
           </span>
         </span>
+        <span className="top-score-copy">
+          <strong title={score.songName}>{score.songName}</strong>
+        </span>
         <span className="top-score-result">
-          <span>
-            <b>{score.grade || "—"}</b>
-            <small>{score.plateCode || "—"}</small>
+          <span className="top-score-result-summary">
+            <b className="top-score-score">{scoreValue}</b>
+            <span className="top-score-grade">
+              <b>{score.grade || "—"}</b>
+              <small>{score.plateCode || "—"}</small>
+            </span>
           </span>
           <strong>{rating === null ? "—" : pumbilityLabel(rating)}</strong>
         </span>
@@ -612,6 +624,7 @@ function TopScoreDetailDialog({
           </div>
           <div className="top-score-dialog-result">
             <span><small>Rank</small><strong>#{rank}</strong></span>
+            <span><small>Score</small><strong>{topScoreValue(score)}</strong></span>
             <span>
               <small>{isCoop ? "Co-op Rating" : "Pumbility"}</small>
               <strong>{rating === null ? "Unavailable" : pumbilityLabel(rating)}</strong>
@@ -627,12 +640,99 @@ function TopScoreDetailDialog({
   );
 }
 
+function ExportTop50Button({
+  mode,
+  playerKey,
+  scores,
+}: {
+  mode: Exclude<RecommendationModeKey, "coop">;
+  playerKey: string;
+  scores: RecommendationTopScore[];
+}) {
+  const [exporting, setExporting] = useState(false);
+  const [status, setStatus] = useState("");
+  const statusId = useId();
+  const hasExactScores = scores.length > 0
+    && scores.every((score) => Number.isInteger(score.score));
+
+  const exportImage = async () => {
+    if (!hasExactScores || exporting) return;
+    setExporting(true);
+    setStatus("");
+    try {
+      const params = new URLSearchParams({ mode, playerKey });
+      const response = await fetch(`/exports/top50?${params.toString()}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        let message = "The Top 50 image could not be created.";
+        try {
+          const parsed = JSON.parse(body) as { error?: unknown };
+          if (typeof parsed.error === "string" && parsed.error.trim()) {
+            message = parsed.error;
+          }
+        } catch {
+          if (body.trim()) message = body.trim().replace(/\s+/g, " ").slice(0, 180);
+        }
+        throw new Error(message);
+      }
+      const blob = await response.blob();
+      if (!blob.type.startsWith("image/png")) {
+        throw new Error("The export service returned an unexpected file type.");
+      }
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = top50ExportDownloadFilename(
+        response.headers.get("content-disposition"),
+        mode,
+      );
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+      track("top50_image_exported", { mode, scoreCount: scores.length });
+      setStatus("Top 50 image downloaded.");
+    } catch (caught) {
+      setStatus(caught instanceof Error
+        ? caught.message
+        : "The Top 50 image could not be created.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const unavailableMessage = scores.length && !hasExactScores
+    ? "Exact Top 50 scores are still being prepared. Export will unlock after the next score sync."
+    : "";
+  return (
+    <div className="top50-export-control">
+      <button
+        aria-describedby={statusId}
+        className="top50-export-button"
+        disabled={!hasExactScores || exporting}
+        onClick={exportImage}
+        type="button"
+      >
+        {exporting ? <span aria-hidden="true" className="spinner" /> : null}
+        {exporting ? "Creating image…" : "Export Top 50 image"}
+      </button>
+      <p aria-live="polite" id={statusId} role="status">
+        {unavailableMessage || status}
+      </p>
+    </div>
+  );
+}
+
 function TopScoresSection({
   mode,
+  playerKey,
   scores,
   onSelect,
 }: {
   mode: RecommendationModeKey;
+  playerKey: string;
   scores: RecommendationTopScore[];
   onSelect: (score: RecommendationTopScore, rank: number) => void;
 }) {
@@ -665,6 +765,13 @@ function TopScoresSection({
           <p>{modeLabel} Phoenix 2 {isCoop ? "Co-op Rating" : "Pumbility"} scores will appear here after score sync.</p>
         </div>
       )}
+      {!isCoop && scores.length ? (
+        <ExportTop50Button
+          mode={mode}
+          playerKey={playerKey}
+          scores={scores}
+        />
+      ) : null}
     </section>
   );
 }
@@ -1179,7 +1286,7 @@ export default function RecommendationsPage() {
           <div className="recommendation-empty">
             <span>PF</span>
             <h2>Select a username</h2>
-            <p>Your internal player ID and raw score history are never returned to the browser.</p>
+            <p>Only scores in the displayed Top 50 are returned to the browser. Your internal player ID and full score history stay private.</p>
           </div>
         ) : loadingPlayer && !playerPayload && !hasAnyPlayerPayload ? (
           <div className="recommendation-empty"><span className="spinner" /><h2>Calculating your route</h2></div>
@@ -1259,6 +1366,7 @@ export default function RecommendationsPage() {
                 <TopScoresSection
                   mode={activeMode}
                   onSelect={(score, rank) => setSelectedTopScore({ score, rank })}
+                  playerKey={selectedKey}
                   scores={mode?.topScores ?? []}
                 />
               ) : !mode?.eligible && activeMode === "coop" ? (
@@ -1325,16 +1433,6 @@ export default function RecommendationsPage() {
         />
       ) : null}
 
-      <footer>
-        <p><b>How the merge works</b> Phoenix 2 charts.json is a strict allowlist. Phoenix 2 remains authoritative for played status, current Pumbility, and current top-50 pools. A player&apos;s Phoenix 1 personal best can still raise that chart&apos;s recommendation goal.</p>
-        <p>Phoenix 1 scores are adjusted to the Phoenix 2 note-count scale before their goal grade is selected. Removed Phoenix 1 charts never enter this engine.</p>
-        <p>Singles and Doubles projected scores use the ranks 11–30 Pumbility rating and the Phoenix-weighted median (50th percentile) from all other players with a normalized result on the exact chart, giving Phoenix 2 results twice the weight of Phoenix 1. The search tries plus or minus 0.2 through 0.5 rating in 0.1 steps seeking 20 peers, repeats those radii seeking 10, then repeats seeking five. Every peer within the narrowest successful radius is used; below five peers, the player-balanced population model uses the same Phoenix weighting.</p>
-        <p>For Singles and Doubles, both the engine estimate and the normalized Phoenix 1 personal best are truncated to the lower score boundary of their achieved Phoenix 2 letter grade. The higher grade-boundary result sets the goal, so 982k targets SS and 992k targets SSS. The projected plate is the weighted median in Phoenix 2 order from Rough Game through Perfect Game. Expected Pumbility is calculated once from the selected goal grade, that median plate, and the chart&apos;s mode-specific formula. Projected gain is the deterministic top-50 change from that same goal result.</p>
-        <p>Co-op recommendations compare the fixed letter-grade goal for each chart&apos;s whole-number estimated difficulty with the normalized Phoenix 1 personal best and use the higher grade. The folder lookup is fixed and never rebalanced when charts are added, so every difficulty-17 chart has a base target of AAA with Fair Game. Completing all current base chart goals clears the 16,000 Co-op Rating [CO-OP] Master threshold with extra leeway. Projected gain is additive rather than limited to a top-50 pool; equal gains use the underlying continuous difficulty for ordering.</p>
-        <p>The underlying Co-op tier model adjusts miss points for player strength and Phoenix source using all observations, then estimates the conditional 75th-percentile score for a median-strength Phoenix 2 player. The conditional quantile supplies outlier robustness without trimming raw scores or residuals. Chart order anchors the easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24.9, then truncates the published difficulty to a whole-number range from 10 through 24 without forcing a normal distribution.</p>
-        <p>The visible skill rating uses top-20 average Pumbility and is expressed as the continuous chart level where an S with Fair Game earns the selected window&apos;s average Pumbility. Phoenix 2 supplies a window once it is complete; otherwise a complete Phoenix 1 window is used, followed by partial Phoenix 2. Singles and Doubles recommendations normally extend up to 1.0 estimated-difficulty point above that mode&apos;s rating. A chart beyond that ceiling is still eligible when its normalized Phoenix 1 personal best alone would improve the active mode or Overall top-50 pool; the official folder window still applies.</p>
-        <p>Played status, existing chart Pumbility, and current top 50 use the Pumbility supplied by Phoenix 2 rather than recomputing historical results. Overall Pumbility is the best 50 values across both modes; Overall recommendations recalculate every eligible Single and Double candidate&apos;s deterministic gain against that shared top-50 pool before retaining the best 50. Official-difficulty filters show every matching level-16+ chart, ordered by projected Pumbility gain. Projections are estimates, not guaranteed results.</p>
-      </footer>
     </main>
   );
 }

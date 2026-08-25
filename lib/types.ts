@@ -235,6 +235,8 @@ export interface RecommendationTopScore {
   phoenix1Contributors: number | null;
   phoenix2Contributors: number | null;
   evidenceStatus: EvidenceStatus | null;
+  /** Present on recommendation schema 26+ public Top 50 rows. */
+  score?: number;
   pumbility?: number | null;
   coopRating?: number | null;
   grade: string | null;
