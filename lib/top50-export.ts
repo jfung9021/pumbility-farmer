@@ -3,8 +3,11 @@ import type { RecommendationModeKey, RecommendationTopScore } from "./types";
 
 export type Top50ExportMode = Exclude<RecommendationModeKey, "coop">;
 
-export const TOP50_EXPORT_WIDTH = 1156;
-export const TOP50_EXPORT_HEIGHT = 2048;
+export const TOP50_POSTER_WIDTH = 1156;
+export const TOP50_POSTER_HEIGHT = 2048;
+export const TOP50_EXPORT_SCALE = 2;
+export const TOP50_EXPORT_WIDTH = TOP50_POSTER_WIDTH * TOP50_EXPORT_SCALE;
+export const TOP50_EXPORT_HEIGHT = TOP50_POSTER_HEIGHT * TOP50_EXPORT_SCALE;
 export const TOP50_EXPORT_SITE = "pumbility-farmer.vercel.app";
 export const TOP50_EXPORT_PRODUCTION_ORIGIN = `https://${TOP50_EXPORT_SITE}`;
 export const TOP50_JACKET_HOST = "piuimages.arroweclip.se";
