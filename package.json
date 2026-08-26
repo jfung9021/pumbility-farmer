@@ -18,15 +18,18 @@
     "youtube:build": "python scripts/build_nevsister_chart_links.py --refresh",
     "youtube:check": "python scripts/build_nevsister_chart_links.py --check --offline",
     "build": "next build",
+    "benchmark:top50": "node --experimental-strip-types scripts/benchmark_top50_export.ts",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test:frontend": "node --experimental-strip-types --test tests/frontend-api.test.ts"
   },
   "dependencies": {
+    "@resvg/resvg-js": "2.6.2",
     "@vercel/analytics": "^2.0.1",
     "next": "16.3.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "satori": "0.32.0",
     "sharp": "0.35.3"
   },
   "devDependencies": {
