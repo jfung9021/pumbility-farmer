@@ -4,11 +4,14 @@ import type { ChartResult, ClearingTierMetric, ModeKey, TierMetricKey, TierMetri
 
 export function clearingPercentileRange(clearing: ClearingTierMetric | undefined) {
   if (!clearing) return null;
+  if ("q10Skill" in clearing && "q50Skill" in clearing) {
+    return { label: "10th–50th", lower: clearing.q10Skill ?? null, upper: clearing.q50Skill ?? null };
+  }
   if ("q10Skill" in clearing && "q30Skill" in clearing) {
-    return { label: "10th–30th", lower: clearing.q10Skill ?? null, upper: clearing.q30Skill ?? null, reassessment: true };
+    return { label: "10th–30th", lower: clearing.q10Skill ?? null, upper: clearing.q30Skill ?? null };
   }
   if ("q25Skill" in clearing && "q50Skill" in clearing) {
-    return { label: "25th–50th", lower: clearing.q25Skill ?? null, upper: clearing.q50Skill ?? null, reassessment: false };
+    return { label: "25th–50th", lower: clearing.q25Skill ?? null, upper: clearing.q50Skill ?? null };
   }
   return null;
 }

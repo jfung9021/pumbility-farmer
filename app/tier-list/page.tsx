@@ -171,15 +171,6 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
             ) : null}
             {clearing.meanSkill !== null ? <span>Selected mean skill: <b>{clearing.meanSkill.toFixed(2)}</b></span> : null}
             {clearing.folderReferenceSkill !== null ? <span>Folder reference skill: <b>{clearing.folderReferenceSkill.toFixed(2)}</b></span> : null}
-            {clearing.reassessmentStatus === "applied" && clearing.initialEstimatedDifficulty != null && clearing.assessmentLevel != null ? (
-              <>
-                <span>Initial estimate: <b>{chart.type === "Single" ? "S" : "D"}{formatEstimatedDifficulty(clearing.initialEstimatedDifficulty)}</b></span>
-                <span>Assessed against <b>{chart.type === "Single" ? "S" : "D"}{clearing.assessmentLevel}</b></span>
-              </>
-            ) : null}
-            {clearing.reassessmentStatus === "unavailable" ? (
-              <span>Initial estimate retained: the target level has no reference.</span>
-            ) : null}
           </div>
         ) : null}
         {metric === "pumbility" && pumbility ? (
@@ -682,8 +673,7 @@ export default function TierListPage() {
       <footer>
         {activeMetric === "clearing" ? <>
           <p><b>How clearing estimates work</b> Each chart uses unique successful players from either Phoenix version. We average their current mode-specific skill ratings within the {clearingMethod ? `${clearingMethod.label} percentile interval` : "published percentile interval"}, including both boundaries and ties. Players without a usable skill rating are excluded from that average.</p>
-          <p>The {clearingMethod?.reassessment ? "initial " : ""}median chart in each official-level folder anchors at level + 0.5. Each skill point above or below the folder reference changes difficulty by one point. Estimates can cross official levels: an S20 can be 19.2. Sparse charts remain visible with evidence and limited-data labels; no selected players means Unrated.</p>
-          {clearingMethod?.reassessment ? <p>A chart whose initial estimate crosses a level boundary is assessed once against that level’s fixed reference, without joining its calibration group. Its official level stays the same. If the target reference is unavailable, the initial estimate is retained. Final folder medians can shift after reassessment.</p> : null}
+          <p>The median chart in each official-level folder anchors at level + 0.5. Each skill point above or below the folder reference changes difficulty by one point. Estimates can cross official levels: an S20 can be 19.2. Calibration always uses the chart’s official-level folder. Sparse charts remain visible with evidence and limited-data labels; no selected players means Unrated.</p>
           <p>This estimates clearing difficulty from observed successful players, not pass probability or first-clear ability. Skill ratings can change after the recorded clear.</p>
         </> : activeMetric === "pumbility" ? <>
           <p><b>How Pumbility estimates work</b> Pumbility is the arithmetic average of a chart’s scoring and clearing difficulty. Both components must be available. The average uses full-precision estimates before one-decimal display truncation, so displayed components may average slightly differently.</p>

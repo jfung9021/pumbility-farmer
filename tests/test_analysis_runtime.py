@@ -467,6 +467,7 @@ class ApiRouteTests(unittest.TestCase):
             mix=resolve_mix("phoenix2"),
             force_refresh=True,
             full_sync=False,
+            reanalyze_only=False,
             trigger="jonathan",
         )
 
@@ -489,6 +490,36 @@ class ApiRouteTests(unittest.TestCase):
             mix=resolve_mix("phoenix2"),
             force_refresh=True,
             full_sync=True,
+            reanalyze_only=False,
+            trigger="jonathan",
+        )
+
+    def test_jonathan_reanalysis_reuses_stored_scores_and_requires_password(self) -> None:
+        job = new_job("analysis-reanalyze", NOW, reanalyze_only=True)
+        with (
+            patch.dict("os.environ", {"JONATHAN_PASSWORD": "operator-secret"}),
+            patch(
+                "api.jonathan.start_or_reuse_analysis",
+                return_value=(202, {"outcome": "started", "job": job}),
+            ) as start,
+        ):
+            unauthorized = API_CLIENT.post("/api/jonathan/refresh?mode=reanalyze")
+            self.assertEqual(unauthorized.status_code, 401)
+            start.assert_not_called()
+            response = API_CLIENT.post(
+                "/api/jonathan/refresh?mode=reanalyze",
+                headers={"X-Jonathan-Password": "operator-secret"},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()["job"]["reanalyzeOnly"])
+        self.assertFalse(response.json()["job"]["fullSync"])
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        start.assert_called_once_with(
+            mix=resolve_mix("phoenix2"),
+            force_refresh=True,
+            full_sync=False,
+            reanalyze_only=True,
             trigger="jonathan",
         )
 
@@ -1289,9 +1320,6 @@ def _combined_tier_payload_fixture(*_args, generated_at_utc: str, **_kwargs):
                     "folderReferenceSkill": 20.0,
                     "q10Skill": 19.1,
                     "q30Skill": 19.7,
-                    "initialEstimatedDifficulty": 19.3,
-                    "assessmentLevel": 19,
-                    "reassessmentStatus": "applied",
                 },
                 "pumbility": {"estimatedDifficulty": None},
             },
