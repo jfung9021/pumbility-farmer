@@ -6,19 +6,26 @@ import { RefreshMeta } from "../_components/refresh-meta";
 import { ChartVideoLink } from "../_components/chart-video-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
-import { hasLimitedData } from "../../lib/chart-evidence";
 import { demoPayload } from "../../lib/demo-data";
 import {
   formatCoopEstimatedDifficulty,
   formatEstimatedDifficulty,
-  truncateCoopEstimatedDifficulty,
-  truncateEstimatedDifficulty,
 } from "../../lib/format-difficulty";
-import { tierModeFromSearchParams } from "../../lib/page-view-state";
+import { tierMetricFromSearchParams, tierModeFromSearchParams } from "../../lib/page-view-state";
+import {
+  estimatedTierGroups,
+  hasLimitedTierData,
+  selectedTierMetric,
+  sortTierCharts,
+  tierBandCharts,
+  tierMetricAvailability,
+  tierSupportLabel,
+} from "../../lib/tier-metrics";
 import type {
   AnalysisPayload,
   ChartResult,
   ModeKey,
+  TierMetricKey,
 } from "../../lib/types";
 
 type FilterState = {
@@ -35,33 +42,40 @@ const initialFilter: FilterState = {
 };
 
 const groupTone = ["lime", "green", "mint", "slate", "orange", "rose", "red"];
+const metricLabels: Record<TierMetricKey, string> = { scoring: "Scoring", clearing: "Clearing", pumbility: "Pumbility" };
+const metricTitles: Record<TierMetricKey, string> = {
+  scoring: "Scoring Difficulty Tier List",
+  clearing: "Clearing Difficulty Tier List",
+  pumbility: "Pumbility Tier List",
+};
 
 function signed(value: number, digits = 2): string {
   return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
 }
 
-function chartGrade(chart: ChartResult): string {
-  if (chart.estimatedDifficulty === null) return "-";
+function chartGrade(chart: ChartResult, metric: TierMetricKey): string {
+  const estimate = selectedTierMetric(chart, metric).estimatedDifficulty;
+  if (estimate === null) return "-";
   if (chart.type === "CoOp") {
     const continuous = chart.difficultyModelContinuous;
     return (typeof continuous === "number" && Number.isFinite(continuous)
       ? continuous
-      : chart.estimatedDifficulty).toFixed(1);
+      : estimate).toFixed(1);
   }
   const prefix = chart.type === "Single" ? "S" : "D";
-  return `${prefix}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
+  return `${prefix}${formatEstimatedDifficulty(estimate)}`;
 }
 
 function chartCountLabel(chart: ChartResult): string {
   return chart.type === "CoOp" ? `${chart.level}x` : String(chart.level);
 }
 
-function LimitedDataWarning({ chart, compact = false }: { chart: ChartResult; compact?: boolean }) {
-  if (!hasLimitedData(chart.nContributors)) return null;
+function LimitedDataWarning({ chart, metric, compact = false }: { chart: ChartResult; metric: TierMetricKey; compact?: boolean }) {
+  if (!hasLimitedTierData(chart, metric)) return null;
 
   return (
     <span
-      aria-label={`Limited data: ${chart.nContributors} unique player observations`}
+      aria-label={`Limited data: ${tierSupportLabel(chart, metric)}`}
       className={`limited-data-warning${compact ? " compact-warning" : ""}`}
       role="img"
       title="Limited data"
@@ -114,15 +128,18 @@ function WhatIfDifficulty({ chart }: { chart: ChartResult }) {
   );
 }
 
-function ChartDetails({ chart, headingId }: { chart: ChartResult; headingId?: string }) {
-  const delta = chart.difficultyDelta;
+function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric: TierMetricKey; headingId?: string }) {
+  const selected = selectedTierMetric(chart, metric);
+  const delta = selected.difficultyDelta;
   const isCoop = chart.type === "CoOp";
+  const clearing = chart.tierMetrics?.clearing;
+  const pumbility = chart.tierMetrics?.pumbility;
   return (
     <>
       <div className="chart-copy">
         <div className="chart-heading">
           <h3 id={headingId}>{chart.songName}</h3>
-          <LimitedDataWarning chart={chart} />
+          <LimitedDataWarning chart={chart} metric={metric} />
         </div>
         <p>
           {chart.stepArtist || "Unknown step artist"}
@@ -132,31 +149,53 @@ function ChartDetails({ chart, headingId }: { chart: ChartResult; headingId?: st
           {isCoop
             ? <span><b>{chart.difficulty}</b> chart</span>
             : <span><b>{chart.difficulty}</b> official</span>}
-          <span><b>{chartGrade(chart)}</b> estimated</span>
-          <span><b>{chart.nContributors}</b> contributors</span>
-          {chart.phoenix1Contributors !== undefined && chart.phoenix2Contributors !== undefined ? (
+          <span><b>{chartGrade(chart, metric)}</b> estimated</span>
+          <span>{selected.evidenceStatus}</span>
+          {metric === "scoring" ? <span><b>{chart.nContributors}</b> contributors</span> : null}
+          {metric === "scoring" && chart.phoenix1Contributors !== undefined && chart.phoenix2Contributors !== undefined ? (
             <span><b>{chart.phoenix1Contributors}/{chart.phoenix2Contributors}</b> P1/P2</span>
           ) : null}
-          {!isCoop && chart.levelRank !== null && chart.levelComparisonCharts !== null ? (
-            <span><b>#{chart.levelRank}</b> of {chart.levelComparisonCharts} in {chart.difficulty}</span>
+          {!isCoop && selected.levelRank !== null && selected.levelComparisonCharts !== null ? (
+            <span><b>#{selected.levelRank}</b> of {selected.levelComparisonCharts} in {chart.difficulty}</span>
           ) : null}
         </div>
+        {metric === "clearing" && clearing ? (
+          <div className="chart-meta metric-details">
+            <span><b>{clearing.ratedClearCount}/{clearing.clearCount}</b> clearers with usable skill</span>
+            <span><b>{clearing.selectedCount}</b> selected clearers</span>
+            <span><b>{clearing.missingSkillCount}</b> missing skill</span>
+            {clearing.q25Skill !== null && clearing.q50Skill !== null ? (
+              <span>25th–50th percentile skill: <b>{clearing.q25Skill.toFixed(2)}–{clearing.q50Skill.toFixed(2)}</b> inclusive</span>
+            ) : null}
+            {clearing.meanSkill !== null ? <span>Selected mean skill: <b>{clearing.meanSkill.toFixed(2)}</b></span> : null}
+            {clearing.folderReferenceSkill !== null ? <span>Folder reference skill: <b>{clearing.folderReferenceSkill.toFixed(2)}</b></span> : null}
+          </div>
+        ) : null}
+        {metric === "pumbility" && pumbility ? (
+          <div className="chart-meta metric-details">
+            <span>Scoring: <b>{chartGrade(chart, "scoring")}</b></span>
+            <span>Clearing: <b>{chartGrade(chart, "clearing")}</b></span>
+            <span>Average: <b>{chartGrade(chart, "pumbility")}</b></span>
+            <span><b>{pumbility.scoringSupportCount}</b> scoring contributors</span>
+            <span><b>{pumbility.clearingSupportCount}</b> selected clearers</span>
+          </div>
+        ) : null}
       </div>
       {isCoop ? null : (
         <div className={`delta ${delta !== null && delta < 0 ? "delta-easy" : "delta-hard"}`}>
           <span>difference</span>
           <strong>{delta === null ? "-" : signed(delta)}</strong>
-          {chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null ? (
+          {metric === "scoring" && chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null ? (
             <small>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
           ) : null}
-          <WhatIfDifficulty chart={chart} />
+          {metric === "scoring" ? <WhatIfDifficulty chart={chart} /> : null}
         </div>
       )}
     </>
   );
 }
 
-function ChartCard({ chart }: { chart: ChartResult }) {
+function ChartCard({ chart, metric }: { chart: ChartResult; metric: TierMetricKey }) {
   return (
     <article className={`chart-card${chart.type === "CoOp" ? " chart-card-coop" : ""}`}>
       <div className="chart-art-rail">
@@ -170,23 +209,23 @@ function ChartCard({ chart }: { chart: ChartResult }) {
           variant="tier"
         />
       </div>
-      <ChartDetails chart={chart} />
+      <ChartDetails chart={chart} metric={metric} />
     </article>
   );
 }
 
-function CompactChartCard({ chart, onSelect }: { chart: ChartResult; onSelect: (chart: ChartResult) => void }) {
+function CompactChartCard({ chart, metric, onSelect }: { chart: ChartResult; metric: TierMetricKey; onSelect: (chart: ChartResult) => void }) {
   return (
     <article className="compact-chart-card">
       <button
-        aria-label={`View details for ${chart.songName}, ${chart.difficulty}${hasLimitedData(chart.nContributors) ? ", limited data" : ""}`}
+        aria-label={`View details for ${chart.songName}, ${chart.difficulty}${hasLimitedTierData(chart, metric) ? ", limited data" : ""}`}
         className="compact-chart-button"
         onClick={() => onSelect(chart)}
         type="button"
       >
         <span className="chart-art compact-jacket" data-chart-type={chart.type}>
           {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
-          <LimitedDataWarning chart={chart} compact />
+          <LimitedDataWarning chart={chart} metric={metric} compact />
           <span aria-hidden="true" className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>
             {chartCountLabel(chart)}
           </span>
@@ -196,11 +235,11 @@ function CompactChartCard({ chart, onSelect }: { chart: ChartResult; onSelect: (
   );
 }
 
-function CompactChartGrid({ charts, onSelect }: { charts: ChartResult[]; onSelect: (chart: ChartResult) => void }) {
+function CompactChartGrid({ charts, metric, onSelect }: { charts: ChartResult[]; metric: TierMetricKey; onSelect: (chart: ChartResult) => void }) {
   return (
     <div className="compact-chart-grid">
       {charts.length
-        ? charts.map((chart) => <CompactChartCard chart={chart} key={chart.chartId} onSelect={onSelect} />)
+        ? charts.map((chart) => <CompactChartCard chart={chart} metric={metric} key={chart.chartId} onSelect={onSelect} />)
         : <p className="empty-tier">No charts match the current filters.</p>}
     </div>
   );
@@ -216,7 +255,7 @@ function TierDivider({ headingId, label }: { headingId: string; label: string })
   );
 }
 
-function ChartDetailDialog({ chart, onClose }: { chart: ChartResult; onClose: () => void }) {
+function ChartDetailDialog({ chart, metric, onClose }: { chart: ChartResult; metric: TierMetricKey; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -291,17 +330,18 @@ function ChartDetailDialog({ chart, onClose }: { chart: ChartResult; onClose: ()
               variant="dialog"
             />
           </div>
-          <ChartDetails chart={chart} headingId="chart-detail-dialog-title" />
+          <ChartDetails chart={chart} metric={metric} headingId="chart-detail-dialog-title" />
         </div>
       </div>
     </div>
   );
 }
 
-function TierSection({ rank, name, charts, compact, onSelect }: {
+function TierSection({ rank, name, charts, metric, compact, onSelect }: {
   rank: number;
   name: string;
   charts: ChartResult[];
+  metric: TierMetricKey;
   compact: boolean;
   onSelect: (chart: ChartResult) => void;
 }) {
@@ -309,11 +349,11 @@ function TierSection({ rank, name, charts, compact, onSelect }: {
     <section className={`tier tier-${groupTone[rank - 1]}${compact ? " tier-compact" : ""}`} aria-labelledby={`tier-${rank}`}>
       <TierDivider headingId={`tier-${rank}`} label={name} />
       {compact ? (
-        <CompactChartGrid charts={charts} onSelect={onSelect} />
+        <CompactChartGrid charts={charts} metric={metric} onSelect={onSelect} />
       ) : (
         <div className="tier-list">
           {charts.length
-            ? charts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)
+            ? charts.map((chart) => <ChartCard chart={chart} metric={metric} key={chart.chartId} />)
             : <p className="empty-tier">No charts match the current filters.</p>}
         </div>
       )}
@@ -321,8 +361,9 @@ function TierSection({ rank, name, charts, compact, onSelect }: {
   );
 }
 
-function EstimatedDifficultySection({ charts, compact, mode, value, onSelect }: {
+function EstimatedDifficultySection({ charts, metric, compact, mode, value, onSelect }: {
   charts: ChartResult[];
+  metric: TierMetricKey;
   compact: boolean;
   mode: ModeKey;
   value: number;
@@ -342,10 +383,10 @@ function EstimatedDifficultySection({ charts, compact, mode, value, onSelect }: 
         label={label}
       />
       {compact ? (
-        <CompactChartGrid charts={charts} onSelect={onSelect} />
+        <CompactChartGrid charts={charts} metric={metric} onSelect={onSelect} />
       ) : (
         <div className="tier-list">
-          {charts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
+          {charts.map((chart) => <ChartCard chart={chart} metric={metric} key={chart.chartId} />)}
         </div>
       )}
     </section>
@@ -355,6 +396,7 @@ function EstimatedDifficultySection({ charts, compact, mode, value, onSelect }: 
 export default function TierListPage() {
   const [payload, setPayload] = useState<AnalysisPayload | null>(null);
   const [activeMode, setActiveMode] = useState<ModeKey>("singles");
+  const [activeMetric, setActiveMetric] = useState<TierMetricKey>("scoring");
   const [groupingView, setGroupingView] = useState<GroupingView>("estimated");
   const [layoutView, setLayoutView] = useState<LayoutView>("compact");
   const [filters, setFilters] = useState<Record<ModeKey, FilterState>>({
@@ -405,7 +447,9 @@ export default function TierListPage() {
 
   useEffect(() => {
     const applyModeFromUrl = () => {
-      setActiveMode(tierModeFromSearchParams(new URLSearchParams(window.location.search)));
+      const params = new URLSearchParams(window.location.search);
+      setActiveMode(tierModeFromSearchParams(params));
+      setActiveMetric(tierMetricFromSearchParams(params));
       setSelectedChart(null);
     };
     applyModeFromUrl();
@@ -420,6 +464,7 @@ export default function TierListPage() {
   }, []);
 
   const modeCharts = payload?.[activeMode] || [];
+  const metricAvailability = tierMetricAvailability(modeCharts, activeMetric, activeMode);
   const filter = filters[activeMode];
   const levels = useMemo(
     () => [...new Set(modeCharts.map((chart) => chart.level))].sort((a, b) => a - b),
@@ -432,31 +477,13 @@ export default function TierListPage() {
       return !query || `${chart.songName} ${chart.stepArtist || ""}`.toLocaleLowerCase().includes(query);
     });
   }, [filter, modeCharts]);
-  const estimatedGroups = useMemo(() => {
-    const groups = new Map<number, ChartResult[]>();
-    for (const chart of filteredCharts) {
-      if (chart.estimatedDifficulty === null) continue;
-      const bucket = activeMode === "coop"
-        ? truncateCoopEstimatedDifficulty(chart.estimatedDifficulty)
-        : truncateEstimatedDifficulty(chart.estimatedDifficulty);
-      const charts = groups.get(bucket) ?? [];
-      charts.push(chart);
-      groups.set(bucket, charts);
-    }
-    return [...groups.entries()]
-      .sort(([left], [right]) => left - right)
-      .map(([value, charts]) => ({
-        value,
-        charts: charts.sort((left, right) =>
-          (left.estimatedDifficulty ?? 0) - (right.estimatedDifficulty ?? 0)
-          || left.songName.localeCompare(right.songName)),
-      }));
-  }, [activeMode, filteredCharts]);
+  const estimatedGroups = useMemo(
+    () => estimatedTierGroups(filteredCharts, activeMetric, activeMode),
+    [activeMode, activeMetric, filteredCharts],
+  );
   const unratedCharts = useMemo(
-    () => filteredCharts.filter((chart) => activeMode === "coop"
-      ? chart.estimatedDifficulty === null
-      : chart.difficultyDelta === null),
-    [activeMode, filteredCharts],
+    () => sortTierCharts(filteredCharts.filter((chart) => selectedTierMetric(chart, activeMetric).estimatedDifficulty === null), activeMetric),
+    [activeMetric, filteredCharts],
   );
   const updateFilter = (patch: Partial<FilterState>) => {
     setFilters((current) => ({
@@ -473,13 +500,21 @@ export default function TierListPage() {
     url.searchParams.set("mode", mode);
     window.history.pushState({}, "", url);
   }, []);
+  const selectMetric = useCallback((metric: TierMetricKey) => {
+    setActiveMetric(metric);
+    setSelectedChart(null);
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("metric") === metric) return;
+    url.searchParams.set("metric", metric);
+    window.history.pushState({}, "", url);
+  }, []);
 
   return (
     <main className="tier-list-page">
       <SiteHeader active="tier-list" />
 
       <section className="hero page-title-hero" id="top">
-        <h1>Scoring Difficulty Tier List</h1>
+        <h1>{metricTitles[activeMetric]}</h1>
         <RefreshMeta
           generatedAtUtc={payload?.generatedAtUtc}
           label="Tier list updated"
@@ -491,11 +526,23 @@ export default function TierListPage() {
       </section>
 
       <section className="dashboard" aria-busy={loading} id="rankings-dashboard">
+        <div className="view-switcher metric-switcher" role="group" aria-label="Tier list metric">
+          {(["scoring", "clearing", "pumbility"] as TierMetricKey[]).map((metric) => (
+            <button
+              aria-pressed={activeMetric === metric}
+              className={activeMetric === metric ? "active" : ""}
+              key={metric}
+              onClick={() => selectMetric(metric)}
+              type="button"
+            >{metricLabels[metric]}</button>
+          ))}
+        </div>
         <div className="mode-tabs" role="tablist" aria-label="Chart mode">
           {(["singles", "doubles", "coop"] as ModeKey[]).map((mode) => (
             <button
               aria-selected={activeMode === mode}
               className={activeMode === mode ? "active" : ""}
+              disabled={mode === "coop" && activeMetric !== "scoring"}
               key={mode}
               onClick={() => selectMode(mode)}
               role="tab"
@@ -508,7 +555,15 @@ export default function TierListPage() {
             </button>
           ))}
         </div>
+        {activeMetric !== "scoring" ? <p className="metric-note">{metricLabels[activeMetric]} estimates are available for Singles and Doubles. Co-op uses a separate scoring scale.</p> : null}
 
+        {metricAvailability !== "available" ? (
+          <p className="metric-unavailable" role="status">
+            {metricAvailability === "unsupported"
+              ? `${metricLabels[activeMetric]} difficulty is unavailable for Co-op. Select Singles or Doubles, or switch to Scoring.`
+              : loading ? "Loading tier list..." : `${metricLabels[activeMetric]} estimates are not available in this analysis yet.`}
+          </p>
+        ) : <>
         <div className="filter-bar">
           <label className="search-field">
             <span>Search songs or step artists</span>
@@ -576,7 +631,8 @@ export default function TierListPage() {
           {groupingView === "tiers" && activeMode !== "coop"
             ? (payload?.effectBands || demoPayload.effectBands).map((group) => (
                 <TierSection
-                  charts={filteredCharts.filter((chart) => chart.effectBandRank === group.rank)}
+                  charts={tierBandCharts(filteredCharts, activeMetric, group.rank)}
+                  metric={activeMetric}
                   compact={layoutView === "compact"}
                   key={group.rank}
                   name={group.name}
@@ -590,6 +646,7 @@ export default function TierListPage() {
                   compact={layoutView === "compact"}
                   key={group.value}
                   mode={activeMode}
+                  metric={activeMetric}
                   onSelect={setSelectedChart}
                   value={group.value}
                 />
@@ -600,20 +657,33 @@ export default function TierListPage() {
           <section className={`tier unrated-section${layoutView === "compact" ? " tier-compact" : ""}`} aria-labelledby="unrated-charts">
             <TierDivider headingId="unrated-charts" label="Unrated" />
             {layoutView === "compact" ? (
-              <CompactChartGrid charts={unratedCharts} onSelect={setSelectedChart} />
+              <CompactChartGrid charts={unratedCharts} metric={activeMetric} onSelect={setSelectedChart} />
             ) : (
               <div className="tier-list">
-                {unratedCharts.map((chart) => <ChartCard chart={chart} key={chart.chartId} />)}
+                {unratedCharts.map((chart) => <ChartCard chart={chart} metric={activeMetric} key={chart.chartId} />)}
               </div>
             )}
           </section>
         </div>
+        </>}
       </section>
       <footer>
+        {activeMetric === "clearing" ? <>
+          <p><b>How clearing estimates work</b> Each chart uses unique successful players from either Phoenix version. We average their current mode-specific skill ratings between the 25th and 50th percentiles, including both boundaries and ties. Players without a usable skill rating are excluded from that average.</p>
+          <p>The median chart in each official-level folder anchors at level + 0.5. Each skill point above or below the folder reference changes difficulty by one point. Estimates can cross official levels: an S20 can be 19.2. Sparse charts remain visible with evidence and limited-data labels; no selected players means Unrated.</p>
+          <p>This estimates clearing difficulty from observed successful players, not pass probability or first-clear ability. Skill ratings can change after the recorded clear.</p>
+        </> : activeMetric === "pumbility" ? <>
+          <p><b>How Pumbility estimates work</b> Pumbility is the arithmetic average of a chart’s scoring and clearing difficulty. Both components must be available. The average uses full-precision estimates before one-decimal display truncation, so displayed components may average slightly differently.</p>
+          <p>Evidence follows the weaker component. Limited data means fewer than 20 scoring contributors or fewer than 20 selected clearers; these supports are shown separately.</p>
+        </> : activeMode !== "coop" ? <>
+          <p><b>How scoring estimates work</b> Scoring difficulty compares player performance within official-level folders using Phoenix 1 and Phoenix 2 observations. Folder ranks, confidence intervals, and official-level What-if estimates describe the scoring model.</p>
+          <p>Limited data means fewer than 20 scoring contributors. Select Clearing for difficulty based on the skill of successful players, or Pumbility for the average of both estimates.</p>
+        </> : <>
         <p><b>How Co-op estimates work</b> Co-op charts share one 2x-5x tier list. Miss points are adjusted for player strength and Phoenix source using all observations, then a conditional 75th-percentile score is estimated for a median-strength Phoenix 2 player. The conditional quantile provides outlier robustness; raw scores and residuals are not trimmed.</p>
         <p>The resulting chart order anchors the easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24.9, then truncates the published difficulty to a whole-number range from 10 through 24. This preserves the observed ordering without forcing a normal distribution. Co-op recommendation letter-grade goals are assigned from these whole-number difficulties.</p>
+        </>}
       </footer>
-      {selectedChart ? <ChartDetailDialog chart={selectedChart} onClose={closeChartDialog} /> : null}
+      {selectedChart ? <ChartDetailDialog chart={selectedChart} metric={activeMetric} onClose={closeChartDialog} /> : null}
     </main>
   );
 }

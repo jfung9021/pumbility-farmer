@@ -518,8 +518,8 @@ $tierList = Invoke-DeploymentRequest `
 Assert-Status $tierList @(200) "tier-list API"
 Assert-ResponseWithinLimit $tierList "tier-list API"
 $tierSchemaVersion = [int](Get-PropertyValue $tierList.Payload "schemaVersion")
-if ($tierSchemaVersion -ne 6 -and (
-    -not [string]::IsNullOrWhiteSpace($AnalysisJobId) -or $tierSchemaVersion -ne 5
+if ($tierSchemaVersion -ne 10 -and (
+    -not [string]::IsNullOrWhiteSpace($AnalysisJobId) -or $tierSchemaVersion -ne 9
 )) {
     throw "The tier-list API did not return a compatible combined-tier contract."
 }

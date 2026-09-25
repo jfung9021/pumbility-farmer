@@ -42,8 +42,10 @@ from analysis_runtime import (
     _audit_checkpoint_resume,
     _canonical_json_sha256,
     _checkpoint_continuation,
+    _load_typed_checkpoint_combined,
     _load_typed_checkpoint_shard,
     _load_checkpoint_model_artifacts,
+    _write_typed_checkpoint_combined,
     _write_typed_frame_shards,
     cleanup_abandoned_staging,
     cleanup_abandoned_typed_checkpoints,
@@ -85,7 +87,11 @@ from piu_recommendations import (
     recommendation_blob_path,
     recommendation_shard_path,
 )
-from pumbility_contract import recommendation_generation_key, recommendation_model_path
+from pumbility_contract import (
+    COMBINED_TIER_SCHEMA_VERSION,
+    recommendation_generation_key,
+    recommendation_model_path,
+)
 from recommendation_artifacts import compact_player_recommendation_cache
 from recommendation_refresh import (
     player_refresh_job_id,
@@ -1271,7 +1277,22 @@ def _recommendation_model_artifacts_fixture(
 
 
 def _combined_tier_payload_fixture(*_args, generated_at_utc: str, **_kwargs):
-    return {"generatedAtUtc": generated_at_utc}
+    return {
+        "schemaVersion": COMBINED_TIER_SCHEMA_VERSION,
+        "generatedAtUtc": generated_at_utc,
+        "singles": [{
+            "chartId": "chart-00",
+            "tierMetrics": {
+                "clearing": {
+                    "estimatedDifficulty": 19.2,
+                    "selectedPlayerCount": 4,
+                    "folderReference": 21.0,
+                },
+                "pumbility": {"estimatedDifficulty": None},
+            },
+        }],
+        "doubles": [],
+    }
 
 
 def _recommendation_mode_artifact_fixture(
@@ -1786,6 +1807,15 @@ class WorkerTests(unittest.TestCase):
         )
         self.assertIsNotNone(blobs.get_json(LATEST_BLOB_PATH))
 
+        published = blobs.get_json(combined_tier_blob_path())
+        self.assertEqual(published["schemaVersion"], COMBINED_TIER_SCHEMA_VERSION)
+        self.assertEqual(
+            published["singles"],
+            _combined_tier_payload_fixture(
+                generated_at_utc=published["generatedAtUtc"]
+            )["singles"],
+        )
+
     def test_typed_persistence_failure_leaves_public_pointer_unchanged(self) -> None:
         class FailingTypedStore(MemoryBlobStore):
             typed_persistence_enabled = True
@@ -1813,6 +1843,97 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNotNone(blobs.get_json(CURRENT_SNAPSHOT_PATH))
         self.assertIsNotNone(blobs.get_json(f"{STAGING_PREFIX}{job['id']}.json"))
         self.assertIsNotNone(blobs.get_json(typed_checkpoint_path(job["id"])))
+
+    def test_combined_checkpoint_preserves_tier_metrics_and_rejects_old_schema(self) -> None:
+        blobs = MemoryBlobStore()
+        mix_spec = resolve_mix("phoenix2")
+        job_id = "combined-tier-schema"
+        checkpoint = {"jobId": job_id, "mix": mix_spec.key}
+        payload = _combined_tier_payload_fixture(generated_at_utc=isoformat_utc(NOW))
+        for schema_version in (COMBINED_TIER_SCHEMA_VERSION, COMBINED_TIER_SCHEMA_VERSION - 1):
+            with self.subTest(schema_version=schema_version):
+                stored = {**payload, "schemaVersion": schema_version}
+                reference = _write_typed_checkpoint_combined(
+                    blobs,
+                    job_id=job_id,
+                    mix_spec=mix_spec,
+                    generated_at_utc=isoformat_utc(NOW),
+                    combined_tier=stored,
+                    model_charts=[],
+                    phoenix2_slopes={},
+                    source_hashes={"phoenix1": "a" * 64, "phoenix2": "b" * 64},
+                    snapshot_hashes={"phoenix1": "c" * 64, "phoenix2": "d" * 64},
+                    input_sha256="e" * 64,
+                )
+                if schema_version == COMBINED_TIER_SCHEMA_VERSION:
+                    loaded = _load_typed_checkpoint_combined(
+                        blobs, checkpoint=checkpoint, reference=reference, mix_spec=mix_spec
+                    )
+                    self.assertEqual(loaded["combinedTier"], payload)
+                else:
+                    with self.assertRaisesRegex(ValueError, "incompatible schema"):
+                        _load_typed_checkpoint_combined(
+                            blobs, checkpoint=checkpoint, reference=reference, mix_spec=mix_spec
+                        )
+
+    def test_old_combined_tier_cannot_resume_past_model_fitting(self) -> None:
+        class TypedMemoryStore(MemoryBlobStore):
+            typed_persistence_enabled = True
+
+            def persist_typed_generation(self, **_kwargs):
+                raise AssertionError("an incompatible tier must not reach publication")
+
+        blobs = TypedMemoryStore()
+        jobs = MemoryJobStore()
+        job = new_job("old-combined-publication", NOW)
+        jobs.save(job)
+        jobs.set_latest_job_id(job["id"])
+        first = execute_analysis_job(
+            job["id"], blobs=blobs, jobs=jobs, client=WorkerClient(),
+            now=lambda: NOW, yield_after_typed_checkpoint=True,
+        )
+        self.assertEqual(first[ANALYSIS_CONTINUATION_FIELD], "combined")
+        pathname = typed_checkpoint_path(job["id"])
+        base_checkpoint = blobs.get_json(pathname)
+        previous = {"schemaVersion": COMBINED_TIER_SCHEMA_VERSION - 1, "singles": []}
+        blobs.put_json(combined_tier_blob_path(), previous)
+        for phase in (
+            TYPED_CHECKPOINT_MODEL_PHASE,
+            TYPED_CHECKPOINT_SNAPSHOT_PHASE,
+            TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE,
+            TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+            TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
+            TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE,
+        ):
+            with self.subTest(phase=phase):
+                jobs.save(job)
+                jobs.set_active_job_id(job["id"])
+                blobs.put_json(pathname, {
+                    **base_checkpoint,
+                    "phase": phase,
+                    "combinedTier": previous,
+                    "model": {},
+                })
+                with patch("analysis_runtime.publish_success") as publish:
+                    result = execute_analysis_job(
+                        job["id"], blobs=blobs, jobs=jobs, client=WorkerClient(),
+                        now=lambda: NOW, yield_after_typed_checkpoint=True,
+                    )
+                self.assertEqual(result["status"], "failed")
+                self.assertIn("incompatible schema", result["error"])
+                self.assertIsNone(blobs.get_json(pathname))
+                self.assertEqual(blobs.get_json(combined_tier_blob_path()), previous)
+                publish.assert_not_called()
+
+        enqueued = []
+        status, refreshed = request_refresh(
+            blobs=blobs, jobs=jobs, enqueue=enqueued.append,
+            now=NOW + FAILED_RETRY_DELAY,
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(refreshed["outcome"], "started")
+        self.assertNotEqual(refreshed["job"]["id"], job["id"])
+        self.assertEqual(enqueued, [refreshed["job"]["id"]])
 
     def test_typed_checkpoint_rows_are_bounded_and_hash_validated(self) -> None:
         blobs = MemoryBlobStore()
@@ -2044,7 +2165,7 @@ class WorkerTests(unittest.TestCase):
             ),
             patch(
                 "analysis_runtime.build_combined_tier_payload",
-                return_value={"generatedAtUtc": generated_at},
+                return_value=_combined_tier_payload_fixture(generated_at_utc=generated_at),
             ),
         ):
             combined = execute_analysis_job(
@@ -2092,7 +2213,7 @@ class WorkerTests(unittest.TestCase):
             ),
             patch(
                 "analysis_runtime.build_combined_tier_payload",
-                return_value={"generatedAtUtc": generated_at},
+                return_value=_combined_tier_payload_fixture(generated_at_utc=generated_at),
             ),
         ):
             result = execute_analysis_job(
@@ -2276,7 +2397,7 @@ class WorkerTests(unittest.TestCase):
             patch("analysis_runtime.build_combined_chart_results", return_value=([], {}, {})),
             patch(
                 "analysis_runtime.build_combined_tier_payload",
-                return_value={"generatedAtUtc": generated_at},
+                return_value=_combined_tier_payload_fixture(generated_at_utc=generated_at),
             ),
             patch(
                 "analysis_runtime.build_recommendation_model_artifacts",

@@ -6,6 +6,7 @@ import unittest
 
 import numpy as np
 
+from pumbility_contract import COMBINED_TIER_SCHEMA_VERSION
 from scripts.populate_pumbility_production import (
     NUMERIC_MODEL_ABSOLUTE_TOLERANCE,
     _assert_flags_off,
@@ -111,9 +112,9 @@ class HostedPopulationSafetyTests(unittest.TestCase):
 
     def test_active_generation_requires_adjacent_what_if_schema(self) -> None:
         current_combined = {
-            "schemaVersion": 9,
+            "schemaVersion": COMBINED_TIER_SCHEMA_VERSION,
             "summary": {
-                "scriptVersion": "6.0+combined-tier-v9",
+                "scriptVersion": f"6.0+combined-tier-v{COMBINED_TIER_SCHEMA_VERSION}",
                 "method": {"catalog": "same", "whatIfEstimates": {"radius": 1}},
             },
             "singles": [{"chartId": "a", "whatIfEstimates": []}],

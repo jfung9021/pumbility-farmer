@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from pumbility_contract import (
+    COMBINED_TIER_SCHEMA_VERSION,
     PHOENIX2_MINIMUM_ANALYSIS_SCORES,
     RECOMMENDATION_SCHEMA_VERSION,
     combined_tier_blob_path,
@@ -66,11 +67,12 @@ from phoenix2_pumbility import (
     phoenix2_pumbility,
     skill_rating_for_pumbility,
 )
+from phoenix2_sync import sanitize_score
+from tier_difficulty import build_tier_metrics, tier_metric_method
 
 
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
 RECOMMENDATION_SHARD_SIZE = 10
-COMBINED_TIER_SCHEMA_VERSION = 9
 RECOMMENDATION_RADIUS = 1.0
 WHAT_IF_LEVEL_RADIUS = 1
 CANDIDATE_OFFICIAL_LEVEL_RADIUS = 2
@@ -140,6 +142,8 @@ PEER_SCORE_INITIAL_RADIUS = 0.2
 PEER_SCORE_MAX_RADIUS = 0.5
 PEER_SCORE_RADIUS_STEP = 0.1
 PLAYER_KEY_NAMESPACE = "pumbility-farmer-recommendations-v1"
+TIER_SOURCE_WEIGHTS = {"phoenix1": 1.0, "phoenix2": 1.0}
+# Recommendation score projections keep their separate source weighting.
 SOURCE_WEIGHTS = {"phoenix1": 1.0, "phoenix2": 2.0}
 ABILITY_HALF_WEIGHT_DISTANCE = 1.0
 RECOMMENDATION_CHART_FIELDS = (
@@ -249,7 +253,7 @@ def _ability_weight_from_distance(distance: object) -> float | np.ndarray:
 
 
 def _observation_weight(source: object, player_ability: object, level: int) -> float:
-    source_weight = SOURCE_WEIGHTS.get(str(source), 1.0)
+    source_weight = TIER_SOURCE_WEIGHTS.get(str(source), 1.0)
     try:
         ability = float(player_ability)
     except (TypeError, ValueError):
@@ -1240,7 +1244,7 @@ def _attach_contribution_weights(
     weighted["playerAbility"] = pd.to_numeric(
         pd.Series(abilities, index=weighted.index), errors="coerce"
     )
-    weighted["sourceWeight"] = weighted["source"].map(SOURCE_WEIGHTS).fillna(1.0)
+    weighted["sourceWeight"] = weighted["source"].map(TIER_SOURCE_WEIGHTS).fillna(1.0)
     weighted["abilityWeight"] = _ability_weight_from_distance(
         weighted["playerAbility"].to_numpy(dtype=float)
         - (weighted["chartLevel"].to_numpy(dtype=float) + 0.5)
@@ -2175,6 +2179,80 @@ def build_coop_chart_results(
     return output, metadata
 
 
+def _clearers_by_chart(
+    phoenix1_snapshot: Mapping[str, Any],
+    phoenix2_snapshot: Mapping[str, Any],
+) -> dict[str, set[str]]:
+    """Capture unique successful players before rating filters or consumption."""
+    target_types = {
+        str(chart["id"]): str(chart["type"])
+        for chart in phoenix2_snapshot.get("charts", [])
+        if isinstance(chart, Mapping)
+        and chart.get("id") is not None
+        and chart.get("type") in MODE_TYPES
+    }
+    clearers: dict[str, set[str]] = {}
+    for snapshot in (phoenix1_snapshot, phoenix2_snapshot):
+        compatible_ids = {
+            str(chart["id"])
+            for chart in snapshot.get("charts", [])
+            if isinstance(chart, Mapping)
+            and chart.get("id") is not None
+            and target_types.get(str(chart["id"])) == chart.get("type")
+        }
+        for raw in snapshot.get("scores", []):
+            if not isinstance(raw, Mapping) or str(raw.get("chartId")) not in compatible_ids:
+                continue
+            score = sanitize_score(raw)
+            if score is not None:
+                clearers.setdefault(score["chartId"], set()).add(score["playerId"])
+    return clearers
+
+
+def _player_mode_scoring_ratings(
+    phoenix1_catalog: pd.DataFrame,
+    phoenix1_scores: pd.DataFrame,
+    phoenix2_catalog: pd.DataFrame,
+    phoenix2_scores: pd.DataFrame,
+) -> dict[tuple[str, str], float]:
+    """Compute current scoringRating once per player/mode from complete history."""
+    sources: list[dict[tuple[str, str], tuple[int, float]]] = []
+    for catalog, scores in (
+        (phoenix1_catalog, phoenix1_scores),
+        (phoenix2_catalog, phoenix2_scores),
+    ):
+        type_by_id = dict(zip(catalog["chartId"], catalog["type"]))
+        rows = scores[["playerId", "chartId", "pumbility", "score"]].copy()
+        rows["type"] = rows["chartId"].map(type_by_id)
+        rows = rows[rows["type"].isin(MODE_TYPES)].sort_values(
+            ["playerId", "type", "pumbility", "score", "chartId"],
+            ascending=[True, True, False, False, True],
+            kind="mergesort",
+        )
+        keys = ["playerId", "type"]
+        counts = rows.groupby(keys, sort=False).size()
+        means = (
+            rows.groupby(keys, sort=False).head(RECOMMENDATION_RATING_SCORE_COUNT)
+            .groupby(keys, sort=False)["pumbility"].mean()
+        )
+        sources.append({
+            (str(player), str(chart_type)): (int(counts.loc[(player, chart_type)]), float(mean))
+            for (player, chart_type), mean in means.items()
+        })
+    phoenix1, phoenix2 = sources
+    skills: dict[tuple[str, str], float] = {}
+    for key in phoenix1.keys() | phoenix2.keys():
+        p1_count, p1_mean = phoenix1.get(key, (0, math.nan))
+        p2_count, p2_mean = phoenix2.get(key, (0, math.nan))
+        source = _rating_source_for_counts(p1_count, p2_count)
+        if source is None:
+            continue
+        mean = p2_mean if source == "phoenix2" else p1_mean
+        if math.isfinite(mean):
+            skills[key] = skill_rating_for_pumbility(key[1], mean)
+    return skills
+
+
 def build_combined_chart_results(
     phoenix1_snapshot: Mapping[str, Any],
     phoenix2_snapshot: Mapping[str, Any],
@@ -2184,6 +2262,7 @@ def build_combined_chart_results(
 ) -> tuple[list[dict[str, Any]], dict[str, float], dict[str, Any]]:
     """Build Phoenix 2-catalog chart estimates from normalized two-version evidence."""
     del bootstrap_samples  # Normal-approximation intervals keep full refreshes bounded.
+    clearers = _clearers_by_chart(phoenix1_snapshot, phoenix2_snapshot)
     score_normalizations = build_phoenix1_score_normalizations(
         [
             row
@@ -2239,10 +2318,16 @@ def build_combined_chart_results(
         prepared_frames=phoenix1_frames,
         phoenix1_normalizations=score_normalizations,
     )
-    _, phoenix1_rating_scores = _prepare_phoenix1_rating_frames_from_frames(
+    phoenix1_rating_catalog, phoenix1_rating_scores = _prepare_phoenix1_rating_frames_from_frames(
         *phoenix1_frames,
         phoenix2_catalog,
         normalizations=score_normalizations,
+    )
+    player_mode_skills = _player_mode_scoring_ratings(
+        phoenix1_rating_catalog,
+        phoenix1_rating_scores,
+        phoenix2_catalog,
+        phoenix2_scores,
     )
     del phoenix1_frames
     gc.collect()
@@ -2384,6 +2469,10 @@ def build_combined_chart_results(
     if not rows:
         raise ValueError("The combined recommendation catalog had no Single or Double charts.")
     output = pd.concat(rows, ignore_index=True)
+    output["tierMetrics"], folder_references = build_tier_metrics(
+        output.to_dict(orient="records"), clearers, player_mode_skills
+    )
+    del clearers, player_mode_skills
     keep = [
         "mode",
         "modeRank",
@@ -2407,6 +2496,7 @@ def build_combined_chart_results(
         "bpmMax",
         "estimatedDifficulty",
         "whatIfEstimates",
+        "tierMetrics",
         "averageDifficulty",
         "difficultyDelta",
         "folderMeasuredCharts",
@@ -2428,6 +2518,7 @@ def build_combined_chart_results(
     records = json.loads(output[keep].to_json(orient="records", double_precision=6))
     records.extend(coop_records)
     metadata = {
+        "tierMetrics": tier_metric_method(folder_references),
         "modes": {**mode_metadata, "coop": coop_metadata},
         "sourceObservations": int(len(combined)),
         "phoenix1Observations": int((combined["source"] == "phoenix1").sum()),
@@ -2449,7 +2540,7 @@ def build_combined_tier_payload(
     *,
     generated_at_utc: str | None = None,
 ) -> dict[str, Any]:
-    """Build the public single-tier-list payload from shared chart estimates."""
+    """Build the public scoring, clearing, and Pumbility tier-list payload."""
     generated_at = generated_at_utc or datetime.now(timezone.utc).isoformat().replace(
         "+00:00", "Z"
     )
@@ -2529,7 +2620,7 @@ def build_combined_tier_payload(
             "sources": {
                 "phoenix1Observations": int(mode_meta.get("phoenix1Observations", 0)),
                 "phoenix2Observations": int(mode_meta.get("phoenix2Observations", 0)),
-                "weights": {"phoenix1": 1, "phoenix2": 2},
+                "weights": dict(TIER_SOURCE_WEIGHTS),
             },
             "folders": folders,
         }
@@ -2612,6 +2703,7 @@ def build_combined_tier_payload(
         "generatedAtUtc": generated_at,
         "mix": dict(COMBINED_MIX),
         "method": {
+            "tierMetrics": dict(metadata.get("tierMetrics") or tier_metric_method({})),
             "catalog": "Phoenix 2 authoritative catalog",
             "overlapRule": "Phoenix 2 replaces Phoenix 1 for the same player and chart",
             "sourceMinimumScoresPerPlayer": {
@@ -2620,7 +2712,7 @@ def build_combined_tier_payload(
             },
             "crossVersionNormalization": "Phoenix 1 raw scores use PIUScores catalog-derived note-count normalization before version- and mode-specific Pumbility residuals are converted to level units",
             "observationWeighting": {
-                "sourceWeights": {"phoenix1": 1, "phoenix2": 2},
+                "sourceWeights": dict(TIER_SOURCE_WEIGHTS),
                 "playerAbility": "per-mode S+FG-equivalent rating from Pumbility ranks 11-30, leave-one-chart-out",
                 "curve": "inverse-square distance decay",
                 "formula": "1 / (1 + (abs(playerAbility - midpoint) / halfWeightDistance)^2)",
@@ -3008,17 +3100,27 @@ def _rating_lookup(
     return full, leave_one_out
 
 
+def _rating_source_for_counts(phoenix1_count: int, phoenix2_count: int) -> str | None:
+    """Shared source policy for individual and bulk mode skill calculations."""
+    if phoenix2_count >= PHOENIX2_RATING_SCORE_THRESHOLD:
+        return "phoenix2"
+    if phoenix1_count >= RECOMMENDATION_RATING_SCORE_COUNT:
+        return "phoenix1"
+    if phoenix2_count > 0:
+        return "phoenix2"
+    return None
+
+
 def _select_rating_scores(
     phoenix1_scores: pd.DataFrame,
     phoenix2_scores: pd.DataFrame,
 ) -> tuple[str, pd.DataFrame]:
     """Choose one mode's recommendation-rating source consistently."""
-    if len(phoenix2_scores) >= PHOENIX2_RATING_SCORE_THRESHOLD:
+    source = _rating_source_for_counts(len(phoenix1_scores), len(phoenix2_scores))
+    if source == "phoenix2":
         return "phoenix2", phoenix2_scores
-    if len(phoenix1_scores) >= RECOMMENDATION_RATING_SCORE_COUNT:
+    if source == "phoenix1":
         return "phoenix1", phoenix1_scores
-    if not phoenix2_scores.empty:
-        return "phoenix2", phoenix2_scores
     return "phoenix1", phoenix1_scores.iloc[0:0].copy()
 
 

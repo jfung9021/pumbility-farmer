@@ -27,6 +27,7 @@ from phoenix2_sync import (
 )
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 from pumbility_contract import (
+    COMBINED_TIER_SCHEMA_VERSION,
     PLAYER_REFRESH_STORAGE_SCHEMA_VERSION,
     RECOMMENDATION_SCHEMA_VERSION,
     SCRIPT_VERSION,
@@ -1905,6 +1906,18 @@ def _load_typed_checkpoint_snapshot(
     return snapshot
 
 
+class IncompatibleCombinedTierCheckpointError(ValueError):
+    """A stored combined tier must be rebuilt before it can be published."""
+
+
+def _validate_checkpoint_combined_tier(payload: Mapping[str, Any]) -> None:
+    if payload.get("schemaVersion") != COMBINED_TIER_SCHEMA_VERSION:
+        raise IncompatibleCombinedTierCheckpointError(
+            "The combined tier checkpoint uses an incompatible schema; "
+            "a fresh analysis generation is required."
+        )
+
+
 def _write_typed_checkpoint_combined(
     blob_store: JsonBlobStore,
     *,
@@ -1999,6 +2012,7 @@ def _load_typed_checkpoint_combined(
         or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("inputSha256") or ""))
     ):
         raise ValueError("The typed combined checkpoint failed validation.")
+    _validate_checkpoint_combined_tier(combined_tier)
     return value
 
 
@@ -2904,6 +2918,10 @@ def _resume_typed_analysis_checkpoint(
         or (raw_model_parts is not None and not isinstance(raw_model_parts, Mapping))
     ):
         raise ValueError("The typed analysis checkpoint payload is invalid.")
+    # Later publication phases embed the aggregate directly and no longer load
+    # the combined-input shard, so they need the same compatibility boundary.
+    if isinstance(raw_combined_tier, Mapping):
+        _validate_checkpoint_combined_tier(raw_combined_tier)
     snapshot = _load_typed_checkpoint_snapshot(
         blob_store,
         checkpoint=checkpoint,
@@ -4032,6 +4050,11 @@ def execute_analysis_job(
         )
         return completed
     except Exception as exc:
+        if isinstance(exc, IncompatibleCombinedTierCheckpointError):
+            # The next refresh must create a new generation instead of resuming
+            # an old publish-ready checkpoint. Its private inputs remain intact
+            # for the existing retry and abandoned-shard cleanup paths.
+            blob_store.delete(checkpoint_path)
         if lease_heartbeat is not None:
             try:
                 _stop_job_lease(lease_heartbeat)

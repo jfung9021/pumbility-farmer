@@ -366,6 +366,12 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 .view-switcher button { background: transparent; border: 0; border-radius: 5px; color: #737c74; cursor: pointer; font-size: 8px; font-weight: 800; letter-spacing: 0.03em; line-height: 1.15; min-height: 42px; min-width: 0; padding: 0 8px; text-transform: uppercase; white-space: normal; }
 .view-switcher button:hover { color: #b7c0b8; }
 .view-switcher button.active { background: rgba(200, 255, 46, 0.12); color: var(--acid); }
+.metric-switcher { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 12px; }
+.metric-switcher button { font-size: 11px; }
+.mode-tabs button:disabled { cursor: not-allowed; opacity: 0.4; }
+.metric-note { color: var(--muted); font-size: 11px; line-height: 1.6; margin: 12px 2px; }
+.metric-unavailable { color: var(--muted); font-size: 13px; line-height: 1.7; padding: 30px 2px; }
+.metric-details { line-height: 1.65; margin-top: 8px; }
 
 .tiers { display: grid; gap: 24px; }
 .tier, .unrated-section { --tone: #c8ff2e; min-width: 0; }

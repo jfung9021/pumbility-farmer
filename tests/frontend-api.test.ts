@@ -17,6 +17,7 @@ import {
   truncateEstimatedDifficulty,
 } from "../lib/format-difficulty.ts";
 import {
+  LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION,
   LocalAnalysisNotFoundError,
   LocalAnalysisValidationError,
   localAnalysisEnabled,
@@ -28,7 +29,17 @@ import {
   recommendationModeFromSearchParams,
   recommendationViewFromSearchParams,
   tierModeFromSearchParams,
+  tierMetricFromSearchParams,
 } from "../lib/page-view-state.ts";
+import {
+  estimatedTierGroups,
+  hasLimitedTierData,
+  selectedTierMetric,
+  sortTierCharts,
+  tierBandCharts,
+  tierMetricAvailability,
+  tierSupportLabel,
+} from "../lib/tier-metrics.ts";
 import { pumbilityProgress } from "../lib/pumbility-progress.ts";
 import {
   recommendationDifficultyOptions,
@@ -54,7 +65,7 @@ import {
   applyPhoenix1Rerates,
   type Phoenix1ReratePayload,
 } from "../lib/phoenix1-rerates.ts";
-import type { AnalysisPayload, RecommendationChartEstimate } from "../lib/types.ts";
+import type { AnalysisPayload, ChartResult, RecommendationChartEstimate } from "../lib/types.ts";
 import {
   LocalRecommendationsValidationError,
   recommendationPlayerList,
@@ -182,6 +193,10 @@ test("tier and recommendation tabs are URL-addressable", async () => {
   assert.equal(tierModeFromSearchParams(new URLSearchParams("mode=doubles")), "doubles");
   assert.equal(tierModeFromSearchParams(new URLSearchParams("mode=coop")), "coop");
   assert.equal(tierModeFromSearchParams(new URLSearchParams("mode=overall")), "singles");
+  assert.equal(tierMetricFromSearchParams(new URLSearchParams("metric=clearing&mode=doubles&demo=1")), "clearing");
+  assert.equal(tierMetricFromSearchParams(new URLSearchParams("metric=pumbility")), "pumbility");
+  assert.equal(tierMetricFromSearchParams(new URLSearchParams("metric=invalid")), "scoring");
+  assert.equal(tierMetricFromSearchParams(new URLSearchParams()), "scoring");
 
   assert.equal(recommendationModeFromSearchParams(new URLSearchParams("mode=overall")), "overall");
   assert.equal(recommendationModeFromSearchParams(new URLSearchParams("mode=singles")), "singles");
@@ -199,10 +214,102 @@ test("tier and recommendation tabs are URL-addressable", async () => {
     readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
   ]);
   assert.match(tierList, /url\.searchParams\.set\("mode", mode\)/);
+  assert.match(tierList, /url\.searchParams\.set\("metric", metric\)/);
+  assert.match(tierList, /setActiveMetric\(tierMetricFromSearchParams\(params\)\)/);
+  assert.match(tierList, /const selectMetric[\s\S]*?setSelectedChart\(null\)/);
   assert.match(tierList, /window\.addEventListener\("popstate", applyModeFromUrl\)/);
   assert.match(recommendations, /url\.searchParams\.set\("mode", mode\)/);
   assert.match(recommendations, /url\.searchParams\.set\("view", view\)/);
   assert.match(recommendations, /window\.addEventListener\("popstate", applyViewFromUrl\)/);
+});
+
+test("tier metrics sort buckets and bands by the selected difficulty without changing official labels", () => {
+  const base = demoPayloads.phoenix2.singles.find((chart) => chart.songName === "Vector")!;
+  const lower: ChartResult = structuredClone(base);
+  const higher: ChartResult = structuredClone(base);
+  lower.chartId = "lower";
+  higher.chartId = "higher";
+  lower.estimatedDifficulty = 22;
+  higher.estimatedDifficulty = 18;
+  lower.tierMetrics!.clearing.estimatedDifficulty = 19.21;
+  higher.tierMetrics!.clearing.estimatedDifficulty = 19.29;
+  lower.tierMetrics!.clearing.effectBandRank = higher.tierMetrics!.clearing.effectBandRank = 1;
+  lower.tierMetrics!.pumbility.estimatedDifficulty = 20.605;
+  higher.tierMetrics!.pumbility.estimatedDifficulty = 18.645;
+  const charts = [higher, lower];
+  assert.deepEqual(sortTierCharts(charts, "scoring").map((chart) => chart.chartId), ["higher", "lower"]);
+  assert.deepEqual(sortTierCharts(charts, "clearing").map((chart) => chart.chartId), ["lower", "higher"]);
+  assert.deepEqual(sortTierCharts(charts, "pumbility").map((chart) => chart.chartId), ["higher", "lower"]);
+  const groups = estimatedTierGroups(charts, "clearing", "singles");
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].value, 19.2);
+  assert.deepEqual(groups[0].charts.map((chart) => chart.chartId), ["lower", "higher"]);
+  assert.deepEqual(tierBandCharts(charts, "clearing", 1).map((chart) => chart.chartId), ["lower", "higher"]);
+  higher.tierMetrics!.clearing.estimatedDifficulty = 19.21;
+  assert.deepEqual(sortTierCharts([lower, higher], "clearing").map((chart) => chart.chartId), ["higher", "lower"]);
+  assert.equal(lower.difficulty, "S20");
+  assert.equal(lower.level, 20);
+  assert.equal(charts[0], higher);
+});
+
+test("tier metrics distinguish absent data, unrated charts, and unsupported Co-op", () => {
+  const chart: ChartResult = structuredClone(demoPayloads.phoenix2.singles[0]);
+  assert.equal(selectedTierMetric(chart, "scoring"), chart);
+  assert.equal(selectedTierMetric(chart, "clearing").evidenceStatus, "Insufficient");
+  assert.equal(tierMetricAvailability([chart], "clearing", "singles"), "available");
+  assert.equal(tierMetricAvailability([chart], "clearing", "coop"), "unsupported");
+  assert.equal(tierMetricAvailability([], "scoring", "coop"), "available");
+  chart.tierMetrics!.clearing.estimatedDifficulty = null;
+  assert.deepEqual(estimatedTierGroups([chart], "clearing", "singles"), []);
+  assert.equal(tierMetricAvailability([chart], "clearing", "singles"), "available");
+  delete chart.tierMetrics;
+  assert.equal(selectedTierMetric(chart, "clearing").estimatedDifficulty, null);
+  assert.equal(selectedTierMetric(chart, "pumbility").evidenceStatus, "Unrated");
+  assert.equal(tierMetricAvailability([chart], "pumbility", "doubles"), "unavailable");
+});
+
+test("new tier evidence warnings use selected clearers and each composite support", () => {
+  const chart: ChartResult = structuredClone(demoPayloads.phoenix2.singles[0]);
+  chart.nContributors = 20;
+  chart.tierMetrics!.clearing.selectedCount = 19;
+  chart.tierMetrics!.clearing.evidenceStatus = "Published";
+  assert.equal(hasLimitedTierData(chart, "scoring"), false);
+  assert.equal(hasLimitedTierData(chart, "clearing"), true);
+  assert.equal(tierSupportLabel(chart, "clearing"), "19 selected clearers");
+  chart.tierMetrics!.clearing.selectedCount = 20;
+  assert.equal(hasLimitedTierData(chart, "clearing"), false);
+  const composite = chart.tierMetrics!.pumbility;
+  composite.scoringSupportCount = 19;
+  composite.clearingSupportCount = 20;
+  assert.equal(hasLimitedTierData(chart, "pumbility"), true);
+  composite.scoringSupportCount = 20;
+  composite.clearingSupportCount = 19;
+  assert.equal(hasLimitedTierData(chart, "pumbility"), true);
+  assert.equal(tierSupportLabel(chart, "pumbility"), "20 scoring contributors and 19 selected clearers");
+  composite.clearingSupportCount = 20;
+  assert.equal(hasLimitedTierData(chart, "pumbility"), false);
+});
+
+test("tier demo includes cross-level clearing, calibrated folders, and missing components", () => {
+  const payload = demoPayloads.phoenix2;
+  const vector = payload.singles.find((chart) => chart.songName === "Vector")!;
+  assert.equal(formatEstimatedDifficulty(vector.tierMetrics!.clearing.estimatedDifficulty!), "19.2");
+  for (const charts of [payload.singles, payload.doubles]) {
+    assert.ok(charts.some((chart) => chart.tierMetrics!.clearing.estimatedDifficulty === null));
+    for (const level of new Set(charts.map((chart) => chart.level))) {
+      const estimates = charts.filter((chart) => chart.level === level)
+        .flatMap((chart) => chart.tierMetrics!.clearing.estimatedDifficulty ?? []).sort((a, b) => a - b);
+      if (!estimates.length) continue;
+      const middle = Math.floor(estimates.length / 2);
+      const median = estimates.length % 2 ? estimates[middle] : (estimates[middle - 1] + estimates[middle]) / 2;
+      assert.ok(Math.abs(median - (level + 0.5)) < 1e-10);
+    }
+    for (const chart of charts) {
+      const { clearing, pumbility } = chart.tierMetrics!;
+      assert.equal(pumbility.estimatedDifficulty, chart.estimatedDifficulty === null || clearing.estimatedDifficulty === null
+        ? null : (chart.estimatedDifficulty + clearing.estimatedDifficulty) / 2);
+    }
+  }
 });
 
 test("Co-op methodology derives Master-title goals from tier difficulty", async () => {
@@ -226,7 +333,7 @@ test("Co-op methodology derives Master-title goals from tier difficulty", async 
   assert.match(tierList, /recommendation letter-grade goals are assigned from these whole-number difficulties/);
   assert.match(tierList, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24\.9/);
   assert.match(tierList, /const continuous = chart\.difficultyModelContinuous/);
-  assert.match(tierList, /chart\.estimatedDifficulty\)\.toFixed\(1\)/);
+  assert.match(tierList, /: estimate\)\.toFixed\(1\)/);
   assert.match(readme, /clears the 16,000\s+Co-op Rating `\[CO-OP\] Master` threshold with extra leeway/);
   assert.match(readme, /note-count-normalized Phoenix 1 personal best are\s+each truncated to the lower score boundary/);
   assert.match(readme, /raw nearest-rank q75 result remains provenance/);
@@ -728,10 +835,10 @@ test("Singles and Doubles estimates keep tenths while Co-op stays whole-numbered
   assert.equal(formatCoopEstimatedDifficulty(17.99), "17");
   assert.equal(truncateCoopEstimatedDifficulty(20.89), 20);
   for (const page of pages) {
-    assert.match(page, /formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
     assert.doesNotMatch(page, /estimatedDifficulty\.toFixed\(/);
   }
-  assert.match(pages[0], /activeMode === "coop"[\s\S]*truncateCoopEstimatedDifficulty\(chart\.estimatedDifficulty\)[\s\S]*truncateEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
+  assert.match(pages[0], /formatEstimatedDifficulty\(estimate\)/);
+  assert.match(pages[0], /estimatedTierGroups\(filteredCharts, activeMetric, activeMode\)/);
   assert.match(pages[1], /isCoop[\s\S]*formatCoopEstimatedDifficulty\(chart\.estimatedDifficulty\)[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
 });
 
@@ -744,6 +851,10 @@ test("tier list uses compact segmented controls for grouping and layout", async 
   assert.match(page, /type GroupingView = "tiers" \| "estimated"/);
   assert.match(page, /useState<GroupingView>\("estimated"\)/);
   assert.match(page, /Scoring Difficulty Tier List/);
+  assert.match(page, /Clearing Difficulty Tier List/);
+  assert.match(page, /Pumbility Tier List/);
+  assert.match(page, /aria-label="Tier list metric"/);
+  assert.match(page, /disabled=\{mode === "coop" && activeMetric !== "scoring"\}/);
   assert.doesNotMatch(page, /Combined scoring tier list|Scoring-based Tier List/);
   assert.match(page, /<span>Estimated<br \/>Difficulty<\/span>/);
   assert.match(page, /Tier Bands/);
@@ -754,8 +865,8 @@ test("tier list uses compact segmented controls for grouping and layout", async 
   assert.match(css, /\.view-switcher button \{[^}]*font-size: clamp\(6px, 2vw, 8px\);/);
   assert.match(css, /\.view-switcher button \{[^}]*line-height: 1\.15;[^}]*min-height: 42px;[^}]*white-space: normal;/);
   assert.match(css, /max-width: calc\(100vw - 24px\)/);
-  assert.match(page, /truncateEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
-  assert.match(page, /\.sort\(\(\[left\], \[right\]\) => left - right\)/);
+  assert.match(page, /estimatedTierGroups\(filteredCharts, activeMetric, activeMode\)/);
+  assert.match(page, /tierBandCharts\(filteredCharts, activeMetric, group.rank\)/);
   assert.doesNotMatch(page, /Grouped by truncated one-decimal estimate|easier to score|harder to score/);
   assert.doesNotMatch(page, /showUnrated|Include unrated|unrated-toggle/);
   assert.match(page, /className="search-field"[\s\S]*?className="level-field"/);
@@ -835,7 +946,8 @@ test("tier list chart details provide local mode-specific what-if estimates", as
   assert.match(demo, /const minimumLevel = Math\.max\(16, level - 1\);/);
   assert.match(demo, /level \+ 1 - minimumLevel \+ 1/);
   assert.match(demo, /\.filter\(\(targetLevel\) => targetLevel !== level\)/);
-  assert.match(chartDetails, /<WhatIfDifficulty chart=\{chart\} \/>/);
+  assert.match(chartDetails, /metric === "scoring" \? <WhatIfDifficulty chart=\{chart\} \/> : null/);
+  assert.match(chartDetails, /metric === "scoring" && chart\.difficultyCi95Low/);
 
   assert.match(css, /\.chart-card \{[^}]*grid-template-columns: 58px minmax\(0, 1fr\) 104px;[^}]*min-height: 86px;[^}]*padding: 13px 18px;/);
   assert.match(css, /\.chart-dialog-body \{[^}]*grid-template-columns: 96px minmax\(0, 1fr\);/);
@@ -1261,9 +1373,10 @@ test("limited-data presentation uses the shared 20-player boundary", async () =>
   assert.equal(hasLimitedData(19), true);
   assert.equal(hasLimitedData(20), false);
   for (const page of pages) {
-    assert.match(page, /hasLimitedData\(chart\.nContributors\)/);
     assert.doesNotMatch(page, /evidenceStatus\.toLowerCase\(\)/);
   }
+  assert.match(pages[0], /hasLimitedTierData\(chart, metric\)/);
+  assert.match(pages[1], /hasLimitedData\(chart\.nContributors\)/);
 });
 
 test("all Phoenix 2 Overall rank emblems are vendored locally", async () => {
@@ -1491,7 +1604,7 @@ test("validates local aggregates against the requested Phoenix version", async (
 
 test("accepts the combined tier-list identity", () => {
   const payload = {
-    schemaVersion: 8,
+    schemaVersion: LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     mix: { key: "combined", apiValue: "Phoenix+Phoenix2", label: "Phoenix 1 + 2" },
     summary: { scriptVersion: "test", method: {}, coverage: {}, modes: {} },
