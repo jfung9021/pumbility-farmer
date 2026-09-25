@@ -11,25 +11,25 @@ class PercentileSkillTests(unittest.TestCase):
     def test_boundaries_and_all_ties_are_inclusive(self) -> None:
         result = inclusive_percentile_skill([10, 11, 12, 13, 14])
         self.assertEqual(result, {
-            "q10Skill": 10.4, "q30Skill": 11.2, "meanSkill": 11.0, "selectedCount": 1,
+            "q10Skill": 10.4, "q50Skill": 12.0, "meanSkill": 11.5, "selectedCount": 2,
         })
         tied = inclusive_percentile_skill([10, 11, 11, 11, 11, 12, 13, 14])
         self.assertEqual(tied["selectedCount"], 4)
         self.assertEqual(tied["meanSkill"], 11)
         boundaries = inclusive_percentile_skill(list(range(11)))
         self.assertEqual(boundaries, {
-            "q10Skill": 1.0, "q30Skill": 3.0, "meanSkill": 2.0, "selectedCount": 3,
+            "q10Skill": 1.0, "q50Skill": 5.0, "meanSkill": 3.0, "selectedCount": 5,
         })
 
     def test_interpolated_cutoffs_do_not_invent_observations(self) -> None:
         result = inclusive_percentile_skill([10, 20])
         self.assertEqual(result["q10Skill"], 11)
-        self.assertEqual(result["q30Skill"], 13)
+        self.assertEqual(result["q50Skill"], 15)
         self.assertEqual(result["selectedCount"], 0)
         self.assertIsNone(result["meanSkill"])
         result = inclusive_percentile_skill([10, 11, 12, 100])
-        self.assertEqual(result["selectedCount"], 0)
-        self.assertIsNone(result["meanSkill"])
+        self.assertEqual(result["selectedCount"], 1)
+        self.assertEqual(result["meanSkill"], 11)
 
     def test_empty_nonfinite_and_single_player(self) -> None:
         for values in ([], [float("nan"), float("inf")]):
@@ -89,7 +89,7 @@ class TierMetricTests(unittest.TestCase):
             for field in ("initialEstimatedDifficulty", "assessmentLevel", "reassessmentStatus"):
                 self.assertNotIn(field, metric["clearing"])
         method = tier_metric_method(references)
-        self.assertEqual(method["clearing"]["percentiles"], [0.1, 0.3])
+        self.assertEqual(method["clearing"]["percentiles"], [0.1, 0.5])
         self.assertNotIn("reassessment", method["clearing"])
 
     def test_sparse_finite_estimates_are_included_and_missing_skills_counted(self) -> None:

@@ -1319,7 +1319,7 @@ def _combined_tier_payload_fixture(*_args, generated_at_utc: str, **_kwargs):
                     "selectedCount": 4,
                     "folderReferenceSkill": 20.0,
                     "q10Skill": 19.1,
-                    "q30Skill": 19.7,
+                    "q50Skill": 19.7,
                 },
                 "pumbility": {"estimatedDifficulty": None},
             },

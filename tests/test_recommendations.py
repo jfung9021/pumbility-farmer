@@ -205,14 +205,14 @@ class CombinedEvidenceTests(unittest.TestCase):
         self.assertEqual(consumed, {})
         self.assertTrue(all("tierMetrics" in chart for chart in actual[0]))
         payload = build_combined_tier_payload(actual[0], actual[2])
-        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["version"], 3)
-        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["clearing"]["percentiles"], [0.1, 0.3])
+        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["version"], 4)
+        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["clearing"]["percentiles"], [0.1, 0.5])
         for chart in payload["singles"]:
             metrics = chart["tierMetrics"]
             self.assertEqual(metrics["clearing"]["clearCount"], 12)
-            for field in ("q10Skill", "q30Skill"):
+            for field in ("q10Skill", "q50Skill"):
                 self.assertIn(field, metrics["clearing"])
-            self.assertNotIn("q50Skill", metrics["clearing"])
+            self.assertNotIn("q30Skill", metrics["clearing"])
             self.assertNotIn("q25Skill", metrics["clearing"])
             if chart["estimatedDifficulty"] is not None and metrics["clearing"]["estimatedDifficulty"] is not None:
                 self.assertAlmostEqual(metrics["pumbility"]["estimatedDifficulty"], (chart["estimatedDifficulty"] + metrics["clearing"]["estimatedDifficulty"]) / 2, places=5)
@@ -3657,7 +3657,7 @@ class CombinedTierPayloadTests(unittest.TestCase):
 
         self.assertEqual(payload["mix"]["key"], "combined")
         self.assertEqual(payload["schemaVersion"], COMBINED_TIER_SCHEMA_VERSION)
-        self.assertEqual(payload["schemaVersion"], 12)
+        self.assertEqual(payload["schemaVersion"], 13)
         self.assertEqual(
             [row["chartId"] for row in payload["singles"]],
             ["easier", "current"],
