@@ -99,26 +99,43 @@ scores when available, otherwise 20 normalized Phoenix 1 scores, otherwise the a
 Phoenix 2 scores. Singles and Doubles use separate ratings and include sub-16 history.
 Players without a usable rating are counted in coverage but cannot enter the average.
 
-For each chart, calculate linear-interpolated 25th- and 50th-percentile skill cutoffs.
+For each chart, calculate linear-interpolated 10th- and 30th-percentile skill cutoffs.
 Average the actual player ratings between those cutoffs, including all boundary ties.
 If no ratings lie in the interval, the chart is Unrated. Center those averages within
-each exact mode/official-level folder:
+each exact mode/official-level folder, freezing all folder references before reassessment:
 
 ```text
-clearing difficulty = official level + 0.5
+initial clearing difficulty = official level + 0.5
                       + chart's selected-player mean skill
                       - median chart mean skill in the folder
-pumbility difficulty = (scoring difficulty + clearing difficulty) / 2
 ```
 
-The median clearing estimate for S20 is 20.5 before display truncation. Estimates are
-not confined to the official folder: an S20 can be 19.2. Pumbility uses the unrounded
-component estimates and is Unrated if either component is missing. It is not recentered.
+When the initial estimate crosses a level boundary, assess the chart once against the
+reference for `floor(initial difficulty)`, allowing a 1e-10 tolerance at integer boundaries:
+
+```text
+final clearing difficulty = target level + 0.5
+                            + chart's selected-player mean skill
+                            - frozen target-folder reference
+pumbility difficulty = (scoring difficulty + final clearing difficulty) / 2
+```
+
+For example, a D23 initially estimated at 22.9 uses the D22 reference; 24.0 uses D24.
+The chart does not join the target calibration group, and its clearers, skill ratings,
+official label, and official-folder membership stay fixed. Keep the initial estimate
+when the target reference is unavailable. Reassessment happens once even when its result
+returns to the original level; repeated reassessment can oscillate.
+
+The initial median estimate for S20 is 20.5 before display truncation. Final folder
+medians can shift after reassessment. Estimates are not clamped to an official level
+or to the level-16 display minimum. Pumbility uses unrounded component estimates and
+is Unrated if either component is missing. It is not recentered.
 
 Clearing evidence is Published with at least 10 selected players, Provisional with
 5–9, Insufficient with 1–4, and Unrated without an estimate. The existing limited-data
 warning remains separate: it appears below 20 selected players, or when either
 component has limited support in Pumbility. Details display each component's support.
+Details also show the initial estimate and reassessment reference when applied.
 These lists describe the observed successful-player population, not pass probability.
 
 Select the metric on `/tier-list`, or link directly using

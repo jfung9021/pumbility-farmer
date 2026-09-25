@@ -148,14 +148,17 @@ function withDemoTierMetrics(charts: ChartResult[]): ChartResult[] {
         clearing: {
           ...emptyMetric,
           evidenceStatus,
-          clearCount: selectedCount * 4 + 3,
-          ratedClearCount: selectedCount * 4,
+          clearCount: selectedCount * 5 + 3,
+          ratedClearCount: selectedCount * 5,
           missingSkillCount: 3,
           selectedCount,
-          q25Skill: meanSkill === null ? null : meanSkill - 0.15,
-          q50Skill: meanSkill === null ? null : meanSkill + 0.15,
+          q10Skill: meanSkill === null ? null : meanSkill - 0.15,
+          q30Skill: meanSkill === null ? null : meanSkill + 0.15,
           meanSkill,
           folderReferenceSkill: null,
+          initialEstimatedDifficulty: null,
+          assessmentLevel: null,
+          reassessmentStatus: null,
         },
         pumbility: {
           ...emptyMetric,
@@ -166,16 +169,37 @@ function withDemoTierMetrics(charts: ChartResult[]): ChartResult[] {
       },
     };
   });
+  const references = new Map<number, number>();
   for (const level of new Set(result.map((chart) => chart.level))) {
     const folder = result.filter((chart) => chart.level === level);
     const means = folder.flatMap((chart) => chart.tierMetrics!.clearing.meanSkill ?? []).sort((a, b) => a - b);
     const middle = Math.floor(means.length / 2);
     const reference = means.length === 0 ? null : means.length % 2 ? means[middle] : (means[middle - 1] + means[middle]) / 2;
+    if (reference !== null) references.set(level, reference);
+  }
+  for (const level of new Set(result.map((chart) => chart.level))) {
+    const folder = result.filter((chart) => chart.level === level);
+    const reference = references.get(level) ?? null;
     for (const chart of folder) {
       const { clearing, pumbility } = chart.tierMetrics!;
       clearing.folderReferenceSkill = reference;
       if (clearing.meanSkill !== null && reference !== null) {
         clearing.estimatedDifficulty = chart.level + 0.5 + clearing.meanSkill - reference;
+        clearing.initialEstimatedDifficulty = clearing.estimatedDifficulty;
+        clearing.assessmentLevel = chart.level;
+        clearing.reassessmentStatus = "not-needed";
+        const target = Math.floor(clearing.initialEstimatedDifficulty + 1e-10);
+        if (target !== chart.level) {
+          const targetReference = references.get(target);
+          if (targetReference === undefined) {
+            clearing.reassessmentStatus = "unavailable";
+          } else {
+            clearing.assessmentLevel = target;
+            clearing.folderReferenceSkill = targetReference;
+            clearing.estimatedDifficulty = target + 0.5 + clearing.meanSkill - targetReference;
+            clearing.reassessmentStatus = "applied";
+          }
+        }
         clearing.difficultyDelta = clearing.estimatedDifficulty - (chart.level + 0.5);
         const band = effectBand(clearing.difficultyDelta);
         clearing.effectBand = band?.name ?? null;
@@ -207,7 +231,7 @@ export const demoPayload: AnalysisPayload = {
   generatedAtUtc: "2026-08-07T04:20:00Z",
   mix: { key: "phoenix2", apiValue: "Phoenix2", label: "Phoenix 2" },
   summary: {
-    scriptVersion: "6.3.0-phoenix1-score-override-folder-normalized-0.4-scale",
+    scriptVersion: "6.9.0-clearing-10-30-reassessment",
     method: {
       difficultyDeltaScale: DEMO_DIFFICULTY_DELTA_SCALE,
       folderRangeNormalization: {

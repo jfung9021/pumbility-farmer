@@ -1,6 +1,17 @@
 import { hasLimitedData } from "./chart-evidence.ts";
 import { truncateCoopEstimatedDifficulty, truncateEstimatedDifficulty } from "./format-difficulty.ts";
-import type { ChartResult, ModeKey, TierMetricKey, TierMetricResult } from "./types";
+import type { ChartResult, ClearingTierMetric, ModeKey, TierMetricKey, TierMetricResult } from "./types";
+
+export function clearingPercentileRange(clearing: ClearingTierMetric | undefined) {
+  if (!clearing) return null;
+  if ("q10Skill" in clearing && "q30Skill" in clearing) {
+    return { label: "10th–30th", lower: clearing.q10Skill ?? null, upper: clearing.q30Skill ?? null, reassessment: true };
+  }
+  if ("q25Skill" in clearing && "q50Skill" in clearing) {
+    return { label: "25th–50th", lower: clearing.q25Skill ?? null, upper: clearing.q50Skill ?? null, reassessment: false };
+  }
+  return null;
+}
 
 const unratedMetric: TierMetricResult = {
   estimatedDifficulty: null,
