@@ -28,8 +28,8 @@ export default function HomePage() {
               <p>GLOBAL ANALYSIS</p>
               <h2>Tier List</h2>
               <span>
-                Compare scoring-based difficulty estimates across Phoenix 1 and
-                Phoenix 2 charts in compact or detailed views.
+                Compare Scoring, Clearing, and Pumbility difficulty estimates
+                in compact or detailed views, using Phoenix 1 and Phoenix 2 scores.
               </span>
             </div>
             <b aria-hidden="true">↗</b>

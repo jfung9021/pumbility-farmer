@@ -40,14 +40,17 @@ from piu_recommendations import (
     _PeerScoreCohort,
     _ScoreSurface,
     _apply_phoenix1_score_overrides,
+    _attach_contribution_weights,
     _ability_weight_from_distance,
     _build_score_surface,
     _clean_snapshot_frames,
+    _clearers_by_chart,
     _coop_continuous_estimated_difficulties,
     _effective_sample_size,
     _coop_estimated_difficulties,
     _observation_weight,
     _peer_cohort_key,
+    _player_mode_scoring_ratings,
     _prepare_phoenix1_rating_frames,
     _projected_gain_sort_key,
     _public_top_score_value,
@@ -200,6 +203,80 @@ class CombinedEvidenceTests(unittest.TestCase):
 
         self.assertEqual(actual, expected)
         self.assertEqual(consumed, {})
+        self.assertTrue(all("tierMetrics" in chart for chart in actual[0]))
+        payload = build_combined_tier_payload(actual[0], actual[2])
+        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["version"], 1)
+        for chart in payload["singles"]:
+            metrics = chart["tierMetrics"]
+            self.assertEqual(metrics["clearing"]["clearCount"], 12)
+            if chart["estimatedDifficulty"] is not None and metrics["clearing"]["estimatedDifficulty"] is not None:
+                self.assertAlmostEqual(metrics["pumbility"]["estimatedDifficulty"], (chart["estimatedDifficulty"] + metrics["clearing"]["estimatedDifficulty"]) / 2, places=5)
+            self.assertNotIn("playerId", json.dumps(metrics))
+            self.assertNotIn("tierMetrics", _recommendation_chart_rows([chart])[0])
+
+    def test_clear_membership_is_unique_nonbroken_and_mode_compatible(self) -> None:
+        def score(player: str, chart: str, *, broken: bool = False, points: float = 100) -> dict:
+            return {"playerId": player, "chartId": chart, "isBroken": broken, "pumbility": points}
+        phoenix1 = {
+            "charts": [{"id": "same", "type": "Single"}, {"id": "changed", "type": "Double"}, {"id": "removed", "type": "Single"}],
+            "scores": [score("both", "same"), score("both", "same"), score("failed-later", "same"), score("wrong-mode", "changed"), score("removed", "removed")],
+        }
+        phoenix2 = {
+            "charts": [{"id": "same", "type": "Single"}, {"id": "changed", "type": "Single"}],
+            "scores": [score("both", "same"), score("failed-later", "same", broken=True), score("zero", "same", points=0), score("invalid", "same", points=float("nan"))],
+        }
+        self.assertEqual(_clearers_by_chart(phoenix1, phoenix2), {"same": {"both", "failed-later", "zero"}})
+
+    def test_zero_point_clear_uses_below_sixteen_skill_and_no_scoring_minimum(self) -> None:
+        charts = [{"id": f"c{index}", "songName": f"Chart {index}", "type": "Single", "level": 15 + index % 10, "difficulty": f"S{15 + index % 10}"} for index in range(150)]
+        def score(player: str, chart: str, points: float, recorded: str = "2026-01-01T00:00:00Z") -> dict:
+            return {"playerId": player, "chartId": chart, "pumbility": points, "score": 950_000, "plate": "FG", "isBroken": False, "recordedAt": recorded}
+        phoenix1 = {"charts": charts, "scores": [score("history", chart["id"], chart["level"] * 100 + index, f"2026-01-{1 + index % 28:02d}T00:00:00Z") for index, chart in enumerate(charts) if index != 5]}
+        phoenix2 = {"charts": charts, "scores": [entry for player in ("a", "b", "c") for entry in (score(player, "c0", 200), score(player, "c5", 0))]}
+        records, _, _ = build_combined_chart_results(phoenix1, phoenix2)
+        target = next(chart for chart in records if chart["chartId"] == "c5")
+        clearing = target["tierMetrics"]["clearing"]
+        self.assertEqual(target["nContributors"], 0)
+        self.assertEqual(clearing["clearCount"], 3)
+        self.assertEqual(clearing["ratedClearCount"], 3)
+        self.assertEqual(clearing["selectedCount"], 3)
+        self.assertAlmostEqual(clearing["meanSkill"], skill_rating_for_pumbility("Single", 200), places=5)
+        self.assertIsNotNone(clearing["estimatedDifficulty"])
+        self.assertIsNone(target["tierMetrics"]["pumbility"]["estimatedDifficulty"])
+        # Historical clears outside the source's top/recent windows remain counted.
+        outside = [chart for chart in records if chart["chartId"] not in {"c0", "c5"} and chart["nContributors"] == 0]
+        self.assertTrue(outside)
+        self.assertTrue(all(chart["tierMetrics"]["clearing"]["ratedClearCount"] == 1 for chart in outside))
+
+    def test_bulk_skill_matches_recommendations_for_source_policy_and_modes(self) -> None:
+        charts = [{"id": f"{mode}-{index}", "songName": f"{mode} {index}", "type": mode, "level": 15 + index % 8, "difficulty": f"{'S' if mode == 'Single' else 'D'}{15 + index % 8}", "noteCount": 1000} for mode in ("Single", "Double") for index in range(25)]
+        counts = {"complete": (25, 20), "fallback": (25, 19), "partial": (10, 3), "missing": (19, 0)}
+        snapshots = []
+        for source in range(2):
+            scores = []
+            for player, source_counts in counts.items():
+                for mode in ("Single", "Double"):
+                    for index in range(source_counts[source]):
+                        scores.append({"playerId": player, "chartId": f"{mode}-{index}", "pumbility": 300 + index * 10 + (100 if mode == "Double" else 0), "score": 950_000 + index * 100, "plate": "FG", "isBroken": False})
+            source_charts = deepcopy(charts)
+            if source == 0:
+                source_charts[0]["noteCount"] = 1200
+            snapshots.append({"charts": source_charts, "scores": scores})
+        phoenix1, phoenix2 = snapshots
+        prepared2 = _clean_snapshot_frames(phoenix2)
+        prepared1 = _prepare_phoenix1_rating_frames(phoenix1, prepared2[0])
+        bulk = _player_mode_scoring_ratings(*prepared1, *prepared2)
+        self.assertNotEqual(prepared1[1].loc[prepared1[1]["chartId"] == "Single-0", "score"].iloc[0], 950_000)
+        for player in counts:
+            result = build_player_recommendation(player, phoenix2, [], {}, prepared_phoenix1=prepared1, prepared_phoenix2=prepared2)
+            for chart_type, mode in (("Single", "singles"), ("Double", "doubles")):
+                if player == "missing":
+                    self.assertNotIn((player, chart_type), bulk)
+                    self.assertFalse(result["modes"][mode]["eligible"])
+                else:
+                    self.assertEqual(round(bulk[(player, chart_type)], 3), result["modes"][mode]["scoringRating"])
+                    self.assertEqual(result["modes"][mode]["ratingSource"], "phoenix1" if player == "fallback" else "phoenix2")
+        self.assertNotEqual(bulk[("complete", "Single")], bulk[("complete", "Double")])
 
     def test_note_count_normalizations_are_derived_from_matching_catalogs(self) -> None:
         phoenix1 = [
@@ -282,23 +359,44 @@ class CombinedEvidenceTests(unittest.TestCase):
         self.assertEqual(_observation_weight("phoenix1", 20.0, 20), 0.8)
         self.assertEqual(_observation_weight("phoenix1", 19.5, 20), 0.5)
         self.assertEqual(_observation_weight("phoenix1", 18.5, 20), 0.2)
-        self.assertEqual(_observation_weight("phoenix2", 17.5, 20), 0.2)
-        self.assertEqual(_observation_weight("phoenix2", None, 20), 2.0)
+        self.assertEqual(_observation_weight("phoenix2", 17.5, 20), 0.1)
+        self.assertEqual(_observation_weight("phoenix2", None, 20), 1.0)
+        for ability in (None, 17.5, 19.5, 20.5, 22.5):
+            self.assertEqual(
+                _observation_weight("phoenix1", ability, 20),
+                _observation_weight("phoenix2", ability, 20),
+            )
 
-    def test_weighted_chart_statistics_favor_phoenix2_and_keep_effective_support(self) -> None:
+    def test_equal_source_chart_statistics_keep_full_effective_support(self) -> None:
         statistics = _weighted_residual_statistics(
             np.asarray([0.0, 2.0]),
-            np.asarray([1.0, 2.0]),
+            np.asarray([
+                _observation_weight("phoenix1", 20.5, 20),
+                _observation_weight("phoenix2", 20.5, 20),
+            ]),
         )
 
-        self.assertAlmostEqual(statistics["mean"], 4.0 / 3.0)
-        self.assertAlmostEqual(statistics["location"], 4.0 / 3.0)
-        self.assertEqual(statistics["median"], 2.0)
-        self.assertAlmostEqual(statistics["effectiveSupport"], 9.0 / 5.0)
+        self.assertAlmostEqual(statistics["mean"], 1.0)
+        self.assertAlmostEqual(statistics["location"], 1.0)
+        self.assertAlmostEqual(statistics["effectiveSupport"], 2.0)
         self.assertAlmostEqual(
             statistics["effectiveSupport"],
-            _effective_sample_size(np.asarray([1.0, 2.0])),
+            _effective_sample_size(np.asarray([1.0, 1.0])),
         )
+
+    def test_attached_tier_contributions_use_equal_source_weights(self) -> None:
+        catalog = pd.DataFrame([{"chartId": "chart", "type": "Single"}])
+        rating_rows = pd.DataFrame(columns=["playerId", "chartId", "pumbility", "score"])
+        observations = pd.DataFrame([
+            {"source": source, "playerId": source, "chartType": "Single", "chartId": "chart", "chartLevel": 20}
+            for source in ("phoenix1", "phoenix2")
+        ])
+        weighted = _attach_contribution_weights(
+            observations, None, rating_rows, catalog,
+            phoenix1_rating_scores=rating_rows,
+        )
+        self.assertEqual(weighted["sourceWeight"].tolist(), [1.0, 1.0])
+        self.assertEqual(weighted["observationWeight"].tolist(), [1.0, 1.0])
 
     def test_solve_my_hurt_shortcut_converts_only_phoenix1_score_rows(self) -> None:
         chart_id = SOLVE_MY_HURT_SHORTCUT_D26_CHART_ID
@@ -3124,8 +3222,9 @@ class WhatIfDifficultyTests(unittest.TestCase):
 
         # At D20 the P1 row is at the 20.5 midpoint. The P2 row is 1.1 levels
         # away, so the shifted residuals [0, 2] and reliability use the smooth
-        # inverse-square weights against the hypothetical level.
-        self.assertEqual(target["estimatedDifficulty"], 20.310212)
+        # inverse-square weights [1, 1 / 2.21] against the hypothetical level;
+        # neither Phoenix source receives an extra multiplier.
+        self.assertEqual(target["estimatedDifficulty"], 20.383655)
 
     def test_missing_target_model_and_no_observations_are_unavailable(self) -> None:
         result = pd.DataFrame(
@@ -3553,7 +3652,7 @@ class CombinedTierPayloadTests(unittest.TestCase):
 
         self.assertEqual(payload["mix"]["key"], "combined")
         self.assertEqual(payload["schemaVersion"], COMBINED_TIER_SCHEMA_VERSION)
-        self.assertEqual(payload["schemaVersion"], 9)
+        self.assertEqual(payload["schemaVersion"], 10)
         self.assertEqual(
             [row["chartId"] for row in payload["singles"]],
             ["easier", "current"],
@@ -3588,7 +3687,7 @@ class CombinedTierPayloadTests(unittest.TestCase):
         self.assertEqual(
             payload["summary"]["method"]["observationWeighting"],
             {
-                "sourceWeights": {"phoenix1": 1, "phoenix2": 2},
+                "sourceWeights": {"phoenix1": 1, "phoenix2": 1},
                 "playerAbility": "per-mode S+FG-equivalent rating from Pumbility ranks 11-30, leave-one-chart-out",
                 "curve": "inverse-square distance decay",
                 "formula": "1 / (1 + (abs(playerAbility - midpoint) / halfWeightDistance)^2)",

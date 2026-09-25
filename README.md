@@ -1,6 +1,6 @@
 # Pumbility Farmer
 
-Pumbility Farmer is a PIU Phoenix scoring-difficulty analyzer and Vercel web UI. Its primary tier list combines normalized Phoenix 1 and Phoenix 2 score evidence against the current Phoenix 2 catalog. Phoenix 1 is a frozen, privacy-safe source captured on August 7, 2026; Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Singles and Doubles rankings are completely independent. Co-op has its own combined 2x-5x analysis because those charts have no official difficulty rating. Published Singles and Doubles analysis starts at level 16, while player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 16.
+Pumbility Farmer is a PIU Phoenix difficulty analyzer and Vercel web UI with Scoring, Clearing, and Pumbility tier lists. Its scoring list combines normalized Phoenix 1 and Phoenix 2 score evidence against the current Phoenix 2 catalog. Phoenix 1 is a frozen, privacy-safe source captured on August 7, 2026; Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Singles and Doubles rankings are completely independent. Co-op has its own combined 2x-5x scoring analysis because those charts have no official difficulty rating. Published Singles and Doubles analysis starts at level 16, while player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 16.
 
 ## Analysis method
 
@@ -70,8 +70,8 @@ observation weight = Phoenix source weight × ability weight
 
 The weight is `1.0` at the midpoint, `0.5` one level away, `0.2` two levels
 away, and remains positive while approaching zero for increasingly distant
-players. Phoenix 1 retains source weight `1`; Phoenix 2 retains source weight
-`2`. Adjacent-folder What-if estimates recalculate the same curve against the
+players. Phoenix 1 and Phoenix 2 both use source weight `1` in the tier lists.
+Adjacent-folder What-if estimates recalculate the same curve against the
 hypothetical folder midpoint.
 
 A negative value is easier to score than the typical chart in the same mode and official level. Continuous estimates are not hard-clamped to the official folder, but the `L + 0.5` center and evidence shrinkage mean that an estimate below `L` requires an unusually strong within-folder signal.
@@ -85,6 +85,47 @@ below and one level above the chart, with level 16 as the minimum. These are cha
 they do not rerank or regroup the tier list.
 
 The analyzer does not use the chart catalog's existing `scoringLevel` or an existing tier list.
+
+### Clearing and Pumbility tier difficulty
+
+The Clearing list uses every available unique player with a nonbroken record for a chart
+in either Phoenix source and a usable mode-specific `scoringRating`. A player contributes
+once even when both sources contain a clear. Clear membership includes zero-Pumbility
+records when the player has a skill rating from other history, and is independent of
+the scoring analysis's player minimums and contribution windows.
+
+Skill follows the existing recommendation calculation: the top 20 Phoenix 2 Pumbility
+scores when available, otherwise 20 normalized Phoenix 1 scores, otherwise the available
+Phoenix 2 scores. Singles and Doubles use separate ratings and include sub-16 history.
+Players without a usable rating are counted in coverage but cannot enter the average.
+
+For each chart, calculate linear-interpolated 25th- and 50th-percentile skill cutoffs.
+Average the actual player ratings between those cutoffs, including all boundary ties.
+If no ratings lie in the interval, the chart is Unrated. Center those averages within
+each exact mode/official-level folder:
+
+```text
+clearing difficulty = official level + 0.5
+                      + chart's selected-player mean skill
+                      - median chart mean skill in the folder
+pumbility difficulty = (scoring difficulty + clearing difficulty) / 2
+```
+
+The median clearing estimate for S20 is 20.5 before display truncation. Estimates are
+not confined to the official folder: an S20 can be 19.2. Pumbility uses the unrounded
+component estimates and is Unrated if either component is missing. It is not recentered.
+
+Clearing evidence is Published with at least 10 selected players, Provisional with
+5–9, Insufficient with 1–4, and Unrated without an estimate. The existing limited-data
+warning remains separate: it appears below 20 selected players, or when either
+component has limited support in Pumbility. Details display each component's support.
+These lists describe the observed successful-player population, not pass probability.
+
+Select the metric on `/tier-list`, or link directly using
+`/tier-list?metric=clearing&mode=singles` or `metric=pumbility`. The two new metrics support
+Singles and Doubles; Co-op remains available under Scoring. Official labels and filters
+retain the chart's official level. Confidence intervals and What-if remain Scoring-only.
+Normal aggregate refresh regenerates all three lists together from the private snapshots.
 
 ### Co-op tier difficulty
 

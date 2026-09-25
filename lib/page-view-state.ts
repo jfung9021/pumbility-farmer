@@ -1,8 +1,9 @@
-import type { ModeKey, RecommendationModeKey } from "./types";
+import type { ModeKey, RecommendationModeKey, TierMetricKey } from "./types";
 
 export type RecommendationView = "recommendations" | "top50";
 
 export const DEFAULT_TIER_MODE: ModeKey = "singles";
+export const DEFAULT_TIER_METRIC: TierMetricKey = "scoring";
 export const DEFAULT_RECOMMENDATION_MODE: RecommendationModeKey = "overall";
 export const DEFAULT_RECOMMENDATION_VIEW: RecommendationView = "recommendations";
 
@@ -11,6 +12,11 @@ export function tierModeFromSearchParams(params: URLSearchParams): ModeKey {
   return mode === "singles" || mode === "doubles" || mode === "coop"
     ? mode
     : DEFAULT_TIER_MODE;
+}
+
+export function tierMetricFromSearchParams(params: URLSearchParams): TierMetricKey {
+  const metric = params.get("metric");
+  return metric === "clearing" || metric === "pumbility" ? metric : DEFAULT_TIER_METRIC;
 }
 
 export function recommendationModeFromSearchParams(

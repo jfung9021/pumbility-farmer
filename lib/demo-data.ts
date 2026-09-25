@@ -126,6 +126,83 @@ function makeChart(mode: StandardModeKey, row: [string, number, number | null, n
   };
 }
 
+function withDemoTierMetrics(charts: ChartResult[]): ChartResult[] {
+  const result = charts.map((chart, index): ChartResult => {
+    // Include one unrated clear sample and sparse evidence alongside measured charts.
+    const selectedCount = index === charts.length - 1 ? 0 : index === 0 ? 3 : index === 2 ? 7 : 20 + index;
+    const meanSkill = selectedCount === 0 ? null
+      : chart.difficulty === "S20" ? (chart.songName === "Vector" ? 19.7 : 22.3)
+      : chart.level + 0.5 + (index % 4 - 1.5) * 0.8;
+    const evidenceStatus = selectedCount === 0 ? "Unrated" : selectedCount < 5 ? "Insufficient" : selectedCount < 10 ? "Provisional" : "Published";
+    const emptyMetric = {
+      estimatedDifficulty: null,
+      difficultyDelta: null,
+      levelRank: null,
+      levelComparisonCharts: null,
+      effectBandRank: null,
+      effectBand: null,
+    };
+    return {
+      ...chart,
+      tierMetrics: {
+        clearing: {
+          ...emptyMetric,
+          evidenceStatus,
+          clearCount: selectedCount * 4 + 3,
+          ratedClearCount: selectedCount * 4,
+          missingSkillCount: 3,
+          selectedCount,
+          q25Skill: meanSkill === null ? null : meanSkill - 0.15,
+          q50Skill: meanSkill === null ? null : meanSkill + 0.15,
+          meanSkill,
+          folderReferenceSkill: null,
+        },
+        pumbility: {
+          ...emptyMetric,
+          evidenceStatus,
+          scoringSupportCount: chart.nContributors,
+          clearingSupportCount: selectedCount,
+        },
+      },
+    };
+  });
+  for (const level of new Set(result.map((chart) => chart.level))) {
+    const folder = result.filter((chart) => chart.level === level);
+    const means = folder.flatMap((chart) => chart.tierMetrics!.clearing.meanSkill ?? []).sort((a, b) => a - b);
+    const middle = Math.floor(means.length / 2);
+    const reference = means.length === 0 ? null : means.length % 2 ? means[middle] : (means[middle - 1] + means[middle]) / 2;
+    for (const chart of folder) {
+      const { clearing, pumbility } = chart.tierMetrics!;
+      clearing.folderReferenceSkill = reference;
+      if (clearing.meanSkill !== null && reference !== null) {
+        clearing.estimatedDifficulty = chart.level + 0.5 + clearing.meanSkill - reference;
+        clearing.difficultyDelta = clearing.estimatedDifficulty - (chart.level + 0.5);
+        const band = effectBand(clearing.difficultyDelta);
+        clearing.effectBand = band?.name ?? null;
+        clearing.effectBandRank = band?.rank ?? null;
+      }
+      if (chart.estimatedDifficulty !== null && clearing.estimatedDifficulty !== null) {
+        pumbility.estimatedDifficulty = (chart.estimatedDifficulty + clearing.estimatedDifficulty) / 2;
+        pumbility.difficultyDelta = pumbility.estimatedDifficulty - (chart.level + 0.5);
+        const band = effectBand(pumbility.difficultyDelta);
+        pumbility.effectBand = band?.name ?? null;
+        pumbility.effectBandRank = band?.rank ?? null;
+      } else {
+        pumbility.evidenceStatus = "Unrated";
+      }
+    }
+    for (const key of ["clearing", "pumbility"] as const) {
+      const measured = folder.filter((chart) => chart.tierMetrics![key].estimatedDifficulty !== null)
+        .sort((left, right) => left.tierMetrics![key].estimatedDifficulty! - right.tierMetrics![key].estimatedDifficulty!);
+      measured.forEach((chart, index) => {
+        chart.tierMetrics![key].levelRank = index + 1;
+        chart.tierMetrics![key].levelComparisonCharts = measured.length;
+      });
+    }
+  }
+  return result;
+}
+
 export const demoPayload: AnalysisPayload = {
   generatedAtUtc: "2026-08-07T04:20:00Z",
   mix: { key: "phoenix2", apiValue: "Phoenix2", label: "Phoenix 2" },
@@ -164,8 +241,8 @@ export const demoPayload: AnalysisPayload = {
       },
     },
   },
-  singles: demoRows.singles.map((row, index) => makeChart("singles", row, index)),
-  doubles: demoRows.doubles.map((row, index) => makeChart("doubles", row, index)),
+  singles: withDemoTierMetrics(demoRows.singles.map((row, index) => makeChart("singles", row, index))),
+  doubles: withDemoTierMetrics(demoRows.doubles.map((row, index) => makeChart("doubles", row, index))),
   relativeGroups: groupNames.map((name, index) => ({ rank: index + 1, name })),
   effectBands: effectBands.map((band) => ({ ...band })),
 };

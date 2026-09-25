@@ -3,6 +3,33 @@ import type { CombinedMixInfo, MixInfo, MixKey } from "./mixes";
 export type ModeKey = "singles" | "doubles" | "coop";
 export type RecommendationModeKey = "overall" | ModeKey;
 export type EvidenceStatus = "Published" | "Provisional" | "Insufficient" | "Unrated";
+export type TierMetricKey = "scoring" | "clearing" | "pumbility";
+
+export interface TierMetricResult {
+  estimatedDifficulty: number | null;
+  difficultyDelta: number | null;
+  levelRank: number | null;
+  levelComparisonCharts: number | null;
+  effectBandRank: number | null;
+  effectBand: string | null;
+  evidenceStatus: EvidenceStatus;
+}
+
+export interface ClearingTierMetric extends TierMetricResult {
+  clearCount: number;
+  ratedClearCount: number;
+  missingSkillCount: number;
+  selectedCount: number;
+  q25Skill: number | null;
+  q50Skill: number | null;
+  meanSkill: number | null;
+  folderReferenceSkill: number | null;
+}
+
+export interface PumbilityTierMetric extends TierMetricResult {
+  scoringSupportCount: number;
+  clearingSupportCount: number;
+}
 
 export interface ChartRerate {
   from: string;
@@ -34,6 +61,10 @@ export interface ChartResult {
   bpmMin?: number | null;
   bpmMax?: number | null;
   estimatedDifficulty: number | null;
+  tierMetrics?: {
+    clearing: ClearingTierMetric;
+    pumbility: PumbilityTierMetric;
+  };
   difficultyModelContinuous?: number | null;
   difficultyModelSignal?: number | null;
   difficultyModelSupportCount?: number | null;
