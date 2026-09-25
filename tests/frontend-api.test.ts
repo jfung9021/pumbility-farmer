@@ -18,6 +18,7 @@ import {
 } from "../lib/format-difficulty.ts";
 import {
   LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION,
+  LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION,
   LocalAnalysisNotFoundError,
   LocalAnalysisValidationError,
   localAnalysisEnabled,
@@ -33,6 +34,7 @@ import {
 } from "../lib/page-view-state.ts";
 import {
   clearingPercentileRange,
+  clearingSkillPercentile,
   estimatedTierGroups,
   hasLimitedTierData,
   selectedTierMetric,
@@ -42,6 +44,7 @@ import {
   tierSupportLabel,
 } from "../lib/tier-metrics.ts";
 import { pumbilityProgress } from "../lib/pumbility-progress.ts";
+import { playerSkillDisplay } from "../lib/player-skill-display.ts";
 import {
   recommendationDifficultyOptions,
   recommendationOfficialLevelRange,
@@ -66,7 +69,7 @@ import {
   applyPhoenix1Rerates,
   type Phoenix1ReratePayload,
 } from "../lib/phoenix1-rerates.ts";
-import type { AnalysisPayload, ChartResult, RecommendationChartEstimate } from "../lib/types.ts";
+import type { AnalysisPayload, ChartResult, RecommendationChartEstimate, RecommendationModeResult } from "../lib/types.ts";
 import {
   LocalRecommendationsValidationError,
   recommendationPlayerList,
@@ -293,6 +296,23 @@ test("new tier evidence warnings use selected clearers and each composite suppor
 
 test("clearing percentile labels follow current and legacy payloads including unrated charts", () => {
   const current = demoPayloads.phoenix2.singles[0].tierMetrics!.clearing;
+  const point = structuredClone(current);
+  delete point.q50Skill;
+  point.q10Skill = 20.1;
+  assert.deepEqual(clearingSkillPercentile(point), { label: "10th", value: 20.1 });
+  assert.equal(clearingPercentileRange(point), null);
+  assert.deepEqual(clearingSkillPercentile({ ...point, q10Skill: null }), { label: "10th", value: null });
+  assert.equal(clearingPercentileRange({ ...point, q10Skill: null }), null);
+  assert.equal(clearingSkillPercentile(current), null);
+  assert.deepEqual(clearingSkillPercentile({ ...current, q20Skill: 20.2 }), { label: "20th", value: 20.2 });
+  assert.equal(clearingPercentileRange({ ...current, q20Skill: 20.2 }), null);
+  assert.equal(clearingPercentileRange({ ...current, q20Skill: null }), null);
+  assert.deepEqual(clearingPercentileRange({ ...current, q0Skill: 0 }), {
+    label: "0th–50th", lower: 0, upper: current.q50Skill,
+  });
+  assert.deepEqual(clearingPercentileRange({ ...current, q0Skill: null, q50Skill: null }), {
+    label: "0th–50th", lower: null, upper: null,
+  });
   assert.deepEqual(clearingPercentileRange(current), {
     label: "10th–50th", lower: current.q10Skill, upper: current.q50Skill,
   });
@@ -313,6 +333,22 @@ test("clearing percentile labels follow current and legacy payloads including un
     label: "10th–50th", lower: null, upper: null,
   });
   assert.equal(clearingPercentileRange(undefined), null);
+});
+
+test("point-percentile evidence uses every rated clearer, not one quantile value", () => {
+  const chart: ChartResult = structuredClone(demoPayloads.phoenix2.singles[0]);
+  delete chart.tierMetrics!.clearing.q50Skill;
+  chart.tierMetrics!.clearing.q10Skill = 20.1;
+  chart.tierMetrics!.clearing.selectedCount = 1; // An older field must not override the current sample.
+  chart.tierMetrics!.clearing.ratedClearCount = 20;
+  assert.equal(hasLimitedTierData(chart, "clearing"), false);
+  assert.equal(tierSupportLabel(chart, "clearing"), "20 rated clearers");
+  chart.tierMetrics!.pumbility.scoringSupportCount = 20;
+  chart.tierMetrics!.pumbility.clearingSupportCount = 20;
+  assert.equal(hasLimitedTierData(chart, "pumbility"), false);
+  assert.equal(tierSupportLabel(chart, "pumbility"), "20 scoring contributors and 20 rated clearers");
+  chart.tierMetrics!.clearing.ratedClearCount = 19;
+  assert.equal(hasLimitedTierData(chart, "clearing"), true);
 });
 
 test("tier demo calibrates final folder medians and supports cross-level estimates and missing components", () => {
@@ -692,17 +728,81 @@ test("local recommendation mode projection preserves the envelope and returns on
     charts: [],
     players: [],
   }, 20);
+  Object.assign(response.player.modes.singles!, {
+    clearingRating: 21.5,
+    clearingSkill: {
+      methodVersion: 2,
+      difficultyBasis: "current-official-level",
+      ranks: [1, 50],
+      requiredClearCount: 50,
+      uniqueClearCount: 50,
+      selectedCount: 50,
+      status: "rated",
+    },
+  });
   const selected = recommendationsForMode(response, "singles");
 
   assert.equal(selected.generatedAtUtc, response.generatedAtUtc);
   assert.equal(selected.method, response.method);
   assert.deepEqual(Object.keys(selected.player.modes), ["singles"]);
   assert.deepEqual(selected.player.modes.singles, response.player.modes.singles);
+  assert.equal(selected.player.modes.singles?.clearingRating, 21.5);
+  assert.equal(selected.player.modes.singles?.clearingSkill?.uniqueClearCount, 50);
+});
+
+test("player skill display keeps scoring and clearing availability independent", () => {
+  const mode: RecommendationModeResult = {
+    eligible: false,
+    validScoreCount: 0,
+    topScores: [],
+    topRecommendations: [],
+    clearingRating: 21.5,
+    clearingSkill: {
+      methodVersion: 2,
+      difficultyBasis: "current-official-level",
+      ranks: [1, 50],
+      requiredClearCount: 50,
+      uniqueClearCount: 50,
+      selectedCount: 50,
+      status: "rated",
+    },
+  };
+  assert.equal(playerSkillDisplay("singles", mode).scoring.value, "Unavailable");
+  assert.equal(playerSkillDisplay("singles", mode).clearing.value, "S21.50");
+  assert.match(playerSkillDisplay("singles", mode).clearing.description, /top 50 clears/);
+  const previousMethod = JSON.parse(JSON.stringify(mode)) as RecommendationModeResult;
+  Object.assign(previousMethod.clearingSkill!, { methodVersion: 1, ranks: [11, 30] });
+  assert.equal(playerSkillDisplay("singles", previousMethod).clearing.value, "Not yet calculated");
+  const scoringOnly = {
+    ...mode,
+    eligible: true,
+    scoringRating: 23.1,
+    clearingRating: null,
+    clearingSkill: { ...mode.clearingSkill!, uniqueClearCount: 49, selectedCount: 0 as const, status: "insufficient-clears" as const },
+  };
+  assert.equal(playerSkillDisplay("doubles", scoringOnly).scoring.value, "D23.10");
+  assert.equal(playerSkillDisplay("doubles", scoringOnly).clearing.value, "Unavailable");
+  assert.equal(playerSkillDisplay("doubles", scoringOnly).clearing.description, "49/50 unique clears; 1 more needed.");
+});
+
+test("player skill display distinguishes old payloads and manual inputs from insufficient clears", () => {
+  const mode: RecommendationModeResult = {
+    eligible: true,
+    validScoreCount: 0,
+    scoringRating: 22,
+    topScores: [],
+    topRecommendations: [],
+  };
+  assert.equal(playerSkillDisplay("singles", mode).clearing.value, "Not yet calculated");
+  const manual = playerSkillDisplay("singles", mode, true);
+  assert.equal(manual.scoring.value, "S22.00");
+  assert.equal(manual.clearing.value, "Unavailable");
+  assert.match(manual.clearing.description, /clear history is required/);
 });
 
 test("local recommendations reject stale schemas before rendering", () => {
   const payload = {
-    schemaVersion: 20,
+    schemaVersion: 27,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: [],
@@ -712,7 +812,7 @@ test("local recommendations reject stale schemas before rendering", () => {
   assert.throws(
     () => validateLocalRecommendationIndex(payload),
     (error: unknown) => error instanceof LocalRecommendationsValidationError
-      && /Regenerate schema 26 recommendations/.test(error.message),
+      && /Regenerate schema 28 recommendations/.test(error.message),
   );
 });
 
@@ -745,7 +845,7 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
   };
   const { pumbility: _pumbility, ...topScoreWithoutPumbility } = topScore;
   const payload = {
-    schemaVersion: 26,
+    schemaVersion: 28,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: [],
@@ -769,11 +869,11 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
     }],
   };
 
-  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 26);
+  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 28);
   for (const exactScore of [0, 1_000_000]) {
     const boundaryPayload = structuredClone(payload);
     boundaryPayload.players[0].modes.singles.topScores[0].score = exactScore;
-    assert.equal(validateLocalRecommendationIndex(boundaryPayload).schemaVersion, 26);
+    assert.equal(validateLocalRecommendationIndex(boundaryPayload).schemaVersion, 28);
   }
   const privatePayload = structuredClone(payload);
   Object.assign(privatePayload.players[0].modes.singles.topScores[0], { rawScore: 1_000_000 });
@@ -975,8 +1075,15 @@ test("tier list chart details provide local mode-specific what-if estimates", as
   assert.match(demo, /const minimumLevel = Math\.max\(16, level - 1\);/);
   assert.match(demo, /level \+ 1 - minimumLevel \+ 1/);
   assert.match(demo, /\.filter\(\(targetLevel\) => targetLevel !== level\)/);
-  assert.match(chartDetails, /metric === "scoring" \? <WhatIfDifficulty chart=\{chart\} \/> : null/);
+  assert.match(chartDetails, /metric === "scoring" && !profileScoring \? <WhatIfDifficulty chart=\{chart\} \/> : null/);
   assert.match(chartDetails, /metric === "scoring" && chart\.difficultyCi95Low/);
+  assert.match(types, /scoringDifficultyScale\?: number \| null;/);
+  assert.match(chartDetails, /Applied folder scale: <b>\{chart\.scoringDifficultyScale\.toFixed\(2\)\}/);
+  assert.match(chartDetails, /selected folder scale held fixed; scale-selection uncertainty is excluded/);
+  assert.match(page, /calibration === "folder-scaled-score-profile"/);
+  assert.match(page, /Each mode and official level has its own spread scale/);
+  assert.match(page, /soft penalty beyond ten, no minimum quota, and no hard cap/);
+  assert.doesNotMatch(page, /at most three two-grade moves|profileScoringMethod\?\.difficultyDeltaScale/);
 
   assert.match(css, /\.chart-card \{[^}]*grid-template-columns: 58px minmax\(0, 1fr\) 104px;[^}]*min-height: 86px;[^}]*padding: 13px 18px;/);
   assert.match(css, /\.chart-dialog-body \{[^}]*grid-template-columns: 96px minmax\(0, 1fr\);/);
@@ -1636,7 +1743,17 @@ test("accepts the combined tier-list identity", () => {
     schemaVersion: LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     mix: { key: "combined", apiValue: "Phoenix+Phoenix2", label: "Phoenix 1 + 2" },
-    summary: { scriptVersion: "test", method: {}, coverage: {}, modes: {} },
+    summary: {
+      scriptVersion: "test",
+      method: {
+        scoring: { version: 1, population: "combined", calibration: "original-residual-centering" },
+        tierMetrics: { version: 10, clearing: { skillMethod: {
+          methodVersion: 2, difficultyBasis: "current-official-level", ranks: [1, 50], requiredClearCount: 50,
+        } } },
+      },
+      coverage: {},
+      modes: {},
+    },
     singles: [],
     doubles: [],
     coop: [],
@@ -1644,6 +1761,83 @@ test("accepts the combined tier-list identity", () => {
     effectBands: [],
   };
   assert.equal(validateLocalAnalysisPayload(payload, "combined").mix.key, "combined");
+  const percentile = structuredClone(payload) as unknown as AnalysisPayload;
+  percentile.schemaVersion = LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION;
+  percentile.summary.method.localExperiment = "scoring-profile-level-scales";
+  percentile.summary.method.scoring = {
+    version: 1, population: "combined", calibration: "folder-scaled-score-profile",
+    percentiles: [0.1, 0.25, 0.5, 0.75, 0.9], profileWeights: [1, 1, 1, 1, 2],
+    percentileMethod: "linear interpolation", scoreUnit: 10000,
+    referenceSmoothing: 4, minimumReferencePlayers: 20, minimumReferenceCharts: 5, fullReferenceWeightCharts: 20,
+    folderCenter: "median-profile-match", scaleStep: 0.01, maximumScale: 1,
+    preferredCentralWidth: 1.0, spreadQuantiles: [0.1, 0.9], minimumSpreadCharts: 10,
+    minimumSpreadMedianPlayers: 10, spreadReliabilityCharts: 30, spreadReliabilityPlayers: 20,
+    neighborSmoothing: 0.05, rarityThreshold: 10, rarityPenalty: 0.05,
+  };
+  percentile.summary.method.scoreProfileCalibration = { folderScales: { Single: { "16": 0.25 }, Double: { "26": 0.32 } } };
+  percentile.singles = [{ ...demoPayloads.phoenix2.singles[0], level: 16, scoringDifficultyScale: 0.25 }];
+  percentile.doubles = [{ ...demoPayloads.phoenix2.doubles[0], level: 26, scoringDifficultyScale: 0.32 }];
+  assert.equal(validateLocalAnalysisPayload(percentile, "combined").schemaVersion, LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION);
+  assert.throws(() => validateLocalAnalysisPayload({ ...percentile, schemaVersion: LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION }, "combined"), /incompatible/);
+  const productionProfile = structuredClone(percentile);
+  productionProfile.schemaVersion = LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION;
+  delete productionProfile.summary.method.localExperiment;
+  assert.equal(validateLocalAnalysisPayload(productionProfile, "combined").schemaVersion, LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION);
+  assert.throws(() => validateLocalAnalysisPayload({ ...payload, schemaVersion: LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION }, "combined"), /incompatible/);
+  const wrongProfile = structuredClone(percentile);
+  wrongProfile.summary.method.scoring = { ...(percentile.summary.method.scoring as Record<string, unknown>), percentiles: [0.9] };
+  assert.throws(() => validateLocalAnalysisPayload(wrongProfile, "combined"), /incompatible/);
+  assert.throws(() => validateLocalAnalysisPayload({ ...percentile, schemaVersion: 21 }, "combined"), /unsupported schema/);
+  assert.throws(() => validateLocalAnalysisPayload({ ...percentile, schemaVersion: 22 }, "combined"), /unsupported schema/);
+  assert.throws(() => validateLocalAnalysisPayload({ ...percentile, schemaVersion: 23 }, "combined"), /unsupported schema/);
+  assert.throws(() => validateLocalAnalysisPayload({ ...percentile, schemaVersion: 24 }, "combined"), /unsupported schema/);
+  for (const scale of [-0.01, 1.01, 0.125, Number.NaN]) {
+    const wrongScale = structuredClone(percentile);
+    wrongScale.summary.method.scoreProfileCalibration = { folderScales: { Single: { "16": scale }, Double: { "26": 0.32 } } };
+    assert.throws(() => validateLocalAnalysisPayload(wrongScale, "combined"), /incompatible/);
+  }
+  for (const overrides of [
+    { difficultyDeltaScale: 0.25 }, { maxTwoGradeMoves: 3 }, { preferredCentralWidth: 1.1 },
+    { percentiles: [0.25, 0.5, 0.75] }, { profileWeights: [1, 1, 1, 1, 1] },
+    { profileWeights: [2, 1, 1, 1, 1] },
+    { spreadQuantiles: [0.25, 0.75] }, { rarityThreshold: 3 }, { rarityPenalty: 0.1 },
+    { neighborSmoothing: 0 }, { minimumSpreadCharts: 5 }, { minimumSpreadMedianPlayers: 5 },
+    { spreadReliabilityCharts: 10 }, { spreadReliabilityPlayers: 10 },
+    { calibration: "folder-centered-score-profile" },
+  ]) {
+    const incompatible = structuredClone(percentile);
+    incompatible.summary.method.scoring = { ...(percentile.summary.method.scoring as Record<string, unknown>), ...overrides };
+    assert.throws(() => validateLocalAnalysisPayload(incompatible, "combined"), /incompatible/);
+  }
+  const mismatchedScale = structuredClone(percentile);
+  mismatchedScale.singles[0].scoringDifficultyScale = 0.32;
+  assert.throws(() => validateLocalAnalysisPayload(mismatchedScale, "combined"), /incompatible/);
+  const missingScale = structuredClone(percentile);
+  delete missingScale.summary.method.scoreProfileCalibration;
+  assert.throws(() => validateLocalAnalysisPayload(missingScale, "combined"), /incompatible/);
+  const oldMarker = structuredClone(percentile);
+  oldMarker.summary.method.localExperiment = "scoring-profile-centered";
+  assert.throws(() => validateLocalAnalysisPayload(oldMarker, "combined"), /incompatible/);
+  const unrated = structuredClone(percentile);
+  unrated.singles[0].estimatedDifficulty = null;
+  unrated.singles[0].scoringDifficultyScale = null;
+  assert.equal(validateLocalAnalysisPayload(unrated, "combined").singles[0].scoringDifficultyScale, null);
+  assert.throws(
+    () => validateLocalAnalysisPayload({ ...payload, summary: { ...payload.summary, method: {
+      ...payload.summary.method, scoring: { ...payload.summary.method.scoring, population: "separate-origins" },
+    } } }, "combined"),
+    /combined scoring or clearing-skill method/,
+  );
+  assert.throws(
+    () => validateLocalAnalysisPayload({ ...payload, summary: { ...payload.summary, method: {} } }, "combined"),
+    /combined scoring or clearing-skill method/,
+  );
+  assert.throws(
+    () => validateLocalAnalysisPayload({ ...payload, summary: { ...payload.summary, method: {
+      ...payload.summary.method, tierMetrics: { version: 4 },
+    } } }, "combined"),
+    /combined scoring or clearing-skill method/,
+  );
   assert.throws(
     () => validateLocalAnalysisPayload({ ...payload, schemaVersion: 6 }, "combined"),
     /unsupported schema/,

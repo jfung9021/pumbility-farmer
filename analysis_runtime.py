@@ -28,6 +28,7 @@ from phoenix2_sync import (
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 from pumbility_contract import (
     COMBINED_TIER_SCHEMA_VERSION,
+    MODEL_ARTIFACT_SCHEMA_VERSION,
     PLAYER_REFRESH_STORAGE_SCHEMA_VERSION,
     RECOMMENDATION_SCHEMA_VERSION,
     SCRIPT_VERSION,
@@ -75,7 +76,7 @@ def build_combined_chart_results(*args: Any, **kwargs: Any) -> Any:
 
 
 def build_combined_tier_payload(*args: Any, **kwargs: Any) -> Any:
-    from piu_recommendations import build_combined_tier_payload as implementation
+    from scoring_percentile import build_production_tier_payload as implementation
 
     return implementation(*args, **kwargs)
 
@@ -1910,10 +1911,49 @@ class IncompatibleCombinedTierCheckpointError(ValueError):
     """A stored combined tier must be rebuilt before it can be published."""
 
 
+class IncompatibleRecommendationCheckpointError(ValueError):
+    """A stored recommendation model predates the current private skill inputs."""
+
+
+def _current_recommendation_index(index: Mapping[str, Any]) -> bool:
+    return (
+        index.get("schemaVersion") == RECOMMENDATION_SCHEMA_VERSION
+        and index.get("modelArtifactSchemaVersion") == MODEL_ARTIFACT_SCHEMA_VERSION
+    )
+
+
+def _current_recommendation_model(model: Mapping[str, Any]) -> bool:
+    return (
+        model.get("artifactSchemaVersion") == MODEL_ARTIFACT_SCHEMA_VERSION
+        and model.get("recommendationSchemaVersion") == RECOMMENDATION_SCHEMA_VERSION
+    )
+
+
 def _validate_checkpoint_combined_tier(payload: Mapping[str, Any]) -> None:
     if payload.get("schemaVersion") != COMBINED_TIER_SCHEMA_VERSION:
         raise IncompatibleCombinedTierCheckpointError(
             "The combined tier checkpoint uses an incompatible schema; "
+            "a fresh analysis generation is required."
+        )
+
+    from pumbility_contract import scoring_tier_method_identity
+    from player_skill_ratings import clearing_skill_method
+    from tier_difficulty import TIER_METRIC_VERSION, CLEARING_DIFFICULTY_DELTA_SCALE, CLEARING_SKILL_PERCENTILE
+
+    method = payload.get("summary", {}).get("method", {})
+    tier_method = method.get("tierMetrics", {})
+    if (
+        any(method.get("scoring", {}).get(key) != value
+            for key, value in scoring_tier_method_identity().items())
+        or "localExperiment" in method
+        or "scoringCohorts" in method
+        or tier_method.get("version") != TIER_METRIC_VERSION
+        or tier_method.get("clearing", {}).get("skillMethod") != clearing_skill_method()
+        or tier_method.get("clearing", {}).get("percentile") != CLEARING_SKILL_PERCENTILE
+        or tier_method.get("clearing", {}).get("difficultyDeltaScale") != CLEARING_DIFFICULTY_DELTA_SCALE
+    ):
+        raise IncompatibleCombinedTierCheckpointError(
+            "The combined tier checkpoint uses an incompatible scoring or clearing skill method; "
             "a fresh analysis generation is required."
         )
 
@@ -2185,6 +2225,8 @@ def _recover_published_model_checkpoint(
     index = blobs.get_json(recommendation_index_path(generation))
     if index is None:
         return None
+    if not _current_recommendation_index(index):
+        return None
     generated_at = payload.get("generatedAtUtc")
     raw_shard_count = index.get("inputShardCount")
     if (
@@ -2198,6 +2240,8 @@ def _recover_published_model_checkpoint(
         raise ValueError("The durable recommendation model commit marker is invalid.")
 
     model = blobs.get_json(recommendation_model_path(generation))
+    if model is not None and not _current_recommendation_model(model):
+        return None
     score_model = blobs.get_bytes(recommendation_score_model_path(generation))
     if (
         model is None
@@ -2227,6 +2271,8 @@ def _recover_published_model_checkpoint(
         combined_tier = build_combined_tier_payload(
             combined_charts,
             combined_metadata,
+            phoenix1_snapshot,
+            snapshot,
             generated_at_utc=generated_at,
         )
         source_hashes, snapshot_hashes, input_sha256 = (
@@ -2290,6 +2336,7 @@ def _recover_published_model_checkpoint(
     }
     metadata = {
         "generationKey": generation,
+        "modelArtifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
         "playerCount": len(index.get("players", [])),
         "phoenix1ShardCount": raw_shard_count,
         "phoenix2ShardCount": raw_shard_count,
@@ -2342,6 +2389,11 @@ def _load_checkpoint_model_artifacts(
         or score_model is None
     ):
         raise RuntimeError("A typed analysis checkpoint model artifact is unavailable.")
+    if not _current_recommendation_index(index) or not _current_recommendation_model(model):
+        raise IncompatibleRecommendationCheckpointError(
+            "The recommendation checkpoint uses an incompatible skill model schema; "
+            "rebuild it from stored snapshots."
+        )
     raw_index_shard_count = index.get("inputShardCount")
     if (
         raw_index_shard_count != phoenix1_count
@@ -2392,6 +2444,11 @@ def _load_checkpoint_recommendation_index(
     index = blobs.get_json(recommendation_index_path(generation))
     if index is None:
         raise RuntimeError("A typed analysis checkpoint recommendation index is unavailable.")
+    if not _current_recommendation_index(index):
+        raise IncompatibleRecommendationCheckpointError(
+            "The recommendation checkpoint uses an incompatible skill model schema; "
+            "rebuild it from stored snapshots."
+        )
     if (
         index.get("generationKey") != generation
         or index.get("inputShardCount") != phoenix1_count
@@ -2591,12 +2648,10 @@ def _build_combined_analysis_checkpoint(
         build_combined_chart_results(
             phoenix1_snapshot,
             snapshot,
-            consume_phoenix1_snapshot=True,
         )
     )
     combined_tier = build_combined_tier_payload(
-        combined_charts,
-        combined_metadata,
+        combined_charts, combined_metadata, phoenix1_snapshot, snapshot,
         generated_at_utc=payload.get("generatedAtUtc"),
     )
     reference = _write_typed_checkpoint_combined(
@@ -2611,7 +2666,7 @@ def _build_combined_analysis_checkpoint(
         snapshot_hashes=snapshot_hashes,
         input_sha256=input_sha256,
     )
-    del combined_charts, combined_tier, combined_metadata
+    del combined_charts, combined_tier, combined_metadata, phoenix1_snapshot
     gc.collect()
     _pulse_job_lease(lease_heartbeat)
     return reference
@@ -2669,8 +2724,7 @@ def _build_analysis_model_artifacts(
             build_combined_chart_results(phoenix1_snapshot, snapshot)
         )
         combined_tier_payload = build_combined_tier_payload(
-            combined_charts,
-            combined_metadata,
+            combined_charts, combined_metadata, phoenix1_snapshot, snapshot,
             generated_at_utc=payload.get("generatedAtUtc"),
         )
     else:
@@ -2727,6 +2781,7 @@ def _build_analysis_model_artifacts(
     artifact_sections = artifact_manifest["sections"]
     recommendation_model_metadata = {
         "generationKey": recommendation_generation,
+        "modelArtifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
         "playerCount": len(recommendation_payload.get("players", [])),
         "phoenix1ShardCount": len(recommendation_phoenix1_shards),
         "phoenix2ShardCount": len(recommendation_phoenix2_shards),
@@ -4061,7 +4116,10 @@ def execute_analysis_job(
         )
         return completed
     except Exception as exc:
-        if isinstance(exc, IncompatibleCombinedTierCheckpointError):
+        if isinstance(exc, (
+            IncompatibleCombinedTierCheckpointError,
+            IncompatibleRecommendationCheckpointError,
+        )):
             # The next refresh must create a new generation instead of resuming
             # an old publish-ready checkpoint. Its private inputs remain intact
             # for the existing retry and abandoned-shard cleanup paths.

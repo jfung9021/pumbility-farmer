@@ -45,6 +45,9 @@ from analysis_runtime import (
     _load_typed_checkpoint_combined,
     _load_typed_checkpoint_shard,
     _load_checkpoint_model_artifacts,
+    _load_checkpoint_recommendation_index,
+    _recover_published_model_checkpoint,
+    _validate_checkpoint_combined_tier,
     _write_typed_checkpoint_combined,
     _write_typed_frame_shards,
     cleanup_abandoned_staging,
@@ -88,6 +91,7 @@ from piu_recommendations import (
     recommendation_shard_path,
 )
 from pumbility_contract import (
+    MODEL_ARTIFACT_SCHEMA_VERSION,
     COMBINED_TIER_SCHEMA_VERSION,
     recommendation_generation_key,
     recommendation_model_path,
@@ -1292,6 +1296,7 @@ def _recommendation_model_artifacts_fixture(
     return (
         {
             "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            "modelArtifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
             "storageSchemaVersion": 3,
             "refreshSupported": True,
             "generationKey": generation_key,
@@ -1300,7 +1305,12 @@ def _recommendation_model_artifacts_fixture(
             "inputShardCount": 0,
             "players": [],
         },
-        {"generationKey": generation_key, "generatedAtUtc": generated_at_utc},
+        {
+            "generationKey": generation_key,
+            "generatedAtUtc": generated_at_utc,
+            "artifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
+            "recommendationSchemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+        },
         b"model",
         [],
         [],
@@ -1308,7 +1318,11 @@ def _recommendation_model_artifacts_fixture(
 
 
 def _combined_tier_payload_fixture(*_args, generated_at_utc: str, **_kwargs):
+    from pumbility_contract import scoring_tier_method_identity
+    from tier_difficulty import tier_metric_method
+
     return {
+        "summary": {"method": {"scoring": scoring_tier_method_identity(), "tierMetrics": tier_metric_method({})}},
         "schemaVersion": COMBINED_TIER_SCHEMA_VERSION,
         "generatedAtUtc": generated_at_utc,
         "singles": [{
@@ -1316,10 +1330,9 @@ def _combined_tier_payload_fixture(*_args, generated_at_utc: str, **_kwargs):
             "tierMetrics": {
                 "clearing": {
                     "estimatedDifficulty": 19.2,
-                    "selectedCount": 4,
+                    "ratedClearCount": 4,
                     "folderReferenceSkill": 20.0,
-                    "q10Skill": 19.1,
-                    "q50Skill": 19.7,
+                    "q10Skill": 19.2,
                 },
                 "pumbility": {"estimatedDifficulty": None},
             },
@@ -1341,6 +1354,100 @@ def _recommendation_mode_artifact_fixture(
 
 
 class WorkerTests(unittest.TestCase):
+    def test_current_tier_schema_rejects_old_scoring_or_clearing_method(self) -> None:
+        for changed_method in ("scoring", "clearing", "weights", "clearingScale", "localExperiment"):
+            with self.subTest(method=changed_method):
+                payload = _combined_tier_payload_fixture(generated_at_utc=isoformat_utc(NOW))
+                method = payload["summary"]["method"]
+                if changed_method == "scoring":
+                    method["scoring"]["population"] = "separated"
+                elif changed_method == "clearing":
+                    method["tierMetrics"]["clearing"]["skillMethod"]["requiredClearCount"] = 40
+                elif changed_method == "weights":
+                    method["scoring"]["profileWeights"] = [1, 1, 1, 1, 1]
+                elif changed_method == "clearingScale":
+                    method["tierMetrics"]["clearing"]["difficultyDeltaScale"] = .65
+                else:
+                    method["localExperiment"] = "scoring-profile-level-scales"
+                with self.assertRaisesRegex(ValueError, "incompatible scoring or clearing"):
+                    _validate_checkpoint_combined_tier(payload)
+
+    def test_model_recovery_skips_incompatible_committed_generations(self) -> None:
+        from pumbility_contract import recommendation_index_path, recommendation_model_path
+
+        job_id = "obsolete-model-recovery"
+        generation = recommendation_generation_key(job_id)
+        generated_at = isoformat_utc(NOW)
+        for stale_artifact in ("index", "model"):
+            with self.subTest(artifact=stale_artifact):
+                blobs = MemoryBlobStore()
+                index = {
+                    "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+                    "modelArtifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
+                    "generationKey": generation,
+                    "modelGeneratedAtUtc": generated_at,
+                    "modelPath": recommendation_model_path(generation),
+                    "inputShardCount": 0,
+                }
+                model = {
+                    "artifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
+                    "recommendationSchemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+                    "generationKey": generation,
+                    "generatedAtUtc": generated_at,
+                }
+                if stale_artifact == "index":
+                    index["schemaVersion"] -= 1
+                else:
+                    model["artifactSchemaVersion"] -= 1
+                blobs.put_json(recommendation_index_path(generation), index)
+                blobs.put_json(recommendation_model_path(generation), model)
+                # No numeric model, shards, or upstream reads are needed to
+                # discard an obsolete commit marker and rebuild stored inputs.
+                self.assertIsNone(_recover_published_model_checkpoint(
+                    blobs,
+                    job_id=job_id,
+                    snapshot={},
+                    payload={"generatedAtUtc": generated_at},
+                ))
+
+    def test_model_checkpoint_and_final_index_reject_old_contracts(self) -> None:
+        from pumbility_contract import (
+            recommendation_index_path,
+            recommendation_model_path,
+            recommendation_score_model_path,
+        )
+
+        for stale_artifact in ("index", "model"):
+            with self.subTest(artifact=stale_artifact):
+                blobs = MemoryBlobStore()
+                generation = "old-model-checkpoint"
+                index = {
+                    "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+                    "modelArtifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
+                    "generationKey": generation,
+                    "inputShardCount": 0,
+                }
+                model = {
+                    "artifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
+                    "recommendationSchemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+                }
+                if stale_artifact == "index":
+                    index["schemaVersion"] -= 1
+                else:
+                    model["artifactSchemaVersion"] -= 1
+                    index["modelArtifactSchemaVersion"] -= 1
+                metadata = {
+                    "generationKey": generation,
+                    "indexSha256": _canonical_json_sha256(index),
+                }
+                blobs.put_json(recommendation_index_path(generation), index)
+                blobs.put_json(recommendation_model_path(generation), model)
+                blobs.put_bytes(recommendation_score_model_path(generation), b"model", content_type="application/x-npz")
+                with self.assertRaisesRegex(ValueError, "incompatible skill model schema"):
+                    _load_checkpoint_model_artifacts(blobs, metadata)
+                with self.assertRaisesRegex(ValueError, "incompatible skill model schema"):
+                    _load_checkpoint_recommendation_index(blobs, metadata)
+
     def test_recommendation_artifact_publication_bounds_in_flight_writes(self) -> None:
         class RecordingStore(MemoryBlobStore):
             def __init__(self) -> None:
@@ -2093,11 +2200,18 @@ class WorkerTests(unittest.TestCase):
         blobs = RecordingStore()
         generation = "compact-model-resume"
         index = {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            "modelArtifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
             "generationKey": generation,
             "inputShardCount": 1,
             "players": [],
         }
-        model = {"generationKey": generation, "method": {}}
+        model = {
+            "generationKey": generation,
+            "artifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
+            "recommendationSchemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            "method": {},
+        }
         score_model = b"numeric-model"
         blobs.put_json(recommendation_index_path(generation), index)
         blobs.put_json(recommendation_model_path(generation), model)
@@ -2261,8 +2375,12 @@ class WorkerTests(unittest.TestCase):
         model = {
             "generationKey": generation,
             "generatedAtUtc": generated_at,
+            "artifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
+            "recommendationSchemaVersion": RECOMMENDATION_SCHEMA_VERSION,
         }
         index = {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            "modelArtifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
             "generationKey": generation,
             "modelGeneratedAtUtc": generated_at,
             "modelPath": recommendation_model_path(generation),
@@ -2433,6 +2551,7 @@ class WorkerTests(unittest.TestCase):
         model_artifacts = (
             {
                 "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+                "modelArtifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
                 "storageSchemaVersion": 3,
                 "refreshSupported": True,
                 "generationKey": generation,
@@ -2441,7 +2560,11 @@ class WorkerTests(unittest.TestCase):
                 "inputShardCount": 0,
                 "players": [],
             },
-            {"generationKey": generation},
+            {
+                "generationKey": generation,
+                "artifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
+                "recommendationSchemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+            },
             b"model",
             [],
             [],

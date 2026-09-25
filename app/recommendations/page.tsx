@@ -27,6 +27,7 @@ import {
   type RecommendationView,
 } from "../../lib/page-view-state";
 import { pumbilityProgress } from "../../lib/pumbility-progress";
+import { playerSkillDisplay } from "../../lib/player-skill-display";
 import { top50ExportDownloadFilename } from "../../lib/top50-export";
 import {
   ALL_DIFFICULTIES,
@@ -40,6 +41,7 @@ import type {
   PlayerRefreshResponse,
   RecommendationChart,
   RecommendationModeKey,
+  RecommendationModeResult,
   RecommendationPlayerSummary,
   RecommendationPlayersResponse,
   RecommendationScoreProgress,
@@ -114,6 +116,32 @@ function pumbilityLabel(value: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+function SkillStats({
+  modeKey,
+  mode,
+  manual,
+}: {
+  modeKey: StandardModeKey;
+  mode: RecommendationModeResult;
+  manual: boolean;
+}) {
+  const skills = playerSkillDisplay(modeKey, mode, manual);
+  return (
+    <section aria-label={`${modeKey === "singles" ? "Singles" : "Doubles"} skill ratings`} className="player-skill-grid">
+      <article>
+        <span>Scoring skill</span>
+        <strong>{skills.scoring.value}</strong>
+        <p>{skills.scoring.description}</p>
+      </article>
+      <article>
+        <span>Clearing skill</span>
+        <strong>{skills.clearing.value}</strong>
+        <p>{skills.clearing.description}</p>
+      </article>
+    </section>
+  );
 }
 
 function ProgressStat({
@@ -1319,6 +1347,9 @@ export default function RecommendationsPage() {
               id="recommendation-panel"
               role="tabpanel"
             >
+              {mode && (activeMode === "singles" || activeMode === "doubles") ? (
+                <SkillStats modeKey={activeMode} mode={mode} manual={Boolean(playerPayload?.player.manual)} />
+              ) : null}
               {mode && (mode.eligible || recommendationView === "top50") ? (
                 <ProgressStat mode={activeMode} value={modeRating} />
               ) : null}

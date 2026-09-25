@@ -596,6 +596,11 @@ footer b { color: #929b93; }
 .recommendation-mode-tabs button b { align-items: center; border: 1px solid currentColor; border-radius: 4px; display: flex; font-size: 10px; height: 22px; justify-content: center; width: 22px; }
 .recommendation-mode-tabs button span { font-size: 11px; font-weight: 750; white-space: nowrap; }
 .recommendation-mode-tabs button.active { background: rgba(200, 255, 46, 0.11); border-color: rgba(200, 255, 46, 0.22); color: var(--acid); }
+.player-skill-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); margin-bottom: var(--recommendations-stack-gap); }
+.player-skill-grid article { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; min-width: 0; padding: 20px 24px; }
+.player-skill-grid article > span { color: #929b93; font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.player-skill-grid strong { color: var(--acid); display: block; font-size: 24px; letter-spacing: -0.035em; margin: 8px 0; }
+.player-skill-grid p { color: #929b93; font-size: 11px; line-height: 1.6; margin: 0; }
 .pumbility-progress-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px 26px 20px; width: 100%; }
 .pumbility-progress-heading { align-items: start; display: grid; gap: 18px; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 88px; }
 .pumbility-progress-heading.no-emblem { grid-template-columns: minmax(0, 1fr) auto; }

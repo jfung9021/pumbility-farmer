@@ -31,7 +31,6 @@ from piu_recommendations import (  # noqa: E402
     COMBINED_TIER_SCHEMA_VERSION,
     ScoreResponseModel,
     build_combined_chart_results,
-    build_combined_tier_payload,
 )
 from pumbility_store import (  # noqa: E402
     CANONICAL_SNAPSHOT_WRITE_ENV,
@@ -49,6 +48,7 @@ from recommendation_refresh import (  # noqa: E402
     recommendation_phoenix2_shard_path,
     recommendation_score_model_path,
 )
+from scoring_percentile import build_production_tier_payload as build_combined_tier_payload  # noqa: E402
 from scripts.analyze_pumbility_supabase import (  # noqa: E402
     DEFAULT_BOOTSTRAP_SAMPLES,
     AnalysisOutput,
@@ -737,6 +737,8 @@ def _verify_model(
     combined = build_combined_tier_payload(
         combined_charts,
         metadata,
+        inputs["phoenix1"].snapshot,
+        inputs["phoenix2"].snapshot,
         generated_at_utc=combined_generated_at,
     )
     combined = _combined_payload_for_active_generation(

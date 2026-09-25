@@ -211,7 +211,7 @@ const COOP_TOP_SCORE_KEYS = new Set([
 ]);
 const DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL = 16;
 const RECOMMENDATION_UPPER_RADIUS = 1.0;
-const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 26;
+const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 28;
 
 export type LocalRecommendationIndex = {
   schemaVersion?: number;

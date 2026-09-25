@@ -4,40 +4,25 @@ import unittest
 
 import numpy as np
 
-from tier_difficulty import build_tier_metrics, inclusive_percentile_skill, tier_metric_method
+from tier_difficulty import build_tier_metrics, percentile_skill, tier_metric_method
 
 
 class PercentileSkillTests(unittest.TestCase):
-    def test_boundaries_and_all_ties_are_inclusive(self) -> None:
-        result = inclusive_percentile_skill([10, 11, 12, 13, 14])
-        self.assertEqual(result, {
-            "q10Skill": 10.4, "q50Skill": 12.0, "meanSkill": 11.5, "selectedCount": 2,
-        })
-        tied = inclusive_percentile_skill([10, 11, 11, 11, 11, 12, 13, 14])
-        self.assertEqual(tied["selectedCount"], 4)
-        self.assertEqual(tied["meanSkill"], 11)
-        boundaries = inclusive_percentile_skill(list(range(11)))
-        self.assertEqual(boundaries, {
-            "q10Skill": 1.0, "q50Skill": 5.0, "meanSkill": 3.0, "selectedCount": 5,
-        })
+    def test_tenth_percentile_uses_linear_interpolation_and_all_ratings(self) -> None:
+        self.assertEqual(percentile_skill([10, 11, 12, 13, 14]), 10.4)
+        self.assertEqual(percentile_skill(list(range(11))), 1.0)
+        self.assertEqual(percentile_skill([14, 12, 10, 13, 11]), 10.4)
+        self.assertEqual(percentile_skill([10, 11, 11, 11, 11, 12, 13, 14]), 10.7)
 
-    def test_interpolated_cutoffs_do_not_invent_observations(self) -> None:
-        result = inclusive_percentile_skill([10, 20])
-        self.assertEqual(result["q10Skill"], 11)
-        self.assertEqual(result["q50Skill"], 15)
-        self.assertEqual(result["selectedCount"], 0)
-        self.assertIsNone(result["meanSkill"])
-        result = inclusive_percentile_skill([10, 11, 12, 100])
-        self.assertEqual(result["selectedCount"], 1)
-        self.assertEqual(result["meanSkill"], 11)
+    def test_interpolated_percentile_is_a_value_not_a_selected_subset(self) -> None:
+        self.assertEqual(percentile_skill([10, 20]), 11)
+        self.assertEqual(percentile_skill([10, 11, 12, 100]), 10.3)
 
     def test_empty_nonfinite_and_single_player(self) -> None:
         for values in ([], [float("nan"), float("inf")]):
-            result = inclusive_percentile_skill(values)
-            self.assertIsNone(result["q10Skill"])
-            self.assertIsNone(result["meanSkill"])
-            self.assertEqual(result["selectedCount"], 0)
-        self.assertEqual(inclusive_percentile_skill([20])["meanSkill"], 20)
+            self.assertIsNone(percentile_skill(values))
+        self.assertEqual(percentile_skill([20]), 20)
+        self.assertEqual(percentile_skill([10, float("nan"), 20, float("inf")]), 11)
 
 
 class TierMetricTests(unittest.TestCase):
@@ -63,33 +48,34 @@ class TierMetricTests(unittest.TestCase):
             ("Single", 21, 30), ("Single", 21, 32),
         ])
         estimates = [metric["clearing"]["estimatedDifficulty"] for metric in metrics]
-        self.assertAlmostEqual(estimates[0], 19.2)
+        self.assertAlmostEqual(estimates[0], 19.59)
         self.assertAlmostEqual(float(np.median(estimates[:3])), 20.5)
         self.assertAlmostEqual(float(np.median(estimates[3:5])), 20.5)
         self.assertAlmostEqual(float(np.median(estimates[5:])), 21.5)
         self.assertEqual(references, {"S20": 21, "D20": 12, "S21": 31})
         self.assertEqual(metrics[0]["clearing"]["effectBand"], "Overrated")
         # Crossing into S21 still uses S20's reference and preserves the skill order.
-        self.assertAlmostEqual(estimates[2], 21.8)
+        self.assertAlmostEqual(estimates[2], 21.41)
         self.assertEqual(metrics[2]["clearing"]["folderReferenceSkill"], 21)
         self.assertEqual(metrics[2]["clearing"]["levelRank"], 3)
-        self.assertAlmostEqual(metrics[2]["clearing"]["difficultyDelta"], 1.3)
+        self.assertAlmostEqual(metrics[2]["clearing"]["difficultyDelta"], 0.91)
         self.assertEqual(metrics[2]["clearing"]["levelComparisonCharts"], 3)
 
     def test_crossing_boundaries_never_uses_other_folder_references(self) -> None:
-        specs = [("Double", 23, mean) for mean in (21.4, 21.5, 22, 22.5, 22.6)]
+        specs = [("Double", 23, mean) for mean in (21, 21.2, 22, 22.8, 23)]
         _, baseline, _ = self._calculate(specs)
         _, with_neighbors, references = self._calculate(specs + [
             ("Double", 22, 10), ("Double", 24, 40), ("Single", 23, 50),
         ])
         self.assertEqual(with_neighbors[:5], baseline)
-        for metric, expected in zip(baseline, (22.9, 23.0, 23.5, 24.0, 24.1)):
+        for metric, expected in zip(baseline, (22.8, 22.94, 23.5, 24.06, 24.2)):
             self.assertAlmostEqual(metric["clearing"]["estimatedDifficulty"], expected)
             self.assertEqual(metric["clearing"]["folderReferenceSkill"], 22)
             for field in ("initialEstimatedDifficulty", "assessmentLevel", "reassessmentStatus"):
                 self.assertNotIn(field, metric["clearing"])
         method = tier_metric_method(references)
-        self.assertEqual(method["clearing"]["percentiles"], [0.1, 0.5])
+        self.assertEqual(method["clearing"]["percentile"], 0.1)
+        self.assertEqual(method["clearing"]["difficultyDeltaScale"], 0.70)
         self.assertNotIn("reassessment", method["clearing"])
 
     def test_sparse_finite_estimates_are_included_and_missing_skills_counted(self) -> None:
@@ -114,7 +100,7 @@ class TierMetricTests(unittest.TestCase):
         self.assertEqual(list(reversed(reverse_metrics)), metrics)
         incoming = metrics[3]["clearing"]
         self.assertEqual(incoming["folderReferenceSkill"], 22)
-        self.assertAlmostEqual(incoming["estimatedDifficulty"], 22.9)
+        self.assertAlmostEqual(incoming["estimatedDifficulty"], 23.08)
         self.assertEqual(incoming["levelComparisonCharts"], 3)
         self.assertEqual(charts[3]["level"], 23)
         self.assertEqual(references["D22"], 21.5)
@@ -144,6 +130,20 @@ class TierMetricTests(unittest.TestCase):
         charts[0].update(estimatedDifficulty=20, evidenceStatus="Insufficient", nContributors=2)
         metrics, _ = build_tier_metrics(charts, clearers, skills)
         self.assertEqual(metrics[0]["pumbility"]["evidenceStatus"], "Insufficient")
+
+    def test_quantile_evidence_counts_the_full_eligible_population(self) -> None:
+        charts = [{"chartId": "a", "type": "Single", "level": 20, "estimatedDifficulty": 20.5, "evidenceStatus": "Published", "nContributors": 20}]
+        clearers = {"a": {f"p{index}" for index in range(11)}}
+        skills = {(f"p{index}", "Single"): float(index) for index in range(10)}
+        metrics, _ = build_tier_metrics(charts, clearers, skills)
+        clearing = metrics[0]["clearing"]
+        self.assertEqual(clearing["q10Skill"], 0.9)
+        self.assertEqual(clearing["ratedClearCount"], 10)
+        self.assertEqual(clearing["missingSkillCount"], 1)
+        self.assertEqual(clearing["evidenceStatus"], "Published")
+        self.assertEqual(metrics[0]["pumbility"]["clearingSupportCount"], 10)
+        self.assertNotIn("selectedCount", clearing)
+        self.assertNotIn("meanSkill", clearing)
 
 
 if __name__ == "__main__":

@@ -15,13 +15,34 @@ from typing import Any, Mapping
 from phoenix2_sync import parse_utc, utc_now
 
 
-SCRIPT_VERSION = "6.11.0-clearing-10-50-official-folder"
+SCRIPT_VERSION = "6.14.0-weighted-score-profiles-clearing070"
 PHOENIX2_MINIMUM_ANALYSIS_SCORES = 50
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)
-RECOMMENDATION_SCHEMA_VERSION = 26
+RECOMMENDATION_SCHEMA_VERSION = 28
+MODEL_ARTIFACT_SCHEMA_VERSION = 6
 PLAYER_REFRESH_STORAGE_SCHEMA_VERSION = 3
-COMBINED_TIER_SCHEMA_VERSION = 13
+COMBINED_TIER_SCHEMA_VERSION = 26
+
+
+def scoring_method_identity() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "population": "combined",
+        "calibration": "original-residual-centering",
+    }
+
+
+def scoring_tier_method_identity() -> dict[str, Any]:
+    """Public tier identity; player scoring skill and recommendations stay separate."""
+    return {
+        "version": 1,
+        "population": "combined",
+        "calibration": "folder-scaled-score-profile",
+        "percentiles": [0.10, 0.25, 0.50, 0.75, 0.90],
+        "profileWeights": [1, 1, 1, 1, 2],
+        "preferredCentralWidth": 1.0,
+    }
 
 
 def recommendation_blob_path() -> str:

@@ -9,9 +9,14 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from piu_misgrade_analyzer import difficulty_effect_band
+from player_skill_ratings import clearing_skill_method
 
 
-TIER_METRIC_VERSION = 4
+TIER_METRIC_VERSION = 10
+CLEARING_SKILL_PERCENTILE = 0.10
+# User-selected fixed spread scale. The 2026-09-26 cached S/D population has
+# 15 two-grade moves at 0.70; this is not a quota per folder or run.
+CLEARING_DIFFICULTY_DELTA_SCALE = 0.70
 EVIDENCE_ORDER = ("Unrated", "Insufficient", "Provisional", "Published")
 
 
@@ -22,20 +27,13 @@ def _finite(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def inclusive_percentile_skill(ratings: Sequence[float]) -> dict[str, Any]:
-    """Average actual observations inside the inclusive linear 10th–50th interval."""
+def percentile_skill(ratings: Sequence[float]) -> float | None:
+    """Return the linearly interpolated 10th percentile of finite clearing skills."""
     values = np.asarray(ratings, dtype=float)
     values = values[np.isfinite(values)]
     if not len(values):
-        return {"q10Skill": None, "q50Skill": None, "meanSkill": None, "selectedCount": 0}
-    q10, q50 = np.quantile(values, [0.10, 0.50], method="linear")
-    selected = values[(values >= q10) & (values <= q50)]
-    return {
-        "q10Skill": float(q10),
-        "q50Skill": float(q50),
-        "meanSkill": float(selected.mean()) if len(selected) else None,
-        "selectedCount": int(len(selected)),
-    }
+        return None
+    return float(np.quantile(values, CLEARING_SKILL_PERCENTILE, method="linear"))
 
 
 def _empty_metric() -> dict[str, Any]:
@@ -61,7 +59,7 @@ def _set_estimate(metric: dict[str, Any], estimate: float, midpoint: float) -> N
 def build_tier_metrics(
     charts: Sequence[Mapping[str, Any]],
     clearers_by_chart: Mapping[str, set[str]],
-    player_mode_skills: Mapping[tuple[str, str], float],
+    player_mode_clearing_skills: Mapping[tuple[str, str], float],
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
     """Return public aggregates calibrated within each official mode/level folder.
 
@@ -78,14 +76,14 @@ def build_tier_metrics(
         ratings = [
             rating
             for player in sorted(clearers)
-            if (rating := _finite(player_mode_skills.get((player, chart_type)))) is not None
+            if (rating := _finite(player_mode_clearing_skills.get((player, chart_type)))) is not None
         ]
         clearing = {
             **_empty_metric(),
             "clearCount": len(clearers),
             "ratedClearCount": len(ratings),
             "missingSkillCount": len(clearers) - len(ratings),
-            **inclusive_percentile_skill(ratings),
+            "q10Skill": percentile_skill(ratings),
             "folderReferenceSkill": None,
         }
         metrics.append({
@@ -93,7 +91,7 @@ def build_tier_metrics(
             "pumbility": {
                 **_empty_metric(),
                 "scoringSupportCount": int(chart.get("nContributors") or 0),
-                "clearingSupportCount": clearing["selectedCount"],
+                "clearingSupportCount": clearing["ratedClearCount"],
             },
         })
         folders[(chart_type, int(chart["level"]))].append(index)
@@ -102,23 +100,23 @@ def build_tier_metrics(
     for (chart_type, level), indices in folders.items():
         measurable = [
             index for index in indices
-            if metrics[index]["clearing"]["meanSkill"] is not None
+            if metrics[index]["clearing"]["q10Skill"] is not None
         ]
         if not measurable:
             continue
         reference = float(np.median([
-            metrics[index]["clearing"]["meanSkill"] for index in measurable
+            metrics[index]["clearing"]["q10Skill"] for index in measurable
         ]))
         references[f"{'S' if chart_type == 'Single' else 'D'}{level}"] = reference
         midpoint = float(level) + 0.5
         for index in indices:
             clearing = metrics[index]["clearing"]
             clearing["folderReferenceSkill"] = reference
-            if clearing["meanSkill"] is None:
+            if clearing["q10Skill"] is None:
                 continue
-            estimate = midpoint + clearing["meanSkill"] - reference
+            estimate = midpoint + CLEARING_DIFFICULTY_DELTA_SCALE * (clearing["q10Skill"] - reference)
             _set_estimate(clearing, estimate, midpoint)
-            count = clearing["selectedCount"]
+            count = clearing["ratedClearCount"]
             clearing["evidenceStatus"] = (
                 "Published" if count >= 10 else "Provisional" if count >= 5 else "Insufficient"
             )
@@ -151,13 +149,16 @@ def tier_metric_method(folder_references: Mapping[str, float]) -> dict[str, Any]
     return {
         "version": TIER_METRIC_VERSION,
         "clearing": {
-            "skillRating": "current mode-specific scoringRating from top-20 selected-source Pumbility",
+            "skillRating": "current mode-specific clearingRating from official levels of the top 50 unique clears, requiring 50 clears",
+            "skillMethod": clearing_skill_method(),
             "clearPopulation": "unique nonbroken current-catalog clearers across both Phoenix versions",
-            "percentiles": [0.10, 0.50],
-            "percentileMethod": "linear, inclusive boundaries and ties",
-            "calibration": "official level + 0.5 + mean selected skill - official-folder median selected skill",
+            "percentile": CLEARING_SKILL_PERCENTILE,
+            "percentileMethod": "linear interpolation",
+            "calibration": "official level + 0.5 + difficultyDeltaScale * (10th-percentile skill - official-folder median 10th-percentile skill)",
+            "difficultyDeltaScale": CLEARING_DIFFICULTY_DELTA_SCALE,
             "folderReferenceSkills": dict(folder_references),
-            "evidenceMinimumSelected": {"Published": 10, "Provisional": 5, "Insufficient": 1},
+            "supportPopulation": "all unique clearers with a finite clearing skill",
+            "evidenceMinimumRated": {"Published": 10, "Provisional": 5, "Insufficient": 1},
         },
         "pumbility": {
             "calculation": "(scoring difficulty + clearing difficulty) / 2 before rounding",

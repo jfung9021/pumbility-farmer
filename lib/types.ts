@@ -19,13 +19,16 @@ export interface ClearingTierMetric extends TierMetricResult {
   clearCount: number;
   ratedClearCount: number;
   missingSkillCount: number;
-  selectedCount: number;
-  // Older percentile intervals remain readable while refreshed data is generated.
+  selectedCount?: number;
+  // q10Skill is a point percentile when no legacy range endpoint is present.
+  q10Skill?: number | null;
+  // Earlier point percentiles and ranges remain readable with their original labels.
+  q20Skill?: number | null;
+  q0Skill?: number | null;
   q25Skill?: number | null;
   q50Skill?: number | null;
-  q10Skill?: number | null;
   q30Skill?: number | null;
-  meanSkill: number | null;
+  meanSkill?: number | null;
   folderReferenceSkill: number | null;
 }
 
@@ -68,6 +71,14 @@ export interface ChartResult {
     clearing: ClearingTierMetric;
     pumbility: PumbilityTierMetric;
   };
+  scoringScoreProfile?: [number, number, number, number, number] | null;
+  scoringProfileMatchDifficulty?: number | null;
+  scoringFolderReferenceDifficulty?: number | null;
+  scoringDifficultyScale?: number | null;
+  scoringProfileMatchCi95Low?: number | null;
+  scoringProfileMatchCi95High?: number | null;
+  scoringProfileRmse?: number | null;
+  scoringProfileExtrapolated?: boolean;
   difficultyModelContinuous?: number | null;
   difficultyModelSignal?: number | null;
   difficultyModelSupportCount?: number | null;
@@ -278,6 +289,16 @@ export interface RecommendationTopScore {
   plateCode: string | null;
 }
 
+export interface ClearingSkillMetadata {
+  methodVersion: 2;
+  difficultyBasis: "current-official-level";
+  ranks: [1, 50];
+  requiredClearCount: 50;
+  uniqueClearCount: number;
+  selectedCount: 0 | 50;
+  status: "rated" | "insufficient-clears";
+}
+
 export interface RecommendationModeResult {
   eligible: boolean;
   manual?: boolean;
@@ -294,6 +315,8 @@ export interface RecommendationModeResult {
   baselineLabel?: string;
   baselinePumbility?: number | null;
   scoringRating?: number;
+  clearingRating?: number | null;
+  clearingSkill?: ClearingSkillMetadata;
   projectionRating?: number | null;
   projectionRatingSource?: "phoenix1" | "phoenix2" | null;
   projectionRatingSourceScoreCount?: number;

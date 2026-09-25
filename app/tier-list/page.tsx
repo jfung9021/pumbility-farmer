@@ -14,6 +14,7 @@ import {
 import { tierMetricFromSearchParams, tierModeFromSearchParams } from "../../lib/page-view-state";
 import {
   clearingPercentileRange,
+  clearingSkillPercentile,
   estimatedTierGroups,
   hasLimitedTierData,
   selectedTierMetric,
@@ -133,7 +134,9 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
   const selected = selectedTierMetric(chart, metric);
   const delta = selected.difficultyDelta;
   const isCoop = chart.type === "CoOp";
+  const profileScoring = "scoringScoreProfile" in chart;
   const clearing = chart.tierMetrics?.clearing;
+  const pointPercentile = clearingSkillPercentile(clearing);
   const percentileRange = clearingPercentileRange(clearing);
   const pumbility = chart.tierMetrics?.pumbility;
   return (
@@ -161,15 +164,29 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
             <span><b>#{selected.levelRank}</b> of {selected.levelComparisonCharts} in {chart.difficulty}</span>
           ) : null}
         </div>
+        {metric === "scoring" && profileScoring ? (
+          <div className="chart-meta metric-details">
+            {chart.scoringScoreProfile?.map((score, index) => <span key={index}>{[10, 25, 50, 75, 90][index]}th-percentile score: <b>{Math.round(score).toLocaleString()}</b>{index === 4 ? " (double weight)" : ""}</span>)}
+            <span><b>{chart.nContributors}</b> unique successful players, equally weighted</span>
+            {chart.scoringProfileMatchDifficulty != null ? <span>Profile match before calibration: <b>{chart.scoringProfileMatchDifficulty.toFixed(2)}</b></span> : null}
+            {chart.scoringFolderReferenceDifficulty != null ? <span>Folder median match: <b>{chart.scoringFolderReferenceDifficulty.toFixed(2)}</b></span> : null}
+            {chart.scoringDifficultyScale != null ? <span>Applied folder scale: <b>{chart.scoringDifficultyScale.toFixed(2)}</b></span> : null}
+            {chart.scoringProfileRmse != null ? <span title="Weighted root mean squared score difference from the matched reference profile, with double weight on the 90th percentile; a larger gap means a poorer profile match">Profile match error: <b>{Math.round(chart.scoringProfileRmse).toLocaleString()}</b> score points</span> : null}
+            {chart.scoringProfileExtrapolated ? <span>Raw profile match extends beyond the reference range; final difficulty uses folder centering and spread calibration.</span> : null}
+            {chart.nContributors < 20 ? <span>Difficulty interval requires at least 20 players.</span> : null}
+            {chart.estimatedDifficulty == null && chart.scoringScoreProfile ? <span>Insufficient mode reference data to estimate difficulty.</span> : null}
+          </div>
+        ) : null}
         {metric === "clearing" && clearing ? (
           <div className="chart-meta metric-details">
-            <span><b>{clearing.ratedClearCount}/{clearing.clearCount}</b> clearers with usable skill</span>
-            <span><b>{clearing.selectedCount}</b> selected clearers</span>
-            <span><b>{clearing.missingSkillCount}</b> missing skill</span>
+            <span><b>{clearing.ratedClearCount}/{clearing.clearCount}</b> clearers with available clearing skill (50+ unique clears in this mode)</span>
+            {!pointPercentile ? <span><b>{clearing.selectedCount}</b> selected clearers</span> : null}
+            <span><b>{clearing.missingSkillCount}</b> without clearing skill</span>
             {percentileRange?.lower != null && percentileRange.upper != null ? (
               <span>{percentileRange.label} percentile skill: <b>{percentileRange.lower.toFixed(2)}–{percentileRange.upper.toFixed(2)}</b> inclusive</span>
             ) : null}
-            {clearing.meanSkill !== null ? <span>Selected mean skill: <b>{clearing.meanSkill.toFixed(2)}</b></span> : null}
+            {pointPercentile?.value != null ? <span>{pointPercentile.label}-percentile skill: <b>{pointPercentile.value.toFixed(2)}</b></span> : null}
+            {!pointPercentile && clearing.meanSkill != null ? <span>Selected mean skill: <b>{clearing.meanSkill.toFixed(2)}</b></span> : null}
             {clearing.folderReferenceSkill !== null ? <span>Folder reference skill: <b>{clearing.folderReferenceSkill.toFixed(2)}</b></span> : null}
           </div>
         ) : null}
@@ -179,7 +196,7 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
             <span>Clearing: <b>{chartGrade(chart, "clearing")}</b></span>
             <span>Average: <b>{chartGrade(chart, "pumbility")}</b></span>
             <span><b>{pumbility.scoringSupportCount}</b> scoring contributors</span>
-            <span><b>{pumbility.clearingSupportCount}</b> selected clearers</span>
+            <span><b>{pumbility.clearingSupportCount}</b> {pointPercentile ? "rated" : "selected"} clearers</span>
           </div>
         ) : null}
       </div>
@@ -188,9 +205,9 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
           <span>difference</span>
           <strong>{delta === null ? "-" : signed(delta)}</strong>
           {metric === "scoring" && chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null ? (
-            <small>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
+            <small title={profileScoring ? "95% bootstrap interval after calibration, with the mode reference curve, folder center, and selected folder scale held fixed; scale-selection uncertainty is excluded" : undefined}>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
           ) : null}
-          {metric === "scoring" ? <WhatIfDifficulty chart={chart} /> : null}
+          {metric === "scoring" && !profileScoring ? <WhatIfDifficulty chart={chart} /> : null}
         </div>
       )}
     </>
@@ -397,6 +414,8 @@ function EstimatedDifficultySection({ charts, metric, compact, mode, value, onSe
 
 export default function TierListPage() {
   const [payload, setPayload] = useState<AnalysisPayload | null>(null);
+  const phoenix2Only = payload?.summary.method.sourceSelection === "phoenix2-only";
+  const profileScoring = (payload?.summary.method.scoring as { calibration?: string } | undefined)?.calibration === "folder-scaled-score-profile";
   const [activeMode, setActiveMode] = useState<ModeKey>("singles");
   const [activeMetric, setActiveMetric] = useState<TierMetricKey>("scoring");
   const [groupingView, setGroupingView] = useState<GroupingView>("estimated");
@@ -466,7 +485,13 @@ export default function TierListPage() {
   }, []);
 
   const modeCharts = payload?.[activeMode] || [];
-  const clearingMethod = clearingPercentileRange(modeCharts.find((chart) => chart.tierMetrics?.clearing)?.tierMetrics?.clearing);
+  const clearingExample = modeCharts.find((chart) => chart.tierMetrics?.clearing)?.tierMetrics?.clearing;
+  const pointPercentile = clearingSkillPercentile(clearingExample);
+  const clearingMethod = clearingPercentileRange(clearingExample);
+  const tierMethod = payload?.summary.method.tierMetrics as {
+    clearing?: { difficultyDeltaScale?: number };
+  } | undefined;
+  const clearingScale = tierMethod?.clearing?.difficultyDeltaScale ?? 1;
   const metricAvailability = tierMetricAvailability(modeCharts, activeMetric, activeMode);
   const filter = filters[activeMode];
   const levels = useMemo(
@@ -518,6 +543,7 @@ export default function TierListPage() {
 
       <section className="hero page-title-hero" id="top">
         <h1>{metricTitles[activeMetric]}</h1>
+        {phoenix2Only ? <p className="metric-note">Local experiment: Phoenix 2 data only.</p> : null}
         <RefreshMeta
           generatedAtUtc={payload?.generatedAtUtc}
           label="Tier list updated"
@@ -630,6 +656,9 @@ export default function TierListPage() {
           </div>
         </div>
 
+        {groupingView === "tiers" && activeMode !== "coop" ? (
+          <p className="metric-note">Within each band, charts are sorted by estimated difficulty − (official level + 0.5), from smallest difference to largest.</p>
+        ) : null}
         <div className="tiers">
           {groupingView === "tiers" && activeMode !== "coop"
             ? (payload?.effectBands || demoPayload.effectBands).map((group) => (
@@ -672,14 +701,23 @@ export default function TierListPage() {
       </section>
       <footer>
         {activeMetric === "clearing" ? <>
-          <p><b>How clearing estimates work</b> Each chart uses unique successful players from either Phoenix version. We average their current mode-specific skill ratings within the {clearingMethod ? `${clearingMethod.label} percentile interval` : "published percentile interval"}, including both boundaries and ties. Players without a usable skill rating are excluded from that average.</p>
-          <p>The median chart in each official-level folder anchors at level + 0.5. Each skill point above or below the folder reference changes difficulty by one point. Estimates can cross official levels: an S20 can be 19.2. Calibration always uses the chart’s official-level folder. Sparse charts remain visible with evidence and limited-data labels; no selected players means Unrated.</p>
+          <p><b>How clearing estimates work</b> A player's clearing skill is the average current official difficulty of their 50 hardest unique clears. At least 50 unique clears are required separately for Singles and Doubles. Repeat clears and charts cleared in both Phoenix versions count once.</p>
+          <p>Each chart uses unique successful players from {phoenix2Only ? "Phoenix 2 only" : "either Phoenix version"}. {pointPercentile ? `We use the single ${pointPercentile.label}-percentile clearing skill, calculated with linear interpolation across all eligible clearers.` : `We average their clearing skills within the ${clearingMethod ? `${clearingMethod.label} percentile interval` : "published percentile interval"}, including both boundaries and ties.`} Players without available clearing skill (50+ unique clears in this mode) are excluded.</p>
+          <p>The median chart in each official-level folder anchors at level + 0.5. Each skill point above or below the folder reference changes difficulty by {clearingScale} difficulty points. Estimates can cross official levels: an S20 can be 19.2. Calibration always uses the chart’s official-level folder. Sparse charts remain visible with evidence and limited-data labels; no usable estimate means Unrated.</p>
           <p>This estimates clearing difficulty from observed successful players, not pass probability or first-clear ability. Skill ratings can change after the recorded clear.</p>
         </> : activeMetric === "pumbility" ? <>
           <p><b>How Pumbility estimates work</b> Pumbility is the arithmetic average of a chart’s scoring and clearing difficulty. Both components must be available. The average uses full-precision estimates before one-decimal display truncation, so displayed components may average slightly differently.</p>
-          <p>Evidence follows the weaker component. Limited data means fewer than 20 scoring contributors or fewer than 20 selected clearers; these supports are shown separately.</p>
+          <p>Evidence follows the weaker component. Limited data means fewer than 20 scoring contributors or fewer than 20 {pointPercentile ? "rated" : "selected"} clearers; these supports are shown separately.</p>
+        </> : activeMode !== "coop" && profileScoring ? <>
+          <p><b>How scoring estimates work</b> Each chart uses its 10th-, 25th-, 50th-, 75th-, and 90th-percentile scores among observed successful players, with linear interpolation and one equally weighted score per player. Phoenix 1 scores are normalized to the current chart note count; Phoenix 2 replaces overlapping records. Player skill, Pumbility, and top/recent play windows do not weight or select the scoring sample.</p>
+          <p>The five scores are matched against a continuous reference curve, separately for Singles and Doubles. The 90th-percentile squared score difference has double weight; each other percentile has weight one. Final difficulty is official level + 0.5 + folder scale × (profile match − median profile match in the chart's official folder). Each folder's median anchors at level + 0.5. Matching another folder's typical profile does not force a chart to receive that folder's midpoint.</p>
+          <p>Each mode and official level has its own spread scale, shown in chart details. Scales seek useful spreads while staying reasonably close to neighboring levels in the same mode; sparse folders borrow support from those neighbors. Narrow folders aim for about 1.0 grade across their middle 80%, while broader folders can retain wider spreads.</p>
+          <p>Two-grade scoring moves should be rare: roughly 3–10 across Singles and Doubles is a guideline, with a soft penalty beyond ten, no minimum quota, and no hard cap. Limited-data charts count. Both directions count: for an S21, estimates of 23.0 or above and below 20.0 count. Pumbility remains the arithmetic average of scoring and clearing.</p>
+          <p>References use folders with at least five charts having 20+ successful players each. Raw profile matches outside the reference range use linear extension and are marked in chart details before final calibration. Profile match error shows how closely a chart resembles its reference; lower is a closer fit.</p>
+          <p>Limited data means fewer than 20 successful players. Confidence intervals use 1,000 bootstrap samples of the complete score profile, with the same final calibration. The reference curve, folder center, and selected folder scale are held fixed, so scale-selection uncertainty is excluded. Intervals describe the observed best-score population; charts played mainly by strong players can receive lower scoring estimates.</p>
         </> : activeMode !== "coop" ? <>
-          <p><b>How scoring estimates work</b> Scoring difficulty compares player performance within official-level folders using Phoenix 1 and Phoenix 2 observations. Folder ranks, confidence intervals, and official-level What-if estimates describe the scoring model.</p>
+          <p><b>How scoring estimates work</b> Scoring difficulty compares player performance within official-level folders using {phoenix2Only ? "Phoenix 2 observations only" : "Phoenix 1 and Phoenix 2 observations"}. Folder ranks, confidence intervals, and official-level What-if estimates describe the scoring model.</p>
+          <p>Legacy and new Phoenix 2 charts share one scoring model within each mode. Source-specific normalization is preserved, and Phoenix 1 and Phoenix 2 observations have equal weight. Official level + 0.5 is the folder reference before shrinkage; the final median can differ slightly.</p>
           <p>Limited data means fewer than 20 scoring contributors. Select Clearing for difficulty based on the skill of successful players, or Pumbility for the average of both estimates.</p>
         </> : <>
         <p><b>How Co-op estimates work</b> Co-op charts share one 2x-5x tier list. Miss points are adjusted for player strength and Phoenix source using all observations, then a conditional 75th-percentile score is estimated for a median-strength Phoenix 2 player. The conditional quantile provides outlier robustness; raw scores and residuals are not trimmed.</p>

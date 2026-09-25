@@ -4,6 +4,50 @@ Pumbility Farmer is a PIU Phoenix difficulty analyzer and Vercel web UI with Sco
 
 ## Analysis method
 
+### Scoring tiers with level-specific spreads
+
+Run `.venv/Scripts/python.exe scripts/build_local_recommendations.py --tiers-only`
+to rebuild only local tiers from cached Phoenix snapshots. Production refreshes
+use the same model. Each chart uses its linearly interpolated 10th-, 25th-, 50th-, 75th-, and 90th-percentile
+scores, with one equally weighted successful best-score record per player/chart.
+Phoenix 2 has overlap precedence; Phoenix 1 retains note-count normalization.
+No skill baselines, player-history minimums, Pumbility filters, or top/recent windows
+select or adjust these observations.
+
+The five-score profile is matched against a continuous, smoothed reference curve
+independently for Singles and Doubles. Matching uses weighted mean squared score
+differences with weights `1, 1, 1, 1, 2`: the 90th percentile has double weight.
+This raw match is then centered in its own
+official mode/level folder:
+
+```text
+proposal = official level + 0.5
+         + scale[mode, level] * (raw profile match - median raw profile match in that folder)
+```
+
+Each rated folder median is level + 0.5. Scales are selected separately by mode and
+level on the 0.00-1.00 hundredth grid. Supported narrow folders have a soft target
+of 1.00 grade across the central 80% of chart matches; broader baseline spreads
+are retained as larger targets. Neighbor smoothing stabilizes sparse folders.
+A joint dynamic program balances spread, smoothing, and a soft penalty of 0.05
+per two-grade move beyond ten across both modes. Three to ten is a diagnostic
+range: there is no forced minimum and no hard upper limit. A two-grade move is
+proposal >= official level + 2 or < official level - 1 after export, including
+limited-data charts. See [the implementation plan](docs/scoring-profile-level-scales-plan.md)
+and [experiment specification](docs/local-scoring-percentile-experiment.md).
+
+The tier model recalculates Scoring ranks/bands and Pumbility while preserving the
+independent Clearing and Co-op methods. Production tiers use schema 26. Pumbility
+remains the unrounded arithmetic average of scoring and clearing. Recommendation
+projections and player scoring skill keep their existing scoring model.
+`--scoring-profile` (alias `--scoring-percentile`) runs the same tier calculation
+with the schema-25 local diagnostic marker. These local tier commands do not fetch
+upstream data or rebuild recommendations. In production, the protected
+`/api/jonathan/refresh?mode=reanalyze` route rebuilds tiers and the current
+recommendation/clearing-skill artifacts from stored snapshots without fetching scores.
+
+### Regular scoring and recommendation model
+
 Each mode is processed separately:
 
 1. Deduplicate to a player's best score per chart.
@@ -76,6 +120,12 @@ hypothetical folder midpoint.
 
 A negative value is easier to score than the typical chart in the same mode and official level. Continuous estimates are not hard-clamped to the official folder, but the `L + 0.5` center and evidence shrinkage mean that an estimate below `L` requires an unusually strong within-folder signal.
 
+The scoring tier list fits legacy and new Phoenix 2 charts together within each mode.
+Both Phoenix sources retain their existing normalization, overlap precedence, and equal
+weights. Scoring baselines, eligibility, calibration, shrinkage, ranks, and What-if
+references use complete mode histories and official folders. This is the same combined
+scoring estimator used by recommendations; there is no extra final-median adjustment.
+
 The combined Singles/Doubles estimator does not apply the legacy large-folder
 range compression on top of nearby-ability weighting. Its folder range scale is
 always `1.0`; standalone Phoenix analyses retain their existing compression.
@@ -89,27 +139,37 @@ The analyzer does not use the chart catalog's existing `scoringLevel` or an exis
 ### Clearing and Pumbility tier difficulty
 
 The Clearing list uses every available unique player with a nonbroken record for a chart
-in either Phoenix source and a usable mode-specific `scoringRating`. A player contributes
-once even when both sources contain a clear. Clear membership includes zero-Pumbility
-records when the player has a skill rating from other history, and is independent of
-the scoring analysis's player minimums and contribution windows.
+in either Phoenix source. Each chart counts once per player across sources and repeated
+plays. Valid zero-Pumbility clears and charts below level 16 count toward player history.
 
-Skill follows the existing recommendation calculation: the top 20 Phoenix 2 Pumbility
-scores when available, otherwise 20 normalized Phoenix 1 scores, otherwise the available
-Phoenix 2 scores. Singles and Doubles use separate ratings and include sub-16 history.
-Players without a usable rating are counted in coverage but cannot enter the average.
+**Clearing skill** requires at least 50 unique current-catalog clears in the relevant
+mode. Sort those charts by their current official Phoenix 2 level, hardest first, and
+average the entire top 50: exactly 50 charts. Ties use chart ID without expanding the
+window. Singles and Doubles qualify separately; there is no Overall clearing skill.
+Players with fewer than 50 clears remain in clear counts but not the skill sample.
 
-For each chart, calculate linear-interpolated 10th- and 50th-percentile skill cutoffs.
-Average the actual player ratings between those cutoffs, including all boundary ties.
-If no ratings lie in the interval, the chart is Unrated. Center those averages within
-each exact mode/official-level folder:
+**Scoring skill** retains the existing recommendation calculation: the top 20 Phoenix 2
+Pumbility scores when available, otherwise 20 normalized Phoenix 1 scores, otherwise the
+available Phoenix 2 scores, converted to the mode-specific equivalent level. Clearing
+skill does not change scoring eligibility or recommendation rankings and projections.
+
+For each chart, calculate the single 10th-percentile clearing skill using linear
+interpolation across all eligible clearers' ratings. This is a percentile value, not
+an average of a percentile range. If no eligible ratings are available, the chart is
+Unrated. Center those percentile values within each exact mode/official-level folder:
 
 ```text
 clearing difficulty = official level + 0.5
-                      + chart's selected-player mean skill
-                      - median chart mean skill in the folder
+                      + 0.70 * (chart's 10th-percentile clearing skill
+                                - median chart 10th-percentile clearing skill in the folder)
 pumbility difficulty = (scoring difficulty + clearing difficulty) / 2
 ```
+
+The fixed Clearing spread multiplier is `0.70`. On the cached September 26, 2026
+population, 15 charts across Singles and Doubles have proposals two or more official
+grades away: `estimate >= level + 2` or `estimate < level - 1`. This widens Clearing
+deviations by about 7.7% from the previous `0.65` setting. Future data
+can change the count; the scale is fixed rather than automatically fitted each run.
 
 Calibration always uses the chart's official-level folder, even when an estimate
 crosses a level boundary. For example, a D23 estimated at 22.9 remains 22.9 and uses
@@ -118,9 +178,9 @@ Estimates are not clamped to an official level
 or to the level-16 display minimum. Pumbility uses unrounded component estimates and
 is Unrated if either component is missing. It is not recentered.
 
-Clearing evidence is Published with at least 10 selected players, Provisional with
+Clearing evidence is Published with at least 10 rated clearers, Provisional with
 5–9, Insufficient with 1–4, and Unrated without an estimate. The existing limited-data
-warning remains separate: it appears below 20 selected players, or when either
+warning remains separate: it appears below 20 rated clearers, or when either
 component has limited support in Pumbility. Details display each component's support.
 These lists describe the observed successful-player population, not pass probability.
 
@@ -129,6 +189,12 @@ Select the metric on `/tier-list`, or link directly using
 Singles and Doubles; Co-op remains available under Scoring. Official labels and filters
 retain the chart's official level. Confidence intervals and What-if remain Scoring-only.
 Normal aggregate refresh regenerates all three lists together from the private snapshots.
+
+In Tier Bands, charts within each band sort by the active metric's signed difference:
+`estimated difficulty - (official level + 0.5)`, ascending. For example, an S20 estimated
+at 21.5 has a difference of +1.0. Compact and detailed layouts use the same full-precision
+order, with song name and chart ID breaking ties. Estimated Difficulty groups continue
+to sort by the estimated difficulty itself.
 
 ### Co-op tier difficulty
 
@@ -282,6 +348,18 @@ npm run dev:local
 private local recommendation index. Use
 `npm run analyze:phoenix1` or `npm run analyze:phoenix2` to re-analyze only one version.
 The Phoenix 1 result is written only to `.local-data`; the frozen public archive is not changed.
+
+To test the local tier lists using Phoenix 2 data only, run
+`.venv/Scripts/python.exe scripts/build_local_recommendations.py --phoenix2-only`.
+This uses the cached Phoenix 2 snapshot, excludes Phoenix 1 from tier model inputs
+and clearing history, and marks the tier page as a local experiment.
+Recommendations and both raw snapshots stay unchanged. Run the same command
+without `--phoenix2-only` to rebuild the usual combined results.
+
+To rebuild just the normal combined tier lists from both
+cached sources, run `.venv/Scripts/python.exe scripts/build_local_recommendations.py --tiers-only`.
+This preserves the recommendation index and generations and does not pull fresh data.
+Run without `--tiers-only` to regenerate personal clearing ratings as well.
 
 Open `http://localhost:3000`. Local mode is enabled by the ignored `.env.local` file. The dashboard
 shows a **Local snapshot** badge and its refresh button reloads the aggregate from disk instead of

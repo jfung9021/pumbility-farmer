@@ -174,7 +174,7 @@ function withDemoTierMetrics(charts: ChartResult[]): ChartResult[] {
     for (const chart of folder) {
       const { clearing, pumbility } = chart.tierMetrics!;
       clearing.folderReferenceSkill = reference;
-      if (clearing.meanSkill !== null && reference !== null) {
+      if (clearing.meanSkill != null && reference !== null) {
         clearing.estimatedDifficulty = chart.level + 0.5 + clearing.meanSkill - reference;
         clearing.difficultyDelta = clearing.estimatedDifficulty - (chart.level + 0.5);
         const band = effectBand(clearing.difficultyDelta);
