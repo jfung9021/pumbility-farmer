@@ -1958,6 +1958,17 @@ def _write_typed_checkpoint_combined(
             "combined": value,
         },
     )
+    # PostgreSQL JSONB normalizes number representations (for example -0.0
+    # becomes 0.0). Bind the nested checksum and reference to the persisted
+    # representation, just as the artifact store does for its outer checksum.
+    stored = blob_store.get_json(pathname)
+    stored_value = stored.get("combined") if isinstance(stored, Mapping) else None
+    if not isinstance(stored_value, Mapping) or stored_value != value:
+        raise ValueError("The typed combined checkpoint changed during persistence.")
+    stored_digest, stored_byte_size = _canonical_json_metadata(stored_value)
+    if stored_digest != digest or stored_byte_size != byte_size:
+        blob_store.put_json(pathname, {**stored, "sha256": stored_digest})
+        digest, byte_size = stored_digest, stored_byte_size
     return {"pathname": pathname, "sha256": digest, "byteSize": byte_size}
 
 
