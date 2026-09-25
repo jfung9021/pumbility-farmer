@@ -13,11 +13,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from piu_recommendations import (  # noqa: E402
     build_combined_chart_results,
-    build_combined_tier_payload,
     combined_tier_blob_path,
     recommendation_blob_path,
     recommendation_generation_key,
 )
+from scoring_percentile import build_production_tier_payload as build_combined_tier_payload  # noqa: E402
 from pumbility_store import (  # noqa: E402
     PumbilityArtifactStore,
     _assert_schema,
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         phoenix1 = _database_snapshot(connection, "phoenix1")
         phoenix2 = _database_snapshot(connection, "phoenix2")
     combined_charts, slopes, metadata = build_combined_chart_results(phoenix1, phoenix2)
-    combined_payload = build_combined_tier_payload(combined_charts, metadata)
+    combined_payload = build_combined_tier_payload(combined_charts, metadata, phoenix1, phoenix2)
     generated_at = str(combined_payload["generatedAtUtc"])
     generation_key = recommendation_generation_key(generated_at)
     index, model, score_bytes, p1_shards, p2_shards = build_recommendation_model_artifacts(

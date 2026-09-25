@@ -158,7 +158,7 @@ class CombinedEvidenceTests(unittest.TestCase):
                 "difficulty": f"S{16 + index % 10}",
                 "noteCount": 500 + index,
             }
-            for index in range(40)
+            for index in range(60)
         ]
 
         def snapshot(source: str) -> dict[str, object]:
@@ -205,12 +205,12 @@ class CombinedEvidenceTests(unittest.TestCase):
         self.assertEqual(consumed, {})
         self.assertTrue(all("tierMetrics" in chart for chart in actual[0]))
         payload = build_combined_tier_payload(actual[0], actual[2])
-        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["version"], 4)
-        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["clearing"]["percentiles"], [0.1, 0.5])
+        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["version"], 10)
+        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["clearing"]["percentile"], 0.1)
         for chart in payload["singles"]:
             metrics = chart["tierMetrics"]
             self.assertEqual(metrics["clearing"]["clearCount"], 12)
-            for field in ("q10Skill", "q50Skill"):
+            for field in ("q10Skill",):
                 self.assertIn(field, metrics["clearing"])
             self.assertNotIn("q30Skill", metrics["clearing"])
             self.assertNotIn("q25Skill", metrics["clearing"])
@@ -227,7 +227,7 @@ class CombinedEvidenceTests(unittest.TestCase):
             "scores": [score("both", "same"), score("both", "same"), score("failed-later", "same"), score("wrong-mode", "changed"), score("removed", "removed")],
         }
         phoenix2 = {
-            "charts": [{"id": "same", "type": "Single"}, {"id": "changed", "type": "Single"}],
+            "charts": [{"id": "same", "type": "Single", "level": 20}, {"id": "changed", "type": "Single", "level": 20}],
             "scores": [score("both", "same"), score("failed-later", "same", broken=True), score("zero", "same", points=0), score("invalid", "same", points=float("nan"))],
         }
         self.assertEqual(_clearers_by_chart(phoenix1, phoenix2), {"same": {"both", "failed-later", "zero"}})
@@ -237,21 +237,40 @@ class CombinedEvidenceTests(unittest.TestCase):
         def score(player: str, chart: str, points: float, recorded: str = "2026-01-01T00:00:00Z") -> dict:
             return {"playerId": player, "chartId": chart, "pumbility": points, "score": 950_000, "plate": "FG", "isBroken": False, "recordedAt": recorded}
         phoenix1 = {"charts": charts, "scores": [score("history", chart["id"], chart["level"] * 100 + index, f"2026-01-{1 + index % 28:02d}T00:00:00Z") for index, chart in enumerate(charts) if index != 5]}
-        phoenix2 = {"charts": charts, "scores": [entry for player in ("a", "b", "c") for entry in (score(player, "c0", 200), score(player, "c5", 0))]}
+        low_charts = [{"id": f"low{index}", "songName": f"Low {index}", "type": "Single", "level": 15, "difficulty": "S15"} for index in range(48)]
+        phoenix2 = {"charts": charts + low_charts, "scores": [entry for player in ("a", "b", "c") for entry in [score(player, "c0", 200), score(player, "c5", 0)] + [score(player, chart["id"], 0) for chart in low_charts]]}
         records, _, _ = build_combined_chart_results(phoenix1, phoenix2)
         target = next(chart for chart in records if chart["chartId"] == "c5")
         clearing = target["tierMetrics"]["clearing"]
         self.assertEqual(target["nContributors"], 0)
         self.assertEqual(clearing["clearCount"], 3)
         self.assertEqual(clearing["ratedClearCount"], 3)
-        self.assertEqual(clearing["selectedCount"], 3)
-        self.assertAlmostEqual(clearing["meanSkill"], skill_rating_for_pumbility("Single", 200), places=5)
+        self.assertNotIn("selectedCount", clearing)
+        self.assertEqual(clearing["q10Skill"], 15.1)
         self.assertIsNotNone(clearing["estimatedDifficulty"])
         self.assertIsNone(target["tierMetrics"]["pumbility"]["estimatedDifficulty"])
         # Historical clears outside the source's top/recent windows remain counted.
-        outside = [chart for chart in records if chart["chartId"] not in {"c0", "c5"} and chart["nContributors"] == 0]
+        outside = [chart for chart in records if chart["chartId"].startswith("c") and chart["chartId"] not in {"c0", "c5"} and chart["nContributors"] == 0]
         self.assertTrue(outside)
         self.assertTrue(all(chart["tierMetrics"]["clearing"]["ratedClearCount"] == 1 for chart in outside))
+
+    def test_player_clearing_skill_is_independent_of_scoring_eligibility(self) -> None:
+        charts = [{"id": f"{mode}-{index}", "songName": f"{mode} {index}", "type": mode, "level": 22 if index < 20 else 21, "difficulty": f"{'S' if mode == 'Single' else 'D'}{22 if index < 20 else 21}"} for mode, count in (("Single", 50), ("Double", 49)) for index in range(count)]
+        snapshot = {"charts": charts, "scores": [{"playerId": "player", "chartId": chart["id"], "pumbility": 0, "score": 0, "isBroken": False} for chart in charts]}
+        result = build_player_recommendation("player", snapshot, [], {})
+        singles = result["modes"]["singles"]
+        doubles = result["modes"]["doubles"]
+        self.assertFalse(singles["eligible"])
+        self.assertEqual(singles["clearingRating"], 21.4)
+        self.assertEqual(singles["clearingSkill"]["selectedCount"], 50)
+        self.assertEqual(singles["clearingSkill"]["uniqueClearCount"], 50)
+        self.assertIsNone(doubles["clearingRating"])
+        self.assertEqual(doubles["clearingSkill"]["uniqueClearCount"], 49)
+        self.assertNotIn("clearingRating", result["modes"]["overall"])
+        self.assertNotIn("clearingRating", result["modes"]["coop"])
+        historical = build_player_recommendation("player", {"charts": charts, "scores": []}, [], {}, phoenix1_cleared_chart_ids={chart["id"] for chart in charts})
+        self.assertEqual(historical["modes"]["singles"]["clearingSkill"], singles["clearingSkill"])
+        self.assertEqual(historical["modes"]["singles"]["clearingRating"], singles["clearingRating"])
 
     def test_bulk_skill_matches_recommendations_for_source_policy_and_modes(self) -> None:
         charts = [{"id": f"{mode}-{index}", "songName": f"{mode} {index}", "type": mode, "level": 15 + index % 8, "difficulty": f"{'S' if mode == 'Single' else 'D'}{15 + index % 8}", "noteCount": 1000} for mode in ("Single", "Double") for index in range(25)]
@@ -3657,7 +3676,7 @@ class CombinedTierPayloadTests(unittest.TestCase):
 
         self.assertEqual(payload["mix"]["key"], "combined")
         self.assertEqual(payload["schemaVersion"], COMBINED_TIER_SCHEMA_VERSION)
-        self.assertEqual(payload["schemaVersion"], 13)
+        self.assertEqual(payload["schemaVersion"], COMBINED_TIER_SCHEMA_VERSION)
         self.assertEqual(
             [row["chartId"] for row in payload["singles"]],
             ["easier", "current"],

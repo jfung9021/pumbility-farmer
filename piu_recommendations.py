@@ -32,6 +32,7 @@ from pumbility_contract import (
     recommendation_generation_key,
     recommendation_shard_path,
     recommendation_shard_prefix,
+    scoring_method_identity,
 )
 
 from phoenix1_score_overrides import (
@@ -69,6 +70,10 @@ from phoenix2_pumbility import (
 )
 from phoenix2_sync import sanitize_score
 from tier_difficulty import build_tier_metrics, tier_metric_method
+from player_skill_ratings import (
+    cleared_chart_ids_by_player, clearing_ratings_by_player_mode,
+    clearing_skill_for_chart_ids,
+)
 
 
 RECOMMENDATION_STORAGE_SCHEMA_VERSION = 2
@@ -794,7 +799,7 @@ def _clean_snapshot_dataframes(
     required_scores = {"playerId", "chartId", "pumbility", "isBroken"}
     if charts.empty or not required_charts.issubset(charts.columns):
         raise ValueError("A recommendation snapshot has an invalid chart catalog.")
-    if scores.empty or not required_scores.issubset(scores.columns):
+    if not required_scores.issubset(scores.columns):
         raise ValueError("A recommendation snapshot has no usable score rows.")
 
     charts = charts.copy().rename(columns={"id": "chartId"})
@@ -836,10 +841,22 @@ def _clean_snapshot_dataframes(
 def _clean_snapshot_frames(
     snapshot: Mapping[str, Any],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    return _clean_snapshot_dataframes(
-        pd.DataFrame(snapshot.get("charts", [])),
-        pd.DataFrame(snapshot.get("scores", [])),
+    # An explicitly empty source contributes no evidence. Malformed or partially
+    # missing snapshots still go through the usual validation below.
+    if snapshot.get("charts") == [] and snapshot.get("scores") == []:
+        return (
+            pd.DataFrame(columns=["chartId", "songName", "type", "level"]),
+            pd.DataFrame(columns=[
+                "playerId", "chartId", "pumbility", "score", "recordedAt", "isBroken", "plate",
+            ]).astype({"pumbility": float, "score": float, "isBroken": bool}),
+        )
+    raw_scores = snapshot.get("scores")
+    scores = (
+        pd.DataFrame(columns=["playerId", "chartId", "pumbility", "isBroken"])
+        if raw_scores == []
+        else pd.DataFrame(raw_scores or [])
     )
+    return _clean_snapshot_dataframes(pd.DataFrame(snapshot.get("charts", [])), scores)
 
 
 def _clean_snapshot_frames_consuming(
@@ -2184,28 +2201,13 @@ def _clearers_by_chart(
     phoenix2_snapshot: Mapping[str, Any],
 ) -> dict[str, set[str]]:
     """Capture unique successful players before rating filters or consumption."""
-    target_types = {
-        str(chart["id"]): str(chart["type"])
-        for chart in phoenix2_snapshot.get("charts", [])
-        if isinstance(chart, Mapping)
-        and chart.get("id") is not None
-        and chart.get("type") in MODE_TYPES
-    }
     clearers: dict[str, set[str]] = {}
     for snapshot in (phoenix1_snapshot, phoenix2_snapshot):
-        compatible_ids = {
-            str(chart["id"])
-            for chart in snapshot.get("charts", [])
-            if isinstance(chart, Mapping)
-            and chart.get("id") is not None
-            and target_types.get(str(chart["id"])) == chart.get("type")
-        }
-        for raw in snapshot.get("scores", []):
-            if not isinstance(raw, Mapping) or str(raw.get("chartId")) not in compatible_ids:
-                continue
-            score = sanitize_score(raw)
-            if score is not None:
-                clearers.setdefault(score["chartId"], set()).add(score["playerId"])
+        for player, chart_ids in cleared_chart_ids_by_player(
+            snapshot, phoenix2_snapshot.get("charts", []),
+        ).items():
+            for chart_id in chart_ids:
+                clearers.setdefault(chart_id, set()).add(player)
     return clearers
 
 
@@ -2253,6 +2255,59 @@ def _player_mode_scoring_ratings(
     return skills
 
 
+def _combined_scoring_evidence(
+    phoenix1_frames: tuple[pd.DataFrame, pd.DataFrame],
+    phoenix2_catalog: pd.DataFrame,
+    phoenix2_scores: pd.DataFrame,
+    score_normalizations: Mapping[str, Any],
+) -> tuple[pd.DataFrame, dict[str, float], dict[str, float]]:
+    eligible_phoenix2_scores = _retain_player_modes_with_minimum_scores(
+        phoenix2_catalog, phoenix2_scores, PHOENIX2_MINIMUM_ANALYSIS_SCORES,
+    )
+    phoenix2_chart_ids = set(phoenix2_catalog["chartId"].astype(str))
+    phoenix1, phoenix1_slopes = _source_contributions(
+        {},
+        "phoenix1",
+        authoritative_catalog=phoenix2_catalog,
+        prepared_frames=phoenix1_frames,
+        phoenix1_normalizations=score_normalizations,
+    )
+    phoenix1_rating_catalog, phoenix1_rating_scores = _prepare_phoenix1_rating_frames_from_frames(
+        *phoenix1_frames,
+        phoenix2_catalog,
+        normalizations=score_normalizations,
+    )
+    phoenix2, phoenix2_slopes = _source_contributions(
+        {},
+        "phoenix2",
+        allowed_chart_ids=phoenix2_chart_ids,
+        prepared_frames=(phoenix2_catalog, eligible_phoenix2_scores),
+        minimum_score_count=PHOENIX2_MINIMUM_ANALYSIS_SCORES,
+    )
+    type_by_chart = dict(zip(phoenix2_catalog["chartId"], phoenix2_catalog["type"]))
+    phoenix2_score_keys = eligible_phoenix2_scores[["playerId", "chartId"]].copy()
+    phoenix2_score_keys["mode"] = phoenix2_score_keys["chartId"].map(type_by_chart).map(
+        MODE_LABELS
+    )
+    phoenix2_score_keys = phoenix2_score_keys[phoenix2_score_keys["mode"].notna()]
+    combined = merge_source_contributions(
+        phoenix1,
+        phoenix2,
+        authoritative_phoenix2_keys=phoenix2_score_keys,
+    )
+
+    catalog = phoenix2_catalog
+    combined = retain_phoenix2_catalog_contributions(combined, catalog)
+    combined = _attach_contribution_weights(
+        combined,
+        None,
+        eligible_phoenix2_scores,
+        catalog,
+        phoenix1_rating_scores=phoenix1_rating_scores,
+    )
+    return combined, phoenix2_slopes, phoenix1_slopes
+
+
 def build_combined_chart_results(
     phoenix1_snapshot: Mapping[str, Any],
     phoenix2_snapshot: Mapping[str, Any],
@@ -2263,6 +2318,9 @@ def build_combined_chart_results(
     """Build Phoenix 2-catalog chart estimates from normalized two-version evidence."""
     del bootstrap_samples  # Normal-approximation intervals keep full refreshes bounded.
     clearers = _clearers_by_chart(phoenix1_snapshot, phoenix2_snapshot)
+    player_mode_clearing_skills = clearing_ratings_by_player_mode(
+        clearers, phoenix2_snapshot.get("charts", []),
+    )
     score_normalizations = build_phoenix1_score_normalizations(
         [
             row
@@ -2276,12 +2334,6 @@ def build_combined_chart_results(
         ],
     )
     phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
-    phoenix2_chart_ids = set(phoenix2_catalog["chartId"].astype(str))
-    eligible_phoenix2_scores = _retain_player_modes_with_minimum_scores(
-        phoenix2_catalog,
-        phoenix2_scores,
-        PHOENIX2_MINIMUM_ANALYSIS_SCORES,
-    )
     # Preserve Co-op's raw-score observations before releasing Phoenix 1. Its
     # large ability calculation can then reuse the cleaned S/D frames below.
     coop_inputs = build_coop_observations(phoenix1_snapshot, phoenix2_snapshot)
@@ -2311,55 +2363,11 @@ def build_combined_chart_results(
     )
     del coop_inputs, coop_abilities
     gc.collect()
-    phoenix1, _ = _source_contributions(
-        phoenix1_snapshot,
-        "phoenix1",
-        authoritative_catalog=phoenix2_catalog,
-        prepared_frames=phoenix1_frames,
-        phoenix1_normalizations=score_normalizations,
-    )
-    phoenix1_rating_catalog, phoenix1_rating_scores = _prepare_phoenix1_rating_frames_from_frames(
-        *phoenix1_frames,
-        phoenix2_catalog,
-        normalizations=score_normalizations,
-    )
-    player_mode_skills = _player_mode_scoring_ratings(
-        phoenix1_rating_catalog,
-        phoenix1_rating_scores,
-        phoenix2_catalog,
-        phoenix2_scores,
+    catalog = phoenix2_catalog.copy()
+    combined, phoenix2_slopes, _ = _combined_scoring_evidence(
+        phoenix1_frames, phoenix2_catalog, phoenix2_scores, score_normalizations,
     )
     del phoenix1_frames
-    gc.collect()
-    phoenix2, phoenix2_slopes = _source_contributions(
-        phoenix2_snapshot,
-        "phoenix2",
-        allowed_chart_ids=phoenix2_chart_ids,
-        prepared_frames=(phoenix2_catalog, eligible_phoenix2_scores),
-        minimum_score_count=PHOENIX2_MINIMUM_ANALYSIS_SCORES,
-    )
-    type_by_chart = dict(zip(phoenix2_catalog["chartId"], phoenix2_catalog["type"]))
-    phoenix2_score_keys = eligible_phoenix2_scores[["playerId", "chartId"]].copy()
-    phoenix2_score_keys["mode"] = phoenix2_score_keys["chartId"].map(type_by_chart).map(
-        MODE_LABELS
-    )
-    phoenix2_score_keys = phoenix2_score_keys[phoenix2_score_keys["mode"].notna()]
-    combined = merge_source_contributions(
-        phoenix1,
-        phoenix2,
-        authoritative_phoenix2_keys=phoenix2_score_keys,
-    )
-
-    catalog = phoenix2_catalog
-    combined = retain_phoenix2_catalog_contributions(combined, catalog)
-    combined = _attach_contribution_weights(
-        combined,
-        None,
-        eligible_phoenix2_scores,
-        catalog,
-        phoenix1_rating_scores=phoenix1_rating_scores,
-    )
-    del phoenix1_rating_scores
     gc.collect()
     rows: list[pd.DataFrame] = []
     config = AnalysisConfig(
@@ -2368,26 +2376,22 @@ def build_combined_chart_results(
         published_contributors=10,
         bootstrap_samples=0,
     )
-    mode_metadata: dict[str, dict[str, int]] = {}
+    mode_metadata = {}
+    for chart_type in MODE_TYPES:
+        observed = combined[combined["mode"] == MODE_LABELS[chart_type]]
+        mode_metadata[_mode_key(chart_type)] = {
+            "eligiblePlayers": int(observed["playerId"].nunique()),
+            "phoenix1Observations": int((observed["source"] == "phoenix1").sum()),
+            "phoenix2Observations": int((observed["source"] == "phoenix2").sum()),
+        }
     for chart_type in MODE_TYPES:
         mode_name = MODE_LABELS[chart_type]
         mode_key = _mode_key(chart_type)
         mode_catalog = catalog[catalog["type"] == chart_type].copy()
+        mode_observations = combined[combined["mode"] == mode_name]
         if mode_catalog.empty:
             continue
-        mode_catalog["folder"] = [
-            _folder(chart_type, int(level)) for level in mode_catalog["level"]
-        ]
-        mode_observations = combined[combined["mode"] == mode_name]
-        mode_metadata[mode_key] = {
-            "eligiblePlayers": int(mode_observations["playerId"].nunique()),
-            "phoenix1Observations": int(
-                (mode_observations["source"] == "phoenix1").sum()
-            ),
-            "phoenix2Observations": int(
-                (mode_observations["source"] == "phoenix2").sum()
-            ),
-        }
+        mode_catalog["folder"] = [_folder(chart_type, int(level)) for level in mode_catalog["level"]]
         stat_rows: list[dict[str, Any]] = []
         for chart_id, group in mode_observations.groupby("chartId", sort=False):
             values = group["normalizedResidual"].to_numpy(dtype=float)
@@ -2470,9 +2474,9 @@ def build_combined_chart_results(
         raise ValueError("The combined recommendation catalog had no Single or Double charts.")
     output = pd.concat(rows, ignore_index=True)
     output["tierMetrics"], folder_references = build_tier_metrics(
-        output.to_dict(orient="records"), clearers, player_mode_skills
+        output.to_dict(orient="records"), clearers, player_mode_clearing_skills
     )
-    del clearers, player_mode_skills
+    del clearers, player_mode_clearing_skills
     keep = [
         "mode",
         "modeRank",
@@ -2531,7 +2535,22 @@ def build_combined_chart_results(
             score_normalizations
         ),
     }
+    metadata["scoring"] = scoring_method_identity()
     return records, phoenix2_slopes, metadata
+
+
+def build_scoring_tier_results(
+    phoenix1_snapshot: Mapping[str, Any],
+    phoenix2_snapshot: Mapping[str, Any],
+    *,
+    consume_phoenix1_snapshot: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build tiers using the same combined scoring estimator as recommendations."""
+    records, _, metadata = build_combined_chart_results(
+        phoenix1_snapshot, phoenix2_snapshot,
+        consume_phoenix1_snapshot=consume_phoenix1_snapshot,
+    )
+    return records, metadata
 
 
 def build_combined_tier_payload(
@@ -2704,6 +2723,7 @@ def build_combined_tier_payload(
         "mix": dict(COMBINED_MIX),
         "method": {
             "tierMetrics": dict(metadata.get("tierMetrics") or tier_metric_method({})),
+            "scoring": dict(metadata.get("scoring") or scoring_method_identity()),
             "catalog": "Phoenix 2 authoritative catalog",
             "overlapRule": "Phoenix 2 replaces Phoenix 1 for the same player and chart",
             "sourceMinimumScoresPerPlayer": {
@@ -4184,11 +4204,23 @@ def build_player_recommendation(
     phoenix1_snapshot: Mapping[str, Any] | None = None,
     prepared_phoenix2: tuple[pd.DataFrame, pd.DataFrame] | None = None,
     prepared_phoenix1: tuple[pd.DataFrame, pd.DataFrame] | None = None,
+    phoenix1_cleared_chart_ids: set[str] | None = None,
+    phoenix2_cleared_chart_ids: set[str] | None = None,
     phoenix1_goals: Mapping[str, tuple[int, str]] | None = None,
     plate_model: PlateProjectionModel | None = None,
     include_candidates: bool = True,
 ) -> dict[str, Any]:
     """Build recommendations with historical rating and current-state separation."""
+    target_charts = phoenix2_snapshot.get("charts", [])
+    if phoenix1_cleared_chart_ids is None:
+        phoenix1_cleared_chart_ids = cleared_chart_ids_by_player(
+            phoenix1_snapshot or {}, target_charts,
+        ).get(str(player_id), set())
+    if phoenix2_cleared_chart_ids is None:
+        phoenix2_cleared_chart_ids = cleared_chart_ids_by_player(
+            phoenix2_snapshot, target_charts,
+        ).get(str(player_id), set())
+    player_clear_ids = phoenix1_cleared_chart_ids | phoenix2_cleared_chart_ids
     catalog, scores = prepared_phoenix2 or _clean_snapshot_frames(phoenix2_snapshot)
     if prepared_phoenix1 is not None:
         phoenix1_catalog, phoenix1_scores = prepared_phoenix1
@@ -4302,6 +4334,9 @@ def build_player_recommendation(
 
     for chart_type in MODE_TYPES:
         mode_key = _mode_key(chart_type)
+        clearing_skill = clearing_skill_for_chart_ids(
+            player_clear_ids, target_charts, chart_type,
+        )
         mode_ids = set(catalog.loc[catalog["type"] == chart_type, "chartId"])
         mode_scores = player_scores[player_scores["chartId"].isin(mode_ids)].copy()
         mode_scores = mode_scores.sort_values(
@@ -4347,6 +4382,7 @@ def build_player_recommendation(
 
         if rating_scores.empty:
             modes[mode_key] = {
+                **clearing_skill,
                 "eligible": False,
                 "validScoreCount": int(phoenix2_score_count),
                 "requiredScoreCount": 1,
@@ -4617,6 +4653,7 @@ def build_player_recommendation(
         ]
 
         modes[mode_key] = {
+            **clearing_skill,
             "eligible": True,
             "validScoreCount": int(phoenix2_score_count),
             "phoenix2ScoreCount": int(phoenix2_score_count),
@@ -4827,6 +4864,12 @@ def build_recommendation_index(
         phoenix1_snapshot, prepared_phoenix2[0]
     )
     plate_model = PlateProjectionModel(phoenix1_snapshot, phoenix2_snapshot)
+    phoenix1_clear_ids = cleared_chart_ids_by_player(
+        phoenix1_snapshot, phoenix2_snapshot.get("charts", []),
+    )
+    phoenix2_clear_ids = cleared_chart_ids_by_player(
+        phoenix2_snapshot, phoenix2_snapshot.get("charts", []),
+    )
     players = phoenix2_snapshot.get("players", [])
     named_players = [
         row
@@ -4859,6 +4902,8 @@ def build_recommendation_index(
             score_response_model,
             prepared_phoenix2=prepared_phoenix2,
             prepared_phoenix1=prepared_phoenix1,
+            phoenix1_cleared_chart_ids=phoenix1_clear_ids.get(player_id, set()),
+            phoenix2_cleared_chart_ids=phoenix2_clear_ids.get(player_id, set()),
             phoenix1_goals=phoenix1_goals_by_player.get(player_id, {}),
             plate_model=plate_model,
             include_candidates=True,

@@ -15,7 +15,9 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 import pandas as pd
 
 from recommendation_artifacts import compact_player_recommendation_cache
+from player_skill_ratings import cleared_chart_ids_by_player, clearing_skill_method
 from pumbility_contract import (
+    MODEL_ARTIFACT_SCHEMA_VERSION,
     PLAYER_REFRESH_STORAGE_SCHEMA_VERSION,
     PLAYER_REFRESH_FRESHNESS,
     cached_player_is_fresh,
@@ -78,9 +80,8 @@ from piu_recommendations import (
 
 
 PLAYER_ARTIFACT_SHARD_SIZE = 10
-MODEL_ARTIFACT_SCHEMA_VERSION = 5
 PLAYER_STATE_SCHEMA_VERSION = 1
-COMPACT_PHOENIX1_SHARD_SCHEMA_VERSION = 2
+COMPACT_PHOENIX1_SHARD_SCHEMA_VERSION = 3
 
 
 class JsonStore(Protocol):
@@ -147,6 +148,7 @@ def _recommendation_method(
         "ratingReferencePlate": SKILL_RATING_REFERENCE_PLATE,
         "ratingReferenceMultiplier": SKILL_RATING_REFERENCE_MULTIPLIER,
         "ratingSource": "the displayed rating and recommendation ceiling use Phoenix 2 top 20 at 20 valid scores; otherwise Phoenix 1 top 20 when available, then partial Phoenix 2",
+        "clearingSkill": clearing_skill_method(),
         "projectionRatingSource": "score projections use Phoenix 2 ranks 11-30 at 30 valid scores; otherwise Phoenix 1 ranks 11-30 when all 30 are available",
         "shortHistoryBaseline": "a mode without a complete 30-score Phoenix 2 or Phoenix 1 source can still use normalized Phoenix 1 personal-best goals; other charts keep farm-edge ordering without projected scores",
         "recommendationGoalPolicy": RECOMMENDATION_GOAL_POLICY,
@@ -341,6 +343,17 @@ def build_recommendation_model_artifacts(
 ]:
     """Build a global model, compact index, and per-player input shards."""
     charts_for_players = _recommendation_chart_rows(combined_charts)
+    # Rating frames drop valid zero-Pumbility clears, and compact plate rows
+    # deliberately omit Pumbility. Capture validated membership before either
+    # normalization or destructive snapshot consumption makes it unrecoverable.
+    p1_cleared_by_player = cleared_chart_ids_by_player(
+        phoenix1_snapshot,
+        [
+            row
+            for row in phoenix2_snapshot.get("charts", [])
+            if isinstance(row, Mapping)
+        ],
+    )
     phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
     score_normalizations = build_phoenix1_score_normalizations(
         [
@@ -513,6 +526,7 @@ def build_recommendation_model_artifacts(
                     "scoreColumns": score_columns,
                     "scoreRows": score_rows,
                     "plateScores": p1_plate_by_player.get(player_id, []),
+                    "clearedChartIds": sorted(p1_cleared_by_player.get(player_id, set())),
                 }
             )
             p2_players.append(
@@ -541,6 +555,7 @@ def build_recommendation_model_artifacts(
 
     index = {
         "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
+        "modelArtifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
         "storageSchemaVersion": PLAYER_REFRESH_STORAGE_SCHEMA_VERSION,
         "generationKey": generation_key,
         "modelGeneratedAtUtc": generated_at_utc,
@@ -725,6 +740,30 @@ def _find_shard_player(
     )
 
 
+def _phoenix1_player_input(
+    shard: Mapping[str, Any] | None, player_id: str
+) -> dict[str, Any]:
+    """Require the clear membership that older compact P1 inputs cannot recover."""
+    if (
+        shard is None
+        or shard.get("schemaVersion") != COMPACT_PHOENIX1_SHARD_SCHEMA_VERSION
+    ):
+        raise RuntimeError(
+            "The recommendation model must be rebuilt from stored snapshots "
+            "to include Phoenix 1 clear membership."
+        )
+    player = _find_shard_player(shard, player_id)
+    clear_ids = player.get("clearedChartIds") if player is not None else None
+    if not isinstance(clear_ids, list) or not all(
+        isinstance(chart_id, str) and chart_id.strip() for chart_id in clear_ids
+    ):
+        raise RuntimeError(
+            "The recommendation model is missing Phoenix 1 clear membership; "
+            "rebuild it from stored snapshots."
+        )
+    return player
+
+
 def _merged_player_state(
     base: Mapping[str, Any], live: Mapping[str, Any] | None
 ) -> dict[str, Any]:
@@ -758,6 +797,14 @@ def _load_model(
     score_bytes = store.get_bytes(recommendation_score_model_path(generation))
     if model is None or score_bytes is None:
         raise RuntimeError("The current recommendation model artifacts are incomplete.")
+    if (
+        model.get("artifactSchemaVersion") != MODEL_ARTIFACT_SCHEMA_VERSION
+        or model.get("recommendationSchemaVersion") != RECOMMENDATION_SCHEMA_VERSION
+    ):
+        raise RuntimeError(
+            "The recommendation model must be rebuilt from stored snapshots "
+            "for the current skill calculation."
+        )
     restored = ScoreResponseModel.from_npz_bytes(score_bytes)
     value = (model, restored)
     with _MODEL_CACHE_LOCK:
@@ -800,6 +847,7 @@ def player_recommendation_response(
     score_model: ScoreResponseModel,
     phoenix1_scores: Sequence[Mapping[str, Any]],
     phoenix1_plate_scores: Sequence[Mapping[str, Any]],
+    phoenix1_cleared_chart_ids: set[str],
     phoenix2_state: Mapping[str, Any],
     generated_at_utc: str,
 ) -> dict[str, Any]:
@@ -853,6 +901,7 @@ def player_recommendation_response(
         score_model,
         prepared_phoenix2=(catalog, p2_scores),
         prepared_phoenix1=(catalog, p1_scores),
+        phoenix1_cleared_chart_ids=phoenix1_cleared_chart_ids,
         phoenix1_goals=_phoenix1_goals_by_player(
             p1_snapshot["scores"],
             set(catalog["chartId"].astype(str)),
@@ -914,10 +963,7 @@ def refresh_player_recommendations(
     if timings is not None:
         timings["modelLoadMs"] = round((perf_counter() - model_started) * 1000, 3)
     player_id = str(metadata["internalPlayerId"])
-    p1_player = _find_shard_player(p1_shard, player_id) or {
-        "playerId": player_id,
-        "scores": [],
-    }
+    p1_player = _phoenix1_player_input(p1_shard, player_id)
     base_state = _find_shard_player(p2_shard, player_id)
     if base_state is None:
         raise RuntimeError("The selected player's daily score state is unavailable.")
@@ -957,7 +1003,7 @@ def refresh_player_recommendations(
                 )
             model = latest_model
             score_model = latest_score_model
-            p1_player = _find_shard_player(latest_p1, player_id) or p1_player
+            p1_player = _phoenix1_player_input(latest_p1, player_id)
             state = _merged_player_state(latest_base, state)
 
     valid_ids = {
@@ -1000,6 +1046,7 @@ def refresh_player_recommendations(
             for row in p1_player.get("plateScores", [])
             if isinstance(row, Mapping)
         ],
+        phoenix1_cleared_chart_ids=set(p1_player["clearedChartIds"]),
         phoenix2_state=refreshed_state,
         generated_at_utc=isoformat_utc(now()),
     )
