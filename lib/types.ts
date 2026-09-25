@@ -20,8 +20,14 @@ export interface ClearingTierMetric extends TierMetricResult {
   ratedClearCount: number;
   missingSkillCount: number;
   selectedCount: number;
-  q25Skill: number | null;
-  q50Skill: number | null;
+  // Schema 10 remains readable while the first schema 11 generation is built.
+  q25Skill?: number | null;
+  q50Skill?: number | null;
+  q10Skill?: number | null;
+  q30Skill?: number | null;
+  initialEstimatedDifficulty?: number | null;
+  assessmentLevel?: number | null;
+  reassessmentStatus?: "not-needed" | "applied" | "unavailable" | null;
   meanSkill: number | null;
   folderReferenceSkill: number | null;
 }

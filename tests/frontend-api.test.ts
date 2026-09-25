@@ -32,6 +32,7 @@ import {
   tierMetricFromSearchParams,
 } from "../lib/page-view-state.ts";
 import {
+  clearingPercentileRange,
   estimatedTierGroups,
   hasLimitedTierData,
   selectedTierMetric,
@@ -290,15 +291,38 @@ test("new tier evidence warnings use selected clearers and each composite suppor
   assert.equal(hasLimitedTierData(chart, "pumbility"), false);
 });
 
-test("tier demo includes cross-level clearing, calibrated folders, and missing components", () => {
+test("clearing percentile labels follow current and legacy payloads including unrated charts", () => {
+  const current = demoPayloads.phoenix2.singles[0].tierMetrics!.clearing;
+  assert.deepEqual(clearingPercentileRange(current), {
+    label: "10th–30th", lower: current.q10Skill, upper: current.q30Skill, reassessment: true,
+  });
+  const legacy = structuredClone(current);
+  delete legacy.q10Skill;
+  delete legacy.q30Skill;
+  delete legacy.initialEstimatedDifficulty;
+  delete legacy.assessmentLevel;
+  delete legacy.reassessmentStatus;
+  legacy.q25Skill = 19.5;
+  legacy.q50Skill = 20.5;
+  assert.deepEqual(clearingPercentileRange(legacy), {
+    label: "25th–50th", lower: 19.5, upper: 20.5, reassessment: false,
+  });
+  assert.deepEqual(clearingPercentileRange({ ...current, q10Skill: null, q30Skill: null }), {
+    label: "10th–30th", lower: null, upper: null, reassessment: true,
+  });
+  assert.equal(clearingPercentileRange(undefined), null);
+});
+
+test("tier demo includes reassessment, initial calibrated folders, and missing components", () => {
   const payload = demoPayloads.phoenix2;
   const vector = payload.singles.find((chart) => chart.songName === "Vector")!;
-  assert.equal(formatEstimatedDifficulty(vector.tierMetrics!.clearing.estimatedDifficulty!), "19.2");
+  assert.equal(formatEstimatedDifficulty(vector.tierMetrics!.clearing.initialEstimatedDifficulty!), "19.2");
+  assert.ok(payload.singles.some((chart) => chart.tierMetrics!.clearing.reassessmentStatus === "applied"));
   for (const charts of [payload.singles, payload.doubles]) {
     assert.ok(charts.some((chart) => chart.tierMetrics!.clearing.estimatedDifficulty === null));
     for (const level of new Set(charts.map((chart) => chart.level))) {
       const estimates = charts.filter((chart) => chart.level === level)
-        .flatMap((chart) => chart.tierMetrics!.clearing.estimatedDifficulty ?? []).sort((a, b) => a - b);
+        .flatMap((chart) => chart.tierMetrics!.clearing.initialEstimatedDifficulty ?? []).sort((a, b) => a - b);
       if (!estimates.length) continue;
       const middle = Math.floor(estimates.length / 2);
       const median = estimates.length % 2 ? estimates[middle] : (estimates[middle - 1] + estimates[middle]) / 2;
@@ -306,6 +330,9 @@ test("tier demo includes cross-level clearing, calibrated folders, and missing c
     }
     for (const chart of charts) {
       const { clearing, pumbility } = chart.tierMetrics!;
+      if (clearing.reassessmentStatus === "applied") {
+        assert.equal(clearing.estimatedDifficulty, clearing.assessmentLevel! + 0.5 + clearing.meanSkill! - clearing.folderReferenceSkill!);
+      }
       assert.equal(pumbility.estimatedDifficulty, chart.estimatedDifficulty === null || clearing.estimatedDifficulty === null
         ? null : (chart.estimatedDifficulty + clearing.estimatedDifficulty) / 2);
     }
@@ -1452,7 +1479,7 @@ test("demo payload represents the folder-normalized 0.4-scale methodology", () =
   const payload = demoPayloads.phoenix2;
   assert.equal(
     payload.summary.scriptVersion,
-    "6.3.0-phoenix1-score-override-folder-normalized-0.4-scale",
+    "6.9.0-clearing-10-30-reassessment",
   );
   assert.equal(payload.summary.method.difficultyDeltaScale, 0.4);
   assert.deepEqual(payload.summary.method.folderRangeNormalization, {

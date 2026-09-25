@@ -1285,8 +1285,13 @@ def _combined_tier_payload_fixture(*_args, generated_at_utc: str, **_kwargs):
             "tierMetrics": {
                 "clearing": {
                     "estimatedDifficulty": 19.2,
-                    "selectedPlayerCount": 4,
-                    "folderReference": 21.0,
+                    "selectedCount": 4,
+                    "folderReferenceSkill": 20.0,
+                    "q10Skill": 19.1,
+                    "q30Skill": 19.7,
+                    "initialEstimatedDifficulty": 19.3,
+                    "assessmentLevel": 19,
+                    "reassessmentStatus": "applied",
                 },
                 "pumbility": {"estimatedDifficulty": None},
             },
