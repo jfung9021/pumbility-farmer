@@ -153,7 +153,7 @@ function withDemoTierMetrics(charts: ChartResult[]): ChartResult[] {
           missingSkillCount: 3,
           selectedCount,
           q10Skill: meanSkill === null ? null : meanSkill - 0.15,
-          q30Skill: meanSkill === null ? null : meanSkill + 0.15,
+          q50Skill: meanSkill === null ? null : meanSkill + 0.15,
           meanSkill,
           folderReferenceSkill: null,
         },
@@ -207,7 +207,7 @@ export const demoPayload: AnalysisPayload = {
   generatedAtUtc: "2026-08-07T04:20:00Z",
   mix: { key: "phoenix2", apiValue: "Phoenix2", label: "Phoenix 2" },
   summary: {
-    scriptVersion: "6.10.0-clearing-10-30-official-folder",
+    scriptVersion: "6.11.0-clearing-10-50-official-folder",
     method: {
       difficultyDeltaScale: DEMO_DIFFICULTY_DELTA_SCALE,
       folderRangeNormalization: {

@@ -99,7 +99,7 @@ scores when available, otherwise 20 normalized Phoenix 1 scores, otherwise the a
 Phoenix 2 scores. Singles and Doubles use separate ratings and include sub-16 history.
 Players without a usable rating are counted in coverage but cannot enter the average.
 
-For each chart, calculate linear-interpolated 10th- and 30th-percentile skill cutoffs.
+For each chart, calculate linear-interpolated 10th- and 50th-percentile skill cutoffs.
 Average the actual player ratings between those cutoffs, including all boundary ties.
 If no ratings lie in the interval, the chart is Unrated. Center those averages within
 each exact mode/official-level folder:

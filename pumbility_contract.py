@@ -15,13 +15,13 @@ from typing import Any, Mapping
 from phoenix2_sync import parse_utc, utc_now
 
 
-SCRIPT_VERSION = "6.10.0-clearing-10-30-official-folder"
+SCRIPT_VERSION = "6.11.0-clearing-10-50-official-folder"
 PHOENIX2_MINIMUM_ANALYSIS_SCORES = 50
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)
 RECOMMENDATION_SCHEMA_VERSION = 26
 PLAYER_REFRESH_STORAGE_SCHEMA_VERSION = 3
-COMBINED_TIER_SCHEMA_VERSION = 12
+COMBINED_TIER_SCHEMA_VERSION = 13
 
 
 def recommendation_blob_path() -> str:

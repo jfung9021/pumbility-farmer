@@ -294,24 +294,23 @@ test("new tier evidence warnings use selected clearers and each composite suppor
 test("clearing percentile labels follow current and legacy payloads including unrated charts", () => {
   const current = demoPayloads.phoenix2.singles[0].tierMetrics!.clearing;
   assert.deepEqual(clearingPercentileRange(current), {
-    label: "10th–30th", lower: current.q10Skill, upper: current.q30Skill,
+    label: "10th–50th", lower: current.q10Skill, upper: current.q50Skill,
   });
   const previous = structuredClone(current);
-  delete previous.q30Skill;
-  previous.q50Skill = 20;
+  delete previous.q50Skill;
+  previous.q30Skill = 20;
   assert.deepEqual(clearingPercentileRange(previous), {
-    label: "10th–50th", lower: current.q10Skill, upper: 20,
+    label: "10th–30th", lower: current.q10Skill, upper: 20,
   });
   const legacy = structuredClone(current);
   delete legacy.q10Skill;
-  delete legacy.q30Skill;
   legacy.q25Skill = 19.5;
   legacy.q50Skill = 20.5;
   assert.deepEqual(clearingPercentileRange(legacy), {
     label: "25th–50th", lower: 19.5, upper: 20.5,
   });
-  assert.deepEqual(clearingPercentileRange({ ...current, q10Skill: null, q30Skill: null }), {
-    label: "10th–30th", lower: null, upper: null,
+  assert.deepEqual(clearingPercentileRange({ ...current, q10Skill: null, q50Skill: null }), {
+    label: "10th–50th", lower: null, upper: null,
   });
   assert.equal(clearingPercentileRange(undefined), null);
 });
@@ -1482,7 +1481,7 @@ test("demo payload represents the folder-normalized 0.4-scale methodology", () =
   const payload = demoPayloads.phoenix2;
   assert.equal(
     payload.summary.scriptVersion,
-    "6.10.0-clearing-10-30-official-folder",
+    "6.11.0-clearing-10-50-official-folder",
   );
   assert.equal(payload.summary.method.difficultyDeltaScale, 0.4);
   assert.deepEqual(payload.summary.method.folderRangeNormalization, {
