@@ -102,32 +102,19 @@ Players without a usable rating are counted in coverage but cannot enter the ave
 For each chart, calculate linear-interpolated 10th- and 30th-percentile skill cutoffs.
 Average the actual player ratings between those cutoffs, including all boundary ties.
 If no ratings lie in the interval, the chart is Unrated. Center those averages within
-each exact mode/official-level folder, freezing all folder references before reassessment:
+each exact mode/official-level folder:
 
 ```text
-initial clearing difficulty = official level + 0.5
+clearing difficulty = official level + 0.5
                       + chart's selected-player mean skill
                       - median chart mean skill in the folder
+pumbility difficulty = (scoring difficulty + clearing difficulty) / 2
 ```
 
-When the initial estimate crosses a level boundary, assess the chart once against the
-reference for `floor(initial difficulty)`, allowing a 1e-10 tolerance at integer boundaries:
-
-```text
-final clearing difficulty = target level + 0.5
-                            + chart's selected-player mean skill
-                            - frozen target-folder reference
-pumbility difficulty = (scoring difficulty + final clearing difficulty) / 2
-```
-
-For example, a D23 initially estimated at 22.9 uses the D22 reference; 24.0 uses D24.
-The chart does not join the target calibration group, and its clearers, skill ratings,
-official label, and official-folder membership stay fixed. Keep the initial estimate
-when the target reference is unavailable. Reassessment happens once even when its result
-returns to the original level; repeated reassessment can oscillate.
-
-The initial median estimate for S20 is 20.5 before display truncation. Final folder
-medians can shift after reassessment. Estimates are not clamped to an official level
+Calibration always uses the chart's official-level folder, even when an estimate
+crosses a level boundary. For example, a D23 estimated at 22.9 remains 22.9 and uses
+the D23 reference. The median estimate for S20 is 20.5 before display truncation.
+Estimates are not clamped to an official level
 or to the level-16 display minimum. Pumbility uses unrounded component estimates and
 is Unrated if either component is missing. It is not recentered.
 
@@ -135,7 +122,6 @@ Clearing evidence is Published with at least 10 selected players, Provisional wi
 5–9, Insufficient with 1–4, and Unrated without an estimate. The existing limited-data
 warning remains separate: it appears below 20 selected players, or when either
 component has limited support in Pumbility. Details display each component's support.
-Details also show the initial estimate and reassessment reference when applied.
 These lists describe the observed successful-player population, not pass probability.
 
 Select the metric on `/tier-list`, or link directly using
@@ -331,7 +317,7 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 - `GET /api/analyze?mix=phoenix2`: load the latest successful `AnalysisPayload`.
 - `GET /api/analyze?mix=phoenix2&jobId=...`: load a matching 24-hour queue-job status.
 - `POST /api/analyze?mix=phoenix2`: protected administrator trigger; requires `X-Analysis-Run-Secret` matching `CRON_SECRET` and queues or follows a Phoenix 2 refresh. Add `fullSync=true` to discard the incremental watermark and refetch every consented player's complete score history.
-- `POST /api/jonathan/refresh?mode=incremental|full`: operator-page trigger; requires `X-Jonathan-Password` matching `JONATHAN_PASSWORD`. Incremental refresh ignores the freshness cooldown but retains the score watermark; full refresh discards it.
+- `POST /api/jonathan/refresh?mode=incremental|full|reanalyze`: protected operator trigger; requires `X-Jonathan-Password` matching `JONATHAN_PASSWORD`. Incremental refresh ignores the freshness cooldown but retains the score watermark; full refresh discards it. Reanalysis rebuilds results from the stored production snapshots without fetching upstream scores or replacing the snapshots.
 - `POST /api/deploy?mix=phoenix2`: validate and acknowledge a legacy signed deployment event without starting analysis.
 - `GET /api/recommendations/players`: return consented usernames and mode eligibility without raw IDs; successful lists are cached for five minutes with stale revalidation.
 - `GET /api/recommendations?playerKey=...&mode=overall|singles|doubles|coop`: return only the requested mode from the last cached recommendation for one player. Omitting `mode` retains the full compatibility response. The default Overall response includes canonical `difficultyOptions` but omits its large filter pool; add `difficulty=S16` (for example) to return only that exact Overall difficulty slice.

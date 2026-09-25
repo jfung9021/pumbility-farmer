@@ -31,7 +31,7 @@ def jonathan_authorized(provided: str, expected: str) -> bool:
 @router.post("/api/jonathan/refresh")
 def refresh_from_jonathan(
     request: Request,
-    mode: Literal["incremental", "full"] = Query(default="incremental"),
+    mode: Literal["incremental", "full", "reanalyze"] = Query(default="incremental"),
 ):
     password = os.getenv("JONATHAN_PASSWORD", "").strip()
     if not password:
@@ -54,6 +54,7 @@ def refresh_from_jonathan(
             mix=resolve_mix("phoenix2"),
             force_refresh=True,
             full_sync=full_sync,
+            reanalyze_only=mode == "reanalyze",
             trigger="jonathan",
         )
         return _response(status, payload)
