@@ -1876,6 +1876,48 @@ class WorkerTests(unittest.TestCase):
                             blobs, checkpoint=checkpoint, reference=reference, mix_spec=mix_spec
                         )
 
+    def test_combined_checkpoint_uses_persisted_number_representation(self) -> None:
+        class JsonbNumberStore(MemoryBlobStore):
+            def put_json(self, pathname, payload):
+                # JSONB retains decimal scale but removes the sign from zero.
+                normalized = json.loads(
+                    json.dumps(payload),
+                    parse_float=lambda value: float(value) or 0.0,
+                )
+                super().put_json(pathname, normalized)
+
+        blobs = JsonbNumberStore()
+        mix_spec = resolve_mix("phoenix2")
+        checkpoint = {"jobId": "jsonb-combined", "mix": mix_spec.key}
+        tier = _combined_tier_payload_fixture(generated_at_utc=isoformat_utc(NOW))
+        tier["singles"][0]["difficultyDelta"] = -0.0
+        reference = _write_typed_checkpoint_combined(
+            blobs,
+            job_id=checkpoint["jobId"],
+            mix_spec=mix_spec,
+            generated_at_utc=isoformat_utc(NOW),
+            combined_tier=tier,
+            model_charts=[{"difficultyDelta": -0.0}],
+            phoenix2_slopes={},
+            source_hashes={"phoenix1": "a" * 64, "phoenix2": "b" * 64},
+            snapshot_hashes={"phoenix1": "c" * 64, "phoenix2": "d" * 64},
+            input_sha256="e" * 64,
+        )
+        loaded = _load_typed_checkpoint_combined(
+            blobs, checkpoint=checkpoint, reference=reference, mix_spec=mix_spec
+        )
+        self.assertEqual(loaded["combinedTier"], tier)
+        self.assertEqual(json.dumps(loaded["modelCharts"]), '[{"difficultyDelta": 0.0}]')
+
+        # Correcting harmless representation differences must still reject edits.
+        stored = blobs.get_json(reference["pathname"])
+        stored["combined"]["modelCharts"][0]["difficultyDelta"] = 1.0
+        blobs.put_json(reference["pathname"], stored)
+        with self.assertRaisesRegex(ValueError, "failed validation"):
+            _load_typed_checkpoint_combined(
+                blobs, checkpoint=checkpoint, reference=reference, mix_spec=mix_spec
+            )
+
     def test_old_combined_tier_cannot_resume_past_model_fitting(self) -> None:
         class TypedMemoryStore(MemoryBlobStore):
             typed_persistence_enabled = True
