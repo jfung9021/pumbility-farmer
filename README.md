@@ -174,7 +174,7 @@ and [experiment specification](docs/local-scoring-percentile-experiment.md).
 
 The tier model recalculates Scoring ranks/bands and Pumbility while preserving the
 independent Clearing and Co-op methods. Production tiers use schema 26. Pumbility
-remains the unrounded arithmetic average of scoring and clearing. Recommendation
+uses the maximum of the full-precision scoring and clearing estimates. Both components must be available. Recommendation
 projections and player scoring skill keep their existing scoring model.
 `--scoring-profile` (alias `--scoring-percentile`) runs the same tier calculation
 with the schema-25 local diagnostic marker. These local tier commands do not fetch

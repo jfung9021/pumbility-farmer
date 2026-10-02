@@ -361,7 +361,7 @@ def apply_official_tiers(
                 clearing.update(capDefaultDifficulty=floor, capDefaultBasis=basis)
             if row["estimatedDifficulty"] is not None and clearing["estimatedDifficulty"] is not None:
                 composite = row["tierMetrics"]["pumbility"]
-                _set_metric(composite, (row["estimatedDifficulty"] + clearing["estimatedDifficulty"]) / 2,
+                _set_metric(composite, max(row["estimatedDifficulty"], clearing["estimatedDifficulty"]),
                             level, row["scoringPlayerCount"])
                 composite["evidenceStatus"] = EVIDENCE_ORDER[min(EVIDENCE_ORDER.index(row["evidenceStatus"]),
                                                                 EVIDENCE_ORDER.index(clearing["evidenceStatus"]))]

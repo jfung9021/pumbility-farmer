@@ -169,7 +169,7 @@ class LocalTierBuilderTests(unittest.TestCase):
             self.assertAlmostEqual(clearing["q10Skill"], expected, places=5)
             self.assertAlmostEqual(
                 chart["tierMetrics"]["pumbility"]["estimatedDifficulty"],
-                (chart["estimatedDifficulty"] + clearing["estimatedDifficulty"]) / 2,
+                max(chart["estimatedDifficulty"], clearing["estimatedDifficulty"]),
                 places=5,
             )
 

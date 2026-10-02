@@ -1,4 +1,4 @@
-"""Clearing percentile estimates and the arithmetic Pumbility tier metric."""
+"""Clearing percentile estimates and the maximum-component Pumbility tier metric."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from piu_misgrade_analyzer import difficulty_effect_band
 from player_skill_ratings import clearing_skill_method
 
 
-TIER_METRIC_VERSION = 10
+TIER_METRIC_VERSION = 11
 CLEARING_SKILL_PERCENTILE = 0.10
 # User-selected fixed spread scale. The 2026-09-26 cached S/D population has
 # 15 two-grade moves at 0.70; this is not a quota per folder or run.
@@ -123,7 +123,7 @@ def build_tier_metrics(
             scoring = _finite(charts[index].get("estimatedDifficulty"))
             if scoring is not None:
                 pumbility = metrics[index]["pumbility"]
-                _set_estimate(pumbility, (scoring + estimate) / 2.0, midpoint)
+                _set_estimate(pumbility, max(scoring, estimate), midpoint)
                 scoring_status = str(charts[index].get("evidenceStatus") or "Unrated")
                 pumbility["evidenceStatus"] = EVIDENCE_ORDER[min(
                     EVIDENCE_ORDER.index(scoring_status),
@@ -161,7 +161,7 @@ def tier_metric_method(folder_references: Mapping[str, float]) -> dict[str, Any]
             "evidenceMinimumRated": {"Published": 10, "Provisional": 5, "Insufficient": 1},
         },
         "pumbility": {
-            "calculation": "(scoring difficulty + clearing difficulty) / 2 before rounding",
+            "calculation": "max(scoring difficulty, clearing difficulty) before rounding",
             "evidence": "weaker component status; separate scoring and clearing support counts",
         },
         "limitedDataSupportThreshold": 20,
