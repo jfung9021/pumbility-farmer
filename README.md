@@ -143,15 +143,16 @@ Run `--tiers-only` to regenerate the previous submitted-source tier aggregate.
 
 Run `.venv/Scripts/python.exe scripts/build_local_recommendations.py --tiers-only`
 to rebuild only local tiers from cached Phoenix snapshots. Production refreshes
-use the same model. Each chart uses its linearly interpolated 10th-, 25th-, 50th-, 75th-, and 90th-percentile
+use the same model. Each chart uses its linearly interpolated 50th-, 75th-, and 90th-percentile
 scores, with one equally weighted successful best-score record per player/chart.
 Phoenix 2 has overlap precedence; Phoenix 1 retains note-count normalization.
 No skill baselines, player-history minimums, Pumbility filters, or top/recent windows
 select or adjust these observations.
 
-The five-score profile is matched against a continuous, smoothed reference curve
+The three-score profile is matched against a continuous, smoothed reference curve
 independently for Singles and Doubles. Matching uses weighted mean squared score
-differences with weights `1, 1, 1, 1, 2`: the 90th percentile has double weight.
+differences with weights `1, 1, 2`: the 90th percentile has double weight.
+The 10th and 25th score percentiles are excluded from both the chart profiles and their reference curves.
 This raw match is then centered in its own
 official mode/level folder:
 
@@ -484,6 +485,14 @@ private local recommendation index. Use
 `npm run analyze:phoenix1` or `npm run analyze:phoenix2` to re-analyze only one version.
 The Phoenix 1 result is written only to `.local-data`; the frozen public archive is not changed.
 
+The recommendation build also writes minimized tier-list score overlays to
+`.local-data/piu-scores/recommendations/tier-scores.json`. To generate only those
+overlays from the cached Phoenix 2 snapshot and existing tier list, without
+rerunning numeric analysis, run
+`.venv/Scripts/python.exe scripts/build_local_recommendations.py --tier-scores-only`.
+The overlay uses each retained actual Phoenix 2 score and its same-record plate,
+including charts outside the Top 50; it does not use projected or Phoenix 1 scores.
+
 To test the local tier lists using Phoenix 2 data only, run
 `.venv/Scripts/python.exe scripts/build_local_recommendations.py --phoenix2-only`.
 This uses the cached Phoenix 2 snapshot, excludes Phoenix 1 from tier model inputs
@@ -537,6 +546,7 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 - `POST /api/recommendations/refresh?playerKey=...&mode=...`: synchronize only that player's new Phoenix 2 scores and queue a lightweight recommendation calculation; requests for the same player within 60 seconds are deduplicated. A fresh response honors the optional mode and Overall difficulty projection used by the GET endpoint.
 - `GET /api/recommendations/refresh?jobId=...`: poll a player-refresh job.
 - `GET /api/tier-list`: return the public combined Phoenix 1 and Phoenix 2 tier aggregate.
+- `GET /api/tier-list/scores?playerKey=...&mode=singles|doubles|coop`: return the selected player's retained Phoenix 2 score and plate code for charts in the current tier mode. The response contains only the public player key, mode, sync timestamp, and `{chartId, score, plateCode}` rows, with `Cache-Control: no-store`. Internal player IDs and raw score histories remain server-side.
 
 Phoenix 1 POST, cron, deployment, worker, and publisher paths reject updates as archived.
 

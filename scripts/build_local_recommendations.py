@@ -24,8 +24,10 @@ from piu_recommendations import (  # noqa: E402
     build_combined_tier_payload,
     build_recommendation_index,
     recommendation_generation_key,
+    public_player_key,
 )
 from scoring_percentile import build_production_tier_payload  # noqa: E402
+from tier_scores import build_local_tier_score_artifact  # noqa: E402
 
 
 DATA_ROOT = ROOT / ".local-data" / "piu-scores"
@@ -102,12 +104,17 @@ def parse_args() -> argparse.Namespace:
         "--scoring-profile", "--scoring-percentile",
         dest="scoring_percentile",
         action="store_true",
-        help="Rebuild local tiers with 10th/25th/50th/75th/90th score profiles, double 90th-percentile weight, and level-specific spread scales; preserve recommendations.",
+        help="Rebuild local tiers with 50th/75th/90th score profiles, double 90th-percentile weight, and level-specific spread scales; preserve recommendations.",
     )
     mode.add_argument(
         "--official-tiers",
         action="store_true",
         help="Rebuild S23+/D25+ Scoring and S25+/D26+ Clearing tiers with official per-player scoring and lower-percentile clearer ability; preserve recommendations.",
+    )
+    mode.add_argument(
+        "--tier-scores-only",
+        action="store_true",
+        help="Build minimized player score overlays from cached Phoenix 2 scores and the existing tier list; skip numeric analysis.",
     )
     mode.add_argument(
         "--prune-only",
@@ -121,10 +128,18 @@ def main() -> int:
     args = parse_args()
     removed = (
         _prune_unpublished_generations(_published_generation_key())
-        if args.prune_only or not (args.phoenix2_only or args.tiers_only or args.scoring_percentile or args.official_tiers) else 0
+        if args.prune_only or not (args.phoenix2_only or args.tiers_only or args.scoring_percentile or args.official_tiers or args.tier_scores_only) else 0
     )
     if args.prune_only:
         print(f"Removed {removed} unpublished recommendation generation(s).")
+        return 0
+    if args.tier_scores_only:
+        tiers = json.loads(COMBINED_OUTPUT_PATH.read_text(encoding="utf-8"))
+        _write_json(
+            OUTPUT_PATH.parent / "tier-scores.json",
+            build_local_tier_score_artifact(_read_snapshot("phoenix2"), tiers, public_player_key),
+        )
+        print("Built local player tier scores from the cached Phoenix 2 snapshot.")
         return 0
 
     phoenix1 = (
@@ -199,6 +214,10 @@ def main() -> int:
     ]
     _write_json(OUTPUT_PATH, payload)
     _write_json(COMBINED_OUTPUT_PATH, combined_payload)
+    _write_json(
+        OUTPUT_PATH.parent / "tier-scores.json",
+        build_local_tier_score_artifact(phoenix2, combined_payload, public_player_key),
+    )
     _prune_unpublished_generations(generation_key)
     print(
         "Built combined tiers and recommendations for "

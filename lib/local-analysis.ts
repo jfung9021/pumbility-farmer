@@ -370,8 +370,12 @@ export function validateLocalAnalysisPayload(
       ? (payload.schemaVersion === LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION
           || payload.schemaVersion === LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION
           || payload.schemaVersion === LOCAL_OFFICIAL_ANALYSIS_SCHEMA_VERSION)
-        && JSON.stringify(scoring.percentiles) === "[0.1,0.25,0.5,0.75,0.9]"
-        && JSON.stringify(scoring.profileWeights) === "[1,1,1,1,2]"
+        && ((scoring.version === 1
+          && JSON.stringify(scoring.percentiles) === "[0.1,0.25,0.5,0.75,0.9]"
+          && JSON.stringify(scoring.profileWeights) === "[1,1,1,1,2]")
+          || (scoring.version === 2
+            && JSON.stringify(scoring.percentiles) === "[0.5,0.75,0.9]"
+            && JSON.stringify(scoring.profileWeights) === "[1,1,2]"))
         && scoring.percentileMethod === "linear interpolation" && scoring.scoreUnit === 10000
         && scoring.referenceSmoothing === 4 && scoring.minimumReferencePlayers === 20
         && scoring.minimumReferenceCharts === 5 && scoring.fullReferenceWeightCharts === 20
@@ -387,8 +391,9 @@ export function validateLocalAnalysisPayload(
           : payload.summary.method.localExperiment === "scoring-profile-level-scales")
         && hasValidFolderScales(payload)
       : payload.schemaVersion === LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION
+        && scoring?.version === 1
         && scoring?.calibration === "original-residual-centering";
-    if (scoring?.version !== 1 || scoring.population !== "combined" || !validScoring
+    if (scoring?.population !== "combined" || !validScoring
       || tiers?.version !== 10 || clearing?.methodVersion !== 2
       || clearing.difficultyBasis !== "current-official-level"
       || clearing.requiredClearCount !== 50

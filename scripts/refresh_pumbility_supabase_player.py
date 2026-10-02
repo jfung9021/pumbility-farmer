@@ -32,12 +32,47 @@ class LocalDatabaseScoreClient:
     def __init__(self, database_url: str, player_id: str) -> None:
         self.database_url = database_url
         self.player_id = player_id
+        self._catalog: list[dict[str, Any]] | None = None
+
+    def _read_catalog(self) -> list[dict[str, Any]]:
+        if self._catalog is not None:
+            return self._catalog
+        import psycopg
+
+        with psycopg.connect(self.database_url, prepare_threshold=None) as connection:
+            with connection.cursor() as cursor:
+                _assert_schema(cursor)
+                cursor.execute(
+                    """
+                    select cr.payload
+                    from pumbility.chart_revisions cr
+                    join pumbility.charts c on c.id = cr.chart_id
+                    join pumbility.mixes m on m.id = c.mix_id
+                    where m.mix_key = 'phoenix2' and c.is_active and cr.valid_to is null
+                    order by c.upstream_chart_id
+                    """
+                )
+                self._catalog = [dict(row[0]) for row in cursor.fetchall()]
+        return self._catalog
 
     def fetch_page_collection(
         self, initial_path: str, params: Mapping[str, Any] | None = None
     ) -> list[dict[str, Any]]:
         expected = f"api/v2/players/{self.player_id}/scores"
-        if initial_path != expected or dict(params or {}) != {"mix": "Phoenix2", "limit": 100}:
+        if dict(params or {}) != {"mix": "Phoenix2", "limit": 100}:
+            raise ValueError("The offline player refresh requested an unexpected upstream shape.")
+        if initial_path == "api/v2/charts":
+            return self._read_catalog()
+        if initial_path == "api/v2/songs":
+            songs = {
+                str(chart.get("songName") or ""): {
+                    "name": chart.get("songName"),
+                    "bpm": {"min": chart.get("bpmMin"), "max": chart.get("bpmMax")},
+                }
+                for chart in self._read_catalog()
+            }
+            return list(songs.values())
+        if initial_path != expected:
             raise ValueError("The offline player refresh requested an unexpected upstream shape.")
         import psycopg
 

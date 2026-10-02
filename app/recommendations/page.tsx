@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import { RefreshMeta } from "../_components/refresh-meta";
+import { PlayerPicker } from "../_components/player-picker";
 import { ChartVideoLink } from "../_components/chart-video-link";
 import { ScoreSyncLink } from "../_components/score-sync-link";
 import { SiteHeader } from "../_components/site-header";
@@ -1163,15 +1164,6 @@ export default function RecommendationsPage() {
     window.history.replaceState({}, "", url);
   };
 
-  const filteredPlayers = useMemo(() => {
-    const players = playersPayload?.players || [];
-    const normalized = selectedKey ? "" : playerQuery.trim().toLocaleLowerCase();
-    if (!normalized) return players;
-    return players.filter((player) =>
-      `${player.displayName} ${player.username}`.toLocaleLowerCase().includes(normalized),
-    );
-  }, [playerQuery, playersPayload, selectedKey]);
-
   const difficultyOptions = useMemo(
     () => activeMode === "overall" && mode?.difficultyOptions
       ? mode.difficultyOptions
@@ -1245,44 +1237,17 @@ export default function RecommendationsPage() {
         <div className="player-picker">
           <label htmlFor="player-select">Phoenix 2 username</label>
           <span className="player-picker-view-label" id="recommendation-view-label">View</span>
-          <div className="player-combobox">
-            <input
-              aria-controls="player-options"
-              aria-expanded={playerMenuOpen}
-              aria-haspopup="listbox"
-              autoComplete="off"
-              disabled={loadingPlayers || !playersPayload?.players.length}
-              id="player-select"
-              onBlur={() => setPlayerMenuOpen(false)}
-              onChange={(event) => handlePlayerInput(event.target.value)}
-              onClick={() => setPlayerMenuOpen(true)}
-              onFocus={(event) => {
-                event.currentTarget.select();
-                setPlayerMenuOpen(true);
-              }}
-              placeholder="Type or select a player"
-              role="combobox"
-              type="text"
-              value={playerQuery}
-            />
-            {playerMenuOpen ? (
-              <div className="player-options" id="player-options" role="listbox">
-                {filteredPlayers.map((player) => (
-                  <button
-                    aria-selected={selectedKey === player.playerKey}
-                    key={player.playerKey}
-                    onClick={() => selectPlayer(player.playerKey, player.displayName)}
-                    onMouseDown={(event) => event.preventDefault()}
-                    role="option"
-                    type="button"
-                  >
-                    {player.displayName}
-                  </button>
-                ))}
-                {!filteredPlayers.length ? <p>No matching usernames</p> : null}
-              </div>
-            ) : null}
-          </div>
+          <PlayerPicker
+            disabled={loadingPlayers || !playersPayload?.players.length}
+            id="player-select"
+            onOpenChange={setPlayerMenuOpen}
+            onQueryChange={handlePlayerInput}
+            onSelect={selectPlayer}
+            open={playerMenuOpen}
+            players={playersPayload?.players || []}
+            query={playerQuery}
+            selectedKey={selectedKey}
+          />
           <button
             aria-checked={recommendationView === "top50"}
             aria-labelledby="recommendation-view-label"
@@ -1314,7 +1279,7 @@ export default function RecommendationsPage() {
           <div className="recommendation-empty">
             <span>PF</span>
             <h2>Select a username</h2>
-            <p>Only scores in the displayed Top 50 are returned to the browser. Your internal player ID and full score history stay private.</p>
+            <p>Recommendations show your Top 50 scores. Tier lists can also show your saved scores and plates for the selected mode. Your internal player ID and raw score history stay private.</p>
           </div>
         ) : loadingPlayer && !playerPayload && !hasAnyPlayerPayload ? (
           <div className="recommendation-empty"><span className="spinner" /><h2>Calculating your route</h2></div>

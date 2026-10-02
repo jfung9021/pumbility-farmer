@@ -220,6 +220,29 @@ class Phoenix2SyncTests(unittest.TestCase):
         self.assertNotIn("recordedAfter", paths["api/v2/players/new/scores"])
         self.assertNotIn("api/v2/players/empty/scores", paths)
 
+    def test_incremental_refresh_reloads_catalog_and_keeps_new_chart_scores(self) -> None:
+        current = {
+            "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
+            "players": [{"playerId": "known", "lastSyncedAtUtc": "2026-08-07T04:00:00Z"}],
+            "charts": [chart("existing")],
+            "scores": [score("known", "existing", 600)],
+        }
+        client = FakeClient(
+            ["known"], [chart("existing"), chart("new")],
+            {"known": [score("known", "new", 610)]},
+            songs=[{"name": "new", "bpm": {"min": 110, "max": 130}}],
+        )
+        snapshot, _ = synchronize_phoenix2_snapshot(
+            client, current, job_id="new-catalog", now=lambda: FIXED_NOW,
+        )
+        charts = {row["id"]: row for row in snapshot["charts"]}
+        self.assertEqual((charts["new"]["bpmMin"], charts["new"]["bpmMax"]), (110, 130))
+        self.assertEqual({row["chartId"] for row in snapshot["scores"]}, {"existing", "new"})
+        calls = dict(client.calls)
+        self.assertIn("api/v2/charts", calls)
+        self.assertIn("api/v2/songs", calls)
+        self.assertIn("recordedAfter", calls["api/v2/players/known/scores"])
+
     def test_incremental_overlap_recovers_a_late_backfilled_score(self) -> None:
         late = score("known", "late", 610)
         late["recordedAt"] = "2026-08-03T05:00:00Z"

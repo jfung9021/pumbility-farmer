@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { RefreshMeta } from "../_components/refresh-meta";
 import { ChartVideoLink } from "../_components/chart-video-link";
+import { PlayerPicker } from "../_components/player-picker";
+import { BpmRangeFilter } from "../_components/bpm-range-filter";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { demoPayload } from "../../lib/demo-data";
@@ -12,6 +14,7 @@ import {
   formatEstimatedDifficulty,
 } from "../../lib/format-difficulty";
 import { tierMetricFromSearchParams, tierModeFromSearchParams } from "../../lib/page-view-state";
+import { clampBpmRange, formatTierScore, matchesTierBpm, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
 import {
   clearingPercentileRange,
   clearingSkillPercentile,
@@ -27,12 +30,16 @@ import type {
   AnalysisPayload,
   ChartResult,
   ModeKey,
+  RecommendationPlayersResponse,
   TierMetricKey,
+  TierPlayerScore,
+  TierPlayerScoresResponse,
 } from "../../lib/types";
 
 type FilterState = {
   query: string;
   level: string;
+  bpm: BpmRange | null;
 };
 
 type GroupingView = "tiers" | "estimated";
@@ -41,7 +48,30 @@ type LayoutView = "detailed" | "compact";
 const initialFilter: FilterState = {
   query: "",
   level: "All",
+  bpm: null,
 };
+
+const TierScoresContext = createContext<{
+  selected: boolean;
+  loading: boolean;
+  unavailable: boolean;
+  scores: Map<string, TierPlayerScore>;
+}>({ selected: false, loading: false, unavailable: false, scores: new Map() });
+
+function PersonalChartScore({ chartId }: { chartId: string }) {
+  const { selected, loading, unavailable, scores } = useContext(TierScoresContext);
+  if (!selected) return null;
+  const result = scores.get(chartId);
+  const description = result
+    ? `${result.score.toLocaleString()} points${result.plateCode ? `, ${result.plateCode}` : ""}`
+    : unavailable ? "Player score unavailable" : loading ? "Loading player score" : "No recorded score";
+  return (
+    <div aria-label={description} className="tier-player-score" title={description}>
+      <span>{result ? formatTierScore(result.score) : "—"}</span>
+      <span>{result?.plateCode || ""}</span>
+    </div>
+  );
+}
 
 const groupTone = ["lime", "green", "mint", "slate", "orange", "rose", "red"];
 const metricLabels: Record<TierMetricKey, string> = { scoring: "Scoring", clearing: "Clearing", pumbility: "Pumbility" };
@@ -194,7 +224,7 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
           </div>
         ) : metric === "scoring" && profileScoring ? (
           <div className="chart-meta metric-details">
-            {chart.scoringScoreProfile?.map((score, index) => <span key={index}>{[10, 25, 50, 75, 90][index]}th-percentile score: <b>{Math.round(score).toLocaleString()}</b>{index === 4 ? " (double weight)" : ""}</span>)}
+            {chart.scoringScoreProfile?.map((score, index, profile) => <span key={index}>{(profile.length === 3 ? [50, 75, 90] : [10, 25, 50, 75, 90])[index]}th-percentile score: <b>{Math.round(score).toLocaleString()}</b>{index === profile.length - 1 ? " (double weight)" : ""}</span>)}
             <span><b>{chart.nContributors}</b> unique successful players, equally weighted</span>
             {chart.scoringProfileMatchDifficulty != null ? <span>Profile match before calibration: <b>{chart.scoringProfileMatchDifficulty.toFixed(2)}</b></span> : null}
             {chart.scoringFolderReferenceDifficulty != null ? <span>Folder median match: <b>{chart.scoringFolderReferenceDifficulty.toFixed(2)}</b></span> : null}
@@ -264,6 +294,7 @@ function ChartCard({ chart, metric }: { chart: ChartResult; metric: TierMetricKe
         <div className="chart-art jacket" data-chart-type={chart.type} aria-hidden="true">
           {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
         </div>
+        <PersonalChartScore chartId={chart.chartId} />
         <ChartVideoLink
           chartId={chart.chartId}
           difficulty={chart.difficulty}
@@ -293,6 +324,7 @@ function CompactChartCard({ chart, metric, onSelect }: { chart: ChartResult; met
           </span>
         </span>
       </button>
+      <PersonalChartScore chartId={chart.chartId} />
     </article>
   );
 }
@@ -385,6 +417,7 @@ function ChartDetailDialog({ chart, metric, onClose }: { chart: ChartResult; met
             <div className="chart-art jacket chart-dialog-jacket" data-chart-type={chart.type} aria-hidden="true">
               {chart.imageUrl ? <img src={chart.imageUrl} alt="" /> : <span>{chart.difficulty}</span>}
             </div>
+            <PersonalChartScore chartId={chart.chartId} />
             <ChartVideoLink
               chartId={chart.chartId}
               difficulty={chart.difficulty}
@@ -459,6 +492,7 @@ export default function TierListPage() {
   const [payload, setPayload] = useState<AnalysisPayload | null>(null);
   const phoenix2Only = payload?.summary.method.sourceSelection === "phoenix2-only";
   const profileScoring = (payload?.summary.method.scoring as { calibration?: string } | undefined)?.calibration === "folder-scaled-score-profile";
+  const upperProfileScoring = (payload?.summary.method.scoring as { version?: number } | undefined)?.version === 2;
   const officialTiers = payload?.summary.method.officialTiers;
   const [activeMode, setActiveMode] = useState<ModeKey>("singles");
   const [activeMetric, setActiveMetric] = useState<TierMetricKey>("scoring");
@@ -473,6 +507,79 @@ export default function TierListPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(0);
   const [selectedChart, setSelectedChart] = useState<ChartResult | null>(null);
+  const [playersPayload, setPlayersPayload] = useState<RecommendationPlayersResponse | null>(null);
+  const [selectedPlayerKey, setSelectedPlayerKey] = useState("");
+  const [playerQuery, setPlayerQuery] = useState("");
+  const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
+  const [loadingPlayers, setLoadingPlayers] = useState(true);
+  const [playersError, setPlayersError] = useState<string | null>(null);
+  const [playerScores, setPlayerScores] = useState<TierPlayerScoresResponse | null>(null);
+  const [loadingScores, setLoadingScores] = useState(false);
+  const [scoresError, setScoresError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/recommendations/players", { signal: controller.signal, cache: "no-store" })
+      .then((response) => readJsonResponse<RecommendationPlayersResponse>(response))
+      .then((players) => { if (!controller.signal.aborted) setPlayersPayload(players); })
+      .catch((error) => {
+        if (!controller.signal.aborted) setPlayersError(error instanceof Error ? error.message : "Could not load usernames.");
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoadingPlayers(false); });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!playersPayload) return;
+    const applyPlayerFromUrl = () => {
+      const requested = new URLSearchParams(window.location.search).get("player");
+      const player = playersPayload.players.find((candidate) => candidate.playerKey === requested);
+      setSelectedPlayerKey(player?.playerKey || "");
+      setPlayerQuery(player?.displayName || "");
+      setPlayerMenuOpen(false);
+    };
+    applyPlayerFromUrl();
+    window.addEventListener("popstate", applyPlayerFromUrl);
+    return () => window.removeEventListener("popstate", applyPlayerFromUrl);
+  }, [playersPayload]);
+
+  useEffect(() => {
+    setPlayerScores(null);
+    setScoresError(null);
+    if (!selectedPlayerKey) { setLoadingScores(false); return; }
+    const controller = new AbortController();
+    setLoadingScores(true);
+    const params = new URLSearchParams({ playerKey: selectedPlayerKey, mode: activeMode });
+    fetch(`/api/tier-list/scores?${params}`, { signal: controller.signal, cache: "no-store" })
+      .then((response) => readJsonResponse<TierPlayerScoresResponse>(response))
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        if (result.playerKey !== selectedPlayerKey || result.mode !== activeMode) throw new Error("The server returned scores for another player or mode.");
+        setPlayerScores(result);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setScoresError(error instanceof Error ? error.message : "Could not load player scores.");
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoadingScores(false); });
+    return () => controller.abort();
+  }, [activeMode, selectedPlayerKey]);
+
+  const activePlayerScores = playerScores?.playerKey === selectedPlayerKey && playerScores.mode === activeMode ? playerScores : null;
+  const scoreContext = useMemo(() => ({
+    selected: Boolean(selectedPlayerKey),
+    loading: loadingScores || Boolean(selectedPlayerKey && !activePlayerScores && !scoresError),
+    unavailable: Boolean(scoresError),
+    scores: new Map(activePlayerScores?.scores.map((score) => [score.chartId, score]) || []),
+  }), [activePlayerScores, loadingScores, scoresError, selectedPlayerKey]);
+  const selectPlayer = (key: string, displayName = "") => {
+    setSelectedPlayerKey(key);
+    setPlayerQuery(displayName);
+    setPlayerMenuOpen(false);
+    const url = new URL(window.location.href);
+    if (key) url.searchParams.set("player", key);
+    else url.searchParams.delete("player");
+    window.history.replaceState({}, "", url);
+  };
 
   const loadLatest = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -538,6 +645,8 @@ export default function TierListPage() {
   const clearingScale = tierMethod?.clearing?.difficultyDeltaScale ?? 1;
   const metricAvailability = tierMetricAvailability(modeCharts, activeMetric, activeMode);
   const filter = filters[activeMode];
+  const bpmBounds = useMemo(() => tierBpmBounds(modeCharts), [modeCharts]);
+  const selectedBpm = useMemo(() => filter.bpm && bpmBounds ? clampBpmRange(filter.bpm, bpmBounds) : null, [bpmBounds, filter.bpm]);
   const levels = useMemo(
     () => [...new Set(modeCharts.map((chart) => chart.level))].sort((a, b) => a - b),
     [modeCharts],
@@ -546,9 +655,10 @@ export default function TierListPage() {
     const query = filter.query.trim().toLocaleLowerCase();
     return modeCharts.filter((chart) => {
       if (filter.level !== "All" && chart.level !== Number(filter.level)) return false;
+      if (!matchesTierBpm(chart, selectedBpm)) return false;
       return !query || `${chart.songName} ${chart.stepArtist || ""}`.toLocaleLowerCase().includes(query);
     });
-  }, [filter, modeCharts]);
+  }, [filter, modeCharts, selectedBpm]);
   const estimatedGroups = useMemo(
     () => estimatedTierGroups(filteredCharts, activeMetric, activeMode),
     [activeMode, activeMetric, filteredCharts],
@@ -587,6 +697,7 @@ export default function TierListPage() {
   }, []);
 
   return (
+    <TierScoresContext.Provider value={scoreContext}>
     <main className="tier-list-page">
       <SiteHeader active="tier-list" />
 
@@ -605,6 +716,26 @@ export default function TierListPage() {
       </section>
 
       <section className="dashboard" aria-busy={loading} id="rankings-dashboard">
+        <div className="player-picker tier-player-picker">
+          <label htmlFor="tier-player-select">Phoenix 2 username <span>(optional)</span></label>
+          <PlayerPicker
+            disabled={loadingPlayers || !playersPayload?.players.length}
+            id="tier-player-select"
+            onOpenChange={setPlayerMenuOpen}
+            onQueryChange={(query) => { selectPlayer("", query); setPlayerMenuOpen(true); }}
+            onSelect={selectPlayer}
+            open={playerMenuOpen}
+            players={playersPayload?.players || []}
+            query={playerQuery}
+            selectedKey={selectedPlayerKey}
+          />
+          {selectedPlayerKey ? <button className="tier-clear-player" onClick={() => selectPlayer("")} type="button">Clear selection</button> : null}
+          <div className="tier-player-status">
+            {selectedPlayerKey ? <RefreshMeta generatedAtUtc={activePlayerScores?.syncedAtUtc} label="Player scores synced" loading={loadingScores} loadingLabel="Loading player scores..." nowMs={nowMs} /> : <p>Select a username to see scores and plates.</p>}
+            {selectedPlayerKey && activePlayerScores && !activePlayerScores.syncedAtUtc ? <p>Saved player scores · sync time unavailable</p> : null}
+            {playersError || scoresError ? <p role="status">{playersError || scoresError}</p> : null}
+          </div>
+        </div>
         <div className="view-switcher metric-switcher" role="group" aria-label="Tier list metric">
           {(["scoring", "clearing", "pumbility"] as TierMetricKey[]).map((metric) => (
             <button
@@ -616,7 +747,7 @@ export default function TierListPage() {
             >{metricLabels[metric]}</button>
           ))}
         </div>
-        <div className="mode-tabs" role="tablist" aria-label="Chart mode">
+        <div className="recommendation-mode-tabs tier-mode-tabs" role="tablist" aria-label="Chart mode">
           {(["singles", "doubles", "coop"] as ModeKey[]).map((mode) => (
             <button
               aria-selected={activeMode === mode}
@@ -627,14 +758,11 @@ export default function TierListPage() {
               role="tab"
               type="button"
             >
-              <span className="mode-letter">{mode === "singles" ? "S" : mode === "doubles" ? "D" : "C"}</span>
-              <span>
-                <b>{mode === "coop" ? "Co-op" : mode}</b>
-              </span>
+              <b>{mode === "singles" ? "S" : mode === "doubles" ? "D" : "C"}</b>
+              <span>{mode === "coop" ? "Co-op" : mode}</span>
             </button>
           ))}
         </div>
-        {activeMetric !== "scoring" ? <p className="metric-note">{metricLabels[activeMetric]} estimates are available for Singles and Doubles. Co-op uses a separate scoring scale.</p> : null}
 
         {metricAvailability !== "available" ? (
           <p className="metric-unavailable" role="status">
@@ -665,6 +793,7 @@ export default function TierListPage() {
               ))}
             </select>
           </label>
+          <BpmRangeFilter bounds={bpmBounds} onChange={(bpm) => updateFilter({ bpm })} selected={selectedBpm} />
         </div>
 
         <div className="results-controls">
@@ -778,8 +907,8 @@ export default function TierListPage() {
           </> : null}
           {showSubmittedMethod ? <>
           {showOfficialMethod ? <p><b>Below S23 / D25</b> The player-submitted score population continues to apply.</p> : null}
-          <p><b>How scoring estimates work</b> Each chart uses its 10th-, 25th-, 50th-, 75th-, and 90th-percentile scores among observed successful players, with linear interpolation and one equally weighted score per player. Phoenix 1 scores are normalized to the current chart note count; Phoenix 2 replaces overlapping records. Player skill, Pumbility, and top/recent play windows do not weight or select the scoring sample.</p>
-          <p>The five scores are matched against a continuous reference curve, separately for Singles and Doubles. The 90th-percentile squared score difference has double weight; each other percentile has weight one. Final difficulty is official level + 0.5 + folder scale × (profile match − median profile match in the chart's official folder). Each folder's median anchors at level + 0.5. Matching another folder's typical profile does not force a chart to receive that folder's midpoint.</p>
+          <p><b>How scoring estimates work</b> Each chart uses its {upperProfileScoring ? "50th-, 75th-, and 90th-percentile" : "10th-, 25th-, 50th-, 75th-, and 90th-percentile"} scores among observed successful players, with linear interpolation and one equally weighted score per player. Phoenix 1 scores are normalized to the current chart note count; Phoenix 2 replaces overlapping records. Player skill, Pumbility, and top/recent play windows do not weight or select the scoring sample.</p>
+          <p>The {upperProfileScoring ? "three" : "five"} scores are matched against a continuous reference curve, separately for Singles and Doubles. The 90th-percentile squared score difference has double weight; each other percentile has weight one. Final difficulty is official level + 0.5 + folder scale × (profile match − median profile match in the chart's official folder). Each folder's median anchors at level + 0.5. Matching another folder's typical profile does not force a chart to receive that folder's midpoint.</p>
           <p>Each mode and official level has its own spread scale, shown in chart details. Scales seek useful spreads while staying reasonably close to neighboring levels in the same mode; sparse folders borrow support from those neighbors. Narrow folders aim for about 1.0 grade across their middle 80%, while broader folders can retain wider spreads.</p>
           <p>Two-grade scoring moves should be rare: roughly 3–10 across Singles and Doubles is a guideline, with a soft penalty beyond ten, no minimum quota, and no hard cap. Limited-data charts count. Both directions count: for an S21, estimates of 23.0 or above and below 20.0 count. Pumbility remains the arithmetic average of scoring and clearing.</p>
           <p>References use folders with at least five charts having 20+ successful players each. Raw profile matches outside the reference range use linear extension and are marked in chart details before final calibration. Profile match error shows how closely a chart resembles its reference; lower is a closer fit.</p>
@@ -796,5 +925,6 @@ export default function TierListPage() {
       </footer>
       {selectedChart ? <ChartDetailDialog chart={selectedChart} metric={activeMetric} onClose={closeChartDialog} /> : null}
     </main>
+    </TierScoresContext.Provider>
   );
 }
