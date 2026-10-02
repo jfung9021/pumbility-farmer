@@ -5,6 +5,19 @@ export type RecommendationModeKey = "overall" | ModeKey;
 export type EvidenceStatus = "Published" | "Provisional" | "Insufficient" | "Unrated";
 export type TierMetricKey = "scoring" | "clearing" | "pumbility";
 
+export interface TierPlayerScore {
+  chartId: string;
+  score: number;
+  plateCode: string | null;
+}
+
+export interface TierPlayerScoresResponse {
+  playerKey: string;
+  mode: ModeKey;
+  syncedAtUtc: string | null;
+  scores: TierPlayerScore[];
+}
+
 export interface TierMetricResult {
   estimatedDifficulty: number | null;
   difficultyDelta: number | null;
@@ -165,7 +178,7 @@ export interface ChartResult {
     clearing: ClearingTierMetric;
     pumbility: PumbilityTierMetric;
   };
-  scoringScoreProfile?: [number, number, number, number, number] | null;
+  scoringScoreProfile?: [number, number, number] | [number, number, number, number, number] | null;
   scoringProfileMatchDifficulty?: number | null;
   scoringFolderReferenceDifficulty?: number | null;
   scoringDifficultyScale?: number | null;

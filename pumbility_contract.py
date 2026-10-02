@@ -15,7 +15,7 @@ from typing import Any, Mapping
 from phoenix2_sync import parse_utc, utc_now
 
 
-SCRIPT_VERSION = "6.14.0-weighted-score-profiles-clearing070"
+SCRIPT_VERSION = "6.15.0-upper-score-profiles-clearing070"
 PHOENIX2_MINIMUM_ANALYSIS_SCORES = 50
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)
@@ -42,11 +42,11 @@ def scoring_method_identity() -> dict[str, Any]:
 def scoring_tier_method_identity() -> dict[str, Any]:
     """Public tier identity; player scoring skill and recommendations stay separate."""
     return {
-        "version": 1,
+        "version": 2,
         "population": "combined",
         "calibration": "folder-scaled-score-profile",
-        "percentiles": [0.10, 0.25, 0.50, 0.75, 0.90],
-        "profileWeights": [1, 1, 1, 1, 2],
+        "percentiles": [0.50, 0.75, 0.90],
+        "profileWeights": [1, 1, 2],
         "preferredCentralWidth": 1.0,
     }
 

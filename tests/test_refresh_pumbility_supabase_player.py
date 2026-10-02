@@ -7,6 +7,26 @@ from scripts.refresh_pumbility_supabase_player import LocalDatabaseScoreClient, 
 
 
 class LocalDatabaseScoreClientTests(unittest.TestCase):
+    @patch("scripts.refresh_pumbility_supabase_player._assert_schema")
+    @patch("psycopg.connect")
+    def test_catalog_refresh_reads_imported_metadata_without_upstream_access(
+        self, connect: Mock, schema: Mock,
+    ) -> None:
+        chart = {
+            "id": "new", "songName": "New song", "type": "Single", "level": 20,
+            "bpmMin": 110, "bpmMax": 130,
+        }
+        cursor = connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = [(chart,)]
+        client = LocalDatabaseScoreClient("postgresql://localhost/local", "player")
+        params = {"mix": "Phoenix2", "limit": 100}
+        self.assertEqual(client.fetch_page_collection("api/v2/songs", params), [
+            {"name": "New song", "bpm": {"min": 110, "max": 130}},
+        ])
+        self.assertEqual(client.fetch_page_collection("api/v2/charts", params), [chart])
+        connect.assert_called_once_with("postgresql://localhost/local", prepare_threshold=None)
+        schema.assert_called_once_with(cursor)
+
     def test_rejects_any_nonproduction_request_shape(self) -> None:
         client = LocalDatabaseScoreClient("postgresql://localhost/local", "player")
         with self.assertRaisesRegex(ValueError, "unexpected upstream shape"):

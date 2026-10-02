@@ -135,7 +135,7 @@ test("homepage leads with feature cards and explains the external score sync", a
   assert.match(syncLink, /target="_blank"/);
 });
 
-test("recommendations remove the methodology footer and state the Top 50 privacy boundary", async () => {
+test("recommendations explain the per-view score disclosure boundary", async () => {
   const page = await readFile(
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
@@ -143,8 +143,9 @@ test("recommendations remove the methodology footer and state the Top 50 privacy
 
   assert.doesNotMatch(page, /<footer>/);
   assert.doesNotMatch(page, /How the merge works/);
-  assert.match(page, /Only scores in the displayed Top 50 are returned to the browser/);
-  assert.match(page, /internal player ID and full score history stay private/);
+  assert.match(page, /Recommendations show your Top 50 scores/);
+  assert.match(page, /Tier lists can also show your saved scores and plates/);
+  assert.match(page, /internal player ID and raw score history stay private/);
   assert.match(page, /Skill title progress/);
 });
 
@@ -452,8 +453,10 @@ test("recommendation player clicks are tracked by display name", async () => {
   );
   assert.match(
     page,
-    /onClick=\{\(\) => selectPlayer\(player\.playerKey, player\.displayName\)\}/,
+    /onSelect=\{selectPlayer\}/,
   );
+  const picker = await readFile(path.join(process.cwd(), "app", "_components", "player-picker.tsx"), "utf8");
+  assert.match(picker, /onSelect\(player\.playerKey, player\.displayName\)/);
 });
 
 test("Pumbility progress uses every Phoenix 2 title and rank boundary", () => {
@@ -663,7 +666,7 @@ test("NEVSISTER catalog has the complete validated chart inventory", async () =>
 
   assert.equal(catalog.schemaVersion, 1);
   assert.equal(catalog.channelId, "UCicVRsgv4iIhZGZcbx7xUkw");
-  assert.equal(catalogIds.length, 2712);
+  assert.equal(catalogIds.length, 2746);
   assert.equal(new Set(catalogIds).size, catalogIds.length);
   for (const [chartId, videoId] of Object.entries(catalog.charts)) {
     assert.match(chartId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
@@ -671,14 +674,15 @@ test("NEVSISTER catalog has the complete validated chart inventory", async () =>
   }
 });
 
-test("chart video controls use existing card tracks and out-of-flow positioning", async () => {
+test("tier video controls flow below art and score while recommendation tracks stay fixed", async () => {
   const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
   const mobileStyles = css.slice(css.indexOf("@media (max-width: 560px)"));
 
   assert.match(css, /\.recommendation-card \{[^}]*grid-template-columns: 34px 62px minmax\(0, 1fr\) max-content;[^}]*padding: 15px 18px;/);
   assert.match(css, /\.recommendation-leading \{[^}]*height: 62px;[^}]*position: relative;[^}]*width: 34px;/);
   assert.match(css, /\.chart-card \{[^}]*grid-template-columns: 58px minmax\(0, 1fr\) 104px;[^}]*min-height: 86px;/);
-  assert.match(css, /\.chart-art-rail \{[^}]*height: 58px;[^}]*position: relative;[^}]*width: 58px;/);
+  assert.match(css, /\.chart-art-rail \{[^}]*container-type: inline-size;[^}]*width: 58px;/);
+  assert.match(css, /\.chart-art-rail \.chart-video-link-tier, \.chart-dialog-art-rail \.chart-video-link-dialog \{[^}]*position: static;/);
   assert.match(css, /\.chart-video-link \{[^}]*position: absolute;/);
   assert.doesNotMatch(css, /\.chart-video-link-compact-tier/);
   assert.match(css, /\.chart-video-link-dialog \{[^}]*left: 50%;[^}]*transform: translateX\(-50%\);/);
@@ -688,8 +692,8 @@ test("chart video controls use existing card tracks and out-of-flow positioning"
   assert.match(mobileStyles, /\.recommendation-card \{[^}]*grid-template-columns: 22px 48px minmax\(0, 1fr\) max-content;[^}]*padding: 14px 10px;/);
   assert.match(mobileStyles, /\.recommendation-leading \{[^}]*height: 48px;[^}]*width: 22px;/);
   assert.match(mobileStyles, /\.chart-card \{[^}]*grid-template-columns: 48px minmax\(0, 1fr\);[^}]*padding: 12px 11px;/);
-  assert.match(mobileStyles, /\.chart-art-rail \{[^}]*height: 48px;[^}]*width: 48px;/);
-  assert.match(mobileStyles, /\.chart-dialog-art-rail \{[^}]*height: 102px;[^}]*width: 62px;/);
+  assert.match(mobileStyles, /\.chart-art-rail \{[^}]*width: 48px;/);
+  assert.match(mobileStyles, /\.chart-dialog-art-rail \{[^}]*width: 62px;/);
   assert.match(mobileStyles, /\.chart-video-link-dialog \{[^}]*height: 36px;[^}]*top: 64px;/);
 });
 
@@ -1811,6 +1815,17 @@ test("accepts the combined tier-list identity", () => {
   percentile.singles = [{ ...demoPayloads.phoenix2.singles[0], level: 16, scoringDifficultyScale: 0.25 }];
   percentile.doubles = [{ ...demoPayloads.phoenix2.doubles[0], level: 26, scoringDifficultyScale: 0.32 }];
   assert.equal(validateLocalAnalysisPayload(percentile, "combined").schemaVersion, LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION);
+  const upperProfile = structuredClone(percentile);
+  upperProfile.summary.method.scoring = {
+    ...(upperProfile.summary.method.scoring as Record<string, unknown>),
+    version: 2, percentiles: [0.5, 0.75, 0.9], profileWeights: [1, 1, 2],
+  };
+  assert.equal(validateLocalAnalysisPayload(upperProfile, "combined").schemaVersion, LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION);
+  const wrongUpperWeights = structuredClone(upperProfile);
+  wrongUpperWeights.summary.method.scoring = {
+    ...(wrongUpperWeights.summary.method.scoring as Record<string, unknown>), profileWeights: [1, 1, 1],
+  };
+  assert.throws(() => validateLocalAnalysisPayload(wrongUpperWeights, "combined"), /incompatible/);
   assert.throws(() => validateLocalAnalysisPayload({ ...percentile, schemaVersion: LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION }, "combined"), /incompatible/);
   const productionProfile = structuredClone(percentile);
   productionProfile.schemaVersion = LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION;

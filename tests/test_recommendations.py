@@ -91,6 +91,7 @@ from recommendation_artifacts import (
 )
 from recommendation_refresh import (
     _find_shard_player,
+    _merged_player_state,
     _raw_scores_by_player,
     build_recommendation_model_artifacts,
     cached_player_is_fresh,
@@ -1387,6 +1388,19 @@ class PeerScoreProjectionTests(unittest.TestCase):
 
 
 class PlayerRecommendationTests(unittest.TestCase):
+    def test_newer_daily_shard_preserves_discovered_chart_metadata(self) -> None:
+        state = _merged_player_state(
+            {"playerId": "player", "lastSyncedAtUtc": "2026-08-10T06:00:00Z", "scores": []},
+            {
+                "playerId": "player", "lastSyncedAtUtc": "2026-08-09T06:00:00Z", "scores": [],
+                "catalog": [{"chartId": "new-chart", "bpmMin": 120, "bpmMax": 130}],
+                "catalogSyncedAtUtc": "2026-08-09T06:00:00Z",
+            },
+        )
+        self.assertEqual(state["lastSyncedAtUtc"], "2026-08-10T06:00:00Z")
+        self.assertEqual(state["catalog"][0]["chartId"], "new-chart")
+        self.assertEqual(state["catalogSyncedAtUtc"], "2026-08-09T06:00:00Z")
+
     @staticmethod
     def _fixed_score_model(score: int = 970_000) -> Mock:
         model = Mock()
@@ -1812,6 +1826,98 @@ class PlayerRecommendationTests(unittest.TestCase):
             len(response["player"]["modes"]["overall"]["topRecommendations"]),
         )
         self.assertEqual(materialize_player_recommendation_cache(stored), response)
+
+    def test_player_refresh_retains_new_chart_scores_without_changing_model(self) -> None:
+        index, model, binary, p1, p2 = build_recommendation_model_artifacts(
+            self.snapshot, self.snapshot, combined_charts=self.combined,
+            phoenix2_slopes={"singles": 10.0}, generation_key="new-chart-refresh",
+            generated_at_utc="2026-08-09T06:00:00Z",
+        )
+        original_model = deepcopy(model)
+        store = MemoryBlobStore()
+        publish_recommendation_model_artifacts(
+            store, index=index, model=model, score_model_bytes=binary,
+            phoenix1_shards=p1, phoenix2_shards=p2, index_path="test-index",
+        )
+        player_key = index["players"][0]["playerKey"]
+        new_chart = {
+            **self.snapshot["charts"][0], "id": "new-chart", "songName": "New song",
+        }
+        incoming = [
+            {**self.snapshot["scores"][0], "chartId": chart_id, "pumbility": 999.0}
+            for chart_id in ("new-chart", "not-in-catalog")
+        ]
+        client = Mock()
+        client.fetch_page_collection.side_effect = lambda path, params: {
+            "api/v2/players/player/scores": incoming,
+            "api/v2/charts": [new_chart],
+            "api/v2/songs": [{"name": "New song", "bpm": {"min": 120, "max": 170}}],
+        }[path]
+        response = refresh_player_recommendations(
+            store, client, index_path="test-index", player_key=player_key,
+        )
+        state = store.get_json(recommendation_player_state_path(player_key))
+        self.assertTrue({"new-chart", "not-in-catalog"}.issubset(
+            {row["chartId"] for row in state["scores"]}
+        ))
+        self.assertEqual(state["pendingCatalogChartIds"], ["not-in-catalog"])
+        self.assertEqual((state["catalog"][0]["bpmMin"], state["catalog"][0]["bpmMax"]), (120, 170))
+        top_scores = response["player"]["modes"]["singles"]["topScores"]
+        actual = next(row for row in top_scores if row["chartId"] == "new-chart")
+        self.assertEqual(actual["songName"], "New song")
+        self.assertEqual(actual["score"], incoming[0]["score"])
+        self.assertIsNone(actual["estimatedDifficulty"])
+        self.assertNotIn("not-in-catalog", {row["chartId"] for row in top_scores})
+        self.assertNotIn("new-chart", {
+            row["chartId"] for row in response["player"]["modes"]["singles"]["filterCandidates"]
+        })
+        self.assertEqual(model, original_model)
+
+        # Metadata can arrive after the score. Resolve the retained row even
+        # when the following score fetch does not repeat it.
+        incoming.clear()
+        client.fetch_page_collection.side_effect = lambda path, params: {
+            "api/v2/players/player/scores": [],
+            "api/v2/charts": [{**new_chart, "id": "not-in-catalog"}],
+            "api/v2/songs": [{"name": "New song", "bpm": {"min": 120, "max": 170}}],
+        }[path]
+        response = refresh_player_recommendations(
+            store, client, index_path="test-index", player_key=player_key,
+        )
+        state = store.get_json(recommendation_player_state_path(player_key))
+        self.assertEqual(state["pendingCatalogChartIds"], [])
+        self.assertTrue({"new-chart", "not-in-catalog"}.issubset({
+            row["chartId"] for row in response["player"]["modes"]["singles"]["topScores"]
+        }))
+
+    def test_catalog_failure_keeps_unknown_score_private_and_known_results_usable(self) -> None:
+        from piu_misgrade_analyzer import ApiError
+
+        index, model, binary, p1, p2 = build_recommendation_model_artifacts(
+            self.snapshot, self.snapshot, combined_charts=self.combined,
+            phoenix2_slopes={"singles": 10.0}, generation_key="catalog-failure-refresh",
+            generated_at_utc="2026-08-09T06:00:00Z",
+        )
+        store = MemoryBlobStore()
+        publish_recommendation_model_artifacts(
+            store, index=index, model=model, score_model_bytes=binary,
+            phoenix1_shards=p1, phoenix2_shards=p2, index_path="test-index",
+        )
+        player_key = index["players"][0]["playerKey"]
+        unknown = {**self.snapshot["scores"][0], "chartId": "new-chart"}
+        client = Mock()
+        client.fetch_page_collection.side_effect = [[unknown], ApiError("Unavailable")]
+        response = refresh_player_recommendations(
+            store, client, index_path="test-index", player_key=player_key,
+        )
+        state = store.get_json(recommendation_player_state_path(player_key))
+        self.assertIn("new-chart", {row["chartId"] for row in state["scores"]})
+        self.assertEqual(state["pendingCatalogChartIds"], ["new-chart"])
+        self.assertTrue(state["catalogRefreshFailed"])
+        self.assertNotIn("new-chart", {
+            row["chartId"] for row in response["player"]["modes"]["singles"]["topScores"]
+        })
+        self.assertEqual(response["player"]["modes"]["singles"]["validScoreCount"], 30)
 
     def test_binary_score_model_round_trips_without_json_bloat(self) -> None:
         model, _ = fit_score_response_model(

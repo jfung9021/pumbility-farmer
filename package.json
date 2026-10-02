@@ -23,7 +23,7 @@
     "benchmark:top50": "node --experimental-strip-types scripts/benchmark_top50_export.ts",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test:frontend": "node --experimental-strip-types --test tests/frontend-api.test.ts"
+    "test:frontend": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "dependencies": {
     "@resvg/resvg-js": "2.6.2",

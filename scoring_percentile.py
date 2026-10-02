@@ -20,8 +20,8 @@ from pumbility_contract import COMBINED_TIER_SCHEMA_VERSION
 from tier_difficulty import build_tier_metrics, tier_metric_method
 
 LOCAL_PERCENTILE_SCHEMA_VERSION = 25
-SCORE_PERCENTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
-PROFILE_WEIGHTS = (1, 1, 1, 1, 2)
+SCORE_PERCENTILES = (0.50, 0.75, 0.90)
+PROFILE_WEIGHTS = (1, 1, 2)
 SCORE_UNIT = 10_000.0
 BOOTSTRAP_SAMPLES = 1000
 MINIMUM_CI_PLAYERS = 20
@@ -447,10 +447,10 @@ def build_percentile_tier_payload(
     updated_metadata['sourceObservations'] = sum(row['nContributors'] for row in scoring_rows)
     payload = build_combined_tier_payload(ranked_records, updated_metadata, generated_at_utc=generated_at_utc)
     payload['schemaVersion'] = LOCAL_PERCENTILE_SCHEMA_VERSION
-    payload['summary']['scriptVersion'] += '+local-score-profile-level-scales-v2'
+    payload['summary']['scriptVersion'] += '+local-score-profile-level-scales-v3'
     method = payload['summary']['method']
     method.update({
-        'scoring': {'version': 1, 'population': 'combined', 'calibration': 'folder-scaled-score-profile',
+        'scoring': {'version': 2, 'population': 'combined', 'calibration': 'folder-scaled-score-profile',
                     'percentiles': list(SCORE_PERCENTILES), 'percentileMethod': 'linear interpolation',
                     'profileWeights': list(PROFILE_WEIGHTS), 'scoreUnit': SCORE_UNIT,
                     'referenceSmoothing': REFERENCE_SMOOTHING,
@@ -476,7 +476,7 @@ def build_percentile_tier_payload(
                                      'formula': 'selectedScale * centered raw profile match', 'expandsFolders': True},
         'scoreProfileCalibration': {
             'method': 'weighted second-difference smoothing, increasing-loss isotonic projection, ordered profile quantiles',
-            'matching': 'minimum weighted mean squared score distance on piecewise linear curve; weights 1/1/1/1/2 for q10/q25/q50/q75/q90; midpoint of tied solutions',
+            'matching': 'minimum weighted mean squared score distance on piecewise linear curve; weights 1/1/2 for q50/q75/q90; midpoint of tied solutions',
             'tails': 'raw profile matching uses linear endpoint extrapolation, before folder centering and folder-specific spread calibration',
             'finalCalibration': 'official level + 0.5 + scale[mode, level] * (raw profile match - official folder median profile match)',
             'scaleSelection': 'joint dynamic programming over hundredth scales; reliability-weighted width fit, within-mode neighbor smoothing, and a soft penalty beyond ten combined two-grade moves',
@@ -495,7 +495,7 @@ def build_percentile_tier_payload(
     for mode, chart_type in (('singles', 'Single'), ('doubles', 'Double')):
         payload['summary']['modes'][mode].update({
             'pumbilityPerLevel': None,
-            'calibration': {'method': 'folder-centered 10th/25th/50th/75th/90th-percentile profile matches with double q90 weight, per-level scales, and a soft rarity penalty',
+            'calibration': {'method': 'folder-centered 50th/75th/90th-percentile profile matches with double q90 weight, per-level scales, and a soft rarity penalty',
                             'folderScales': scale_fit['folderScales'][chart_type]},
             'shrinkage': {'method': 'per-level spread scales around exact official-folder midpoints'},
         })
@@ -514,7 +514,7 @@ def build_production_tier_payload(
     )
     payload['schemaVersion'] = COMBINED_TIER_SCHEMA_VERSION
     payload['summary']['scriptVersion'] = payload['summary']['scriptVersion'].replace(
-        '+local-score-profile-level-scales-v2', '+score-profile-level-scales-v2',
+        '+local-score-profile-level-scales-v3', '+score-profile-level-scales-v3',
     )
     payload['summary']['method'].pop('localExperiment', None)
     if official_snapshot is not None:

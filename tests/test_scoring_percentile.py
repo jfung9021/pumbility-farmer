@@ -4,6 +4,7 @@ import copy
 import itertools
 import math
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -59,39 +60,39 @@ class PercentileScoringTests(unittest.TestCase):
 
     def test_projection_matches_other_levels_and_interpolates_without_label_input(self):
         curve = {'difficulties': [22.5, 23.5, 24.5],
-                 'profiles': [[950000, 960000, 970000, 980000, 990000],
-                              [940000, 950000, 960000, 970000, 980000],
-                              [920000, 930000, 940000, 950000, 960000]]}
+                 'profiles': [[970000, 980000, 990000],
+                              [960000, 970000, 980000],
+                              [940000, 950000, 960000]]}
         estimates, errors = match_profiles([
-            [940000, 950000, 960000, 970000, 980000], [945000, 955000, 965000, 975000, 985000],
-            [960000, 970000, 980000, 990000, 1000000], [900000, 910000, 920000, 930000, 940000],
+            [960000, 970000, 980000], [965000, 975000, 985000],
+            [980000, 990000, 1000000], [920000, 930000, 940000],
         ], curve)
         np.testing.assert_allclose(estimates, [23.5, 23., 21.5, 25.5])
         np.testing.assert_allclose(errors, 0, atol=1e-8)
-        # q10 has one sixth of the total weight; its 3,000-point change shifts
-        # the match by 500 points on this 10,000-point-per-level segment.
-        estimate, error = match_profiles([[943000, 950000, 960000, 970000, 980000]], curve)
-        self.assertAlmostEqual(estimate[0], 23.45)
-        self.assertAlmostEqual(error[0], np.sqrt(1_250_000))
+        # q50 has one quarter of the total weight; its 3,000-point change shifts
+        # the match by 750 points on this 10,000-point-per-level segment.
+        estimate, error = match_profiles([[963000, 970000, 980000]], curve)
+        self.assertAlmostEqual(estimate[0], 23.425)
+        self.assertAlmostEqual(error[0], np.sqrt(1_687_500))
         flat = {'difficulties': [20.5, 21.5, 22.5, 23.5],
-                'profiles': [[990000]*5, [980000]*5, [980000]*5, [970000]*5]}
-        self.assertEqual(match_profiles([[980000]*5], flat)[0][0], 22.)
+                'profiles': [[990000]*3, [980000]*3, [980000]*3, [970000]*3]}
+        self.assertEqual(match_profiles([[980000]*3], flat)[0][0], 22.)
         self.assertEqual(two_grade_count([1.5, -1.5, -1.5001, 1.4999]), 2)
 
     def test_ninetieth_percentile_has_double_weight_in_projection_and_error(self):
-        curve = {'difficulties': [20.5, 21.5], 'profiles': [[990000]*5, [980000]*5]}
+        curve = {'difficulties': [20.5, 21.5], 'profiles': [[990000]*3, [980000]*3]}
         estimates, errors = match_profiles([
-            [980000]*5,
-            [974000, 980000, 980000, 980000, 980000],
-            [980000, 980000, 980000, 980000, 986000],
+            [980000]*3,
+            [974000, 980000, 980000],
+            [980000, 980000, 986000],
         ], curve)
-        # Weighted score means are 980000, 979000, and 982000. A q90-only
-        # change shifts twice as far as the same-sized q10-only change.
-        np.testing.assert_allclose(estimates, [21.5, 21.6, 21.3])
-        np.testing.assert_allclose(errors, [0, np.sqrt(5_000_000), np.sqrt(8_000_000)], atol=1e-8)
+        # Weighted score means are 980000, 978500, and 983000. A q90-only
+        # change shifts twice as far as the same-sized q50-only change.
+        np.testing.assert_allclose(estimates, [21.5, 21.65, 21.2])
+        np.testing.assert_allclose(errors, [0, np.sqrt(6_750_000), 3000], atol=1e-8)
 
     def test_raw_reference_smoothing_and_sparse_data(self):
-        folders = {level: [[1_000_000-loss+offset for offset in (-20000, -10000, 0, 10000, 20000)]]*20
+        folders = {level: [[1_000_000-loss+offset for offset in (0, 10000, 20000)]]*20
                    for level, loss in zip(range(20, 25), [40000, 50000, 50000, 70000, 80000])}
         curve = fit_profile_curve(folders)
         # The raw match can move; the final calibration centers it separately.
@@ -102,14 +103,14 @@ class PercentileScoringTests(unittest.TestCase):
         self.assertTrue(np.all(np.diff(profiles, axis=0) <= 1e-7))
         self.assertTrue(np.all(np.diff(profiles, axis=1) >= 0))
         self.assertIsNone(fit_profile_curve({20: folders[20]}))
-        self.assertIsNone(fit_profile_curve({20: [[980000]*5]*5, 21: [[980000]*5]*5}))
+        self.assertIsNone(fit_profile_curve({20: [[980000]*3]*5, 21: [[980000]*3]*5}))
         sparse = fit_profile_curve({20: folders[20], 22: folders[23], 23: folders[24][:4]})
         self.assertEqual(sparse['difficulties'], [20.5, 21.5, 22.5])
         self.assertEqual(sparse['references'][1]['charts'], 0)
         self.assertIsNone(sparse['references'][1]['rawProfile'])
 
     def test_joint_bootstrap_is_reproducible_order_independent_and_requires_support(self):
-        curve = {'difficulties': [20.5, 21.5], 'profiles': [[980000]*5, [970000]*5]}
+        curve = {'difficulties': [20.5, 21.5], 'profiles': [[980000]*3, [970000]*3]}
         self.assertEqual(profile_difficulty_interval([975000]*19, 'a', curve), (None, None))
         self.assertEqual(profile_difficulty_interval([975000]*20, 'a', None), (None, None))
         self.assertEqual(profile_difficulty_interval([975000]*20, 'a', curve), (21., 21.))
@@ -118,6 +119,26 @@ class PercentileScoringTests(unittest.TestCase):
         self.assertEqual(result, profile_difficulty_interval(list(reversed(values)), 'a', curve))
         self.assertLess(result[0], result[1])
         self.assertTrue(all(np.isfinite(result)))
+
+    def test_lower_quartile_changes_do_not_change_profiles_references_or_point_estimates(self):
+        charts = [chart(f'{level}-{offset}', level) for level in (20, 21) for offset in range(5)]
+        scores = [score(f'p{i}', row['id'], 970000 - (row['level'] - 20) * 10000 + offset * 100 + i * 100)
+                  for offset, row in enumerate(charts) for i in range(20)]
+        changed = copy.deepcopy(scores)
+        for row in changed:
+            if int(row['playerId'][1:]) < 5:
+                row['score'] -= 100000
+        rows, metadata = base_records(charts)
+        # Bootstrap intervals still reflect the full observed population; compare
+        # the profile coordinates and point estimates affected by this change.
+        with patch('scoring_percentile.profile_difficulty_interval', return_value=(None, None)):
+            before, after = [build_percentile_tier_payload(rows, metadata, {'charts': [], 'scores': []},
+                            {'charts': charts, 'scores': observations}) for observations in (scores, changed)]
+        self.assertEqual(before['summary']['method']['scoreProfileCalibration']['curves'],
+                         after['summary']['method']['scoreProfileCalibration']['curves'])
+        for original, altered in zip(before['singles'], after['singles']):
+            self.assertEqual(original['scoringScoreProfile'], altered['scoringScoreProfile'])
+            self.assertEqual(original['estimatedDifficulty'], altered['estimatedDifficulty'])
 
     def test_scale_caps_combined_tail_count_and_obeys_serialized_boundaries(self):
         for offsets, expected in [([2]*4, .74), ([-2]*4, .75),
@@ -237,8 +258,9 @@ class PercentileScoringTests(unittest.TestCase):
         by_id = {row['chartId']: row for row in payload['singles']+payload['doubles']}
         self.assertEqual(payload['schemaVersion'], 25)
         self.assertEqual(payload['summary']['method']['localExperiment'], 'scoring-profile-level-scales')
-        self.assertEqual(payload['summary']['method']['scoring']['percentiles'], [.1, .25, .5, .75, .9])
-        self.assertEqual(payload['summary']['method']['scoring']['profileWeights'], [1, 1, 1, 1, 2])
+        self.assertEqual(payload['summary']['method']['scoring']['version'], 2)
+        self.assertEqual(payload['summary']['method']['scoring']['percentiles'], [.5, .75, .9])
+        self.assertEqual(payload['summary']['method']['scoring']['profileWeights'], [1, 1, 2])
         calibration = payload['summary']['method']['scoreProfileCalibration']
         self.assertIsNone(calibration['outlierCap'])
         self.assertNotIn('difficultyDeltaScale', payload['summary']['method']['scoring'])
@@ -248,7 +270,7 @@ class PercentileScoringTests(unittest.TestCase):
             row['estimatedDifficulty'] is not None and
             (row['estimatedDifficulty'] >= row['level']+2 or row['estimatedDifficulty'] < row['level']-1)
             for row in by_id.values()))
-        self.assertEqual(by_id['s20-0']['scoringScoreProfile'], [970190, 970475, 970950, 971425, 971710])
+        self.assertEqual(by_id['s20-0']['scoringScoreProfile'], [970950, 971425, 971710])
         self.assertEqual(by_id['mislabel']['scoringProfileMatchDifficulty'], by_id['s21-0']['scoringProfileMatchDifficulty'])
         self.assertNotEqual(by_id['mislabel']['estimatedDifficulty'], by_id['s21-0']['estimatedDifficulty'])
         for typ in ('Single', 'Double'):

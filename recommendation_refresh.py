@@ -41,7 +41,14 @@ from phoenix1_score_overrides import (
     phoenix1_score_overrides_metadata,
 )
 from phoenix2_pumbility import PlateProjectionModel
-from phoenix2_sync import isoformat_utc, merge_best_scores, parse_utc, utc_now
+from phoenix2_sync import (
+    attach_song_bpm_metadata,
+    isoformat_utc,
+    merge_best_scores,
+    parse_utc,
+    sanitize_chart,
+    utc_now,
+)
 from piu_recommendations import (
     BASELINE_END_RANK,
     BASELINE_START_RANK,
@@ -779,7 +786,82 @@ def _merged_player_state(
         [row for row in live.get("scores", []) if isinstance(row, Mapping)],
         player_id=player_id or None,
     )
+    # A newer daily score shard does not include metadata discovered by a
+    # selected-player refresh. Retain that metadata until the model catches up.
+    for field in ("catalog", "catalogSyncedAtUtc", "pendingCatalogChartIds"):
+        if field in live:
+            result[field] = live[field]
     return result
+
+
+def _actual_score_catalog(
+    model: Mapping[str, Any], state: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Combine model metadata with privately retained new-chart metadata."""
+    catalog = {
+        str(row.get("chartId") or row.get("id") or ""): dict(row)
+        for row in model.get("catalog", [])
+        if isinstance(row, Mapping)
+    }
+    for row in state.get("catalog", []):
+        if not isinstance(row, Mapping):
+            continue
+        chart_id = str(row.get("chartId") or row.get("id") or "")
+        if chart_id and chart_id not in catalog:
+            catalog[chart_id] = dict(row)
+    return list(catalog.values())
+
+
+def _resolve_score_catalog(
+    client: Any,
+    model: Mapping[str, Any],
+    state: Mapping[str, Any],
+    scores: Sequence[Mapping[str, Any]],
+    *,
+    synced_at: str,
+) -> dict[str, Any]:
+    """Resolve new scores without changing the immutable fitted model."""
+    from piu_misgrade_analyzer import ApiError
+
+    model_ids = {
+        str(row.get("chartId") or row.get("id") or "")
+        for row in model.get("catalog", [])
+        if isinstance(row, Mapping)
+    }
+    catalog = {
+        str(row.get("chartId") or row.get("id") or ""): dict(row)
+        for row in _actual_score_catalog(model, state)
+    }
+    score_ids = {str(row["chartId"]) for row in scores}
+    catalog_synced = state.get("catalogSyncedAtUtc")
+    refresh_failed = False
+    if score_ids - catalog.keys():
+        try:
+            songs = client.fetch_page_collection(
+                "api/v2/songs", {"mix": "Phoenix2", "limit": 100}
+            )
+            charts = client.fetch_page_collection(
+                "api/v2/charts", {"mix": "Phoenix2", "limit": 100}
+            )
+            for raw in attach_song_bpm_metadata(charts, songs):
+                chart = sanitize_chart(raw)
+                if chart is None or chart["id"] not in score_ids - model_ids:
+                    continue
+                catalog[chart["id"]] = {
+                    **{key: value for key, value in chart.items() if key != "id"},
+                    "chartId": chart["id"],
+                }
+            catalog_synced = synced_at
+        except ApiError:
+            # Keep pending rows privately so a transient catalog failure cannot
+            # permanently lose scores already fetched successfully.
+            refresh_failed = True
+    return {
+        "catalog": [catalog[key] for key in sorted(catalog.keys() - model_ids)],
+        "catalogSyncedAtUtc": catalog_synced,
+        "pendingCatalogChartIds": sorted(score_ids - catalog.keys()),
+        "catalogRefreshFailed": refresh_failed,
+    }
 
 
 _MODEL_CACHE_LOCK = threading.RLock()
@@ -852,12 +934,17 @@ def player_recommendation_response(
     generated_at_utc: str,
 ) -> dict[str, Any]:
     player_id = str(metadata["internalPlayerId"])
-    catalog_rows = [
-        row for row in model.get("catalog", []) if isinstance(row, Mapping)
+    catalog_rows = _actual_score_catalog(model, phoenix2_state)
+    catalog_ids = {
+        str(row.get("chartId") or row.get("id") or "") for row in catalog_rows
+    }
+    resolved_scores = [
+        row for row in phoenix2_state.get("scores", [])
+        if isinstance(row, Mapping) and str(row.get("chartId") or "") in catalog_ids
     ]
     catalog, p2_scores = _prepared_frames(
         catalog_rows,
-        [row for row in phoenix2_state.get("scores", []) if isinstance(row, Mapping)],
+        resolved_scores,
     )
     _, p1_scores = _prepared_frames(catalog_rows, phoenix1_scores)
     catalog_types = dict(zip(catalog["chartId"].astype(str), catalog["type"].astype(str)))
@@ -868,11 +955,7 @@ def player_recommendation_response(
         ]
     }
     p2_snapshot = {
-        "scores": [
-            dict(row)
-            for row in phoenix2_state.get("scores", [])
-            if isinstance(row, Mapping)
-        ]
+        "scores": [dict(row) for row in resolved_scores]
     }
     plate_model = PlateProjectionModel.from_global_payload(
         model.get("plateModel", {}),
@@ -890,11 +973,7 @@ def player_recommendation_response(
                 }
                 for row in catalog_rows
             ],
-            "scores": [
-                dict(row)
-                for row in phoenix2_state.get("scores", [])
-                if isinstance(row, Mapping)
-            ],
+            "scores": [dict(row) for row in resolved_scores],
         },
         model.get("recommendationCharts", []),
         model.get("phoenix2Slopes", {}),
@@ -1006,19 +1085,10 @@ def refresh_player_recommendations(
             p1_player = _phoenix1_player_input(latest_p1, player_id)
             state = _merged_player_state(latest_base, state)
 
-    valid_ids = {
-        str(row.get("chartId") or row.get("id"))
-        for row in model.get("catalog", [])
-        if isinstance(row, Mapping)
-    }
     merge_started = perf_counter()
     merged = merge_best_scores(
         [row for row in state.get("scores", []) if isinstance(row, Mapping)],
-        [
-            row
-            for row in incoming
-            if isinstance(row, Mapping) and str(row.get("chartId") or "") in valid_ids
-        ],
+        [row for row in incoming if isinstance(row, Mapping)],
         player_id=player_id,
     )
     boundary = isoformat_utc(started)
@@ -1028,6 +1098,7 @@ def refresh_player_recommendations(
         "username": metadata.get("username"),
         "lastSyncedAtUtc": boundary,
         "scores": merged,
+        **_resolve_score_catalog(client, model, state, merged, synced_at=boundary),
     }
     if timings is not None:
         timings["mergeMs"] = round((perf_counter() - merge_started) * 1000, 3)
