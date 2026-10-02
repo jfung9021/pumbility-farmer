@@ -406,7 +406,7 @@ test("tier demo calibrates final folder medians and supports cross-level estimat
       }
       assert.equal("reassessmentStatus" in clearing, false);
       assert.equal(pumbility.estimatedDifficulty, chart.estimatedDifficulty === null || clearing.estimatedDifficulty === null
-        ? null : (chart.estimatedDifficulty + clearing.estimatedDifficulty) / 2);
+        ? null : Math.max(chart.estimatedDifficulty, clearing.estimatedDifficulty));
     }
   }
 });
@@ -1784,7 +1784,7 @@ test("accepts the combined tier-list identity", () => {
       scriptVersion: "test",
       method: {
         scoring: { version: 1, population: "combined", calibration: "original-residual-centering" },
-        tierMetrics: { version: 10, clearing: { skillMethod: {
+        tierMetrics: { version: 11, clearing: { skillMethod: {
           methodVersion: 2, difficultyBasis: "current-official-level", ranks: [1, 50], requiredClearCount: 50,
         } } },
       },
@@ -1893,7 +1893,7 @@ test("accepts the combined tier-list identity", () => {
     effectBandRank:5,effectBand:"Hard",evidenceStatus:"Published",clearCount:500,
     ratedClearCount:400,missingSkillCount:100,q10Skill:24.7,folderReferenceSkill:24.4,
   };
-  Object.assign(mixedChart.tierMetrics!.pumbility,{estimatedDifficulty:24.55,clearingSupportCount:400});
+  Object.assign(mixedChart.tierMetrics!.pumbility,{estimatedDifficulty:24.7,clearingSupportCount:400});
   assert.throws(() => validateLocalAnalysisPayload(mixedSources,"combined"), /official tier/);
   assert.equal(tierSupportLabel(mixedChart,"clearing"),"400 rated submitted clearers");
   const wrongClearingSource = structuredClone(mixedSources);

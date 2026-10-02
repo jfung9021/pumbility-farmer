@@ -182,7 +182,7 @@ function withDemoTierMetrics(charts: ChartResult[]): ChartResult[] {
         clearing.effectBandRank = band?.rank ?? null;
       }
       if (chart.estimatedDifficulty !== null && clearing.estimatedDifficulty !== null) {
-        pumbility.estimatedDifficulty = (chart.estimatedDifficulty + clearing.estimatedDifficulty) / 2;
+        pumbility.estimatedDifficulty = Math.max(chart.estimatedDifficulty, clearing.estimatedDifficulty);
         pumbility.difficultyDelta = pumbility.estimatedDifficulty - (chart.level + 0.5);
         const band = effectBand(pumbility.difficultyDelta);
         pumbility.effectBand = band?.name ?? null;

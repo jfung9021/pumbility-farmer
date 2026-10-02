@@ -228,7 +228,7 @@ function hasValidOfficialTiers(payload: Partial<AnalysisPayload>): boolean {
         if (chart.estimatedDifficulty === null || clearing.estimatedDifficulty === null) {
           if (pumbility.estimatedDifficulty !== null) return false;
         } else if (typeof pumbility.estimatedDifficulty !== "number"
-          || Math.abs(pumbility.estimatedDifficulty - (chart.estimatedDifficulty + clearing.estimatedDifficulty) / 2) > .000002) return false;
+          || Math.abs(pumbility.estimatedDifficulty - Math.max(chart.estimatedDifficulty, clearing.estimatedDifficulty)) > .000002) return false;
         if (evidence.status === "missing" && !evidence.unavailableReason) return false;
         continue;
       }
@@ -394,7 +394,7 @@ export function validateLocalAnalysisPayload(
         && scoring?.version === 1
         && scoring?.calibration === "original-residual-centering";
     if (scoring?.population !== "combined" || !validScoring
-      || tiers?.version !== 10 || clearing?.methodVersion !== 2
+      || tiers?.version !== 11 || clearing?.methodVersion !== 2
       || clearing.difficultyBasis !== "current-official-level"
       || clearing.requiredClearCount !== 50
       || !Array.isArray(clearing.ranks) || clearing.ranks.length !== 2

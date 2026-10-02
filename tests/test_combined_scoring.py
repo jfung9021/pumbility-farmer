@@ -96,7 +96,7 @@ class CombinedScoringTests(unittest.TestCase):
             clearing = row["tierMetrics"]["clearing"]["estimatedDifficulty"]
             scoring = row["estimatedDifficulty"]
             if scoring is not None and clearing is not None:
-                self.assertAlmostEqual(row["tierMetrics"]["pumbility"]["estimatedDifficulty"], (scoring + clearing) / 2, places=5)
+                self.assertAlmostEqual(row["tierMetrics"]["pumbility"]["estimatedDifficulty"], max(scoring, clearing), places=5)
 
 
 if __name__ == "__main__":

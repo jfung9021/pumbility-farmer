@@ -15,7 +15,7 @@ from typing import Any, Mapping
 from phoenix2_sync import parse_utc, utc_now
 
 
-SCRIPT_VERSION = "6.15.0-upper-score-profiles-clearing070"
+SCRIPT_VERSION = "6.16.0-max-pumbility-clearing070"
 PHOENIX2_MINIMUM_ANALYSIS_SCORES = 50
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)
