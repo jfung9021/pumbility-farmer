@@ -506,6 +506,7 @@ def build_production_tier_payload(
     base_records: Sequence[Mapping[str, Any]], metadata: Mapping[str, Any],
     phoenix1: Mapping[str, Any], phoenix2: Mapping[str, Any],
     *, generated_at_utc: str | None = None,
+    official_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Publish the approved profile model without changing recommendation inputs."""
     payload = build_percentile_tier_payload(
@@ -516,4 +517,18 @@ def build_production_tier_payload(
         '+local-score-profile-level-scales-v2', '+score-profile-level-scales-v2',
     )
     payload['summary']['method'].pop('localExperiment', None)
+    if official_snapshot is not None:
+        from official_scores import validate_official_snapshot
+        from official_tiers import apply_official_tiers
+        from pumbility_contract import OFFICIAL_TIER_SCHEMA_VERSION
+
+        official_snapshot = validate_official_snapshot(official_snapshot, phoenix2['charts'])
+        if official_snapshot.get('historyMinimumLevels') != {'Single': 22, 'Double': 23}:
+            raise ValueError('Official clearer ability requires the S22+/D23+ history snapshot; recapture official boards.')
+        payload = apply_official_tiers(payload, official_snapshot, phoenix2['charts'])
+        payload['schemaVersion'] = OFFICIAL_TIER_SCHEMA_VERSION
+        payload['summary']['method']['officialTiers']['snapshotSha256'] = hashlib.sha256(
+            json.dumps(official_snapshot, sort_keys=True, separators=(',', ':'), ensure_ascii=False,
+                       allow_nan=False).encode('utf-8')
+        ).hexdigest()
     return payload

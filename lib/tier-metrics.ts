@@ -50,6 +50,13 @@ export function tierMetricAvailability(charts: ChartResult[], metric: TierMetric
 }
 
 export function hasLimitedTierData(chart: ChartResult, metric: TierMetricKey): boolean {
+  if (chart.officialEvidence) {
+    const limitedScoring = (chart.scoringPlayerCount ?? 0) < 10 || chart.scoringProvisional === true;
+    const clearing = chart.tierMetrics?.clearing;
+    const limitedClearing = hasLimitedData(clearingSkillPercentile(clearing)
+      ? clearing?.ratedClearCount ?? 0 : clearing?.selectedCount ?? 0);
+    return metric === "scoring" ? limitedScoring : metric === "clearing" ? limitedClearing : limitedScoring || limitedClearing;
+  }
   if (metric === "scoring") return hasLimitedData(chart.nContributors);
   const clearing = chart.tierMetrics?.clearing;
   if (metric === "clearing") return hasLimitedData(clearingSkillPercentile(clearing)
@@ -60,6 +67,16 @@ export function hasLimitedTierData(chart: ChartResult, metric: TierMetricKey): b
 }
 
 export function tierSupportLabel(chart: ChartResult, metric: TierMetricKey): string {
+  if (chart.officialEvidence) {
+    const scoring = `${chart.scoringPlayerCount ?? 0} players with same-level comparisons`;
+    const clearingMetric = chart.tierMetrics?.clearing;
+    const clearing = clearingMetric?.skillMetric === "official-clearer-ability"
+      ? `${clearingMetric.ratedClearCount} eligible official clearers`
+      : clearingSkillPercentile(clearingMetric)
+        ? `${clearingMetric?.ratedClearCount ?? 0} rated submitted clearers`
+        : `${clearingMetric?.selectedCount ?? 0} selected submitted clearers`;
+    return metric === "scoring" ? scoring : metric === "clearing" ? clearing : `${scoring} and ${clearing}`;
+  }
   if (metric === "scoring") return `${chart.nContributors} unique player observations`;
   const clearing = chart.tierMetrics?.clearing;
   const pointPercentile = clearingSkillPercentile(clearing);

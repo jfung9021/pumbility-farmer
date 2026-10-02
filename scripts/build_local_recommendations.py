@@ -31,6 +31,7 @@ from scoring_percentile import build_production_tier_payload  # noqa: E402
 DATA_ROOT = ROOT / ".local-data" / "piu-scores"
 OUTPUT_PATH = DATA_ROOT / "recommendations" / "latest.json"
 COMBINED_OUTPUT_PATH = DATA_ROOT / "combined" / "analysis" / "web_results.json"
+OFFICIAL_SNAPSHOT_PATH = DATA_ROOT / "official" / "phoenix2" / "current.json"
 GENERATIONS_PATH = OUTPUT_PATH.parent / "generations"
 
 
@@ -104,6 +105,11 @@ def parse_args() -> argparse.Namespace:
         help="Rebuild local tiers with 10th/25th/50th/75th/90th score profiles, double 90th-percentile weight, and level-specific spread scales; preserve recommendations.",
     )
     mode.add_argument(
+        "--official-tiers",
+        action="store_true",
+        help="Rebuild S25+/D26+ Scoring and Clearing tiers with official per-player scoring and lower-percentile clearer ability; preserve recommendations.",
+    )
+    mode.add_argument(
         "--prune-only",
         action="store_true",
         help="Remove generation directories not referenced by latest.json and exit",
@@ -115,7 +121,7 @@ def main() -> int:
     args = parse_args()
     removed = (
         _prune_unpublished_generations(_published_generation_key())
-        if args.prune_only or not (args.phoenix2_only or args.tiers_only or args.scoring_percentile) else 0
+        if args.prune_only or not (args.phoenix2_only or args.tiers_only or args.scoring_percentile or args.official_tiers) else 0
     )
     if args.prune_only:
         print(f"Removed {removed} unpublished recommendation generation(s).")
@@ -152,10 +158,17 @@ def main() -> int:
         print(f"Built local score-profile tiers with level-specific scales and "
               f"{method['scoreProfileCalibration']['actualTwoGradeCount']} two-grade proposals. Recommendations are unchanged.")
         return 0
-    combined_payload = build_production_tier_payload(combined_charts, combined_metadata, phoenix1, phoenix2)
-    if args.tiers_only:
+    official_arguments = {}
+    if args.official_tiers:
+        # Missing/invalid official inputs must fail before replacing the aggregate.
+        official_arguments["official_snapshot"] = json.loads(OFFICIAL_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    combined_payload = build_production_tier_payload(
+        combined_charts, combined_metadata, phoenix1, phoenix2, **official_arguments,
+    )
+    if args.tiers_only or args.official_tiers:
         _write_json(COMBINED_OUTPUT_PATH, combined_payload)
-        print("Built combined local tier lists from both sources. Recommendations are unchanged.")
+        print("Built local tier lists" + (" with official S25+/D26+ Scoring and Clearing evidence." if args.official_tiers
+                                         else " from both Phoenix sources.") + " Recommendations are unchanged.")
         return 0
     generation_key = recommendation_generation_key(combined_payload["generatedAtUtc"])
 

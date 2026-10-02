@@ -1,6 +1,8 @@
+import copy
 import hashlib
 import hmac
 import json
+import os
 import threading
 import time
 import tomllib
@@ -1354,6 +1356,47 @@ def _recommendation_mode_artifact_fixture(
 
 
 class WorkerTests(unittest.TestCase):
+    def test_official_checkpoint_requires_opt_in_and_the_same_snapshot(self) -> None:
+        from analysis_runtime import _official_tier_arguments
+        from pumbility_contract import OFFICIAL_TIER_SCHEMA_VERSION, official_tier_snapshot_path
+
+        blobs = MemoryBlobStore()
+        snapshot = {'schemaVersion': 1, 'source': 'piuscores-official', 'boards': []}
+        tier = _combined_tier_payload_fixture(generated_at_utc=isoformat_utc(NOW))
+        tier['schemaVersion'] = OFFICIAL_TIER_SCHEMA_VERSION
+        tier['summary']['method']['officialTiers'] = {
+            'version': 14, 'source': 'piuscores-official', 'mix': 'Phoenix2',
+            'minimumLevels': {'Single': 25, 'Double': 26},
+            'capPolicy': 'clearing-folder-minimum',
+            'scoring': {'metric': 'equal-player-score-gaps', 'minimumOtherCharts': 3, 'sparsePolicy': 'provisional-same-level',
+                        'aggregation': 'equal-player-mean', 'pointsPerLevel': 10000,
+                        'calibration': {'method': 'shared-linear-player-gaps', 'version': 5, 'minimumLevels': {'Single': 25, 'Double': 26}, 'rangePolicy': 'unbounded', 'referenceQuantile': .90, 'targetHalfWidth': .45, 'maximumScale': 1, 'minimumSupportedCharts': 8, 'minimumReferencePlayers': 10, 'outlierUse': 'diagnostic-only'}},
+            'clearing': {'skillMetric': 'official-clearer-ability', 'minimumLevels': {'Single': 25, 'Double': 26},
+                         'normalization': 'folder-median-player-ability', 'difficultyDeltaScale': .70,
+                         'percentile': .20, 'playerSkill': {'method': 'leave-one-chart-out-top-official-levels',
+                         'topCharts': 25, 'minimumOtherCharts': 25, 'historyMinimumLevels': {'Single': 22, 'Double': 23}}, 'shrinkage': {'priorPlayers': 20},
+                         'calibration': {'method': 'robust-folder-spread', 'version': 4, 'rangePolicy': 'unbounded', 'referenceQuantile': .90, 'targetHalfWidth': .45, 'maximumScale': None, 'minimumSupportedCharts': 5, 'minimumReferencePlayers': 10, 'outlierUse': 'diagnostic-only'}},
+            'snapshotSha256': _canonical_json_sha256(snapshot),
+        }
+        with patch.dict(os.environ, {'PIU_OFFICIAL_HIGH_LEVEL_TIERS': '0'}):
+            self.assertEqual(_official_tier_arguments(blobs), {})
+            with self.assertRaisesRegex(ValueError, 'incompatible schema'):
+                _validate_checkpoint_combined_tier(tier, blobs)
+        with patch.dict(os.environ, {'PIU_OFFICIAL_HIGH_LEVEL_TIERS': '1'}):
+            with self.assertRaisesRegex(RuntimeError, 'snapshot is unavailable'):
+                _official_tier_arguments(blobs)
+            blobs.put_json(official_tier_snapshot_path(), snapshot)
+            self.assertEqual(_official_tier_arguments(blobs), {'official_snapshot': snapshot})
+            _validate_checkpoint_combined_tier(tier, blobs)
+            for field, obsolete in (('version', 3), ('capPolicy', 'exclude-from-estimates-and-calibration')):
+                changed = copy.deepcopy(tier)
+                changed['summary']['method']['officialTiers'][field] = obsolete
+                with self.assertRaisesRegex(ValueError, 'source is incompatible'):
+                    _validate_checkpoint_combined_tier(changed, blobs)
+            blobs.put_json(official_tier_snapshot_path(), {**snapshot, 'asOf': 'changed'})
+            with self.assertRaisesRegex(ValueError, 'snapshot changed'):
+                _validate_checkpoint_combined_tier(tier, blobs)
+
     def test_current_tier_schema_rejects_old_scoring_or_clearing_method(self) -> None:
         for changed_method in ("scoring", "clearing", "weights", "clearingScale", "localExperiment"):
             with self.subTest(method=changed_method):

@@ -28,12 +28,14 @@ from phoenix2_sync import (
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 from pumbility_contract import (
     COMBINED_TIER_SCHEMA_VERSION,
+    OFFICIAL_TIER_SCHEMA_VERSION,
     MODEL_ARTIFACT_SCHEMA_VERSION,
     PLAYER_REFRESH_STORAGE_SCHEMA_VERSION,
     RECOMMENDATION_SCHEMA_VERSION,
     SCRIPT_VERSION,
     combined_tier_blob_path,
     phoenix1_snapshot_path,
+    official_tier_snapshot_path,
     recommendation_blob_path,
     recommendation_generation_key,
     recommendation_index_path,
@@ -79,6 +81,16 @@ def build_combined_tier_payload(*args: Any, **kwargs: Any) -> Any:
     from scoring_percentile import build_production_tier_payload as implementation
 
     return implementation(*args, **kwargs)
+
+
+def _official_tier_arguments(blob_store: Any) -> dict[str, Any]:
+    """Explicit hosted opt-in: never substitute submitted scores for a missing input."""
+    if os.getenv("PIU_OFFICIAL_HIGH_LEVEL_TIERS", "") != "1":
+        return {}
+    snapshot = blob_store.get_json(official_tier_snapshot_path())
+    if not isinstance(snapshot, Mapping):
+        raise RuntimeError("The official high-level tier snapshot is unavailable.")
+    return {"official_snapshot": snapshot}
 
 
 def recommendation_model_chart_rows(*args: Any, **kwargs: Any) -> Any:
@@ -1929,8 +1941,10 @@ def _current_recommendation_model(model: Mapping[str, Any]) -> bool:
     )
 
 
-def _validate_checkpoint_combined_tier(payload: Mapping[str, Any]) -> None:
-    if payload.get("schemaVersion") != COMBINED_TIER_SCHEMA_VERSION:
+def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: Any = None) -> None:
+    official_enabled = os.getenv("PIU_OFFICIAL_HIGH_LEVEL_TIERS", "") == "1"
+    expected_schema = OFFICIAL_TIER_SCHEMA_VERSION if official_enabled else COMBINED_TIER_SCHEMA_VERSION
+    if payload.get("schemaVersion") != expected_schema:
         raise IncompatibleCombinedTierCheckpointError(
             "The combined tier checkpoint uses an incompatible schema; "
             "a fresh analysis generation is required."
@@ -1941,6 +1955,58 @@ def _validate_checkpoint_combined_tier(payload: Mapping[str, Any]) -> None:
     from tier_difficulty import TIER_METRIC_VERSION, CLEARING_DIFFICULTY_DELTA_SCALE, CLEARING_SKILL_PERCENTILE
 
     method = payload.get("summary", {}).get("method", {})
+    official_method = method.get("officialTiers")
+    if official_enabled:
+        if (
+            not isinstance(official_method, Mapping)
+            or official_method.get("version") != 14
+            or official_method.get("source") != "piuscores-official"
+            or official_method.get("mix") != "Phoenix2"
+            or official_method.get("minimumLevels") != {"Single": 25, "Double": 26}
+            or official_method.get("capPolicy") != "clearing-folder-minimum"
+            or official_method.get("scoring", {}).get("metric") != "equal-player-score-gaps"
+            or official_method.get("scoring", {}).get("minimumOtherCharts") != 3
+            or official_method.get("scoring", {}).get("sparsePolicy") != "provisional-same-level"
+            or official_method.get("scoring", {}).get("aggregation") != "equal-player-mean"
+            or official_method.get("scoring", {}).get("pointsPerLevel") != 10000
+            or official_method.get("scoring", {}).get("calibration", {}).get("method") != "shared-linear-player-gaps"
+            or official_method.get("scoring", {}).get("calibration", {}).get("version") != 5
+            or official_method.get("scoring", {}).get("calibration", {}).get("minimumLevels") != {"Single": 25, "Double": 26}
+            or official_method.get("scoring", {}).get("calibration", {}).get("rangePolicy") != "unbounded"
+            or official_method.get("scoring", {}).get("calibration", {}).get("referenceQuantile") != .90
+            or official_method.get("scoring", {}).get("calibration", {}).get("targetHalfWidth") != .45
+            or official_method.get("scoring", {}).get("calibration", {}).get("maximumScale") != 1
+            or official_method.get("scoring", {}).get("calibration", {}).get("minimumSupportedCharts") != 8
+            or official_method.get("scoring", {}).get("calibration", {}).get("minimumReferencePlayers") != 10
+            or official_method.get("scoring", {}).get("calibration", {}).get("outlierUse") != "diagnostic-only"
+            or official_method.get("clearing", {}).get("skillMetric") != "official-clearer-ability"
+            or official_method.get("clearing", {}).get("minimumLevels") != {"Single": 25, "Double": 26}
+            or official_method.get("clearing", {}).get("normalization") != "folder-median-player-ability"
+            or official_method.get("clearing", {}).get("difficultyDeltaScale") != .70
+            or official_method.get("clearing", {}).get("percentile") != .20
+            or official_method.get("clearing", {}).get("playerSkill", {}).get("method") != "leave-one-chart-out-top-official-levels"
+            or official_method.get("clearing", {}).get("playerSkill", {}).get("topCharts") != 25
+            or official_method.get("clearing", {}).get("playerSkill", {}).get("minimumOtherCharts") != 25
+            or official_method.get("clearing", {}).get("shrinkage", {}).get("priorPlayers") != 20
+            or official_method.get("clearing", {}).get("playerSkill", {}).get("historyMinimumLevels") != {"Single": 22, "Double": 23}
+            or official_method.get("clearing", {}).get("calibration", {}).get("method") != "robust-folder-spread"
+            or official_method.get("clearing", {}).get("calibration", {}).get("version") != 4
+            or official_method.get("clearing", {}).get("calibration", {}).get("rangePolicy") != "unbounded"
+            or official_method.get("clearing", {}).get("calibration", {}).get("referenceQuantile") != .90
+            or official_method.get("clearing", {}).get("calibration", {}).get("targetHalfWidth") != .45
+            or official_method.get("clearing", {}).get("calibration", {}).get("maximumScale", "missing") is not None
+            or official_method.get("clearing", {}).get("calibration", {}).get("minimumSupportedCharts") != 5
+            or official_method.get("clearing", {}).get("calibration", {}).get("minimumReferencePlayers") != 10
+            or official_method.get("clearing", {}).get("calibration", {}).get("outlierUse") != "diagnostic-only"
+            or not re.fullmatch(r"[0-9a-f]{64}", str(official_method.get("snapshotSha256") or ""))
+        ):
+            raise IncompatibleCombinedTierCheckpointError("The official tier checkpoint source is incompatible.")
+        if blob_store is not None:
+            current_official = _official_tier_arguments(blob_store)["official_snapshot"]
+            if official_method["snapshotSha256"] != _canonical_json_sha256(current_official):
+                raise IncompatibleCombinedTierCheckpointError("The official tier snapshot changed; a fresh analysis generation is required.")
+    elif official_method is not None:
+        raise IncompatibleCombinedTierCheckpointError("The official tier checkpoint requires its source policy to be enabled.")
     tier_method = method.get("tierMetrics", {})
     if (
         any(method.get("scoring", {}).get(key) != value
@@ -2063,7 +2129,7 @@ def _load_typed_checkpoint_combined(
         or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("inputSha256") or ""))
     ):
         raise ValueError("The typed combined checkpoint failed validation.")
-    _validate_checkpoint_combined_tier(combined_tier)
+    _validate_checkpoint_combined_tier(combined_tier, blob_store)
     return value
 
 
@@ -2274,6 +2340,7 @@ def _recover_published_model_checkpoint(
             phoenix1_snapshot,
             snapshot,
             generated_at_utc=generated_at,
+            **_official_tier_arguments(blobs),
         )
         source_hashes, snapshot_hashes, input_sha256 = (
             _recommendation_source_identity(
@@ -2653,6 +2720,7 @@ def _build_combined_analysis_checkpoint(
     combined_tier = build_combined_tier_payload(
         combined_charts, combined_metadata, phoenix1_snapshot, snapshot,
         generated_at_utc=payload.get("generatedAtUtc"),
+        **_official_tier_arguments(blob_store),
     )
     reference = _write_typed_checkpoint_combined(
         blob_store,
@@ -2726,6 +2794,7 @@ def _build_analysis_model_artifacts(
         combined_tier_payload = build_combined_tier_payload(
             combined_charts, combined_metadata, phoenix1_snapshot, snapshot,
             generated_at_utc=payload.get("generatedAtUtc"),
+            **_official_tier_arguments(blob_store),
         )
     else:
         if (
@@ -2987,7 +3056,7 @@ def _resume_typed_analysis_checkpoint(
     # Later publication phases embed the aggregate directly and no longer load
     # the combined-input shard, so they need the same compatibility boundary.
     if isinstance(raw_combined_tier, Mapping):
-        _validate_checkpoint_combined_tier(raw_combined_tier)
+        _validate_checkpoint_combined_tier(raw_combined_tier, blob_store)
     snapshot = _load_typed_checkpoint_snapshot(
         blob_store,
         checkpoint=checkpoint,

@@ -23,6 +23,12 @@ RECOMMENDATION_SCHEMA_VERSION = 28
 MODEL_ARTIFACT_SCHEMA_VERSION = 6
 PLAYER_REFRESH_STORAGE_SCHEMA_VERSION = 3
 COMBINED_TIER_SCHEMA_VERSION = 26
+OFFICIAL_TIER_SCHEMA_VERSION = 40
+
+
+def official_tier_snapshot_path() -> str:
+    """Private official-board input; deliberately separate from submitted scores."""
+    return "analysis/private/official/phoenix2.json"
 
 
 def scoring_method_identity() -> dict[str, Any]:
