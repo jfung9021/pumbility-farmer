@@ -4,6 +4,141 @@ Pumbility Farmer is a PIU Phoenix difficulty analyzer and Vercel web UI with Sco
 
 ## Analysis method
 
+### Official Scoring and Clearing S25+ / D26+
+
+Capture the mirrored Phoenix 2 boards and rebuild only the tier aggregate:
+
+```powershell
+.venv/Scripts/python.exe scripts/capture_official_score_snapshot.py
+.venv/Scripts/python.exe scripts/build_local_recommendations.py --official-tiers
+npm run dev -- --hostname 127.0.0.1 --port 3000
+```
+
+Open `http://127.0.0.1:3000/tier-list?mode=singles&metric=clearing` and select S25
+or higher (D26 or higher in Doubles). The capture uses the existing
+`PIU_SCORES_API_KEY` credential and always requests `supplemented=false`.
+Private inputs live in `.local-data/piu-scores/official/phoenix2/current.json`;
+the public aggregate contains no player identities. Capture resumes an interrupted
+snapshot only when its boards belong to the same upstream weekly snapshot.
+
+Schema 40 (official method version 14) uses official Scoring and Clearing for
+S25+/D26+. Through S24/D25, both retain their original player-submitted methods. Pumbility averages the selected Scoring and Clearing methods.
+Scoring compares each player's best scores within the same mode and official level.
+Players normally need three other charts. Smaller folders use all available
+comparisons; a folder without a normal panel can fall back to one other chart.
+These comparisons are provisional. No comparable history means Unrated (including
+single-chart folders). There is no top-30% or submitted-score fallback.
+
+For player p and chart c, let d[j] be the fitted chart effect in score points:
+
+`gap[p,c] = mean(score[p,j] + d[j] for other observed charts j) - score[p,c]`.
+
+Solve `d[c] = mean(gap[p,c])` jointly over shared-player comparison graphs, using
+pair weights `1 / (player chart count - 1)`. Each player's total weight for a
+target chart is one. Anchor each connected component's median effect at zero.
+Disconnected groups are provisional and cannot be compared reliably across groups.
+This adjusts for observed chart selection, not unknown effort or missing attempts.
+
+`personalDifficulty[p,c] = officialLevel + 0.5 + folderScale * gap[p,c] / 10000`.
+
+The chart difficulty is exactly the equal-player mean of personal values before
+display truncation. Every player in a mode/level uses the same **linear** coefficient.
+Use at least eight charts with ten eligible players and normal connected comparisons
+as the reference set. Let `spread = Q90(abs(rawDelta))` for that set:
+
+`folderScale = min(1, 0.45 / spread)` (1 when spread is zero).
+
+This shrinks a broad central distribution without stretching a narrow one. There
+are no endpoint clamps, minimum/maximum-chart constraints, or maximum level shift.
+Tails may cross official levels even without an outlier label. Sparse folders use
+the nearest supported same-mode coefficient (lower level wins distance ties),
+or 0.4 when no supported donor exists.
+
+Scoring outlier labels require ten eligible players, normal connected comparisons,
+and a gap beyond two IQRs outside the supported chart quartiles (IQR floor 2,000
+points). These labels are diagnostic only and never change numeric estimates.
+Diagnostics include eligible players, mean score gap, disagreement, comparison
+group size and provisional status. The 95% intervals use 1,000 deterministic
+shared-player bootstrap samples with fitted adjustments and scales held fixed;
+they exclude model-fit uncertainty, effort, selection and truncation bias.
+At least five contributing players are required for an interval.
+Private per-player diagnostics can be generated with
+`python scripts/diagnose_official_player_scoring.py`; public output has no identities.
+
+Clearing uses the **20th percentile of
+clearer ability**, with linear interpolation and equal weight per eligible player.
+For each player, ability is the average official level + 0.5 of their 25 hardest
+other distinct clears. At least 25 other clears are required, and the chart being
+rated is always excluded. Only official S22+ histories inform Singles and D23+
+histories inform Doubles. The lower history boards support player ability without
+changing their own submitted-score tier ratings. Clearing through S24/D25
+uses the original submitted-score 10th-percentile method, including its 50-clear
+player eligibility rule. The 300-score Clearing default applies only at S25+/D26+.
+
+
+The folder reference is the median ability percentile among uncapped charts with
+usable histories in that same official mode/level. Let `n` be eligible clearers
+and `N` be all observed unique clearers:
+
+`weight = n / (n + 20) * n / N`
+
+`rawDelta = 0.70 * weight * (chartAbilityPercentile - folderReference)`.
+
+Clearing uses `folderScale = 0.45 / Q90(abs(rawDelta))` with no multiplier cap,
+using at least five uncapped reference charts having ten eligible clearers each.
+This expands or compresses the reference spread so roughly 90% of those charts
+fall within level + 0.05 to level + 0.95 (the displayed x.0–x.9 buckets), separately
+for each official level. It is not an exact 90% guarantee across every chart.
+Both signs share one coefficient and tails are unbounded. Sparse folders borrow
+the nearest supported same-mode scale; with no donor or zero reference spread,
+the coefficient is 1. Capped and unrated charts never set the reference.
+
+A Clearing outlier label still requires a supported folder, at least twenty
+eligible clearers, 50% history coverage, and both the raw delta and its full
+conditional interval beyond the same three-IQR fence (IQR floor 0.07). It no longer
+determines whether a chart can cross levels. A crossing is displayed separately
+from statistical-outlier and limited-evidence labels.
+
+`Clearing = level + 0.5 + calibratedDelta`.
+
+Leaderboard size affects evidence strength, not the raw difficulty signal. Small
+samples or incomplete histories pull toward the folder midpoint; no eligible
+clearers means Unrated. Missing histories are never interpreted as failed clears.
+At least five eligible players are needed for the displayed 95% bootstrap interval
+of the ability percentile (1,000 deterministic resamples). Histories, folder references and coefficients stay fixed. Difficulty intervals use
+the same linear transform and exclude preference bias and calibration uncertainty.
+Displayed player skills and recommendations retain their existing definitions.
+
+A board with at least 300 raw rows or a rank reaching 300 is excluded from the
+Clearing folder reference. Its Clearing estimate defaults to the **lowest uncapped nonempty
+Clearing estimate in its own mode/level folder**, after calibration, rather than
+x.0. If no such chart exists, the folder midpoint x.5 is an explicitly labeled
+fallback. Its Scoring estimate uses observed players with comparable histories. Its visible appearances
+still support player histories, but its own lower-tail ability does not set the
+Clearing estimate. Cap defaults are labeled provisional or insufficient evidence.
+
+To add missing tier and history boards to an existing same-week snapshot without replacing its boards:
+
+```powershell
+.venv/Scripts/python.exe scripts/capture_official_score_snapshot.py --extend-existing
+```
+
+The capture includes S25+/D26+ tier boards and S22+/D23+ Clearing history by default. Broader cached snapshots remain valid when they contain all required boards and only known catalog charts; extra boards outside the required scope are ignored. Extension refuses a different upstream
+week and leaves the current snapshot untouched; a normal fresh capture is then needed.
+
+Estimates can cross official levels. Pumbility remains the component average,
+calculated before rounding. Lower-level estimates and Co-op stay unchanged;
+overall rank positions can move. Official calibration never consumes submitted
+scores, and missing official evidence has no submitted-score fallback.
+
+The shared production builder also accepts an explicit `official_snapshot` input.
+Hosted workers opt in with `PIU_OFFICIAL_HIGH_LEVEL_TIERS=1` and require a staged
+private artifact at `analysis/private/official/phoenix2.json`. Missing inputs fail
+the build, and changed snapshot hashes invalidate resumed tier checkpoints.
+This local workflow neither stages that hosted artifact nor enables or deploys
+the hosted change. The local Supabase model builder accepts `--official-snapshot`.
+Run `--tiers-only` to regenerate the previous submitted-source tier aggregate.
+
 ### Scoring tiers with level-specific spreads
 
 Run `.venv/Scripts/python.exe scripts/build_local_recommendations.py --tiers-only`

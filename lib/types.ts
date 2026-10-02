@@ -20,6 +20,18 @@ export interface ClearingTierMetric extends TierMetricResult {
   ratedClearCount: number;
   missingSkillCount: number;
   selectedCount?: number;
+  skillMetric?: "official-clearer-ability";
+  abilityCoverage?: number;
+  shrinkageWeight?: number;
+  spreadCalibration?: OfficialClearingSpread | null;
+  extremeOutlier?: boolean;
+  difficultyCi95Low?: number | null;
+  difficultyCi95High?: number | null;
+  q20SkillCi95Low?: number | null;
+  q20SkillCi95High?: number | null;
+  defaultedAtCap?: boolean;
+  capDefaultDifficulty?: number | null;
+  capDefaultBasis?: "uncapped-folder-minimum" | "folder-midpoint-no-uncapped-charts" | null;
   // q10Skill is a point percentile when no legacy range endpoint is present.
   q10Skill?: number | null;
   // Earlier point percentiles and ranges remain readable with their original labels.
@@ -29,7 +41,74 @@ export interface ClearingTierMetric extends TierMetricResult {
   q50Skill?: number | null;
   q30Skill?: number | null;
   meanSkill?: number | null;
-  folderReferenceSkill: number | null;
+  folderReferenceSkill?: number | null;
+}
+
+export interface OfficialClearingSpread {
+  scale: number;
+  referenceSpread: number | null;
+  supportedCharts: number;
+  lowerFence: number | null;
+  upperFence: number | null;
+  referenceLevel: number | null;
+  basis: "folder" | "neighbor-folder" | "fallback";
+}
+
+export interface OfficialTierEvidence {
+  source: "piuscores-official";
+  asOf: string | null;
+  rawRowCount: number;
+  maxRank: number | null;
+  possiblyTruncated: boolean;
+  cutoffScore: number | null;
+  status: "available" | "possibly-truncated" | "missing";
+  unavailableReason: string | null;
+}
+
+export interface OfficialTierMethod {
+  version: 14;
+  enabled: true;
+  source: "piuscores-official";
+  mix: "Phoenix2";
+  asOf: string | null;
+  minimumLevels: { Single: 25; Double: 26 };
+  capPolicy: "clearing-folder-minimum";
+  scoring: {
+    metric: "equal-player-score-gaps";
+    minimumOtherCharts: 3;
+    sparsePolicy: "provisional-same-level";
+    aggregation: "equal-player-mean";
+    calibration: {
+      method: "shared-linear-player-gaps"; version: 5;
+      minimumLevels: { Single: 25; Double: 26 };
+      referenceQuantile: 0.9; targetHalfWidth: 0.45; maximumScale: 1; rangePolicy: "unbounded";
+      minimumSupportedCharts: 8; minimumReferencePlayers: 10; outlierIqrMultiplier: 2;
+      outlierUse: "diagnostic-only";
+      folderScales: Record<"Single" | "Double", Record<string, number>>;
+    };
+  };
+  clearing: {
+    minimumLevels: { Single: 25; Double: 26 };
+    skillMetric: "official-clearer-ability";
+    difficultyDeltaScale: 0.70;
+    normalization: "folder-median-player-ability";
+    percentile: 0.20;
+    playerSkill: { method: "leave-one-chart-out-top-official-levels"; topCharts: 25; minimumOtherCharts: 25; historyMinimumLevels: { Single: 22; Double: 23 } };
+    shrinkage: { priorPlayers: 20 };
+    calibration: { method: "robust-folder-spread"; version: 4;
+      referenceQuantile: 0.9; targetHalfWidth: 0.45; maximumScale: null; rangePolicy: "unbounded";
+      minimumSupportedCharts: 5; minimumReferencePlayers: 10; outlierUse: "diagnostic-only" };
+  };
+}
+
+export interface OfficialScoringSpread {
+  scale: number;
+  referenceSpread: number | null;
+  supportedCharts: number;
+  lowerFence: number | null;
+  upperFence: number | null;
+  basis: "folder" | "neighbor-folder" | "fallback";
+  referenceLevel: number | null;
 }
 
 export interface PumbilityTierMetric extends TierMetricResult {
@@ -67,6 +146,21 @@ export interface ChartResult {
   bpmMin?: number | null;
   bpmMax?: number | null;
   estimatedDifficulty: number | null;
+  officialEvidence?: OfficialTierEvidence;
+  officialContributors?: number;
+  scoringPlayerCount?: number;
+  scoringMinimumOtherCharts?: number;
+  scoringComparisonCharts?: number;
+  scoringComponentCount?: number;
+  scoringProvisional?: boolean;
+  scoringMeanGap?: number | null;
+  scoringGapStdDev?: number | null;
+  scoringGapCi95Low?: number | null;
+  scoringGapCi95High?: number | null;
+  scoringUnratedReason?: string | null;
+  scoringPointsPerLevel?: number | null;
+  scoringSpreadCalibration?: OfficialScoringSpread | null;
+  scoringExtremeOutlier?: boolean;
   tierMetrics?: {
     clearing: ClearingTierMetric;
     pumbility: PumbilityTierMetric;
@@ -156,7 +250,7 @@ export interface AnalysisPayload {
   mix: MixInfo | CombinedMixInfo;
   summary: {
     scriptVersion: string;
-    method: Record<string, unknown>;
+    method: Record<string, unknown> & { officialTiers?: OfficialTierMethod };
     coverage: Record<string, number>;
     modes: Partial<Record<ModeKey, ModeSummary>>;
   };

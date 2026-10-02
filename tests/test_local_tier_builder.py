@@ -15,6 +15,34 @@ from tier_difficulty import percentile_skill
 
 
 class LocalTierBuilderTests(unittest.TestCase):
+    def test_official_tiers_require_the_official_snapshot_and_preserve_recommendations(self) -> None:
+        snapshots = {mix: {'charts': [], 'scores': []} for mix in ('phoenix1', 'phoenix2')}
+        official = {'source': 'piuscores-official', 'boards': []}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot_path = root / 'official.json'
+            tier_path = root / 'tiers.json'
+            tier_path.write_text('{"previous":true}', encoding='utf-8')
+            with (
+                patch.object(sys, 'argv', ['build_local_recommendations.py', '--official-tiers']),
+                patch.object(builder, '_read_snapshot', side_effect=lambda mix: snapshots[mix]),
+                patch.object(builder, 'build_combined_chart_results', return_value=([], {}, {})),
+                patch.object(builder, 'OFFICIAL_SNAPSHOT_PATH', snapshot_path),
+                patch.object(builder, 'COMBINED_OUTPUT_PATH', tier_path),
+                patch.object(builder, 'build_production_tier_payload', return_value={'schemaVersion': 34}) as build,
+                patch.object(builder, 'build_recommendation_index', side_effect=AssertionError('Recommendations must not rebuild')),
+                patch.object(builder, '_prune_unpublished_generations', side_effect=AssertionError('Recommendations must not be pruned')),
+                redirect_stdout(io.StringIO()),
+            ):
+                with self.assertRaises(FileNotFoundError):
+                    builder.main()
+                self.assertEqual(json.loads(tier_path.read_text()), {'previous': True})
+                build.assert_not_called()
+                snapshot_path.write_text(json.dumps(official), encoding='utf-8')
+                self.assertEqual(builder.main(), 0)
+                build.assert_called_once_with([], {}, snapshots['phoenix1'], snapshots['phoenix2'], official_snapshot=official)
+            self.assertEqual(json.loads(tier_path.read_text()), {'schemaVersion': 34})
+
     def test_percentile_experiment_only_writes_tiers(self) -> None:
         snapshots = {mix: {'charts': [], 'scores': []} for mix in ('phoenix1', 'phoenix2')}
         payload = {'summary': {'method': {'scoreProfileCalibration': {'actualTwoGradeCount': 12}}}}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -33,6 +34,7 @@ from scripts.reconcile_pumbility_supabase import _database_snapshot  # noqa: E40
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database-url-env", default="PUMBILITY_DATABASE_URL")
+    parser.add_argument("--official-snapshot", type=Path, help="Optional cached official-board input for S25+/D26+ Scoring and Clearing tiers.")
     return parser
 
 
@@ -50,7 +52,12 @@ def main(argv: list[str] | None = None) -> int:
         phoenix1 = _database_snapshot(connection, "phoenix1")
         phoenix2 = _database_snapshot(connection, "phoenix2")
     combined_charts, slopes, metadata = build_combined_chart_results(phoenix1, phoenix2)
-    combined_payload = build_combined_tier_payload(combined_charts, metadata, phoenix1, phoenix2)
+    official_arguments = {}
+    if args.official_snapshot is not None:
+        official_arguments["official_snapshot"] = json.loads(args.official_snapshot.read_text(encoding="utf-8"))
+    combined_payload = build_combined_tier_payload(
+        combined_charts, metadata, phoenix1, phoenix2, **official_arguments,
+    )
     generated_at = str(combined_payload["generatedAtUtc"])
     generation_key = recommendation_generation_key(generated_at)
     index, model, score_bytes, p1_shards, p2_shards = build_recommendation_model_artifacts(
