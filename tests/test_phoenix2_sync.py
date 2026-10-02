@@ -220,6 +220,33 @@ class Phoenix2SyncTests(unittest.TestCase):
         self.assertNotIn("recordedAfter", paths["api/v2/players/new/scores"])
         self.assertNotIn("api/v2/players/empty/scores", paths)
 
+    def test_incremental_cutoff_uses_app_sync_checkpoint_not_latest_score(self) -> None:
+        for recorded_at in ("2026-05-01T00:00:00Z", "2026-08-08T00:00:00Z"):
+            with self.subTest(recorded_at=recorded_at):
+                cached = score("known", "a", 600)
+                cached["recordedAt"] = recorded_at
+                current = {
+                    "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
+                    "players": [{
+                        "playerId": "known",
+                        "lastSyncedAtUtc": "2026-08-07T13:00:00+09:00",
+                        "lastScoreRecordedAtUtc": recorded_at,
+                    }],
+                    "charts": [chart("a")],
+                    "scores": [cached],
+                }
+                client = FakeClient(["known"], [chart("a")], {"known": []})
+                snapshot, _ = synchronize_phoenix2_snapshot(
+                    client, current, job_id="sync-checkpoint", now=lambda: FIXED_NOW
+                )
+                params = dict(client.calls)["api/v2/players/known/scores"]
+                self.assertEqual(params["recordedAfter"], "2026-07-31T04:00:00Z")
+                # A successful empty delta still advances the app checkpoint,
+                # while retaining the upstream record's independent timestamp.
+                self.assertEqual(snapshot["players"][0]["lastSyncedAtUtc"], "2026-08-07T06:00:00Z")
+                self.assertEqual(snapshot["players"][0]["lastScoreRecordedAtUtc"], recorded_at)
+                self.assertEqual(snapshot["scores"][0]["recordedAt"], recorded_at)
+
     def test_incremental_refresh_reloads_catalog_and_keeps_new_chart_scores(self) -> None:
         current = {
             "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
