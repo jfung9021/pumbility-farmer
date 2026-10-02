@@ -9,7 +9,7 @@ MINIMUM_LEVELS = OFFICIAL_SCORING_MINIMUM_LEVELS
 
 def scoring_calibration_identity() -> dict[str, Any]:
     return {
-        "method": "shared-linear-player-gaps", "version": 5,
+        "method": "shared-linear-player-gaps", "version": 6,
         "minimumLevels": dict(MINIMUM_LEVELS), "referenceQuantile": .90,
         "targetHalfWidth": .45, "maximumScale": 1., "rangePolicy": "unbounded",
         "minimumSupportedCharts": 8, "minimumReferencePlayers": 10,

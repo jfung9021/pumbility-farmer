@@ -102,8 +102,8 @@ class OfficialScoresTests(unittest.TestCase):
 
     def test_exact_scope_and_mode_boundaries(self):
         for mode, level, expected in [
-            ("Single", 20, False), ("Single", 21, False), ("Single", 23, False), ("Single", 24, False), ("Single", 25, True), ("Single", 26, True),
-            ("Double", 21, False), ("Double", 22, False), ("Double", 24, False), ("Double", 25, False), ("Double", 26, True), ("Double", 29, True),
+            ("Single", 20, False), ("Single", 21, False), ("Single", 23, True), ("Single", 24, True), ("Single", 25, True), ("Single", 26, True),
+            ("Double", 21, False), ("Double", 22, False), ("Double", 24, False), ("Double", 25, True), ("Double", 26, True), ("Double", 29, True),
             ("CoOp", 25, False), ("Single", None, False),
         ]:
             with self.subTest(mode=mode, level=level):

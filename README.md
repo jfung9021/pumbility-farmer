@@ -4,7 +4,7 @@ Pumbility Farmer is a PIU Phoenix difficulty analyzer and Vercel web UI with Sco
 
 ## Analysis method
 
-### Official Scoring and Clearing S25+ / D26+
+### Official Scoring S23+ / D25+ and Clearing S25+ / D26+
 
 Capture the mirrored Phoenix 2 boards and rebuild only the tier aggregate:
 
@@ -21,8 +21,9 @@ Private inputs live in `.local-data/piu-scores/official/phoenix2/current.json`;
 the public aggregate contains no player identities. Capture resumes an interrupted
 snapshot only when its boards belong to the same upstream weekly snapshot.
 
-Schema 40 (official method version 14) uses official Scoring and Clearing for
-S25+/D26+. Through S24/D25, both retain their original player-submitted methods. Pumbility averages the selected Scoring and Clearing methods.
+Schema 41 (official method version 15) uses official Scoring for S23+/D25+ and
+official Clearing for S25+/D26+. Below those respective cutoffs, each metric retains
+its original player-submitted method. Pumbility averages the selected Scoring and Clearing methods.
 Scoring compares each player's best scores within the same mode and official level.
 Players normally need three other charts. Smaller folders use all available
 comparisons; a folder without a normal panel can fall back to one other chart.
@@ -70,8 +71,7 @@ clearer ability**, with linear interpolation and equal weight per eligible playe
 For each player, ability is the average official level + 0.5 of their 25 hardest
 other distinct clears. At least 25 other clears are required, and the chart being
 rated is always excluded. Only official S22+ histories inform Singles and D23+
-histories inform Doubles. The lower history boards support player ability without
-changing their own submitted-score tier ratings. Clearing through S24/D25
+histories inform Doubles. History boards below each metric's cutoff support player ability without changing that metric's submitted-score ratings. Clearing through S24/D25
 uses the original submitted-score 10th-percentile method, including its 50-clear
 player eligibility rule. The 300-score Clearing default applies only at S25+/D26+.
 
@@ -123,7 +123,7 @@ To add missing tier and history boards to an existing same-week snapshot without
 .venv/Scripts/python.exe scripts/capture_official_score_snapshot.py --extend-existing
 ```
 
-The capture includes S25+/D26+ tier boards and S22+/D23+ Clearing history by default. Broader cached snapshots remain valid when they contain all required boards and only known catalog charts; extra boards outside the required scope are ignored. Extension refuses a different upstream
+The capture includes S23+/D25+ Scoring boards, S25+/D26+ Clearing, and S22+/D23+ Clearing history by default. Broader cached snapshots remain valid when they contain all required boards and only known catalog charts; extra boards outside the required scope are ignored. Extension refuses a different upstream
 week and leaves the current snapshot untouched; a normal fresh capture is then needed.
 
 Estimates can cross official levels. Pumbility remains the component average,

@@ -1365,12 +1365,12 @@ class WorkerTests(unittest.TestCase):
         tier = _combined_tier_payload_fixture(generated_at_utc=isoformat_utc(NOW))
         tier['schemaVersion'] = OFFICIAL_TIER_SCHEMA_VERSION
         tier['summary']['method']['officialTiers'] = {
-            'version': 14, 'source': 'piuscores-official', 'mix': 'Phoenix2',
-            'minimumLevels': {'Single': 25, 'Double': 26},
+            'version': 15, 'source': 'piuscores-official', 'mix': 'Phoenix2',
+            'minimumLevels': {'Single': 23, 'Double': 25},
             'capPolicy': 'clearing-folder-minimum',
             'scoring': {'metric': 'equal-player-score-gaps', 'minimumOtherCharts': 3, 'sparsePolicy': 'provisional-same-level',
                         'aggregation': 'equal-player-mean', 'pointsPerLevel': 10000,
-                        'calibration': {'method': 'shared-linear-player-gaps', 'version': 5, 'minimumLevels': {'Single': 25, 'Double': 26}, 'rangePolicy': 'unbounded', 'referenceQuantile': .90, 'targetHalfWidth': .45, 'maximumScale': 1, 'minimumSupportedCharts': 8, 'minimumReferencePlayers': 10, 'outlierUse': 'diagnostic-only'}},
+                        'calibration': {'method': 'shared-linear-player-gaps', 'version': 6, 'minimumLevels': {'Single': 23, 'Double': 25}, 'rangePolicy': 'unbounded', 'referenceQuantile': .90, 'targetHalfWidth': .45, 'maximumScale': 1, 'minimumSupportedCharts': 8, 'minimumReferencePlayers': 10, 'outlierUse': 'diagnostic-only'}},
             'clearing': {'skillMetric': 'official-clearer-ability', 'minimumLevels': {'Single': 25, 'Double': 26},
                          'normalization': 'folder-median-player-ability', 'difficultyDeltaScale': .70,
                          'percentile': .20, 'playerSkill': {'method': 'leave-one-chart-out-top-official-levels',

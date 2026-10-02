@@ -21,8 +21,8 @@ class OfficialScoringCalibrationTests(unittest.TestCase):
         self.assertGreater(calibrate_scoring_delta(1.1,p,10)[0],.45)
 
     def test_below_scope_folders_cannot_supply_scoring_calibration(self):
-        fitted = fit_scoring_spreads({("Single",24):folder(list(np.linspace(-1,1,20))),
-                                     ("Double",25):folder(list(np.linspace(-1,1,20))),
+        fitted = fit_scoring_spreads({("Single",22):folder(list(np.linspace(-1,1,20))),
+                                     ("Double",24):folder(list(np.linspace(-1,1,20))),
                                      ("Single",25):folder([-.1,.1]), ("Double",26):folder([-.1,.1])})
         self.assertEqual(set(fitted), {("Single",25),("Double",26)})
         self.assertTrue(all(p["basis"] == "fallback" for p in fitted.values()))

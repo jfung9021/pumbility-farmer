@@ -43,7 +43,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--restart", action="store_true", help="Ignore an interrupted same-week checkpoint.")
     parser.add_argument("--extend-existing", "--extend-clearing-history", dest="extend_existing", action="store_true",
-                        help="Add missing S25+/D26+ tiers and S22+/D23+ history boards without changing existing boards or week.")
+                        help="Add missing S23+/D25+ scoring and S22+/D23+ history boards without changing existing boards or week.")
     args = parser.parse_args()
     try:
         _ensure_git_ignored(DEFAULT_OFFICIAL_SNAPSHOT_PATH)

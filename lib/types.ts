@@ -66,12 +66,12 @@ export interface OfficialTierEvidence {
 }
 
 export interface OfficialTierMethod {
-  version: 14;
+  version: 15;
   enabled: true;
   source: "piuscores-official";
   mix: "Phoenix2";
   asOf: string | null;
-  minimumLevels: { Single: 25; Double: 26 };
+  minimumLevels: { Single: 23; Double: 25 };
   capPolicy: "clearing-folder-minimum";
   scoring: {
     metric: "equal-player-score-gaps";
@@ -79,8 +79,8 @@ export interface OfficialTierMethod {
     sparsePolicy: "provisional-same-level";
     aggregation: "equal-player-mean";
     calibration: {
-      method: "shared-linear-player-gaps"; version: 5;
-      minimumLevels: { Single: 25; Double: 26 };
+      method: "shared-linear-player-gaps"; version: 6;
+      minimumLevels: { Single: 23; Double: 25 };
       referenceQuantile: 0.9; targetHalfWidth: 0.45; maximumScale: 1; rangePolicy: "unbounded";
       minimumSupportedCharts: 8; minimumReferencePlayers: 10; outlierIqrMultiplier: 2;
       outlierUse: "diagnostic-only";
