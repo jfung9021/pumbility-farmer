@@ -82,7 +82,12 @@ def incremental_recorded_after(
     *,
     lookback: timedelta = INCREMENTAL_SCORE_LOOKBACK,
 ) -> str | None:
-    """Return an overlapping score watermark that tolerates delayed indexing."""
+    """Use our successful-sync time to query PIUScores record-write times.
+
+    The v2 API's recordedAt/recordedAfter refer to when PIUScores wrote a
+    record, not when the chart was played. Never derive this cutoff from the
+    newest cached score; the overlap covers delayed visibility of records.
+    """
     parsed = parse_utc(value)
     if parsed is None:
         return None
