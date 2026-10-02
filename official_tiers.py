@@ -23,7 +23,7 @@ from official_player_scoring import fit_player_comparisons
 from tier_difficulty import CLEARING_DIFFICULTY_DELTA_SCALE, EVIDENCE_ORDER
 
 
-OFFICIAL_TIER_METHOD_VERSION = 14
+OFFICIAL_TIER_METHOD_VERSION = 15
 OFFICIAL_SOURCE = "piuscores-official"
 CLEAR_ABILITY_METRIC = "official-clearer-ability"
 CLEARING_PERCENTILE = .20
@@ -161,7 +161,7 @@ def apply_official_tiers(
     official_snapshot: Mapping[str, Any] | None,
     current_charts: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Use official Scoring and Clearing at S25+/D26+.
+    """Use official Scoring at S23+/D25+ and official Clearing at S25+/D26+.
 
     Full boards participate in Scoring and observed player histories. Their Clearing result
     is the lowest uncapped estimate in the same folder, or its midpoint when

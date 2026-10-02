@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 
-from official_scores import is_official_clearing_target
+from official_scores import is_official_clearing_target, is_official_target
 from official_tiers import CLEAR_ABILITY_METRIC, apply_official_tiers, official_player_ability
 
 
@@ -156,7 +156,7 @@ class OfficialTierTests(unittest.TestCase):
         history["self"] = 100
         self.assertAlmostEqual(official_player_ability(history, "self"), (23*22.5+27.5+28.5)/25)
 
-    def test_both_metrics_use_official_evidence_only_at_s25_d26_and_above(self):
+    def test_metric_cutoffs_select_official_scoring_and_clearing_independently(self):
         charts = [chart(f"s{level}-{i}",level) for level in range(21,26) for i in range(4)] + [
             chart(f"d{level}-{i}",level,"Double") for level in range(22,27) for i in range(4)]
         base = payload(charts)
@@ -164,10 +164,13 @@ class OfficialTierTests(unittest.TestCase):
         result = by_id(apply_official_tiers(base,{**self.snapshot,"boards":boards},charts))
         for c in charts:
             row = result[c["id"]]
-            if is_official_clearing_target(c):
+            if is_official_target(c):
                 self.assertIn("officialEvidence",row)
                 self.assertIsNotNone(row["estimatedDifficulty"])
-                self.assertEqual(row["tierMetrics"]["clearing"]["skillMetric"],CLEAR_ABILITY_METRIC)
+                if is_official_clearing_target(c):
+                    self.assertEqual(row["tierMetrics"]["clearing"]["skillMetric"],CLEAR_ABILITY_METRIC)
+                else:
+                    self.assertEqual(row["tierMetrics"]["clearing"],by_id(base)[c["id"]]["tierMetrics"]["clearing"])
             else:
                 self.assertNotIn("officialEvidence",row)
                 self.assertEqual(without_mode_rank(row),without_mode_rank(by_id(base)[c["id"]]))
@@ -201,15 +204,17 @@ class OfficialTierTests(unittest.TestCase):
         rows = by_id(apply_official_tiers(base,{**self.snapshot,"boards":boards},charts))
         for c in charts:
             row = rows[c["id"]]
-            self.assertEqual("officialEvidence" in row, c["level"] >= (25 if c["type"] == "Single" else 26))
+            self.assertEqual("officialEvidence" in row, c["level"] >= (23 if c["type"] == "Single" else 25))
             if is_official_clearing_target(c):
-                self.assertEqual(row["tierMetrics"]["clearing"]["skillMetric"],CLEAR_ABILITY_METRIC)
+                if is_official_clearing_target(c):
+                    self.assertEqual(row["tierMetrics"]["clearing"]["skillMetric"],CLEAR_ABILITY_METRIC)
+                else:
+                    self.assertEqual(row["tierMetrics"]["clearing"],by_id(base)[c["id"]]["tierMetrics"]["clearing"])
             else:
                 self.assertEqual(row["tierMetrics"]["clearing"],by_id(base)[c["id"]]["tierMetrics"]["clearing"])
-        self.assertNotIn("officialEvidence",rows["s23"])
-        self.assertEqual(without_mode_rank(rows["s23"]),without_mode_rank(by_id(base)["s23"]))
+        self.assertEqual(rows["s23"]["officialEvidence"]["status"],"missing")
         self.assertIsNotNone(rows["s23"]["tierMetrics"]["clearing"]["estimatedDifficulty"])
-        self.assertIsNotNone(rows["s23"]["tierMetrics"]["pumbility"]["estimatedDifficulty"])
+        self.assertIsNone(rows["s23"]["tierMetrics"]["pumbility"]["estimatedDifficulty"])
 
     def test_boards_below_history_scope_do_not_expand_official_clearing_histories(self):
         charts = [chart(f"s21-{i}",21) for i in range(25)] + [chart("target",25)]
@@ -335,7 +340,7 @@ class OfficialTierTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply_official_tiers(self.base, {**self.snapshot, "source": "player-submitted"}, self.charts)
         method = self.result["summary"]["method"]["officialTiers"]
-        self.assertEqual(method["version"], 14)
+        self.assertEqual(method["version"], 15)
         self.assertEqual(method["capPolicy"], "clearing-folder-minimum")
         self.assertEqual(method["scoring"]["metric"], "equal-player-score-gaps")
         self.assertEqual(method["scoring"]["minimumOtherCharts"], 3)

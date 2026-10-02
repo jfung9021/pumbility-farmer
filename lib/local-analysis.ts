@@ -8,7 +8,7 @@ import { COMBINED_MIX, DEFAULT_MIX, isMixKey, MIXES, type MixKey } from "./mixes
 const SECRET_PATTERN = /(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}/i;
 const FORBIDDEN_KEYS = new Set(["playerId", "username", "gameTag", "authorization", "apiKey", "token"]);
 export const LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION = 26;
-export const LOCAL_OFFICIAL_ANALYSIS_SCHEMA_VERSION = 40;
+export const LOCAL_OFFICIAL_ANALYSIS_SCHEMA_VERSION = 41;
 export const LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION = 25;
 
 export const LEGACY_LOCAL_RESULTS_PATH = path.join(
@@ -76,7 +76,7 @@ function hasValidFolderScales(payload: Partial<AnalysisPayload>): boolean {
     const modeScales = folders as Record<string, number>;
     const charts = (mode === "Single" ? payload.singles : payload.doubles)?.filter((chart) =>
       payload.schemaVersion !== LOCAL_OFFICIAL_ANALYSIS_SCHEMA_VERSION
-      || chart.level < (mode === "Single" ? 25 : 26));
+      || chart.level < (mode === "Single" ? 23 : 25));
     if (charts?.some((chart) => chart.estimatedDifficulty != null
       && (!isFolderScale(chart.scoringDifficultyScale)
         || chart.scoringDifficultyScale !== modeScales[String(chart.level)]))) return false;
@@ -119,16 +119,16 @@ function isCentralRange(spread: OfficialScoringSpread | null | undefined, level:
 
 function hasValidOfficialTiers(payload: Partial<AnalysisPayload>): boolean {
   const method = payload.summary?.method.officialTiers;
-  if (!method || method.version !== 14 || method.enabled !== true
+  if (!method || method.version !== 15 || method.enabled !== true
     || method.source !== "piuscores-official" || method.mix !== "Phoenix2"
     || (method.asOf !== null && typeof method.asOf !== "string")
-    || method.minimumLevels?.Single !== 25 || method.minimumLevels?.Double !== 26
+    || method.minimumLevels?.Single !== 23 || method.minimumLevels?.Double !== 25
     || method.capPolicy !== "clearing-folder-minimum"
     || method.scoring?.metric !== "equal-player-score-gaps" || method.scoring.minimumOtherCharts !== 3
     || method.scoring.sparsePolicy !== "provisional-same-level" || method.scoring.aggregation !== "equal-player-mean"
     || method.scoring.calibration?.method !== "shared-linear-player-gaps"
-    || method.scoring.calibration.version !== 5
-    || method.scoring.calibration.minimumLevels?.Single !== 25 || method.scoring.calibration.minimumLevels?.Double !== 26
+    || method.scoring.calibration.version !== 6
+    || method.scoring.calibration.minimumLevels?.Single !== 23 || method.scoring.calibration.minimumLevels?.Double !== 25
     || method.scoring.calibration.minimumSupportedCharts !== 8
     || method.scoring.calibration.outlierIqrMultiplier !== 2
     || method.scoring.calibration.referenceQuantile !== .90 || method.scoring.calibration.targetHalfWidth !== .45

@@ -1959,10 +1959,10 @@ def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: A
     if official_enabled:
         if (
             not isinstance(official_method, Mapping)
-            or official_method.get("version") != 14
+            or official_method.get("version") != 15
             or official_method.get("source") != "piuscores-official"
             or official_method.get("mix") != "Phoenix2"
-            or official_method.get("minimumLevels") != {"Single": 25, "Double": 26}
+            or official_method.get("minimumLevels") != {"Single": 23, "Double": 25}
             or official_method.get("capPolicy") != "clearing-folder-minimum"
             or official_method.get("scoring", {}).get("metric") != "equal-player-score-gaps"
             or official_method.get("scoring", {}).get("minimumOtherCharts") != 3
@@ -1970,8 +1970,8 @@ def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: A
             or official_method.get("scoring", {}).get("aggregation") != "equal-player-mean"
             or official_method.get("scoring", {}).get("pointsPerLevel") != 10000
             or official_method.get("scoring", {}).get("calibration", {}).get("method") != "shared-linear-player-gaps"
-            or official_method.get("scoring", {}).get("calibration", {}).get("version") != 5
-            or official_method.get("scoring", {}).get("calibration", {}).get("minimumLevels") != {"Single": 25, "Double": 26}
+            or official_method.get("scoring", {}).get("calibration", {}).get("version") != 6
+            or official_method.get("scoring", {}).get("calibration", {}).get("minimumLevels") != {"Single": 23, "Double": 25}
             or official_method.get("scoring", {}).get("calibration", {}).get("rangePolicy") != "unbounded"
             or official_method.get("scoring", {}).get("calibration", {}).get("referenceQuantile") != .90
             or official_method.get("scoring", {}).get("calibration", {}).get("targetHalfWidth") != .45

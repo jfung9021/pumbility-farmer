@@ -107,7 +107,7 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument(
         "--official-tiers",
         action="store_true",
-        help="Rebuild S25+/D26+ Scoring and Clearing tiers with official per-player scoring and lower-percentile clearer ability; preserve recommendations.",
+        help="Rebuild S23+/D25+ Scoring and S25+/D26+ Clearing tiers with official per-player scoring and lower-percentile clearer ability; preserve recommendations.",
     )
     mode.add_argument(
         "--prune-only",
@@ -167,7 +167,7 @@ def main() -> int:
     )
     if args.tiers_only or args.official_tiers:
         _write_json(COMBINED_OUTPUT_PATH, combined_payload)
-        print("Built local tier lists" + (" with official S25+/D26+ Scoring and Clearing evidence." if args.official_tiers
+        print("Built local tier lists" + (" with official S23+/D25+ Scoring and S25+/D26+ Clearing evidence." if args.official_tiers
                                          else " from both Phoenix sources.") + " Recommendations are unchanged.")
         return 0
     generation_key = recommendation_generation_key(combined_payload["generatedAtUtc"])

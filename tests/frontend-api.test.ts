@@ -1819,11 +1819,11 @@ test("accepts the combined tier-list identity", () => {
   const official = structuredClone(productionProfile);
   official.schemaVersion = LOCAL_OFFICIAL_ANALYSIS_SCHEMA_VERSION;
   official.summary.method.officialTiers = {
-    version: 14, enabled: true, source: "piuscores-official", mix: "Phoenix2", asOf: "2026-10-01T00:00:00Z",
-    minimumLevels: { Single: 25, Double: 26 }, capPolicy: "clearing-folder-minimum",
+    version: 15, enabled: true, source: "piuscores-official", mix: "Phoenix2", asOf: "2026-10-01T00:00:00Z",
+    minimumLevels: { Single: 23, Double: 25 }, capPolicy: "clearing-folder-minimum",
     scoring: {
       metric: "equal-player-score-gaps", minimumOtherCharts: 3, sparsePolicy: "provisional-same-level", aggregation: "equal-player-mean",
-      calibration: { method: "shared-linear-player-gaps", version: 5, minimumLevels: { Single: 25, Double: 26 },
+      calibration: { method: "shared-linear-player-gaps", version: 6, minimumLevels: { Single: 23, Double: 25 },
         referenceQuantile: .90, targetHalfWidth: .45, maximumScale: 1, rangePolicy: "unbounded",
         minimumSupportedCharts: 8, minimumReferencePlayers: 10, outlierIqrMultiplier: 2, outlierUse: "diagnostic-only",
         folderScales: { Single: {}, Double: { "26": 0.5 } } },

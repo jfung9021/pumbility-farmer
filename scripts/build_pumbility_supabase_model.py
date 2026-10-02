@@ -34,7 +34,7 @@ from scripts.reconcile_pumbility_supabase import _database_snapshot  # noqa: E40
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database-url-env", default="PUMBILITY_DATABASE_URL")
-    parser.add_argument("--official-snapshot", type=Path, help="Optional cached official-board input for S25+/D26+ Scoring and Clearing tiers.")
+    parser.add_argument("--official-snapshot", type=Path, help="Optional cached official-board input for S23+/D25+ Scoring and S25+/D26+ Clearing tiers.")
     return parser
 
 
