@@ -1,6 +1,8 @@
 import type { AnalysisPayload, ChartResult } from "./types";
 
 export const POSTPROCESSED_SCHEMA = 44;
+export const HYBRID_INITIAL_SCHEMA = 46;
+export const HYBRID_POSTPROCESSED_SCHEMA = 47;
 export const FIT_FIELDS = ["estimatedDifficulty", "difficultyDelta", "difficultyCi95Low", "difficultyCi95High",
   "difficultyDeltaCi95Low", "difficultyDeltaCi95High", "effectBand", "effectBandRank", "levelRank",
   "levelComparisonCharts", "modeRank", "levelPercentile", "relativeGroup", "relativeGroupRank"] as const;
@@ -12,8 +14,10 @@ export function compressionPolicy(baseAnalysisSchemaVersion: number) {
 
 export function hasMidpointCompression(payload: AnalysisPayload | null | undefined): boolean {
   const p = payload?.summary.method.ratingPostprocessing as {baseAnalysisSchemaVersion?: number} | undefined;
-  return payload?.schemaVersion === POSTPROCESSED_SCHEMA && !!p
-    && [26, 41, 42, 43].includes(p.baseAnalysisSchemaVersion ?? 0)
+  const validBase = payload?.schemaVersion === POSTPROCESSED_SCHEMA
+    ? [26, 41, 42, 43].includes(p?.baseAnalysisSchemaVersion ?? 0)
+    : [HYBRID_POSTPROCESSED_SCHEMA, 48].includes(payload?.schemaVersion ?? 0) && p?.baseAnalysisSchemaVersion === HYBRID_INITIAL_SCHEMA;
+  return validBase && !!p
     && samePolicy(p, compressionPolicy(p.baseAnalysisSchemaVersion!));
 }
 

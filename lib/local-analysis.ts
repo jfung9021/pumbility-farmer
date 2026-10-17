@@ -4,7 +4,8 @@ import path from "node:path";
 import type { AnalysisPayload, CrossLevelClearingCurve, OfficialCrossLevelCurve, OfficialScoringSpread } from "./types";
 import { COMBINED_MIX, DEFAULT_MIX, isMixKey, MIXES, type MixKey } from "./mixes.ts";
 import { pumbilityReference as aggregatePumbility, resolvePumbilityPolicy } from "./pumbility-policy.ts";
-import { POSTPROCESSED_SCHEMA, recoverInitialFitPayload } from "./tier-postprocessing.ts";
+import { HYBRID_INITIAL_SCHEMA, HYBRID_POSTPROCESSED_SCHEMA, POSTPROCESSED_SCHEMA, recoverInitialFitPayload } from "./tier-postprocessing.ts";
+import { LOCAL_AVERAGE_PUMBILITY_SCHEMA, recoverMaximumPumbility } from "./pumbility-experiment.ts";
 
 
 const SECRET_PATTERN = /(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}/i;
@@ -43,6 +44,16 @@ export const COMBINED_LOCAL_RESULTS_PATH = path.join(
   "analysis",
   "web_results.json",
 );
+export const AVERAGE_PUMBILITY_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "average", "web_results.json");
+export const HYBRID_PUMBILITY_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "hybrid", "web_results.json");
+
+export function localCombinedResultsPath(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  const experiment = localAnalysisEnabled(environment) ? environment.PIU_LOCAL_PUMBILITY_EXPERIMENT : undefined;
+  return experiment === "hybrid" ? HYBRID_PUMBILITY_LOCAL_RESULTS_PATH
+    : experiment === "average" ? AVERAGE_PUMBILITY_LOCAL_RESULTS_PATH : COMBINED_LOCAL_RESULTS_PATH;
+}
 
 export class LocalAnalysisNotFoundError extends Error {}
 export class LocalAnalysisValidationError extends Error {}
@@ -103,9 +114,15 @@ function hasValidPumbilityMethod(payload: Partial<AnalysisPayload>): boolean {
   return rows.every((row) => {
     const c = row.tierMetrics?.clearing.estimatedDifficulty;
     const p = row.tierMetrics?.pumbility;
-    if (!p || (policy.requiresRowMarker ? p.aggregation !== "maximum"
+    if (!p || (policy.requiresRowMarker ? p.aggregation !== policy.aggregation
       : p.aggregation !== undefined)) return false;
-    if (row.estimatedDifficulty === null || c == null) return p.estimatedDifficulty === null;
+    if (row.estimatedDifficulty === null || c == null) return p.estimatedDifficulty === null
+      && (payload.schemaVersion !== HYBRID_INITIAL_SCHEMA || p.evidenceStatus === "Unrated");
+    if (payload.schemaVersion === HYBRID_INITIAL_SCHEMA) {
+      const statuses = ["Unrated", "Insufficient", "Provisional", "Published"];
+      const weakest = Math.min(statuses.indexOf(row.evidenceStatus), statuses.indexOf(row.tierMetrics!.clearing.evidenceStatus));
+      if (weakest < 0 || p.evidenceStatus !== statuses[weakest]) return false;
+    }
     return Number.isFinite(row.estimatedDifficulty) && Number.isFinite(c)
       && typeof p.estimatedDifficulty === "number"
       && Math.abs(p.estimatedDifficulty - aggregatePumbility(policy.aggregation, row.estimatedDifficulty, c)) < .000002;
@@ -373,7 +390,7 @@ function validOfficialCurve(curve: OfficialCrossLevelCurve | null | undefined): 
     && curve.supportedRange[1] === curve.anchors[curve.anchors.length - 1].difficulty;
 }
 
-function hasValidCrossLevelScoring(payload: Partial<AnalysisPayload>): boolean {
+function hasValidCrossLevelScoring(payload: Partial<AnalysisPayload>, hybrid = false): boolean {
   const method = payload.summary?.method.officialCrossLevelScoring;
   const scoring = payload.summary?.method.scoring as Record<string, unknown> | undefined;
   if (!method || method.version !== 1 || method.minimumOfficialLevel !== 20
@@ -386,7 +403,7 @@ function hasValidCrossLevelScoring(payload: Partial<AnalysisPayload>): boolean {
     || scoring.calibration !== "official-cross-level-median-anchored-exponential"
     || scoring.minimumOfficialLevel !== 20) return false;
   for (const mode of ["Single", "Double"] as const) {
-    const charts = (mode === "Single" ? payload.singles : payload.doubles) ?? [];
+    const charts = ((mode === "Single" ? payload.singles : payload.doubles) ?? []).filter((chart) => !hybrid || chart.level >= 20);
     const curve = method.calibration[mode];
     if (charts.some((chart) => chart.level >= 20) ? !validOfficialCurve(curve) : curve !== null && !validOfficialCurve(curve)) return false;
     for (const chart of charts) {
@@ -473,6 +490,26 @@ export const CROSS_LEVEL_CLEARING_POLICY = {
   minimumAnchors: 3, tailPolicy: "boundary-linear", intervalMethod: "none",
 } as const;
 
+export const HYBRID_CLEARING_POLICY = {
+  ...CROSS_LEVEL_CLEARING_POLICY, version: 2, minimumCalibrationLevel: 20,
+  calibrationMethod: "20plus-median-anchored-piecewise-linear-with-lower-folder-fallback",
+  lowerLevelMethod: { method: "folder-centered-q10", difficultyDeltaScale: .70, referenceMinimumClearers: 20, referenceMinimumCharts: 5 },
+} as const;
+
+export const HYBRID_TIER_POLICY = {
+  version: 1, minimumDisplayLevel: 16,
+  scoring: { below20: "piuscores-submitted-score-profile-v2", atLeast20: "official-cross-level-v1", officialMinimumLevel: 20, missingOfficialPolicy: "unrated" },
+  clearing: { below20: "submitted-folder-centered-clearing-v1", atLeast20: "submitted-cross-level-clearing-v2", minimumCalibrationLevel: 20 },
+} as const;
+
+export const SUBMITTED_PROFILE_POLICY_V2 = {
+  version: 2, population: "combined", calibration: "folder-scaled-score-profile", percentiles: [.5, .75, .9], profileWeights: [1, 1, 2],
+  percentileMethod: "linear interpolation", scoreUnit: 10000, referenceSmoothing: 4, minimumReferencePlayers: 20,
+  minimumReferenceCharts: 5, fullReferenceWeightCharts: 20, folderCenter: "median-profile-match", scaleStep: .01, maximumScale: 1,
+  preferredCentralWidth: 1, spreadQuantiles: [.1, .9], minimumSpreadCharts: 10, minimumSpreadMedianPlayers: 10,
+  spreadReliabilityCharts: 30, spreadReliabilityPlayers: 20, neighborSmoothing: .05, rarityThreshold: 10, rarityPenalty: .05,
+} as const;
+
 function matchesClearingPolicy(value: unknown, expected: unknown): boolean {
   return expected !== null && typeof expected === "object"
     ? value !== null && typeof value === "object" && Object.entries(expected).every(([key, item]) =>
@@ -480,12 +517,14 @@ function matchesClearingPolicy(value: unknown, expected: unknown): boolean {
     : value === expected;
 }
 
-function hasValidCrossLevelClearing(payload: Partial<AnalysisPayload>): boolean {
+function hasValidCrossLevelClearing(payload: Partial<AnalysisPayload>, hybrid = false): boolean {
   const method = payload.summary?.method.crossLevelClearing;
   const tiers = payload.summary?.method.tierMetrics as { version?: number; clearing?: unknown } | undefined;
-  if (!method || !matchesClearingPolicy(method, CROSS_LEVEL_CLEARING_POLICY)
-    || tiers?.version !== 11 || !matchesClearingPolicy(tiers.clearing, CROSS_LEVEL_CLEARING_POLICY)
+  const policy = hybrid ? HYBRID_CLEARING_POLICY : CROSS_LEVEL_CLEARING_POLICY;
+  if (!method || !matchesClearingPolicy(method, policy)
+    || tiers?.version !== (hybrid ? 12 : 11) || !matchesClearingPolicy(tiers.clearing, policy)
     || ![26, 41, 42].includes(method.baseScoringSchemaVersion)
+    || (hybrid && method.baseScoringSchemaVersion !== 42)
     || !method.inputHashes || Object.keys(method.inputHashes).sort().join() !== "currentCatalog,phoenix1,phoenix2"
     || Object.values(method.inputHashes).some((hash) => !/^[0-9a-f]{64}$/.test(hash))
     || !method.sourceDates || Object.keys(method.sourceDates).sort().join() !== "phoenix1,phoenix2"
@@ -494,22 +533,31 @@ function hasValidCrossLevelClearing(payload: Partial<AnalysisPayload>): boolean 
   for (const mode of ["Single", "Double"] as const) {
     const rows = (mode === "Single" ? payload.singles : payload.doubles) ?? [];
     const curve = method.calibration[mode];
-    if (!rows.length && curve === null) continue;
-    if (!curve || curve.version !== 1 || curve.tailPolicy !== "boundary-linear"
+    const needsCurve = rows.some((row) => !hybrid || row.level >= 20);
+    if (needsCurve && (!curve || curve.version !== 1 || curve.tailPolicy !== "boundary-linear"
       || !Array.isArray(curve.anchors) || curve.anchors.length < 3
-      || !Array.isArray(curve.supportedRange) || curve.supportedRange.length !== 2) return false;
-    if (curve.anchors.some((a, i, anchors) => !Number.isInteger(a.level) || a.level < 16
+      || !Array.isArray(curve.supportedRange) || curve.supportedRange.length !== 2)) return false;
+    if (!needsCurve && curve !== null) return false;
+    if (curve && curve.anchors.some((a, i, anchors) => !Number.isInteger(a.level) || a.level < (hybrid ? 20 : 16)
       || a.difficulty !== a.level + .5 || !Number.isFinite(a.threshold)
       || !Number.isInteger(a.referenceCharts) || a.referenceCharts < 5 || !Array.isArray(a.chartIds)
       || a.chartIds.length !== a.referenceCharts || new Set(a.chartIds).size !== a.chartIds.length
       || a.chartIds.some((id) => typeof id !== "string")
+      || (i === 0 && hybrid && a.level !== 20)
       || (i > 0 && (a.level <= anchors[i - 1].level || a.threshold <= anchors[i - 1].threshold)))) return false;
-    if (curve.supportedRange[0] !== curve.anchors[0].difficulty
-      || curve.supportedRange[1] !== curve.anchors[curve.anchors.length - 1].difficulty) return false;
+    if (curve && (curve.supportedRange[0] !== curve.anchors[0].difficulty
+      || curve.supportedRange[1] !== curve.anchors[curve.anchors.length - 1].difficulty)) return false;
+    const lowerReferences = hybrid ? method.lowerReferenceSkills?.[mode] : {};
+    if (hybrid && (!lowerReferences || typeof lowerReferences !== "object" || Array.isArray(lowerReferences)
+      || Object.entries(lowerReferences).some(([level, a]) => !/^(16|17|18|19)$/.test(level) || a.level !== Number(level)
+        || !Number.isFinite(a.threshold) || !Number.isInteger(a.referenceCharts) || a.referenceCharts < 5
+        || !Array.isArray(a.chartIds) || a.chartIds.length !== a.referenceCharts || new Set(a.chartIds).size !== a.referenceCharts))) return false;
     for (const row of rows) {
       const c = row.tierMetrics?.clearing;
       const p = row.tierMetrics?.pumbility;
-      if (!c || !p || c.method !== "submitted-cross-level-clearing-v1" || row.level < 16
+      const lower = hybrid && row.level < 20;
+      const reference = lower ? lowerReferences?.[String(row.level)] : curve?.anchors.find((a) => a.level === row.level);
+      if (!c || !p || c.method !== (lower ? "submitted-folder-centered-clearing-v1" : hybrid ? "submitted-cross-level-clearing-v2" : "submitted-cross-level-clearing-v1") || row.level < 16
         || !Number.isInteger(c.clearCount) || !Number.isInteger(c.ratedClearCount) || c.ratedClearCount < 0
         || c.clearCount < c.ratedClearCount || c.missingSkillCount !== c.clearCount - c.ratedClearCount
         || !c.sourceCounts || Object.keys(c.sourceCounts).sort().join() !== "phoenix1,phoenix2"
@@ -523,24 +571,27 @@ function hasValidCrossLevelClearing(payload: Partial<AnalysisPayload>): boolean 
         || c.difficultyCi95Low !== null || c.difficultyCi95High !== null || c.q20Skill !== undefined
         || c.defaultedAtCap !== undefined || c.spreadCalibration !== undefined
         || !Array.isArray(c.provisionalReasons) || typeof c.extrapolated !== "boolean"
-        || JSON.stringify(c.supportedRange) !== JSON.stringify(curve.supportedRange)
+        || JSON.stringify(c.supportedRange) !== JSON.stringify(lower ? null : curve?.supportedRange)
         || p.clearingSupportCount !== c.ratedClearCount || p.scoringSupportCount !== row.nContributors) return false;
-      const reference = curve.anchors.find((a) => a.level === row.level);
       if (c.folderReferenceSkill !== (reference?.threshold ?? null)) return false;
-      if (c.ratedClearCount === 0) {
-        if (c.q10Skill !== null || c.estimatedDifficulty !== null || c.difficultyDelta !== null
+      if (c.ratedClearCount === 0 || (lower && !reference)) {
+        if ((c.ratedClearCount === 0 ? c.q10Skill !== null : typeof c.q10Skill !== "number" || !Number.isFinite(c.q10Skill))
+          || c.estimatedDifficulty !== null || c.difficultyDelta !== null
           || c.evidenceStatus !== "Unrated" || p.estimatedDifficulty !== null) return false;
+        if (hybrid && (!c.unratedReason || c.extrapolated || c.provisionalReasons.length)) return false;
       } else {
+        const expected = lower ? row.level + .5 + .70 * (c.q10Skill! - reference!.threshold)
+          : inverseClearingThreshold(c.q10Skill!, curve!);
         if (typeof c.q10Skill !== "number" || !Number.isFinite(c.q10Skill)
           || typeof c.estimatedDifficulty !== "number" || !Number.isFinite(c.estimatedDifficulty)
-          || Math.abs(c.estimatedDifficulty - inverseClearingThreshold(c.q10Skill, curve)) > .0000001
+          || Math.abs(c.estimatedDifficulty - expected) > .0000001
           || typeof c.difficultyDelta !== "number" || Math.abs(c.difficultyDelta - c.estimatedDifficulty + row.level + .5) > .0000001) return false;
-        const outside = c.q10Skill < curve.anchors[0].threshold || c.q10Skill > curve.anchors[curve.anchors.length - 1].threshold;
+        const outside = !lower && (c.q10Skill < curve!.anchors[0].threshold || c.q10Skill > curve!.anchors[curve!.anchors.length - 1].threshold);
         const reasons = [...(c.ratedClearCount < 20 ? ["fewer-than-20-rated-clearers"] : []),
           ...(c.comparability !== "comparable" ? [`chart-comparability-${c.comparability}`] : []),
           ...(!reference ? ["unsupported-official-folder"] : []), ...(outside ? ["outside-supported-anchors"] : [])];
         const status = c.ratedClearCount < 5 ? "Insufficient" : reasons.length ? "Provisional" : "Published";
-        if (c.extrapolated !== outside || JSON.stringify(c.provisionalReasons) !== JSON.stringify(reasons)
+        if ((hybrid && c.unratedReason !== null) || c.extrapolated !== outside || JSON.stringify(c.provisionalReasons) !== JSON.stringify(reasons)
           || c.evidenceStatus !== status) return false;
       }
       if (row.estimatedDifficulty === null || c.estimatedDifficulty === null) {
@@ -548,7 +599,7 @@ function hasValidCrossLevelClearing(payload: Partial<AnalysisPayload>): boolean 
       } else if (typeof p.estimatedDifficulty !== "number"
         || Math.abs(p.estimatedDifficulty - pumbilityReference(payload, row.estimatedDifficulty, c.estimatedDifficulty)) > .0000001) return false;
     }
-    for (const anchor of curve.anchors) {
+    for (const anchor of [...(curve?.anchors ?? []), ...Object.values(lowerReferences ?? {})]) {
       const references = rows.filter((row) => row.level === anchor.level && row.tierMetrics?.clearing.anchorEligible);
       if (references.length !== anchor.referenceCharts || anchor.chartIds.some((id) => !references.some((r) => r.chartId === id))) return false;
       const thresholds = references.map((row) => row.tierMetrics!.clearing.q10Skill!).sort((a, b) => a - b);
@@ -556,8 +607,75 @@ function hasValidCrossLevelClearing(payload: Partial<AnalysisPayload>): boolean 
       const median = thresholds.length % 2 ? thresholds[middle] : (thresholds[middle - 1] + thresholds[middle]) / 2;
       if (Math.abs(median - anchor.threshold) > .0000001) return false;
     }
+    if (hybrid) for (const level of new Set(rows.map((row) => row.level))) {
+      const supported = rows.filter((row) => row.level === level && row.tierMetrics?.clearing.anchorEligible).length >= 5;
+      const reference = level < 20 ? lowerReferences?.[String(level)] : curve?.anchors.find((anchor) => anchor.level === level);
+      if (supported !== !!reference) return false;
+    }
   }
-  return !(payload.coop ?? []).some((row) => row.tierMetrics?.clearing.method === "submitted-cross-level-clearing-v1");
+  return !(payload.coop ?? []).some((row) => row.tierMetrics?.clearing.method?.startsWith("submitted-"));
+}
+
+function hasValidHybridScoring(payload: Partial<AnalysisPayload>): boolean {
+  const hybrid = payload.summary?.method.hybridTiers;
+  const submitted = hybrid?.submittedScoring;
+  const calibration = submitted?.scoreProfileCalibration as {
+    folderScales?: Record<string, Record<string, number>>;
+    folderCenters?: Record<string, Record<string, number>>;
+    curves?: Record<string, unknown>;
+  } | undefined;
+  if (!hybrid || !matchesClearingPolicy(hybrid, HYBRID_TIER_POLICY)
+    || !submitted || !matchesClearingPolicy(submitted.method, SUBMITTED_PROFILE_POLICY_V2)
+    || submitted.method.difficultyDeltaScale !== undefined || submitted.method.maxTwoGradeMoves !== undefined
+    || !matchesClearingPolicy(submitted.confidenceIntervals, { samples: 1000, minimumPlayers: 20,
+      method: "joint score-profile bootstrap with final affine calibration, holding the curve, folder center, and selected folder scale fixed; excludes scale-selection uncertainty",
+      population: "observed successful-player best scores; excludes attempt and player-selection uncertainty" })
+    || !calibration?.folderScales || !calibration.folderCenters || !calibration.curves
+    || !hasValidCrossLevelScoring(payload, true)) return false;
+  for (const mode of ["Single", "Double"] as const) {
+    const rows = ((mode === "Single" ? payload.singles : payload.doubles) ?? []).filter((row) => row.level < 20);
+    const scales = calibration.folderScales[mode], centers = calibration.folderCenters[mode];
+    if (!scales || !centers || !(mode in calibration.curves)
+      || Object.entries(scales).some(([level, scale]) => !/^\d+$/.test(level) || !isFolderScale(scale))
+      || Object.values(centers).some((center) => !Number.isFinite(center))) return false;
+    for (const row of rows) {
+      const p = row.tierMetrics?.pumbility, c = row.tierMetrics?.clearing;
+      if (row.level < 16 || row.scoringMethod !== "submitted-score-profile-v2"
+        || row.officialScoringEvidence != null || row.officialEvidence != null
+        || (row.officialScoringContributors != null && row.officialScoringContributors !== 0) || row.scoringChartCost != null
+        || !p || !c || !Number.isInteger(row.nContributors) || row.nContributors < 0
+        || row.nPlayersScored !== row.nContributors || p.scoringSupportCount !== row.nContributors) return false;
+      const raw = row.scoringProfileMatchDifficulty;
+      if (raw == null) {
+        if (row.estimatedDifficulty !== null || row.difficultyDelta !== null || row.evidenceStatus !== "Unrated"
+          || row.scoringDifficultyScale != null || p.estimatedDifficulty !== null) return false;
+      } else {
+        const scale = scales[String(row.level)], center = centers[String(row.level)];
+        const expected = row.level + .5 + scale * (raw - center);
+        if (!Number.isFinite(raw) || !Number.isFinite(center) || !isFolderScale(scale)
+          || row.scoringDifficultyScale !== scale || !Number.isFinite(row.scoringFolderReferenceDifficulty)
+          || Math.abs(row.scoringFolderReferenceDifficulty! - center) > .000002
+          || !Number.isFinite(row.estimatedDifficulty) || Math.abs(row.estimatedDifficulty! - expected) > .000003
+          || Math.abs(row.difficultyDelta! - expected + row.level + .5) > .000003
+          || !Array.isArray(row.scoringScoreProfile) || row.scoringScoreProfile.length !== 3
+          || row.scoringScoreProfile.some((score, i, values) => !Number.isFinite(score) || score < 0 || score > 1000000 || (i > 0 && score < values[i - 1]))
+          || row.evidenceStatus !== (row.nContributors >= 10 ? "Published" : row.nContributors >= 5 ? "Provisional" : "Insufficient")) return false;
+      }
+      for (const side of ["Low", "High"] as const) {
+        const rawEndpoint = row[`scoringProfileMatchCi95${side}`], endpoint = row[`difficultyCi95${side}`];
+        if (rawEndpoint == null) {
+          if (endpoint !== null || row[`difficultyDeltaCi95${side}`] !== null) return false;
+        } else {
+          const expected = row.level + .5 + scales[String(row.level)] * (rawEndpoint - centers[String(row.level)]);
+          if (row.nContributors < 20 || !Number.isFinite(rawEndpoint) || !Number.isFinite(endpoint)
+            || Math.abs(endpoint! - expected) > .000003
+            || Math.abs(row[`difficultyDeltaCi95${side}`]! - expected + row.level + .5) > .000003) return false;
+        }
+      }
+      if ((row.difficultyCi95Low ?? 0) > (row.difficultyCi95High ?? 0)) return false;
+    }
+  }
+  return true;
 }
 
 export function validateLocalAnalysisPayload(
@@ -568,7 +686,15 @@ export function validateLocalAnalysisPayload(
     throw new LocalAnalysisValidationError("The local analysis payload must be an object.");
   }
   const payload = value as Partial<AnalysisPayload>;
-  if (expectedMix === "combined" && payload.schemaVersion === POSTPROCESSED_SCHEMA) {
+  if (expectedMix === "combined" && [LOCAL_AVERAGE_PUMBILITY_SCHEMA, 48].includes(payload.schemaVersion ?? 0)) {
+    try {
+      validateLocalAnalysisPayload(recoverMaximumPumbility(payload as AnalysisPayload), expectedMix);
+      return payload as AnalysisPayload;
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The local Pumbility experiment is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
+  if (expectedMix === "combined" && [POSTPROCESSED_SCHEMA, HYBRID_POSTPROCESSED_SCHEMA].includes(payload.schemaVersion ?? 0)) {
     try {
       const raw = recoverInitialFitPayload(payload as AnalysisPayload);
       validateLocalAnalysisPayload(raw, expectedMix);
@@ -583,6 +709,7 @@ export function validateLocalAnalysisPayload(
     && payload.schemaVersion !== LOCAL_OFFICIAL_ANALYSIS_SCHEMA_VERSION
     && payload.schemaVersion !== LOCAL_CROSS_LEVEL_ANALYSIS_SCHEMA_VERSION
     && payload.schemaVersion !== LOCAL_CROSS_LEVEL_CLEARING_SCHEMA_VERSION
+    && payload.schemaVersion !== HYBRID_INITIAL_SCHEMA
     && payload.schemaVersion !== LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION
   ) {
     throw new LocalAnalysisValidationError(
@@ -605,8 +732,9 @@ export function validateLocalAnalysisPayload(
     if (!resolvePumbilityPolicy(payload)) {
       throw new LocalAnalysisValidationError("The local combined scoring or clearing-skill method is incompatible: unrecognized Pumbility policy.");
     }
-    const newClearing = payload.schemaVersion === LOCAL_CROSS_LEVEL_CLEARING_SCHEMA_VERSION;
-    if (newClearing && !hasValidCrossLevelClearing(payload)) {
+    const hybrid = payload.schemaVersion === HYBRID_INITIAL_SCHEMA;
+    const newClearing = payload.schemaVersion === LOCAL_CROSS_LEVEL_CLEARING_SCHEMA_VERSION || hybrid;
+    if (newClearing && !hasValidCrossLevelClearing(payload, hybrid)) {
       throw new LocalAnalysisValidationError("The cross-level Clearing method, evidence, or calibration is incompatible.");
     }
     const scoringPayload = newClearing ? { ...payload, schemaVersion: payload.summary.method.crossLevelClearing!.baseScoringSchemaVersion } : payload;
@@ -648,7 +776,7 @@ export function validateLocalAnalysisPayload(
     } | undefined;
     const clearing = tiers?.clearing?.skillMethod;
     const crossLevel = scoringPayload.schemaVersion === LOCAL_CROSS_LEVEL_ANALYSIS_SCHEMA_VERSION;
-    const validScoring = crossLevel ? hasValidCrossLevelScoring(payload) : scoring?.calibration === "folder-scaled-score-profile"
+    const validScoring = hybrid ? hasValidHybridScoring(payload) : crossLevel ? hasValidCrossLevelScoring(payload) : scoring?.calibration === "folder-scaled-score-profile"
       ? (scoringPayload.schemaVersion === LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION
           || scoringPayload.schemaVersion === LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION
           || scoringPayload.schemaVersion === LOCAL_OFFICIAL_ANALYSIS_SCHEMA_VERSION)
@@ -761,7 +889,7 @@ export async function readLocalAnalysisPayload(
 export async function readLocalCombinedAnalysisPayload(): Promise<AnalysisPayload> {
   let raw: string;
   try {
-    raw = await readFile(COMBINED_LOCAL_RESULTS_PATH, "utf8");
+    raw = await readFile(localCombinedResultsPath(), "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new LocalAnalysisNotFoundError(

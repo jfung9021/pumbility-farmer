@@ -12,6 +12,7 @@ from piu_misgrade_analyzer import difficulty_effect_band, relative_difficulty_gr
 from tier_difficulty import refresh_pumbility_metrics
 
 SCHEMA_VERSION = 44
+HYBRID_SCHEMA_VERSION = 47
 FIT_FIELDS = (
     "estimatedDifficulty", "difficultyDelta", "difficultyCi95Low", "difficultyCi95High",
     "difficultyDeltaCi95Low", "difficultyDeltaCi95High", "effectBand", "effectBandRank",
@@ -21,7 +22,7 @@ FIT_FIELDS = (
 
 
 def compression_policy(base_schema: int) -> dict[str, Any]:
-    if base_schema not in (26, 41, 42, 43):
+    if base_schema not in (26, 41, 42, 43, 46):
         raise ValueError("Unsupported initial-fit tier schema.")
     return {"version": 1, "method": "official-midpoint-compression", "factor": .5,
             "reference": "current-official-level-plus-0.5", "metrics": ["scoring", "clearing"],
@@ -47,14 +48,19 @@ def _fit(metric):
 
 def initial_fit_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Recover the original calibration contract for fitting and validation."""
+    if payload.get("schemaVersion") == 48:
+        from pumbility_average import recover_maximum_pumbility
+        return initial_fit_payload(recover_maximum_pumbility(payload))
     result = copy.deepcopy(payload)
     policy = result.get("summary", {}).get("method", {}).get("ratingPostprocessing")
-    if result.get("schemaVersion") != SCHEMA_VERSION:
+    if result.get("schemaVersion") not in (SCHEMA_VERSION, HYBRID_SCHEMA_VERSION):
         if policy is not None:
             raise ValueError("Post-processing metadata requires its versioned schema.")
         return result
     if not isinstance(policy, dict) or policy != compression_policy(policy.get("baseAnalysisSchemaVersion")):
         raise ValueError("Incompatible midpoint compression policy.")
+    if (result["schemaVersion"] == HYBRID_SCHEMA_VERSION) != (policy["baseAnalysisSchemaVersion"] == 46):
+        raise ValueError("Midpoint compression schema disagrees with its initial fit.")
     for mode in ("singles", "doubles"):
         for row in result.get(mode, []):
             for metric in _metrics(row):
@@ -119,9 +125,13 @@ def _rank_secondary(rows, name):
 
 def finalize_tiers(payload: Mapping[str, Any], *, newly_fitted_metrics=()) -> dict[str, Any]:
     """Always derive public values from the initial fit, never from a prior compression."""
+    if payload.get("schemaVersion") == 48:
+        from pumbility_average import apply_average_pumbility, recover_maximum_pumbility
+        return apply_average_pumbility(finalize_tiers(recover_maximum_pumbility(payload),
+                                                    newly_fitted_metrics=newly_fitted_metrics))
     if set(newly_fitted_metrics) - {"scoring", "clearing"}:
         raise ValueError("Unknown newly fitted tier metric.")
-    processed = payload.get("schemaVersion") == SCHEMA_VERSION
+    processed = payload.get("schemaVersion") in (SCHEMA_VERSION, HYBRID_SCHEMA_VERSION)
     raw = initial_fit_payload(payload)
     if processed:
         for mode in ("singles", "doubles"):
@@ -161,12 +171,15 @@ def finalize_tiers(payload: Mapping[str, Any], *, newly_fitted_metrics=()) -> di
             row["tierMetrics"]["pumbility"]["initialFit"] = pumbility_fits[row["chartId"]]
         _rank_secondary(result.get(mode, []), "pumbility")
     result["summary"]["method"]["ratingPostprocessing"] = compression_policy(raw["schemaVersion"])
-    result["schemaVersion"] = SCHEMA_VERSION
+    result["schemaVersion"] = HYBRID_SCHEMA_VERSION if raw["schemaVersion"] == 46 else SCHEMA_VERSION
     _refresh_summary(result)
     return result
 
 
 def validate_postprocessing(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if payload.get("schemaVersion") == 48:
+        from pumbility_average import recover_maximum_pumbility
+        return validate_postprocessing(recover_maximum_pumbility(payload))
     raw = initial_fit_payload(payload)
     expected = finalize_tiers(raw)
     for mode in ("singles", "doubles"):

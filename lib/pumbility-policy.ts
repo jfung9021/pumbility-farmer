@@ -16,8 +16,26 @@ export function resolvePumbilityPolicy(payload: Partial<AnalysisPayload> | null 
     version?: number;
     pumbility?: { version?: number; aggregation?: string; requiresBoth?: boolean; calculation?: string };
   } | undefined;
-  if (!tiers || (tiers.version !== 10 && tiers.version !== 11)) return null;
+  if (!tiers || ![10, 11, 12].includes(tiers.version ?? 0)) return null;
   const method = tiers.pumbility;
+  if (tiers.version === 12) {
+    const hybrid = payload?.summary?.method.hybridTiers as { version?: number } | undefined;
+    if (hybrid?.version !== 1) return null;
+    if ([46, 47].includes(payload?.schemaVersion ?? 0) && method?.version === 2
+      && method.aggregation === "maximum" && method.requiresBoth === true
+      && method.calculation === MAXIMUM_PUMBILITY_CALCULATION) return { aggregation: "maximum", requiresRowMarker: true };
+    const experiment = payload?.summary?.method.pumbilityExperiment as { version?: number; aggregation?: string; baseAnalysisSchemaVersion?: number } | undefined;
+    if (payload?.schemaVersion === 48 && method?.version === 4 && method.aggregation === "average" && method.requiresBoth === true
+      && method.calculation === AVERAGE_PUMBILITY_CALCULATION && experiment?.version === 2
+      && experiment.aggregation === "average" && experiment.baseAnalysisSchemaVersion === 47) return { aggregation: "average", requiresRowMarker: true };
+    return null;
+  }
+  if (payload?.schemaVersion === 45 && method?.version === 3 && method.aggregation === "average" && method.requiresBoth === true
+    && method.calculation === AVERAGE_PUMBILITY_CALCULATION) {
+    const experiment = payload.summary?.method.pumbilityExperiment as { version?: number; aggregation?: string; baseAnalysisSchemaVersion?: number } | undefined;
+    return experiment?.version === 1 && experiment.aggregation === "average" && experiment.baseAnalysisSchemaVersion === 44
+      ? { aggregation: "average", requiresRowMarker: true } : null;
+  }
   if (method?.version !== undefined || method?.aggregation !== undefined || method?.requiresBoth !== undefined) {
     return method.version === 2 && method.aggregation === "maximum" && method.requiresBoth === true
       && (method.calculation === undefined || method.calculation === MAXIMUM_PUMBILITY_CALCULATION)

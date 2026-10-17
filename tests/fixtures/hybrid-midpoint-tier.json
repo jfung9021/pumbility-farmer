@@ -1,0 +1,3376 @@
+{
+  "generatedAtUtc": "2026-08-07T04:20:00Z",
+  "mix": {
+    "key": "combined",
+    "apiValue": "Phoenix+Phoenix2",
+    "label": "Phoenix 1 + 2"
+  },
+  "summary": {
+    "scriptVersion": "6.11.0-clearing-10-50-official-folder",
+    "method": {
+      "scoring": {
+        "version": 1,
+        "population": "official-max-per-player-chart",
+        "calibration": "official-cross-level-median-anchored-exponential",
+        "minimumOfficialLevel": 20
+      },
+      "hybridTiers": {
+        "version": 1,
+        "minimumDisplayLevel": 16,
+        "scoring": {
+          "below20": "piuscores-submitted-score-profile-v2",
+          "atLeast20": "official-cross-level-v1",
+          "officialMinimumLevel": 20,
+          "missingOfficialPolicy": "unrated"
+        },
+        "clearing": {
+          "below20": "submitted-folder-centered-clearing-v1",
+          "atLeast20": "submitted-cross-level-clearing-v2",
+          "minimumCalibrationLevel": 20
+        },
+        "submittedScoring": {
+          "method": {
+            "version": 2,
+            "population": "combined",
+            "calibration": "folder-scaled-score-profile",
+            "percentiles": [
+              0.5,
+              0.75,
+              0.9
+            ],
+            "profileWeights": [
+              1,
+              1,
+              2
+            ],
+            "percentileMethod": "linear interpolation",
+            "scoreUnit": 10000,
+            "referenceSmoothing": 4,
+            "minimumReferencePlayers": 20,
+            "minimumReferenceCharts": 5,
+            "fullReferenceWeightCharts": 20,
+            "folderCenter": "median-profile-match",
+            "scaleStep": 0.01,
+            "maximumScale": 1,
+            "preferredCentralWidth": 1,
+            "spreadQuantiles": [
+              0.1,
+              0.9
+            ],
+            "minimumSpreadCharts": 10,
+            "minimumSpreadMedianPlayers": 10,
+            "spreadReliabilityCharts": 30,
+            "spreadReliabilityPlayers": 20,
+            "neighborSmoothing": 0.05,
+            "rarityThreshold": 10,
+            "rarityPenalty": 0.05
+          },
+          "confidenceIntervals": {
+            "method": "joint score-profile bootstrap with final affine calibration, holding the curve, folder center, and selected folder scale fixed; excludes scale-selection uncertainty",
+            "samples": 1000,
+            "minimumPlayers": 20,
+            "population": "observed successful-player best scores; excludes attempt and player-selection uncertainty"
+          },
+          "scoreProfileCalibration": {
+            "folderScales": {
+              "Single": {
+                "19": 0.4
+              },
+              "Double": {}
+            },
+            "folderCenters": {
+              "Single": {
+                "19": 19.5
+              },
+              "Double": {}
+            },
+            "curves": {
+              "Single": null,
+              "Double": null
+            }
+          }
+        }
+      },
+      "officialCrossLevelScoring": {
+        "version": 1,
+        "minimumOfficialLevel": 20,
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "intervalMethod": "conditional-player-bootstrap-fixed-fit-v1",
+        "calibration": {
+          "Single": {
+            "version": 1,
+            "anchors": [
+              {
+                "level": 20,
+                "threshold": 21,
+                "difficulty": 20.5,
+                "referenceCharts": 5,
+                "chartIds": [
+                  "synthetic-20-0",
+                  "synthetic-20-1",
+                  "synthetic-20-2",
+                  "synthetic-20-3",
+                  "synthetic-20-4"
+                ],
+                "cost": 10000
+              },
+              {
+                "level": 21,
+                "threshold": 22,
+                "difficulty": 21.5,
+                "referenceCharts": 5,
+                "chartIds": [
+                  "synthetic-21-0",
+                  "synthetic-21-1",
+                  "synthetic-21-2",
+                  "synthetic-21-3",
+                  "synthetic-21-4"
+                ],
+                "cost": 20000
+              },
+              {
+                "level": 22,
+                "threshold": 23,
+                "difficulty": 22.5,
+                "referenceCharts": 5,
+                "chartIds": [
+                  "synthetic-22-0",
+                  "synthetic-22-1",
+                  "synthetic-22-2",
+                  "synthetic-22-3",
+                  "synthetic-22-4"
+                ],
+                "cost": 30000
+              }
+            ],
+            "offset": 0,
+            "fit": {
+              "growth": 1,
+              "normalizedOffset": 0,
+              "normalizedAmplitude": 1,
+              "normalizedMse": 0,
+              "boundHit": false
+            },
+            "tailPolicy": "tangent-linear",
+            "supportedRange": [
+              20.5,
+              22.5
+            ],
+            "referenceMinimumPlayers": 10,
+            "referenceMinimumCharts": 5
+          },
+          "Double": null
+        }
+      },
+      "crossLevelClearing": {
+        "version": 2,
+        "source": "piuscores-submitted",
+        "minimumOfficialLevel": 16,
+        "skillMethod": {
+          "version": 1,
+          "topClearCount": 30,
+          "minimumScoreRecords": 200,
+          "minimumUniqueClears": 30,
+          "difficultyBasis": "current-official-level",
+          "scope": "same-mode-current-catalog",
+          "recordDeduplication": "account-chart-across-mixes"
+        },
+        "percentile": 0.1,
+        "percentileMethod": "linear",
+        "calibrationMethod": "20plus-median-anchored-piecewise-linear-with-lower-folder-fallback",
+        "calibrationVersion": 1,
+        "referenceMinimumClearers": 20,
+        "referenceMinimumCharts": 5,
+        "minimumAnchors": 3,
+        "tailPolicy": "boundary-linear",
+        "intervalMethod": "none",
+        "minimumCalibrationLevel": 20,
+        "lowerLevelMethod": {
+          "method": "folder-centered-q10",
+          "difficultyDeltaScale": 0.7,
+          "referenceMinimumClearers": 20,
+          "referenceMinimumCharts": 5
+        },
+        "baseScoringSchemaVersion": 42,
+        "sourceDates": {
+          "phoenix1": "2026-10-01T00:00:00Z",
+          "phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "inputHashes": {
+          "phoenix1": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "phoenix2": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "currentCatalog": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "calibration": {
+          "Single": {
+            "version": 1,
+            "anchors": [
+              {
+                "level": 20,
+                "threshold": 21,
+                "difficulty": 20.5,
+                "referenceCharts": 5,
+                "chartIds": [
+                  "synthetic-20-0",
+                  "synthetic-20-1",
+                  "synthetic-20-2",
+                  "synthetic-20-3",
+                  "synthetic-20-4"
+                ]
+              },
+              {
+                "level": 21,
+                "threshold": 22,
+                "difficulty": 21.5,
+                "referenceCharts": 5,
+                "chartIds": [
+                  "synthetic-21-0",
+                  "synthetic-21-1",
+                  "synthetic-21-2",
+                  "synthetic-21-3",
+                  "synthetic-21-4"
+                ]
+              },
+              {
+                "level": 22,
+                "threshold": 23,
+                "difficulty": 22.5,
+                "referenceCharts": 5,
+                "chartIds": [
+                  "synthetic-22-0",
+                  "synthetic-22-1",
+                  "synthetic-22-2",
+                  "synthetic-22-3",
+                  "synthetic-22-4"
+                ]
+              }
+            ],
+            "tailPolicy": "boundary-linear",
+            "supportedRange": [
+              20.5,
+              22.5
+            ]
+          },
+          "Double": null
+        },
+        "lowerReferenceSkills": {
+          "Single": {
+            "19": {
+              "level": 19,
+              "threshold": 21,
+              "referenceCharts": 5,
+              "chartIds": [
+                "synthetic-19-0",
+                "synthetic-19-1",
+                "synthetic-19-2",
+                "synthetic-19-3",
+                "synthetic-19-4"
+              ]
+            }
+          },
+          "Double": {}
+        }
+      },
+      "tierMetrics": {
+        "version": 12,
+        "clearing": {
+          "version": 2,
+          "source": "piuscores-submitted",
+          "minimumOfficialLevel": 16,
+          "skillMethod": {
+            "version": 1,
+            "topClearCount": 30,
+            "minimumScoreRecords": 200,
+            "minimumUniqueClears": 30,
+            "difficultyBasis": "current-official-level",
+            "scope": "same-mode-current-catalog",
+            "recordDeduplication": "account-chart-across-mixes"
+          },
+          "percentile": 0.1,
+          "percentileMethod": "linear",
+          "calibrationMethod": "20plus-median-anchored-piecewise-linear-with-lower-folder-fallback",
+          "calibrationVersion": 1,
+          "referenceMinimumClearers": 20,
+          "referenceMinimumCharts": 5,
+          "minimumAnchors": 3,
+          "tailPolicy": "boundary-linear",
+          "intervalMethod": "none",
+          "minimumCalibrationLevel": 20,
+          "lowerLevelMethod": {
+            "method": "folder-centered-q10",
+            "difficultyDeltaScale": 0.7,
+            "referenceMinimumClearers": 20,
+            "referenceMinimumCharts": 5
+          }
+        },
+        "pumbility": {
+          "version": 2,
+          "aggregation": "maximum",
+          "requiresBoth": true,
+          "calculation": "max(scoring difficulty, clearing difficulty) before rounding"
+        }
+      },
+      "ratingPostprocessing": {
+        "version": 1,
+        "method": "official-midpoint-compression",
+        "factor": 0.5,
+        "reference": "current-official-level-plus-0.5",
+        "metrics": [
+          "scoring",
+          "clearing"
+        ],
+        "baseAnalysisSchemaVersion": 46
+      }
+    },
+    "coverage": {
+      "playersReturnedByCredential": 52
+    },
+    "modes": {
+      "singles": {
+        "eligiblePlayers": 46,
+        "catalogCharts": 474,
+        "measuredCharts": 312,
+        "publishedCharts": 188,
+        "pumbilityPerLevel": 7.3,
+        "calibration": {},
+        "shrinkage": {},
+        "folders": {}
+      },
+      "doubles": {
+        "eligiblePlayers": 41,
+        "catalogCharts": 737,
+        "measuredCharts": 421,
+        "publishedCharts": 246,
+        "pumbilityPerLevel": 7.3,
+        "calibration": {},
+        "shrinkage": {},
+        "folders": {}
+      }
+    }
+  },
+  "singles": [
+    {
+      "mode": "Singles",
+      "modeRank": 1,
+      "levelRank": 1,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": 5,
+      "folder": "S19",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": 4,
+      "effectBand": "Medium",
+      "songName": "synthetic-19-0",
+      "difficulty": "S19",
+      "type": "Single",
+      "level": 19,
+      "chartId": "synthetic-19-0",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": 19.46,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": -0.03999999999999915,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 30,
+      "nPlayersScored": 30,
+      "evidenceStatus": "Published",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 19.43,
+          "difficultyDelta": -0.07000000000000028,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 1,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 20.8,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-folder-centered-clearing-v1",
+          "folderReferenceSkill": 21,
+          "supportedRange": null,
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 19.36,
+            "difficultyDelta": -0.14000000000000057,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 1,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": 19.46,
+          "difficultyDelta": -0.03999999999999915,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 1,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "aggregation": "maximum",
+          "scoringSupportCount": 30,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": 19.42,
+            "difficultyDelta": -0.0799999999999983,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 1,
+            "levelComparisonCharts": 5
+          }
+        }
+      },
+      "scoringMethod": "submitted-score-profile-v2",
+      "scoringScoreProfile": [
+        970000,
+        980000,
+        990000
+      ],
+      "scoringProfileMatchDifficulty": 19.3,
+      "scoringFolderReferenceDifficulty": 19.5,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": 0.4,
+      "scoringSpreadCalibration": null,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": null,
+      "scoringProvisional": false,
+      "scoringUnratedReason": null,
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": 19.42,
+        "difficultyDelta": -0.0799999999999983,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": 1,
+        "levelComparisonCharts": 5,
+        "modeRank": 1,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": 2,
+      "levelRank": 2,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": 5,
+      "folder": "S19",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": 4,
+      "effectBand": "Medium",
+      "songName": "synthetic-19-1",
+      "difficulty": "S19",
+      "type": "Single",
+      "level": 19,
+      "chartId": "synthetic-19-1",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": 19.48,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": -0.019999999999999574,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 30,
+      "nPlayersScored": 30,
+      "evidenceStatus": "Published",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 19.465,
+          "difficultyDelta": -0.03500000000000014,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 2,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 20.9,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-folder-centered-clearing-v1",
+          "folderReferenceSkill": 21,
+          "supportedRange": null,
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 19.43,
+            "difficultyDelta": -0.07000000000000028,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 2,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": 19.48,
+          "difficultyDelta": -0.019999999999999574,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 2,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "aggregation": "maximum",
+          "scoringSupportCount": 30,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": 19.46,
+            "difficultyDelta": -0.03999999999999915,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 2,
+            "levelComparisonCharts": 5
+          }
+        }
+      },
+      "scoringMethod": "submitted-score-profile-v2",
+      "scoringScoreProfile": [
+        970000,
+        980000,
+        990000
+      ],
+      "scoringProfileMatchDifficulty": 19.4,
+      "scoringFolderReferenceDifficulty": 19.5,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": 0.4,
+      "scoringSpreadCalibration": null,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": null,
+      "scoringProvisional": false,
+      "scoringUnratedReason": null,
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": 19.46,
+        "difficultyDelta": -0.03999999999999915,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": 2,
+        "levelComparisonCharts": 5,
+        "modeRank": 2,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": 3,
+      "levelRank": 3,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": 5,
+      "folder": "S19",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": 4,
+      "effectBand": "Medium",
+      "songName": "synthetic-19-2",
+      "difficulty": "S19",
+      "type": "Single",
+      "level": 19,
+      "chartId": "synthetic-19-2",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": 19.5,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": 0,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 30,
+      "nPlayersScored": 30,
+      "evidenceStatus": "Published",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 19.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 3,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 21,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-folder-centered-clearing-v1",
+          "folderReferenceSkill": 21,
+          "supportedRange": null,
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 19.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 3,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": 19.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 3,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "aggregation": "maximum",
+          "scoringSupportCount": 30,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": 19.5,
+            "difficultyDelta": 0,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 3,
+            "levelComparisonCharts": 5
+          }
+        }
+      },
+      "scoringMethod": "submitted-score-profile-v2",
+      "scoringScoreProfile": [
+        970000,
+        980000,
+        990000
+      ],
+      "scoringProfileMatchDifficulty": 19.5,
+      "scoringFolderReferenceDifficulty": 19.5,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": 0.4,
+      "scoringSpreadCalibration": null,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": null,
+      "scoringProvisional": false,
+      "scoringUnratedReason": null,
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": 19.5,
+        "difficultyDelta": 0,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": 3,
+        "levelComparisonCharts": 5,
+        "modeRank": 3,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": 4,
+      "levelRank": 4,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": 5,
+      "folder": "S19",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": 4,
+      "effectBand": "Medium",
+      "songName": "synthetic-19-3",
+      "difficulty": "S19",
+      "type": "Single",
+      "level": 19,
+      "chartId": "synthetic-19-3",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": 19.52,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": 0.019999999999999574,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 30,
+      "nPlayersScored": 30,
+      "evidenceStatus": "Published",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 19.535,
+          "difficultyDelta": 0.03500000000000014,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 4,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 21.1,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-folder-centered-clearing-v1",
+          "folderReferenceSkill": 21,
+          "supportedRange": null,
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 19.57,
+            "difficultyDelta": 0.07000000000000028,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 4,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": 19.535,
+          "difficultyDelta": 0.03500000000000014,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 4,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "aggregation": "maximum",
+          "scoringSupportCount": 30,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": 19.57,
+            "difficultyDelta": 0.07000000000000028,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 4,
+            "levelComparisonCharts": 5
+          }
+        }
+      },
+      "scoringMethod": "submitted-score-profile-v2",
+      "scoringScoreProfile": [
+        970000,
+        980000,
+        990000
+      ],
+      "scoringProfileMatchDifficulty": 19.6,
+      "scoringFolderReferenceDifficulty": 19.5,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": 0.4,
+      "scoringSpreadCalibration": null,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": null,
+      "scoringProvisional": false,
+      "scoringUnratedReason": null,
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": 19.54,
+        "difficultyDelta": 0.03999999999999915,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": 4,
+        "levelComparisonCharts": 5,
+        "modeRank": 4,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": 5,
+      "levelRank": 5,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": 5,
+      "folder": "S19",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": 4,
+      "effectBand": "Medium",
+      "songName": "synthetic-19-4",
+      "difficulty": "S19",
+      "type": "Single",
+      "level": 19,
+      "chartId": "synthetic-19-4",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": 19.54,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": 0.03999999999999915,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 30,
+      "nPlayersScored": 30,
+      "evidenceStatus": "Published",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 19.57,
+          "difficultyDelta": 0.07000000000000028,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 5,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 21.2,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-folder-centered-clearing-v1",
+          "folderReferenceSkill": 21,
+          "supportedRange": null,
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 19.64,
+            "difficultyDelta": 0.14000000000000057,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 5,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": 19.57,
+          "difficultyDelta": 0.07000000000000028,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 5,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "aggregation": "maximum",
+          "scoringSupportCount": 30,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": 19.64,
+            "difficultyDelta": 0.14000000000000057,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 5,
+            "levelComparisonCharts": 5
+          }
+        }
+      },
+      "scoringMethod": "submitted-score-profile-v2",
+      "scoringScoreProfile": [
+        970000,
+        980000,
+        990000
+      ],
+      "scoringProfileMatchDifficulty": 19.7,
+      "scoringFolderReferenceDifficulty": 19.5,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": 0.4,
+      "scoringSpreadCalibration": null,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": null,
+      "scoringProvisional": false,
+      "scoringUnratedReason": null,
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": 19.58,
+        "difficultyDelta": 0.0799999999999983,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": 5,
+        "levelComparisonCharts": 5,
+        "modeRank": 5,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S20",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-20-0",
+      "difficulty": "S20",
+      "type": "Single",
+      "level": 20,
+      "chartId": "synthetic-20-0",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 20.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 1,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 21,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 21,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 20.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 1,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S20",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-20-1",
+      "difficulty": "S20",
+      "type": "Single",
+      "level": 20,
+      "chartId": "synthetic-20-1",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 20.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 2,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 21,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 21,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 20.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 2,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S20",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-20-2",
+      "difficulty": "S20",
+      "type": "Single",
+      "level": 20,
+      "chartId": "synthetic-20-2",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 20.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 3,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 21,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 21,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 20.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 3,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S20",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-20-3",
+      "difficulty": "S20",
+      "type": "Single",
+      "level": 20,
+      "chartId": "synthetic-20-3",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 20.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 4,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 21,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 21,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 20.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 4,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S20",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-20-4",
+      "difficulty": "S20",
+      "type": "Single",
+      "level": 20,
+      "chartId": "synthetic-20-4",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 20.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 5,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 21,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 21,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 20.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 5,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S21",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-21-0",
+      "difficulty": "S21",
+      "type": "Single",
+      "level": 21,
+      "chartId": "synthetic-21-0",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 21.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 1,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 22,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 22,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 21.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 1,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S21",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-21-1",
+      "difficulty": "S21",
+      "type": "Single",
+      "level": 21,
+      "chartId": "synthetic-21-1",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 21.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 2,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 22,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 22,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 21.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 2,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S21",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-21-2",
+      "difficulty": "S21",
+      "type": "Single",
+      "level": 21,
+      "chartId": "synthetic-21-2",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 21.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 3,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 22,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 22,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 21.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 3,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S21",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-21-3",
+      "difficulty": "S21",
+      "type": "Single",
+      "level": 21,
+      "chartId": "synthetic-21-3",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 21.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 4,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 22,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 22,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 21.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 4,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S21",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-21-4",
+      "difficulty": "S21",
+      "type": "Single",
+      "level": 21,
+      "chartId": "synthetic-21-4",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 21.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 5,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 22,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 22,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 21.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 5,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S22",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-22-0",
+      "difficulty": "S22",
+      "type": "Single",
+      "level": 22,
+      "chartId": "synthetic-22-0",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 22.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 1,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 23,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 23,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 22.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 1,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S22",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-22-1",
+      "difficulty": "S22",
+      "type": "Single",
+      "level": 22,
+      "chartId": "synthetic-22-1",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 22.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 2,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 23,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 23,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 22.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 2,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S22",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-22-2",
+      "difficulty": "S22",
+      "type": "Single",
+      "level": 22,
+      "chartId": "synthetic-22-2",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 22.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 3,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 23,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 23,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 22.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 3,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S22",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-22-3",
+      "difficulty": "S22",
+      "type": "Single",
+      "level": 22,
+      "chartId": "synthetic-22-3",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 22.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 4,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 23,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 23,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 22.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 4,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    },
+    {
+      "mode": "Singles",
+      "modeRank": null,
+      "levelRank": null,
+      "levelPercentile": 0.05,
+      "levelComparisonCharts": null,
+      "folder": "S22",
+      "relativeGroupRank": 1,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": null,
+      "effectBand": null,
+      "songName": "synthetic-22-4",
+      "difficulty": "S22",
+      "type": "Single",
+      "level": 22,
+      "chartId": "synthetic-22-4",
+      "imageUrl": null,
+      "noteCount": 1120,
+      "stepArtist": "EXC",
+      "averageDifficulty": 16.5,
+      "estimatedDifficulty": null,
+      "whatIfEstimates": [
+        {
+          "level": 17,
+          "estimatedDifficulty": 17.068
+        }
+      ],
+      "difficultyDelta": null,
+      "folderMeasuredCharts": 10,
+      "folderRangeCompression": 1,
+      "difficultyDeltaCi95Low": null,
+      "difficultyDeltaCi95High": null,
+      "difficultyCi95Low": null,
+      "difficultyCi95High": null,
+      "nContributors": 0,
+      "nPlayersScored": 0,
+      "evidenceStatus": "Unrated",
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 22.5,
+          "difficultyDelta": 0,
+          "effectBandRank": 4,
+          "effectBand": "Medium",
+          "levelRank": 5,
+          "levelComparisonCharts": 5,
+          "evidenceStatus": "Published",
+          "clearCount": 20,
+          "ratedClearCount": 20,
+          "missingSkillCount": 0,
+          "q10Skill": 23,
+          "sourceCounts": {
+            "phoenix1": 0,
+            "phoenix2": 20
+          },
+          "retainedSources": [
+            "phoenix2"
+          ],
+          "comparability": "comparable",
+          "anchorEligible": true,
+          "qualificationExclusions": {},
+          "method": "submitted-cross-level-clearing-v2",
+          "folderReferenceSkill": 23,
+          "supportedRange": [
+            20.5,
+            22.5
+          ],
+          "extrapolated": false,
+          "provisionalReasons": [],
+          "unratedReason": null,
+          "difficultyCi95Low": null,
+          "difficultyCi95High": null,
+          "initialFit": {
+            "estimatedDifficulty": 22.5,
+            "difficultyDelta": 0,
+            "difficultyCi95Low": null,
+            "difficultyCi95High": null,
+            "effectBand": "Medium",
+            "effectBandRank": 4,
+            "levelRank": 5,
+            "levelComparisonCharts": 5
+          }
+        },
+        "pumbility": {
+          "estimatedDifficulty": null,
+          "difficultyDelta": null,
+          "effectBandRank": null,
+          "effectBand": null,
+          "levelRank": null,
+          "levelComparisonCharts": null,
+          "evidenceStatus": "Unrated",
+          "aggregation": "maximum",
+          "scoringSupportCount": 0,
+          "clearingSupportCount": 20,
+          "initialFit": {
+            "estimatedDifficulty": null,
+            "difficultyDelta": null,
+            "effectBand": null,
+            "effectBandRank": null,
+            "levelRank": null,
+            "levelComparisonCharts": null
+          }
+        }
+      },
+      "scoringMethod": "official-cross-level-v1",
+      "scoringScoreProfile": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringDifficultyScale": null,
+      "scoringSpreadCalibration": null,
+      "scoringPlayerCount": 0,
+      "officialScoringContributors": 0,
+      "officialScoringEvidence": {
+        "sourceDates": {
+          "Phoenix": "2026-10-01T00:00:00Z",
+          "Phoenix2": "2026-10-02T00:00:00Z"
+        },
+        "sourceCounts": {
+          "Phoenix": 0,
+          "Phoenix2": 0
+        },
+        "sourceStates": {},
+        "mergedPlayerCount": 0,
+        "comparability": "no-evidence",
+        "component": null,
+        "anchorEligible": false
+      },
+      "scoringProvisional": true,
+      "scoringUnratedReason": "No official score evidence.",
+      "scoringChartCost": null,
+      "scoringChartCostCi95Low": null,
+      "scoringChartCostCi95High": null,
+      "initialFit": {
+        "estimatedDifficulty": null,
+        "difficultyDelta": null,
+        "difficultyCi95Low": null,
+        "difficultyCi95High": null,
+        "difficultyDeltaCi95Low": null,
+        "difficultyDeltaCi95High": null,
+        "effectBand": "Very Easy",
+        "effectBandRank": 2,
+        "levelRank": null,
+        "levelComparisonCharts": null,
+        "modeRank": null,
+        "levelPercentile": 0.05,
+        "relativeGroup": "Easiest 10%",
+        "relativeGroupRank": 1
+      }
+    }
+  ],
+  "doubles": [],
+  "relativeGroups": [
+    {
+      "rank": 1,
+      "name": "Easiest 10%"
+    },
+    {
+      "rank": 2,
+      "name": "10–20% percentile"
+    },
+    {
+      "rank": 3,
+      "name": "20–30% percentile"
+    },
+    {
+      "rank": 4,
+      "name": "30–40% percentile"
+    },
+    {
+      "rank": 5,
+      "name": "40–50% percentile"
+    },
+    {
+      "rank": 6,
+      "name": "50–60% percentile"
+    },
+    {
+      "rank": 7,
+      "name": "60–70% percentile"
+    },
+    {
+      "rank": 8,
+      "name": "70–80% percentile"
+    },
+    {
+      "rank": 9,
+      "name": "80–90% percentile"
+    },
+    {
+      "rank": 10,
+      "name": "Hardest 10%"
+    }
+  ],
+  "effectBands": [
+    {
+      "rank": 1,
+      "name": "Overrated",
+      "low": null,
+      "high": -0.5
+    },
+    {
+      "rank": 2,
+      "name": "Very Easy",
+      "low": -0.5,
+      "high": -0.3
+    },
+    {
+      "rank": 3,
+      "name": "Easy",
+      "low": -0.3,
+      "high": -0.1
+    },
+    {
+      "rank": 4,
+      "name": "Medium",
+      "low": -0.1,
+      "high": 0.1
+    },
+    {
+      "rank": 5,
+      "name": "Hard",
+      "low": 0.1,
+      "high": 0.3
+    },
+    {
+      "rank": 6,
+      "name": "Very Hard",
+      "low": 0.3,
+      "high": 0.5
+    },
+    {
+      "rank": 7,
+      "name": "Underrated",
+      "low": 0.5,
+      "high": null
+    }
+  ],
+  "schemaVersion": 47,
+  "coop": []
+}

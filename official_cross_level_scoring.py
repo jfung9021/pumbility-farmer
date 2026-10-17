@@ -103,12 +103,14 @@ def _reference_anchors(mode: str, catalog: Mapping[str, Mapping[str, Any]],
 
 
 def apply_cross_level_scoring(base_payload: Mapping[str, Any], merged: Mapping[str, Any],
-                              current_charts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+                              current_charts: Sequence[Mapping[str, Any]], *,
+                              retain_submitted_below20: bool = False) -> dict[str, Any]:
     """Apply official-only Scoring, preserving each existing Clearing metric exactly."""
     from pumbility_contract import CROSS_LEVEL_TIER_SCHEMA_VERSION
 
     from tier_postprocessing import initial_fit_payload
     payload = initial_fit_payload(base_payload)
+    submitted_method = copy.deepcopy(payload.get("summary", {}).get("method", {}))
     catalog = {str(chart.get("id", chart.get("chartId"))): chart for chart in current_charts}
     metadata = merged.get("charts", {})
     source_dates = dict(merged.get("sourceDates", {}))
@@ -145,6 +147,11 @@ def apply_cross_level_scoring(base_payload: Mapping[str, Any], merged: Mapping[s
                 row.update(level=level, difficulty=chart.get("difficulty") or f"{'S' if mode == 'Single' else 'D'}{level}",
                            folder=f"{'S' if mode == 'Single' else 'D'}{level}")
             level = int(row["level"])
+            if retain_submitted_below20 and level < 20:
+                row.update(scoringMethod="submitted-score-profile-v2", officialScoringContributors=0,
+                           officialScoringEvidence=None)
+                row.setdefault("tierMetrics", {}).setdefault("pumbility", _empty_metric())
+                continue
             for field in list(row):
                 if field.startswith("scoring") or field in ("whatIfEstimates", "pumbilityPerLevel"):
                     row.pop(field, None)
@@ -220,6 +227,13 @@ def apply_cross_level_scoring(base_payload: Mapping[str, Any], merged: Mapping[s
         "sourceDates": source_dates, "manifestSha256": merged.get("manifestSha256"), "calibration": curves,
         "intervalMethod": INTERVAL_METHOD, "modes": mode_diagnostics,
     }
+    if retain_submitted_below20:
+        from pumbility_contract import hybrid_tier_method_identity
+        method["sourceSelection"] = "hybrid-submitted-below20-official-at20plus"
+        method["hybridTiers"] = {**hybrid_tier_method_identity(), "submittedScoring": {
+            "method": submitted_method.get("scoring"),
+            "scoreProfileCalibration": submitted_method.get("scoreProfileCalibration"),
+            "confidenceIntervals": submitted_method.get("confidenceIntervals")}}
     if "officialTiers" in method:
         method["officialTiers"].pop("scoring", None)
     for field in ("scoreProfileCalibration", "whatIfEstimates"):

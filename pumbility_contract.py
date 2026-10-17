@@ -16,6 +16,7 @@ from phoenix2_sync import parse_utc, utc_now
 
 
 SCRIPT_VERSION = "6.18.0-midpoint-compression"
+HYBRID_TIER_SCRIPT_VERSION = "6.19.0-hybrid-average"
 PHOENIX2_MINIMUM_ANALYSIS_SCORES = 50
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)
@@ -27,6 +28,9 @@ OFFICIAL_TIER_SCHEMA_VERSION = 41
 CROSS_LEVEL_TIER_SCHEMA_VERSION = 42
 CROSS_LEVEL_CLEARING_SCHEMA_VERSION = 43
 POSTPROCESSED_TIER_SCHEMA_VERSION = 44
+HYBRID_TIER_SCHEMA_VERSION = 46
+HYBRID_POSTPROCESSED_TIER_SCHEMA_VERSION = 47
+HYBRID_AVERAGE_TIER_SCHEMA_VERSION = 48
 
 
 def cross_level_clearing_method_identity() -> dict[str, Any]:
@@ -40,6 +44,23 @@ def cross_level_clearing_method_identity() -> dict[str, Any]:
         "referenceMinimumClearers": 20, "referenceMinimumCharts": 5,
         "minimumAnchors": 3, "tailPolicy": "boundary-linear", "intervalMethod": "none",
     }
+
+
+def hybrid_clearing_method_identity() -> dict[str, Any]:
+    return {**cross_level_clearing_method_identity(), "version": 2,
+            "minimumCalibrationLevel": 20,
+            "calibrationMethod": "20plus-median-anchored-piecewise-linear-with-lower-folder-fallback",
+            "lowerLevelMethod": {"method": "folder-centered-q10", "difficultyDeltaScale": .70,
+                                 "referenceMinimumClearers": 20, "referenceMinimumCharts": 5}}
+
+
+def hybrid_tier_method_identity() -> dict[str, Any]:
+    return {"version": 1, "minimumDisplayLevel": 16,
+            "scoring": {"below20": "piuscores-submitted-score-profile-v2",
+                        "atLeast20": "official-cross-level-v1", "officialMinimumLevel": 20,
+                        "missingOfficialPolicy": "unrated"},
+            "clearing": {"below20": "submitted-folder-centered-clearing-v1",
+                         "atLeast20": "submitted-cross-level-clearing-v2", "minimumCalibrationLevel": 20}}
 
 
 def official_tier_snapshot_path() -> str:

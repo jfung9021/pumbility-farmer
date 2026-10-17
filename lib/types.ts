@@ -30,7 +30,8 @@ export interface TierMetricResult {
 }
 
 export interface ClearingTierMetric extends TierMetricResult {
-  method?: "submitted-cross-level-clearing-v1";
+  method?: "submitted-cross-level-clearing-v1" | "submitted-cross-level-clearing-v2" | "submitted-folder-centered-clearing-v1";
+  unratedReason?: string | null;
   sourceCounts?: Record<string, number>;
   retainedSources?: string[];
   comparability?: "comparable" | "changed" | "unknown" | "no-evidence";
@@ -124,15 +125,26 @@ export interface CrossLevelClearingCurve {
 }
 
 export interface CrossLevelClearingMethod {
-  version: 1;
+  version: 1 | 2;
   source: "piuscores-submitted";
   baseScoringSchemaVersion: 26 | 41 | 42;
+  minimumCalibrationLevel?: 20;
+  lowerLevelMethod?: { method: "folder-centered-q10"; difficultyDeltaScale: 0.70; referenceMinimumClearers: 20; referenceMinimumCharts: 5 };
+  lowerReferenceSkills?: Record<"Single" | "Double", Record<string, { level: number; threshold: number; referenceCharts: number; chartIds: string[] }>>;
   skillMethod: { version: 1; topClearCount: 30; minimumScoreRecords: 200; minimumUniqueClears: 30;
     difficultyBasis: "current-official-level"; scope: "same-mode-current-catalog"; recordDeduplication: "account-chart-across-mixes" };
   sourceDates: Record<string, string | null>;
   inputHashes: Record<string, string>;
   calibration: Record<"Single" | "Double", CrossLevelClearingCurve | null>;
   intervalMethod: "none";
+}
+
+export interface HybridTierMethod {
+  version: 1;
+  minimumDisplayLevel: 16;
+  scoring: { below20: "piuscores-submitted-score-profile-v2"; atLeast20: "official-cross-level-v1"; officialMinimumLevel: 20; missingOfficialPolicy: "unrated" };
+  clearing: { below20: "submitted-folder-centered-clearing-v1"; atLeast20: "submitted-cross-level-clearing-v2"; minimumCalibrationLevel: 20 };
+  submittedScoring: { method: Record<string, unknown>; scoreProfileCalibration: Record<string, unknown>; confidenceIntervals: Record<string, unknown> };
 }
 
 export interface OfficialCrossLevelCurve {
@@ -193,7 +205,8 @@ export interface OfficialScoringSpread {
 }
 
 export interface PumbilityTierMetric extends TierMetricResult {
-  aggregation?: "maximum";
+  aggregation?: "maximum" | "average";
+  maximumBaseline?: PumbilityTierMetric;
   scoringSupportCount: number;
   clearingSupportCount: number;
 }
@@ -231,7 +244,7 @@ export interface ChartResult {
   estimatedDifficulty: number | null;
   officialEvidence?: OfficialTierEvidence;
   officialContributors?: number;
-  scoringMethod?: "official-cross-level-v1";
+  scoringMethod?: "official-cross-level-v1" | "submitted-score-profile-v2";
   officialScoringEvidence?: OfficialScoringEvidence | null;
   officialScoringContributors?: number;
   scoringChartCost?: number | null;
@@ -342,7 +355,7 @@ export interface AnalysisPayload {
   mix: MixInfo | CombinedMixInfo;
   summary: {
     scriptVersion: string;
-    method: Record<string, unknown> & { officialTiers?: OfficialTierMethod; officialCrossLevelScoring?: OfficialCrossLevelScoringMethod; crossLevelClearing?: CrossLevelClearingMethod };
+    method: Record<string, unknown> & { officialTiers?: OfficialTierMethod; officialCrossLevelScoring?: OfficialCrossLevelScoringMethod; crossLevelClearing?: CrossLevelClearingMethod; hybridTiers?: HybridTierMethod };
     coverage: Record<string, number>;
     modes: Partial<Record<ModeKey, ModeSummary>>;
   };
