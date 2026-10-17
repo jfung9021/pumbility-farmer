@@ -1871,7 +1871,7 @@ test("accepts the combined tier-list identity", () => {
       scriptVersion: "test",
       method: {
         scoring: { version: 1, population: "combined", calibration: "original-residual-centering" },
-        tierMetrics: { version: 11, clearing: { skillMethod: {
+        tierMetrics: { version: 10, clearing: { skillMethod: {
           methodVersion: 2, difficultyBasis: "current-official-level", ranks: [1, 50], requiredClearCount: 50,
         } } },
       },
