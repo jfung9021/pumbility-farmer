@@ -236,7 +236,7 @@ def load_official_scoring_manifest(path: Path = DEFAULT_OFFICIAL_SCORING_MANIFES
     return hydrate_official_scoring_manifest(manifest, loader, current_charts)
 
 
-def refresh_hosted_official_scoring_sources(client: Any, store: Any) -> dict[str, Any]:
+def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boards: int = 100) -> dict[str, Any]:
     """Capture live official boards inside the protected hosted environment.
 
     Write immutable captures before advancing the private manifest. A failed
@@ -246,6 +246,19 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any) -> dict[str
 
     key = official_scoring_manifest_path()
     prefix = key.rsplit("/", 1)[0]
+    pending_key = f"{prefix}/refresh-pending.json"
+    class BatchComplete(Exception):
+        pass
+    class BoundedClient:
+        def __init__(self):
+            self.count = 0
+        def _get_json(self, path):
+            if self.count >= max_boards:
+                raise BatchComplete()
+            self.count += 1
+            return client._get_json(path)
+    if type(max_boards) is not int or max_boards < 1:
+        raise ValueError("Official capture batch size must be positive.")
     with tempfile.TemporaryDirectory(prefix="piu-official-scoring-") as directory:
         path = Path(directory) / "manifest.json"
         previous = store.get_json(key)
@@ -254,15 +267,29 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any) -> dict[str
                 previous, lambda relative: store.get_json(f"{prefix}/{relative}"),
             )
             publish_official_scoring_manifest(loaded["_captures"], path)
+        pending = store.get_json(pending_key) or {}
+        for mix in MIXES:
+            if mix in pending:
+                _atomic_json(path.parent / f"{mix}.pending.json", pending[mix])
         catalogs = {mix: client.fetch_page_collection(f"api/v2/charts?mix={mix}&limit=500") for mix in MIXES}
-        loaded = capture_official_scoring_sources(client, catalogs, path)
+        try:
+            loaded = capture_official_scoring_sources(
+                BoundedClient(), catalogs, path, checkpoint_interval=min(25, max_boards),
+            )
+        except BatchComplete:
+            pending = {mix: json.loads((path.parent / f"{mix}.pending.json").read_bytes())
+                       for mix in MIXES if (path.parent / f"{mix}.pending.json").exists()}
+            store.put_json(pending_key, pending)
+            return {"outcome": "official-sources-progress",
+                    "capturedBoards": {mix: len(cap["boards"]) for mix, cap in pending.items()},
+                    "targetCharts": len(scoring_target_charts(catalogs["Phoenix2"]))}
         manifest = {k: v for k, v in loaded.items() if not k.startswith("_")}
         for mix, ref in manifest["captures"].items():
             store.put_json(f"{prefix}/{ref['path']}", loaded["_captures"][mix])
         hydrate_official_scoring_manifest(
             manifest, lambda relative: store.get_json(f"{prefix}/{relative}"),
         )
-        store.put_json(key, manifest)
+        store.put_json_bundle({key: manifest, pending_key: {}})
     return {
         "sourceDates": {mix: ref["asOf"] for mix, ref in manifest["captures"].items()},
         "boardCounts": {mix: len(loaded["_captures"][mix]["boards"]) for mix in MIXES},
@@ -360,7 +387,8 @@ def import_research_scoring_sources(directory: Path, path: Path = DEFAULT_OFFICI
 
 def capture_official_scoring_sources(client: Any, catalogs: Mapping[str, list], path: Path = DEFAULT_OFFICIAL_SCORING_MANIFEST_PATH,
                                      *, restart: bool = False, now: Callable[[], datetime] = _utc_now,
-                                     progress: Callable[[str, int, int], None] | None = None) -> dict[str, Any]:
+                                     progress: Callable[[str, int, int], None] | None = None,
+                                     checkpoint_interval: int = 1) -> dict[str, Any]:
     """Resume source checkpoints only after probing that mix's live snapshot date.
 
     Phoenix is reused when its date/catalog/scope match the live probe. Phoenix2
@@ -414,7 +442,7 @@ def capture_official_scoring_sources(client: Any, catalogs: Mapping[str, list], 
                 elif board["asOf"] != as_of:
                     raise ValueError("Official scoring boards changed source dates during capture.")
             boards[cid] = board
-            if as_of is not None:
+            if as_of is not None and (len(boards) % checkpoint_interval == 0 or len(boards) == len(current)):
                 capture = _capture_object(mix, catalogs[mix], current, dict(boards), as_of, _iso(now()))
                 capture["captureProvenance"] = {"method": "authenticated-api"}
                 _atomic_json(pending_path, capture)
