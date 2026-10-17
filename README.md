@@ -4,6 +4,92 @@ Pumbility Farmer is a PIU Phoenix difficulty analyzer and Vercel web UI with Sco
 
 ## Analysis method
 
+### Submitted cross-level Clearing
+
+The local Clearing candidate combines submitted successful PIUScores records from
+both Phoenix versions, deduplicated by account and current chart ID. It requires
+200 valid distinct same-mode records, including history below the display floor.
+Clearing-tier skill averages the player's 30 hardest unique clears by current
+official level. Personal ratings and recommendation calculations keep their
+existing definitions.
+
+Each chart uses the linearly interpolated tenth percentile of qualified clearers'
+skills. Comparable charts with at least 20 qualified clearers can set reference
+medians; five charts establish a folder anchor at level + 0.5. One piecewise-linear
+curve per mode maps every chart across levels 16+, with provisional boundary tails
+and unsupported folders. These successful best records do not identify a pass
+probability; missing records remain unknown. Clearing intervals are not estimated.
+
+```powershell
+.venv/Scripts/python.exe scripts/build_local_recommendations.py --cross-level-clearing
+```
+
+This atomically updates the local combined tier artifact, preserving Scoring,
+Co-op and recommendation files, and saves chart comparisons under
+`output/cross-level-clearing-2026-10-17/` (override with `--clearing-audit-dir`).
+Open `/tier-list?mode=singles&metric=clearing`. The Only 20+ filter remains available;
+Clearing itself also covers the existing level-16+ chart population.
+
+Schema 43 retains the previous Scoring schema identity and adds a distinct Clearing
+policy and source/catalog hashes. Readers still accept legacy schemas. Hosted
+analysis enables this path only with `PIU_CROSS_LEVEL_CLEARING=1`, independently of
+the official Scoring/Clearing flags; no local rebuild changes hosted settings.
+New checkpoint policies reject old method generations. The full specification is
+in `docs/cross-level-clearing-implementation-plan.md`.
+
+### Official cross-level Scoring S20+ / D20+
+
+The opt-in cross-level model uses official-only Phoenix 1 and Phoenix 2 boards,
+matching unambiguous full game tags and retaining the **maximum raw score** for
+each player/chart. Current Phoenix 2 chart IDs, modes and levels define scope.
+Singles and Doubles each have one connected shared-player comparison model across
+all levels 20+. Charts below 20 do not enter its fit or calibration and their
+Scoring and derived tier-list Pumbility are Unrated. Clearing, Co-op and player
+skill/recommendation calculations keep their existing methods.
+
+Each supported folder's median reference-chart score cost maps to level + 0.5.
+Reference charts require ten contributing players and comparable note counts; five
+reference charts establish an anchor. Each mode needs at least three anchors,
+including level 20. Exponential segments connect those empirical anchors; tangent
+linear tails are explicitly provisional extrapolations. The curve is monotone,
+but empirical anchors do not force every successive level gap to grow. Conditional
+bootstrap intervals hold the fitted chart effects and anchors fixed and do not
+include missing-attempt, identity, model-fit or calibration uncertainty.
+
+Prepare private identity-retaining sources, then overlay the existing local tier
+artifact (which supplies unchanged Clearing values):
+
+```powershell
+.venv/Scripts/python.exe scripts/capture_official_scoring_sources.py
+.venv/Scripts/python.exe scripts/build_local_recommendations.py --cross-level-scoring
+$env:PIU_LOCAL_ANALYSIS = "1"
+npm run dev -- --hostname 127.0.0.1 --port 3000
+```
+
+A complete research capture can be imported offline instead of fetching again:
+
+```powershell
+.venv/Scripts/python.exe scripts/capture_official_scoring_sources.py --import-research .local-data/analysis/official-cross-level-2026-10-17
+```
+
+The private manifest defaults to `.local-data/piu-scores/official/scoring/manifest.json`;
+content-addressed per-mix captures retain their separate source dates and raw tags.
+Those captures must never be copied to public output. Changed or unknown note-count
+comparability keeps the raw maxima but marks estimates provisional and excludes
+them from reference anchors. Renamed players cannot be reliably joined by this API.
+
+Open `/tier-list?mode=singles&metric=scoring` or the Doubles equivalent and select
+**Only 20+**, immediately after **All**, to filter by current official level. This
+filter also works with Clearing and Pumbility; Co-op retains its player-count filters.
+
+Schema 42 is read alongside legacy schema 41 for rollback compatibility. Hosted
+writers remain on their existing method unless `PIU_OFFICIAL_CROSS_LEVEL_SCORING=1`
+is explicitly enabled. That flag requires the private Scoring manifest and its
+referenced captures under `analysis/private/official/scoring/`; it is independent
+of the existing Phoenix 2 Clearing source flag. All source/catalog hashes and
+method identities invalidate incompatible checkpoints. No local build enables
+the hosted flag or publishes a generation.
+
 ### Official Scoring S23+ / D25+ and Clearing S25+ / D26+
 
 Capture the mirrored Phoenix 2 boards and rebuild only the tier aggregate:
@@ -23,7 +109,7 @@ snapshot only when its boards belong to the same upstream weekly snapshot.
 
 Schema 41 (official method version 15) uses official Scoring for S23+/D25+ and
 official Clearing for S25+/D26+. Below those respective cutoffs, each metric retains
-its original player-submitted method. Pumbility averages the selected Scoring and Clearing methods.
+its original player-submitted method. Pumbility takes the maximum of the selected Scoring and Clearing difficulties, requiring both components.
 Scoring compares each player's best scores within the same mode and official level.
 Players normally need three other charts. Smaller folders use all available
 comparisons; a folder without a normal panel can fall back to one other chart.
@@ -126,7 +212,7 @@ To add missing tier and history boards to an existing same-week snapshot without
 The capture includes S23+/D25+ Scoring boards, S25+/D26+ Clearing, and S22+/D23+ Clearing history by default. Broader cached snapshots remain valid when they contain all required boards and only known catalog charts; extra boards outside the required scope are ignored. Extension refuses a different upstream
 week and leaves the current snapshot untouched; a normal fresh capture is then needed.
 
-Estimates can cross official levels. Pumbility remains the component average,
+Estimates can cross official levels. Pumbility takes the component maximum,
 calculated before rounding. Lower-level estimates and Co-op stay unchanged;
 overall rank positions can move. Official calibration never consumes submitted
 scores, and missing official evidence has no submitted-score fallback.
@@ -174,7 +260,7 @@ and [experiment specification](docs/local-scoring-percentile-experiment.md).
 
 The tier model recalculates Scoring ranks/bands and Pumbility while preserving the
 independent Clearing and Co-op methods. Production tiers use schema 26. Pumbility
-uses the maximum of the full-precision scoring and clearing estimates. Both components must be available. Recommendation
+uses the unrounded maximum of scoring and clearing, requiring both components. Recommendation
 projections and player scoring skill keep their existing scoring model.
 `--scoring-profile` (alias `--scoring-percentile`) runs the same tier calculation
 with the schema-25 local diagnostic marker. These local tier commands do not fetch
@@ -298,7 +384,7 @@ Unrated. Center those percentile values within each exact mode/official-level fo
 clearing difficulty = official level + 0.5
                       + 0.70 * (chart's 10th-percentile clearing skill
                                 - median chart 10th-percentile clearing skill in the folder)
-pumbility difficulty = (scoring difficulty + clearing difficulty) / 2
+pumbility difficulty = max(scoring difficulty, clearing difficulty)
 ```
 
 The fixed Clearing spread multiplier is `0.70`. On the cached September 26, 2026
@@ -505,6 +591,27 @@ cached sources, run `.venv/Scripts/python.exe scripts/build_local_recommendation
 This preserves the recommendation index and generations and does not pull fresh data.
 Run without `--tiers-only` to regenerate personal clearing ratings as well.
 
+To refresh only the existing tier artifact's producer identity and derived
+Pumbility fields, run
+`.venv/Scripts/python.exe scripts/build_local_recommendations.py --refresh-tier-metadata`.
+This keeps Scoring, Clearing, Co-op, recommendations, and personal-score artifacts
+intact and records the inherited base generation as provenance. It does not refit
+models or read score snapshots. New generations use the component maximum;
+supported historical average generations retain their original values and labels
+when read. Production-format maximum generations are also accepted without
+rewriting their metadata. See the [parity implementation plan](docs/production-local-tier-parity-implementation-plan.md).
+
+To halve the final Scoring and Clearing distances from each chart's official
+level + 0.5, run
+`.venv/Scripts/python.exe scripts/build_local_recommendations.py --compress-tiers`.
+Schema 44 retains the original fitted values and difficulty intervals in
+`initialFit`, applies the fixed 0.5 factor after calibration, and derives Pumbility
+from the higher adjusted component. Repeated conversions and metadata refreshes
+reuse the original fit, so compression does not compound. Scoring/Clearing overlay
+commands preserve this policy on an already processed aggregate. Hosted builders
+can opt in with `PIU_TIER_MIDPOINT_COMPRESSION=1`; legacy generations remain readable.
+See the [compression plan](docs/midpoint-compression-implementation-plan.md).
+
 Open `http://localhost:3000`. Local mode is enabled by the ignored `.env.local` file. The dashboard
 shows a **Local snapshot** badge and its refresh button reloads the aggregate from disk instead of
 starting a production job. After changing the methodology, run `npm run analyze:local` again and
@@ -539,7 +646,7 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 - `GET /api/analyze?mix=phoenix2`: load the latest successful `AnalysisPayload`.
 - `GET /api/analyze?mix=phoenix2&jobId=...`: load a matching 24-hour queue-job status.
 - `POST /api/analyze?mix=phoenix2`: protected administrator trigger; requires `X-Analysis-Run-Secret` matching `CRON_SECRET` and queues or follows a Phoenix 2 refresh. Add `fullSync=true` to discard the incremental watermark and refetch every consented player's complete score history.
-- `POST /api/jonathan/refresh?mode=incremental|full|reanalyze`: protected operator trigger; requires `X-Jonathan-Password` matching `JONATHAN_PASSWORD`. Incremental refresh ignores the freshness cooldown but retains the score watermark; full refresh discards it. Reanalysis rebuilds results from the stored production snapshots without fetching upstream scores or replacing the snapshots.
+- `POST /api/jonathan/refresh?mode=incremental|full|reanalyze|official`: protected operator trigger; requires `X-Jonathan-Password` matching `JONATHAN_PASSWORD`. Incremental refresh ignores the freshness cooldown but retains the score watermark; full refresh discards it. Reanalysis rebuilds results from the stored production snapshots without fetching upstream scores or replacing the snapshots. With cross-level Scoring enabled, `official` captures current official leaderboards in private storage and advances the complete manifest only after validation. Run it before an incremental refresh or reanalysis to use fresh official evidence; it does not publish tiers itself.
 - `POST /api/deploy?mix=phoenix2`: validate and acknowledge a legacy signed deployment event without starting analysis.
 - `GET /api/recommendations/players`: return consented usernames and mode eligibility without raw IDs; successful lists are cached for five minutes with stale revalidation.
 - `GET /api/recommendations?playerKey=...&mode=overall|singles|doubles|coop`: return only the requested mode from the last cached recommendation for one player. Omitting `mode` retains the full compatibility response. The default Overall response includes canonical `difficultyOptions` but omits its large filter pool; add `difficulty=S16` (for example) to return only that exact Overall difficulty slice.

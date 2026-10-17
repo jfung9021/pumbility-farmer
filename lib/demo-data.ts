@@ -1,4 +1,5 @@
 import type { AnalysisPayload, ChartResult, ModeKey } from "./types";
+import { MAXIMUM_PUMBILITY_CALCULATION } from "./pumbility-policy.ts";
 
 type StandardModeKey = Exclude<ModeKey, "coop">;
 
@@ -159,6 +160,7 @@ function withDemoTierMetrics(charts: ChartResult[]): ChartResult[] {
         },
         pumbility: {
           ...emptyMetric,
+          aggregation: "maximum",
           evidenceStatus,
           scoringSupportCount: chart.nContributors,
           clearingSupportCount: selectedCount,
@@ -216,6 +218,11 @@ export const demoPayload: AnalysisPayload = {
         expandsFolders: false,
       },
       displayMinimumOfficialLevel: 16,
+      tierMetrics: {
+        version: 11,
+        pumbility: { version: 2, aggregation: "maximum", requiresBoth: true,
+          calculation: MAXIMUM_PUMBILITY_CALCULATION },
+      },
     },
     coverage: { playersReturnedByCredential: 52 },
     modes: {

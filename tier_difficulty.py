@@ -1,4 +1,4 @@
-"""Clearing percentile estimates and the maximum-component Pumbility tier metric."""
+"""Clearing percentile estimates and maximum-component Pumbility tiers."""
 
 from __future__ import annotations
 
@@ -25,6 +25,42 @@ def _finite(value: Any) -> float | None:
         return None
     number = float(value)
     return number if math.isfinite(number) else None
+
+
+def pumbility_difficulty(scoring: float | None, clearing: float | None) -> float | None:
+    return max(scoring, clearing) if scoring is not None and clearing is not None else None
+
+
+def pumbility_metric_method() -> dict[str, Any]:
+    return {"version": 2, "aggregation": "maximum", "requiresBoth": True,
+            "calculation": "max(scoring difficulty, clearing difficulty) before rounding",
+            "evidence": "weaker component status; separate scoring and clearing support counts"}
+
+
+def refresh_pumbility_metrics(payload: dict[str, Any], *, chart_ids: set[str] | None = None) -> None:
+    """Apply the same versioned composite rule after every metric overlay."""
+    payload.setdefault("summary", {}).setdefault("method", {}).setdefault("tierMetrics", {})["pumbility"] = pumbility_metric_method()
+    for mode in ("singles", "doubles"):
+        folders = defaultdict(list)
+        for row in payload.get(mode, []):
+            if chart_ids is not None and str(row["chartId"]) not in chart_ids:
+                continue
+            clearing = row.get("tierMetrics", {}).get("clearing", {})
+            composite = {**_empty_metric(), "aggregation": "maximum",
+                         "scoringSupportCount": int(row.get("nContributors") or 0),
+                         "clearingSupportCount": int(clearing.get("ratedClearCount") or 0)}
+            estimate = pumbility_difficulty(row.get("estimatedDifficulty"), clearing.get("estimatedDifficulty"))
+            if estimate is not None:
+                _set_estimate(composite, estimate, row["level"] + .5)
+                composite["evidenceStatus"] = EVIDENCE_ORDER[min(
+                    EVIDENCE_ORDER.index(row.get("evidenceStatus", "Unrated")),
+                    EVIDENCE_ORDER.index(clearing.get("evidenceStatus", "Unrated")))]
+                folders[row["level"]].append(row)
+            row.setdefault("tierMetrics", {})["pumbility"] = composite
+        for group in folders.values():
+            group.sort(key=lambda row: (row["tierMetrics"]["pumbility"]["estimatedDifficulty"], row.get("songName", ""), row["chartId"]))
+            for rank, row in enumerate(group, 1):
+                row["tierMetrics"]["pumbility"].update(levelRank=rank, levelComparisonCharts=len(group))
 
 
 def percentile_skill(ratings: Sequence[float]) -> float | None:
@@ -90,6 +126,7 @@ def build_tier_metrics(
             "clearing": clearing,
             "pumbility": {
                 **_empty_metric(),
+                "aggregation": "maximum",
                 "scoringSupportCount": int(chart.get("nContributors") or 0),
                 "clearingSupportCount": clearing["ratedClearCount"],
             },
@@ -123,7 +160,7 @@ def build_tier_metrics(
             scoring = _finite(charts[index].get("estimatedDifficulty"))
             if scoring is not None:
                 pumbility = metrics[index]["pumbility"]
-                _set_estimate(pumbility, max(scoring, estimate), midpoint)
+                _set_estimate(pumbility, pumbility_difficulty(scoring, estimate), midpoint)
                 scoring_status = str(charts[index].get("evidenceStatus") or "Unrated")
                 pumbility["evidenceStatus"] = EVIDENCE_ORDER[min(
                     EVIDENCE_ORDER.index(scoring_status),
@@ -160,9 +197,6 @@ def tier_metric_method(folder_references: Mapping[str, float]) -> dict[str, Any]
             "supportPopulation": "all unique clearers with a finite clearing skill",
             "evidenceMinimumRated": {"Published": 10, "Provisional": 5, "Insufficient": 1},
         },
-        "pumbility": {
-            "calculation": "max(scoring difficulty, clearing difficulty) before rounding",
-            "evidence": "weaker component status; separate scoring and clearing support counts",
-        },
+        "pumbility": pumbility_metric_method(),
         "limitedDataSupportThreshold": 20,
     }

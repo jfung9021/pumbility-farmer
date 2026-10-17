@@ -9,6 +9,7 @@ import math
 import os
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -27,13 +28,17 @@ from piu_recommendations import (  # noqa: E402
     public_player_key,
 )
 from scoring_percentile import build_production_tier_payload  # noqa: E402
+from pumbility_contract import SCRIPT_VERSION  # noqa: E402
+from tier_difficulty import TIER_METRIC_VERSION, refresh_pumbility_metrics  # noqa: E402
 from tier_scores import build_local_tier_score_artifact  # noqa: E402
+from tier_postprocessing import finalize_tiers, initial_fit_payload, SCHEMA_VERSION as PROCESSED_SCHEMA  # noqa: E402
 
 
 DATA_ROOT = ROOT / ".local-data" / "piu-scores"
 OUTPUT_PATH = DATA_ROOT / "recommendations" / "latest.json"
 COMBINED_OUTPUT_PATH = DATA_ROOT / "combined" / "analysis" / "web_results.json"
 OFFICIAL_SNAPSHOT_PATH = DATA_ROOT / "official" / "phoenix2" / "current.json"
+OFFICIAL_SCORING_MANIFEST_PATH = DATA_ROOT / "official" / "scoring" / "manifest.json"
 GENERATIONS_PATH = OUTPUT_PATH.parent / "generations"
 
 
@@ -49,6 +54,27 @@ def _write_json(path: Path, payload: object) -> None:
             sort_keys=True,
         )
     os.replace(temporary, path)
+
+
+def _stamp_tier_overlay(payload: dict, base: dict, operation: str) -> None:
+    """Identify this producer while retaining the original model generation."""
+    inherited = {
+        "scriptVersion": base.get("summary", {}).get("scriptVersion"),
+        "schemaVersion": base.get("schemaVersion"),
+        "generatedAtUtc": base.get("generatedAtUtc"),
+    }
+    existing = base.get("summary", {}).get("tierArtifactProvenance", {})
+    generated_at = datetime.now(timezone.utc).isoformat()
+    summary = payload.setdefault("summary", {})
+    summary["scriptVersion"] = f"{SCRIPT_VERSION}+{operation}"
+    summary["tierArtifactProvenance"] = {
+        "base": existing.get("base", inherited),
+        "previous": inherited,
+        "operation": operation,
+        "producerScriptVersion": SCRIPT_VERSION,
+    }
+    summary.setdefault("method", {}).setdefault("tierMetrics", {})["version"] = TIER_METRIC_VERSION
+    payload["generatedAtUtc"] = summary["generatedAtUtc"] = generated_at
 
 
 def _read_snapshot(mix: str) -> dict:
@@ -112,6 +138,26 @@ def parse_args() -> argparse.Namespace:
         help="Rebuild S23+/D25+ Scoring and S25+/D26+ Clearing tiers with official per-player scoring and lower-percentile clearer ability; preserve recommendations.",
     )
     mode.add_argument(
+        "--cross-level-scoring",
+        action="store_true",
+        help="Overlay official-only Phoenix 1/Phoenix 2 Scoring at S20+/D20+ on existing local tiers; preserve Clearing and recommendation artifacts.",
+    )
+    mode.add_argument("--cross-level-clearing", action="store_true",
+                      help="Rebuild submitted Clearing using top-30 skill, 200 same-mode records, and cross-level median anchors; preserve Scoring and recommendations.")
+    mode.add_argument("--refresh-tier-metadata", action="store_true",
+                      help="Refresh Pumbility composites and current producer metadata on existing tiers; preserve Scoring, Clearing, Co-op, recommendations and player score artifacts without fitting models.")
+    mode.add_argument("--compress-tiers", action="store_true",
+                      help="Halve fitted Scoring/Clearing deviations from official level + 0.5; preserve initial fits and personal artifacts without refitting.")
+    parser.add_argument("--clearing-audit-dir", type=Path,
+                        default=ROOT / "output" / "cross-level-clearing-2026-10-17",
+                        help="Directory for the public Clearing comparison and verification artifacts.")
+    parser.add_argument(
+        "--official-scoring-manifest",
+        type=Path,
+        default=OFFICIAL_SCORING_MANIFEST_PATH,
+        help="Private dual-mix official Scoring manifest for --cross-level-scoring.",
+    )
+    mode.add_argument(
         "--tier-scores-only",
         action="store_true",
         help="Build minimized player score overlays from cached Phoenix 2 scores and the existing tier list; skip numeric analysis.",
@@ -126,6 +172,83 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.refresh_tier_metadata or args.compress_tiers:
+        from copy import deepcopy
+
+        base = json.loads(COMBINED_OUTPUT_PATH.read_text(encoding="utf-8"))
+        candidate = deepcopy(base)
+        if args.compress_tiers or base.get("schemaVersion") == PROCESSED_SCHEMA:
+            candidate = finalize_tiers(base)
+        else:
+            refresh_pumbility_metrics(candidate)
+        _stamp_tier_overlay(candidate, base, "midpoint-compression" if args.compress_tiers else "refresh-pumbility")
+        _write_json(COMBINED_OUTPUT_PATH, candidate)
+        print("Updated tier metadata and derived ratings; initial fitted values, Co-op and personal artifacts are preserved.")
+        return 0
+    if args.cross_level_clearing:
+        from cross_level_clearing import apply_cross_level_clearing, current_clearing_catalog
+
+        base = json.loads(COMBINED_OUTPUT_PATH.read_text(encoding="utf-8"))
+        phoenix1, phoenix2 = _read_snapshot("phoenix1"), _read_snapshot("phoenix2")
+        dates = {}
+        for mix in ("phoenix1", "phoenix2"):
+            manifest = json.loads((DATA_ROOT / mix / "current" / "snapshot_manifest.json").read_text(encoding="utf-8"))
+            dates[mix] = manifest.get("captureCompletedAtUtc", manifest.get("pulledAtUtc"))
+        fitted_base = initial_fit_payload(base)
+        candidate = apply_cross_level_clearing(fitted_base, phoenix1, phoenix2,
+            current_clearing_catalog(fitted_base, phoenix2), source_dates=dates)
+        _stamp_tier_overlay(candidate, base, "cross-level-clearing")
+        generated_at = candidate["generatedAtUtc"]
+        def scoring_rows(payload):
+            return [{k: v for k, v in row.items() if k != "tierMetrics"}
+                    for key in ("singles", "doubles") for row in payload[key]]
+        if scoring_rows(fitted_base) != scoring_rows(candidate) or base.get("coop") != candidate.get("coop"):
+            raise ValueError("Clearing rebuild changed Scoring or Co-op.")
+        if base.get("schemaVersion") == PROCESSED_SCHEMA:
+            candidate = finalize_tiers(candidate)
+        records, summary = [], {"schemaVersion": candidate["schemaVersion"], "generatedAtUtc": generated_at,
+            "method": candidate["summary"]["method"]["crossLevelClearing"],
+            "scoringUnchanged": True, "coopUnchanged": True, "modes": {}}
+        for mode in ("singles", "doubles"):
+            before = {row["chartId"]: row for row in base[mode]}
+            for row in candidate[mode]:
+                clearing = row["tierMetrics"]["clearing"]
+                previous = before[row["chartId"]]["tierMetrics"]["clearing"]["estimatedDifficulty"]
+                estimate = clearing["estimatedDifficulty"]
+                records.append({"chartId": row["chartId"], "songName": row["songName"], "difficulty": row["difficulty"],
+                    "mode": row["type"], "level": row["level"], **clearing, "previousDifficulty": previous,
+                    "change": estimate - previous if estimate is not None and previous is not None else None,
+                    "scoringDifficulty": row["estimatedDifficulty"],
+                    "pumbilityDifficulty": row["tierMetrics"]["pumbility"]["estimatedDifficulty"]})
+            values = [row["tierMetrics"]["clearing"] for row in candidate[mode]]
+            summary["modes"][mode] = {"charts": len(values), "rated": sum(c["estimatedDifficulty"] is not None for c in values),
+                "published": sum(c["evidenceStatus"] == "Published" for c in values),
+                "extrapolated": sum(c["extrapolated"] for c in values)}
+        args.clearing_audit_dir.mkdir(parents=True, exist_ok=True)
+        if not (args.clearing_audit_dir / "before.json").exists():
+            _write_json(args.clearing_audit_dir / "before.json", base)
+        _write_json(args.clearing_audit_dir / "chart-analysis.json", records)
+        _write_json(args.clearing_audit_dir / "summary.json", summary)
+        _write_json(COMBINED_OUTPUT_PATH, candidate)
+        print(json.dumps(summary["modes"], indent=2))
+        print("Built submitted cross-level Clearing tiers; Scoring, Co-op and recommendations are preserved.")
+        return 0
+    if args.cross_level_scoring:
+        from official_score_merge import merge_official_scores
+        from official_scoring_sources import load_official_scoring_manifest
+        from official_cross_level_scoring import apply_cross_level_scoring
+
+        # This path does not rebuild player/recommendation models or Clearing.
+        base = json.loads(COMBINED_OUTPUT_PATH.read_text(encoding="utf-8"))
+        manifest = load_official_scoring_manifest(args.official_scoring_manifest)
+        merged = merge_official_scores(manifest)
+        candidate = apply_cross_level_scoring(base, merged, merged['currentCatalog'])
+        if base.get("schemaVersion") == PROCESSED_SCHEMA:
+            candidate = finalize_tiers(candidate)
+        _stamp_tier_overlay(candidate, base, "cross-level-scoring")
+        _write_json(COMBINED_OUTPUT_PATH, candidate)
+        print("Built local official-only cross-level S20+/D20+ Scoring tiers. Clearing and recommendation artifacts are preserved.")
+        return 0
     removed = (
         _prune_unpublished_generations(_published_generation_key())
         if args.prune_only or not (args.phoenix2_only or args.tiers_only or args.scoring_percentile or args.official_tiers or args.tier_scores_only) else 0
@@ -178,7 +301,10 @@ def main() -> int:
         # Missing/invalid official inputs must fail before replacing the aggregate.
         official_arguments["official_snapshot"] = json.loads(OFFICIAL_SNAPSHOT_PATH.read_text(encoding="utf-8"))
     combined_payload = build_production_tier_payload(
-        combined_charts, combined_metadata, phoenix1, phoenix2, **official_arguments,
+        combined_charts, combined_metadata, phoenix1, phoenix2,
+        **official_arguments,
+        **({"midpoint_compression": True} if os.getenv("PIU_TIER_MIDPOINT_COMPRESSION") == "1"
+           or (COMBINED_OUTPUT_PATH.exists() and json.loads(COMBINED_OUTPUT_PATH.read_text(encoding="utf-8")).get("schemaVersion") == PROCESSED_SCHEMA) else {}),
     )
     if args.tiers_only or args.official_tiers:
         _write_json(COMBINED_OUTPUT_PATH, combined_payload)

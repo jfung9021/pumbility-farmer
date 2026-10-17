@@ -20,7 +20,7 @@ from official_scoring_calibration import fit_scoring_spreads, calibrate_scoring_
 from piu_misgrade_analyzer import _apply_chart_ranks_and_groups, difficulty_effect_band
 from scoring_percentile import SCORE_UNIT
 from official_player_scoring import fit_player_comparisons
-from tier_difficulty import CLEARING_DIFFICULTY_DELTA_SCALE, EVIDENCE_ORDER
+from tier_difficulty import CLEARING_DIFFICULTY_DELTA_SCALE, EVIDENCE_ORDER, pumbility_difficulty, refresh_pumbility_metrics
 
 
 OFFICIAL_TIER_METHOD_VERSION = 15
@@ -361,7 +361,7 @@ def apply_official_tiers(
                 clearing.update(capDefaultDifficulty=floor, capDefaultBasis=basis)
             if row["estimatedDifficulty"] is not None and clearing["estimatedDifficulty"] is not None:
                 composite = row["tierMetrics"]["pumbility"]
-                _set_metric(composite, max(row["estimatedDifficulty"], clearing["estimatedDifficulty"]),
+                _set_metric(composite, pumbility_difficulty(row["estimatedDifficulty"], clearing["estimatedDifficulty"]),
                             level, row["scoringPlayerCount"])
                 composite["evidenceStatus"] = EVIDENCE_ORDER[min(EVIDENCE_ORDER.index(row["evidenceStatus"]),
                                                                 EVIDENCE_ORDER.index(clearing["evidenceStatus"]))]
@@ -426,4 +426,5 @@ def apply_official_tiers(
         },
     }
     _refresh_summary(payload, targets, official_players)
+    refresh_pumbility_metrics(payload, chart_ids=set(target_catalog))
     return payload

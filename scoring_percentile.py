@@ -507,6 +507,9 @@ def build_production_tier_payload(
     phoenix1: Mapping[str, Any], phoenix2: Mapping[str, Any],
     *, generated_at_utc: str | None = None,
     official_snapshot: Mapping[str, Any] | None = None,
+    official_scoring_manifest: Mapping[str, Any] | None = None,
+    cross_level_clearing: bool = False,
+    midpoint_compression: bool = False,
 ) -> dict[str, Any]:
     """Publish the approved profile model without changing recommendation inputs."""
     payload = build_percentile_tier_payload(
@@ -531,4 +534,17 @@ def build_production_tier_payload(
             json.dumps(official_snapshot, sort_keys=True, separators=(',', ':'), ensure_ascii=False,
                        allow_nan=False).encode('utf-8')
         ).hexdigest()
+    if official_scoring_manifest is not None:
+        from official_score_merge import merge_official_scores
+        from official_cross_level_scoring import apply_cross_level_scoring
+
+        merged = merge_official_scores(official_scoring_manifest)
+        payload = apply_cross_level_scoring(payload, merged, merged['currentCatalog'])
+    if cross_level_clearing:
+        from cross_level_clearing import apply_cross_level_clearing, current_clearing_catalog
+
+        payload = apply_cross_level_clearing(payload, phoenix1, phoenix2, current_clearing_catalog(payload, phoenix2))
+    if midpoint_compression:
+        from tier_postprocessing import finalize_tiers
+        payload = finalize_tiers(payload, newly_fitted_metrics={"scoring", "clearing"})
     return payload

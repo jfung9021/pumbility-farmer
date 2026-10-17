@@ -31,7 +31,7 @@ def jonathan_authorized(provided: str, expected: str) -> bool:
 @router.post("/api/jonathan/refresh")
 def refresh_from_jonathan(
     request: Request,
-    mode: Literal["incremental", "full", "reanalyze"] = Query(default="incremental"),
+    mode: Literal["incremental", "full", "reanalyze", "official"] = Query(default="incremental"),
 ):
     password = os.getenv("JONATHAN_PASSWORD", "").strip()
     if not password:
@@ -50,6 +50,16 @@ def refresh_from_jonathan(
 
     full_sync = mode == "full"
     try:
+        if mode == "official":
+            if os.getenv("PIU_OFFICIAL_CROSS_LEVEL_SCORING", "") != "1":
+                return _response(409, {"error": "Official cross-level Scoring is not enabled."})
+            from analysis_runtime import PrivateBlobStore, PiuScoresClient
+            from official_scoring_sources import refresh_hosted_official_scoring_sources
+
+            result = refresh_hosted_official_scoring_sources(
+                PiuScoresClient(api_key=os.getenv("PIU_SCORES_API_KEY", "")), PrivateBlobStore(),
+            )
+            return _response(200, {"outcome": "official-sources-refreshed", **result})
         status, payload = start_or_reuse_analysis(
             mix=resolve_mix("phoenix2"),
             force_refresh=True,

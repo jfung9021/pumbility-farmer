@@ -29,6 +29,9 @@ from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 from pumbility_contract import (
     COMBINED_TIER_SCHEMA_VERSION,
     OFFICIAL_TIER_SCHEMA_VERSION,
+    CROSS_LEVEL_TIER_SCHEMA_VERSION,
+    CROSS_LEVEL_CLEARING_SCHEMA_VERSION,
+    cross_level_clearing_method_identity,
     MODEL_ARTIFACT_SCHEMA_VERSION,
     PLAYER_REFRESH_STORAGE_SCHEMA_VERSION,
     RECOMMENDATION_SCHEMA_VERSION,
@@ -36,6 +39,7 @@ from pumbility_contract import (
     combined_tier_blob_path,
     phoenix1_snapshot_path,
     official_tier_snapshot_path,
+    official_scoring_manifest_path,
     recommendation_blob_path,
     recommendation_generation_key,
     recommendation_index_path,
@@ -85,12 +89,27 @@ def build_combined_tier_payload(*args: Any, **kwargs: Any) -> Any:
 
 def _official_tier_arguments(blob_store: Any) -> dict[str, Any]:
     """Explicit hosted opt-in: never substitute submitted scores for a missing input."""
-    if os.getenv("PIU_OFFICIAL_HIGH_LEVEL_TIERS", "") != "1":
-        return {}
-    snapshot = blob_store.get_json(official_tier_snapshot_path())
-    if not isinstance(snapshot, Mapping):
-        raise RuntimeError("The official high-level tier snapshot is unavailable.")
-    return {"official_snapshot": snapshot}
+    arguments: dict[str, Any] = {}
+    if os.getenv("PIU_TIER_MIDPOINT_COMPRESSION", "") == "1":
+        arguments["midpoint_compression"] = True
+    if os.getenv("PIU_CROSS_LEVEL_CLEARING", "") == "1":
+        arguments["cross_level_clearing"] = True
+    if os.getenv("PIU_OFFICIAL_HIGH_LEVEL_TIERS", "") == "1":
+        snapshot = blob_store.get_json(official_tier_snapshot_path())
+        if not isinstance(snapshot, Mapping):
+            raise RuntimeError("The official high-level tier snapshot is unavailable.")
+        arguments["official_snapshot"] = snapshot
+    if os.getenv("PIU_OFFICIAL_CROSS_LEVEL_SCORING", "") == "1":
+        from official_scoring_sources import hydrate_official_scoring_manifest
+
+        manifest = blob_store.get_json(official_scoring_manifest_path())
+        if not isinstance(manifest, Mapping):
+            raise RuntimeError("The official cross-level scoring manifest is unavailable.")
+        prefix = official_scoring_manifest_path().rsplit("/", 1)[0]
+        arguments["official_scoring_manifest"] = hydrate_official_scoring_manifest(
+            manifest, lambda relative_path: blob_store.get_json(f"{prefix}/{relative_path}"),
+        )
+    return arguments
 
 
 def recommendation_model_chart_rows(*args: Any, **kwargs: Any) -> Any:
@@ -1943,7 +1962,19 @@ def _current_recommendation_model(model: Mapping[str, Any]) -> bool:
 
 def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: Any = None) -> None:
     official_enabled = os.getenv("PIU_OFFICIAL_HIGH_LEVEL_TIERS", "") == "1"
-    expected_schema = OFFICIAL_TIER_SCHEMA_VERSION if official_enabled else COMBINED_TIER_SCHEMA_VERSION
+    cross_enabled = os.getenv("PIU_OFFICIAL_CROSS_LEVEL_SCORING", "") == "1"
+    clearing_enabled = os.getenv("PIU_CROSS_LEVEL_CLEARING", "") == "1"
+    scoring_schema = (CROSS_LEVEL_TIER_SCHEMA_VERSION if cross_enabled else
+                       OFFICIAL_TIER_SCHEMA_VERSION if official_enabled else COMBINED_TIER_SCHEMA_VERSION)
+    expected_schema = CROSS_LEVEL_CLEARING_SCHEMA_VERSION if clearing_enabled else scoring_schema
+    if os.getenv("PIU_TIER_MIDPOINT_COMPRESSION", "") == "1":
+        from tier_postprocessing import validate_postprocessing, SCHEMA_VERSION as processed_schema
+        if payload.get("schemaVersion") != processed_schema:
+            raise IncompatibleCombinedTierCheckpointError("The combined tier checkpoint requires midpoint compression.")
+        try:
+            payload = validate_postprocessing(payload)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise IncompatibleCombinedTierCheckpointError("The combined tier checkpoint compression policy is incompatible.") from exc
     if payload.get("schemaVersion") != expected_schema:
         raise IncompatibleCombinedTierCheckpointError(
             "The combined tier checkpoint uses an incompatible schema; "
@@ -1952,9 +1983,43 @@ def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: A
 
     from pumbility_contract import scoring_tier_method_identity
     from player_skill_ratings import clearing_skill_method
-    from tier_difficulty import TIER_METRIC_VERSION, CLEARING_DIFFICULTY_DELTA_SCALE, CLEARING_SKILL_PERCENTILE
+    from tier_difficulty import TIER_METRIC_VERSION, CLEARING_DIFFICULTY_DELTA_SCALE, CLEARING_SKILL_PERCENTILE, pumbility_metric_method
 
     method = payload.get("summary", {}).get("method", {})
+    clearing_method = method.get("crossLevelClearing")
+    if clearing_enabled:
+        identity = cross_level_clearing_method_identity()
+        if (not isinstance(clearing_method, Mapping)
+                or any(clearing_method.get(key) != value for key, value in identity.items())
+                or clearing_method.get("baseScoringSchemaVersion") != scoring_schema
+                or set(clearing_method.get("calibration", {})) != {"Single", "Double"}
+                or set(clearing_method.get("inputHashes", {})) != {"phoenix1", "phoenix2", "currentCatalog"}
+                or any(not re.fullmatch(r"[0-9a-f]{64}", str(value)) for value in clearing_method.get("inputHashes", {}).values())):
+            raise IncompatibleCombinedTierCheckpointError("The cross-level Clearing checkpoint method or input identity is incompatible.")
+    elif clearing_method is not None:
+        raise IncompatibleCombinedTierCheckpointError("The cross-level Clearing checkpoint requires its source policy to be enabled.")
+    cross_method = method.get("officialCrossLevelScoring")
+    if cross_enabled:
+        from official_scoring_sources import canonical_scoring_manifest_sha256
+
+        expected_cross = {
+            "version": 1, "source": "piuscores-official", "minimumOfficialLevel": 20,
+            "mergePolicy": "maximum-raw-score", "minimumOtherCharts": 3,
+            "modelVersion": 1, "calibrationVersion": 1, "bootstrapSamples": 1000,
+            "intervalMethod": "conditional-player-bootstrap-fixed-fit-v1",
+        }
+        if (not isinstance(cross_method, Mapping)
+                or any(cross_method.get(key) != value for key, value in expected_cross.items())
+                or not re.fullmatch(r"[0-9a-f]{64}", str(cross_method.get("manifestSha256") or ""))
+                or set(cross_method.get("sourceDates", {})) != {"Phoenix", "Phoenix2"}
+                or set(cross_method.get("calibration", {})) != {"Single", "Double"}):
+            raise IncompatibleCombinedTierCheckpointError("The cross-level scoring checkpoint source or method is incompatible.")
+        if blob_store is not None:
+            current_manifest = _official_tier_arguments(blob_store)["official_scoring_manifest"]
+            if cross_method["manifestSha256"] != canonical_scoring_manifest_sha256(current_manifest):
+                raise IncompatibleCombinedTierCheckpointError("The official scoring manifest changed; a fresh analysis generation is required.")
+    elif cross_method is not None:
+        raise IncompatibleCombinedTierCheckpointError("The cross-level scoring checkpoint requires its source policy to be enabled.")
     official_method = method.get("officialTiers")
     if official_enabled:
         if (
@@ -1964,7 +2029,8 @@ def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: A
             or official_method.get("mix") != "Phoenix2"
             or official_method.get("minimumLevels") != {"Single": 23, "Double": 25}
             or official_method.get("capPolicy") != "clearing-folder-minimum"
-            or official_method.get("scoring", {}).get("metric") != "equal-player-score-gaps"
+            or (not cross_enabled and (
+            official_method.get("scoring", {}).get("metric") != "equal-player-score-gaps"
             or official_method.get("scoring", {}).get("minimumOtherCharts") != 3
             or official_method.get("scoring", {}).get("sparsePolicy") != "provisional-same-level"
             or official_method.get("scoring", {}).get("aggregation") != "equal-player-mean"
@@ -1978,7 +2044,7 @@ def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: A
             or official_method.get("scoring", {}).get("calibration", {}).get("maximumScale") != 1
             or official_method.get("scoring", {}).get("calibration", {}).get("minimumSupportedCharts") != 8
             or official_method.get("scoring", {}).get("calibration", {}).get("minimumReferencePlayers") != 10
-            or official_method.get("scoring", {}).get("calibration", {}).get("outlierUse") != "diagnostic-only"
+            or official_method.get("scoring", {}).get("calibration", {}).get("outlierUse") != "diagnostic-only"))
             or official_method.get("clearing", {}).get("skillMetric") != "official-clearer-ability"
             or official_method.get("clearing", {}).get("minimumLevels") != {"Single": 25, "Double": 26}
             or official_method.get("clearing", {}).get("normalization") != "folder-median-player-ability"
@@ -2009,14 +2075,22 @@ def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: A
         raise IncompatibleCombinedTierCheckpointError("The official tier checkpoint requires its source policy to be enabled.")
     tier_method = method.get("tierMetrics", {})
     if (
-        any(method.get("scoring", {}).get(key) != value
-            for key, value in scoring_tier_method_identity().items())
+        (not cross_enabled and any(method.get("scoring", {}).get(key) != value
+            for key, value in scoring_tier_method_identity().items()))
+        or (cross_enabled and method.get("scoring") != {
+            "version": 1, "population": "official-max-per-player-chart",
+            "calibration": "official-cross-level-median-anchored-exponential",
+            "minimumOfficialLevel": 20,
+        })
         or "localExperiment" in method
         or "scoringCohorts" in method
-        or tier_method.get("version") != TIER_METRIC_VERSION
-        or tier_method.get("clearing", {}).get("skillMethod") != clearing_skill_method()
-        or tier_method.get("clearing", {}).get("percentile") != CLEARING_SKILL_PERCENTILE
-        or tier_method.get("clearing", {}).get("difficultyDeltaScale") != CLEARING_DIFFICULTY_DELTA_SCALE
+        or tier_method.get("pumbility") != pumbility_metric_method()
+        or (clearing_enabled and (tier_method.get("version") != 11
+            or tier_method.get("clearing") != cross_level_clearing_method_identity()))
+        or (not clearing_enabled and (tier_method.get("version") != TIER_METRIC_VERSION
+            or tier_method.get("clearing", {}).get("skillMethod") != clearing_skill_method()
+            or tier_method.get("clearing", {}).get("percentile") != CLEARING_SKILL_PERCENTILE
+            or tier_method.get("clearing", {}).get("difficultyDeltaScale") != CLEARING_DIFFICULTY_DELTA_SCALE))
     ):
         raise IncompatibleCombinedTierCheckpointError(
             "The combined tier checkpoint uses an incompatible scoring or clearing skill method; "
@@ -2130,6 +2204,10 @@ def _load_typed_checkpoint_combined(
     ):
         raise ValueError("The typed combined checkpoint failed validation.")
     _validate_checkpoint_combined_tier(combined_tier, blob_store)
+    clearing_method = combined_tier.get("summary", {}).get("method", {}).get("crossLevelClearing")
+    if clearing_method and any(clearing_method["inputHashes"][mix] != snapshot_hashes[mix]
+                               for mix in ("phoenix1", "phoenix2")):
+        raise IncompatibleCombinedTierCheckpointError("The cross-level Clearing inputs do not match the pinned checkpoint snapshots.")
     return value
 
 

@@ -15,7 +15,7 @@ from typing import Any, Mapping
 from phoenix2_sync import parse_utc, utc_now
 
 
-SCRIPT_VERSION = "6.16.0-max-pumbility-clearing070"
+SCRIPT_VERSION = "6.18.0-midpoint-compression"
 PHOENIX2_MINIMUM_ANALYSIS_SCORES = 50
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)
@@ -24,11 +24,32 @@ MODEL_ARTIFACT_SCHEMA_VERSION = 6
 PLAYER_REFRESH_STORAGE_SCHEMA_VERSION = 3
 COMBINED_TIER_SCHEMA_VERSION = 26
 OFFICIAL_TIER_SCHEMA_VERSION = 41
+CROSS_LEVEL_TIER_SCHEMA_VERSION = 42
+CROSS_LEVEL_CLEARING_SCHEMA_VERSION = 43
+POSTPROCESSED_TIER_SCHEMA_VERSION = 44
+
+
+def cross_level_clearing_method_identity() -> dict[str, Any]:
+    return {
+        "version": 1, "source": "piuscores-submitted", "minimumOfficialLevel": 16,
+        "skillMethod": {"version": 1, "topClearCount": 30, "minimumScoreRecords": 200,
+                        "minimumUniqueClears": 30, "difficultyBasis": "current-official-level",
+                        "scope": "same-mode-current-catalog", "recordDeduplication": "account-chart-across-mixes"},
+        "percentile": .10, "percentileMethod": "linear",
+        "calibrationMethod": "median-anchored-piecewise-linear", "calibrationVersion": 1,
+        "referenceMinimumClearers": 20, "referenceMinimumCharts": 5,
+        "minimumAnchors": 3, "tailPolicy": "boundary-linear", "intervalMethod": "none",
+    }
 
 
 def official_tier_snapshot_path() -> str:
     """Private official-board input; deliberately separate from submitted scores."""
     return "analysis/private/official/phoenix2.json"
+
+
+def official_scoring_manifest_path() -> str:
+    """Private identity-retaining dual-mix Scoring evidence, separate from Clearing."""
+    return "analysis/private/official/scoring/manifest.json"
 
 
 def scoring_method_identity() -> dict[str, Any]:

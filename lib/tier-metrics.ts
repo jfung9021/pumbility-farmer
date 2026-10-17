@@ -50,25 +50,29 @@ export function tierMetricAvailability(charts: ChartResult[], metric: TierMetric
 }
 
 export function hasLimitedTierData(chart: ChartResult, metric: TierMetricKey): boolean {
-  if (chart.officialEvidence) {
+  if (chart.officialEvidence || chart.scoringMethod === "official-cross-level-v1") {
     const limitedScoring = (chart.scoringPlayerCount ?? 0) < 10 || chart.scoringProvisional === true;
     const clearing = chart.tierMetrics?.clearing;
     const limitedClearing = hasLimitedData(clearingSkillPercentile(clearing)
-      ? clearing?.ratedClearCount ?? 0 : clearing?.selectedCount ?? 0);
+      ? clearing?.ratedClearCount ?? 0 : clearing?.selectedCount ?? 0)
+      || (clearing?.method === "submitted-cross-level-clearing-v1" && clearing.evidenceStatus !== "Published");
     return metric === "scoring" ? limitedScoring : metric === "clearing" ? limitedClearing : limitedScoring || limitedClearing;
   }
   if (metric === "scoring") return hasLimitedData(chart.nContributors);
   const clearing = chart.tierMetrics?.clearing;
   if (metric === "clearing") return hasLimitedData(clearingSkillPercentile(clearing)
-    ? clearing?.ratedClearCount ?? 0 : clearing?.selectedCount ?? 0);
+    ? clearing?.ratedClearCount ?? 0 : clearing?.selectedCount ?? 0)
+    || (clearing?.method === "submitted-cross-level-clearing-v1" && clearing.evidenceStatus !== "Published");
   const pumbility = chart.tierMetrics?.pumbility;
   return hasLimitedData(pumbility?.scoringSupportCount ?? 0)
     || hasLimitedData(pumbility?.clearingSupportCount ?? 0);
 }
 
 export function tierSupportLabel(chart: ChartResult, metric: TierMetricKey): string {
-  if (chart.officialEvidence) {
-    const scoring = `${chart.scoringPlayerCount ?? 0} players with same-level comparisons`;
+  if (chart.officialEvidence || chart.scoringMethod === "official-cross-level-v1") {
+    const scoring = chart.scoringMethod === "official-cross-level-v1"
+      ? `${chart.scoringPlayerCount ?? 0} players with cross-level official comparisons`
+      : `${chart.scoringPlayerCount ?? 0} players with same-level comparisons`;
     const clearingMetric = chart.tierMetrics?.clearing;
     const clearing = clearingMetric?.skillMetric === "official-clearer-ability"
       ? `${clearingMetric.ratedClearCount} eligible official clearers`

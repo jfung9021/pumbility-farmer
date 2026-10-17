@@ -5,16 +5,116 @@ import json
 import sys
 import tempfile
 import unittest
+from copy import deepcopy
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 from piu_recommendations import _clean_snapshot_frames
 from scripts import build_local_recommendations as builder
+from pumbility_contract import SCRIPT_VERSION
 from tier_difficulty import percentile_skill
 
 
 class LocalTierBuilderTests(unittest.TestCase):
+    def _overlay_base(self) -> dict:
+        return {
+            "schemaVersion": 43, "generatedAtUtc": "2026-10-16T00:00:00Z",
+            "summary": {"scriptVersion": "6.15.0-upper-score-profiles-clearing070",
+                        "method": {"tierMetrics": {"version": 10, "clearing": {"keep": "method"}}}},
+            "singles": [{"chartId": "a", "songName": "A", "difficulty": "S23", "type": "Single", "level": 23,
+                         "estimatedDifficulty": 23.8123456789, "evidenceStatus": "Published", "nContributors": 21,
+                         "scoringDiagnostics": {"keep": [1, 2]},
+                         "tierMetrics": {"clearing": {"estimatedDifficulty": 23.2, "ratedClearCount": 8,
+                                                      "evidenceStatus": "Provisional", "extrapolated": False,
+                                                      "diagnostics": {"keep": True}},
+                                         "pumbility": {"estimatedDifficulty": 23.50617283945}}}],
+            "doubles": [], "coop": [{"chartId": "coop", "estimatedDifficulty": 3.42, "keep": [1]}],
+        }
+
+    def test_metadata_refresh_preserves_models_and_personal_artifacts_with_provenance(self) -> None:
+        base = self._overlay_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tier_path = root / "tiers.json"
+            tier_path.write_text(json.dumps(base), encoding="utf-8")
+            protected = [root / "recommendations/latest.json", root / "recommendations/tier-scores.json",
+                         root / "recommendations/generations/old/shards/0000.json"]
+            for path in protected:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'{"preserve":"exact bytes"}\n')
+            before = {path: path.read_bytes() for path in protected}
+            with (
+                patch.object(sys, "argv", ["build_local_recommendations.py", "--refresh-tier-metadata"]),
+                patch.object(builder, "COMBINED_OUTPUT_PATH", tier_path),
+                patch.object(builder, "OUTPUT_PATH", protected[0]),
+                patch.object(builder, "GENERATIONS_PATH", root / "recommendations/generations"),
+                patch.object(builder, "_read_snapshot", side_effect=AssertionError("Must not read model inputs")),
+                patch.object(builder, "build_combined_chart_results", side_effect=AssertionError("Must not fit models")),
+                patch.object(builder, "build_recommendation_index", side_effect=AssertionError("Must not rebuild recommendations")),
+                patch.object(builder, "_prune_unpublished_generations", side_effect=AssertionError("Must not prune recommendations")),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(builder.main(), 0)
+                first = json.loads(tier_path.read_text(encoding="utf-8"))
+                self.assertEqual(builder.main(), 0)
+                repeated = json.loads(tier_path.read_text(encoding="utf-8"))
+            self.assertEqual({path: path.read_bytes() for path in protected}, before)
+        for candidate in (first, repeated):
+            self.assertEqual(candidate["schemaVersion"], base["schemaVersion"])
+            self.assertEqual(candidate["coop"], base["coop"])
+            for mode in ("singles", "doubles"):
+                self.assertEqual([{k: v for k, v in row.items() if k != "tierMetrics"} for row in candidate[mode]],
+                                 [{k: v for k, v in row.items() if k != "tierMetrics"} for row in base[mode]])
+                self.assertEqual([row["tierMetrics"]["clearing"] for row in candidate[mode]],
+                                 [row["tierMetrics"]["clearing"] for row in base[mode]])
+            self.assertEqual(candidate["summary"]["method"]["tierMetrics"]["clearing"], {"keep": "method"})
+            self.assertEqual(candidate["summary"]["method"]["tierMetrics"]["version"], 11)
+            self.assertEqual(candidate["summary"]["scriptVersion"], f"{SCRIPT_VERSION}+refresh-pumbility")
+            self.assertEqual(candidate["singles"][0]["tierMetrics"]["pumbility"]["estimatedDifficulty"], 23.8123456789)
+            provenance = candidate["summary"]["tierArtifactProvenance"]
+            self.assertEqual(provenance["base"], {"scriptVersion": base["summary"]["scriptVersion"],
+                                                 "schemaVersion": 43, "generatedAtUtc": base["generatedAtUtc"]})
+            self.assertEqual(provenance["producerScriptVersion"], SCRIPT_VERSION)
+        self.assertEqual(first["summary"]["tierArtifactProvenance"]["previous"], first["summary"]["tierArtifactProvenance"]["base"])
+        self.assertEqual(repeated["summary"]["tierArtifactProvenance"]["previous"]["scriptVersion"], first["summary"]["scriptVersion"])
+        self.assertEqual(repeated["summary"]["tierArtifactProvenance"]["previous"]["generatedAtUtc"], first["generatedAtUtc"])
+
+    def test_cross_level_overlay_commands_stamp_the_actual_producer(self) -> None:
+        for operation in ("cross-level-scoring", "cross-level-clearing"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                tier_path = root / "tiers.json"
+                base = self._overlay_base()
+                tier_path.write_text(json.dumps(base), encoding="utf-8")
+                for mix in ("phoenix1", "phoenix2"):
+                    manifest = root / mix / "current/snapshot_manifest.json"
+                    manifest.parent.mkdir(parents=True)
+                    manifest.write_text('{"captureCompletedAtUtc":"2026-10-16T00:00:00Z"}', encoding="utf-8")
+                candidate = deepcopy(base)
+                with (
+                    patch.object(sys, "argv", ["build_local_recommendations.py", f"--{operation}", "--clearing-audit-dir", str(root / "audit")]),
+                    patch.object(builder, "DATA_ROOT", root),
+                    patch.object(builder, "COMBINED_OUTPUT_PATH", tier_path),
+                    patch.object(builder, "_read_snapshot", return_value={}),
+                    patch("official_scoring_sources.load_official_scoring_manifest", return_value={}),
+                    patch("official_score_merge.merge_official_scores", return_value={"currentCatalog": []}),
+                    patch("official_cross_level_scoring.apply_cross_level_scoring", return_value=candidate),
+                    patch("cross_level_clearing.current_clearing_catalog", return_value=[]),
+                    patch("cross_level_clearing.apply_cross_level_clearing", return_value=candidate),
+                    patch.object(builder, "build_recommendation_index", side_effect=AssertionError("Must not rebuild recommendations")),
+                    patch.object(builder, "_prune_unpublished_generations", side_effect=AssertionError("Must not prune recommendations")),
+                    redirect_stdout(io.StringIO()),
+                ):
+                    # The Clearing command also writes its existing audit summary.
+                    candidate["summary"]["method"]["crossLevelClearing"] = {"version": 1}
+                    self.assertEqual(builder.main(), 0)
+                output = json.loads(tier_path.read_text(encoding="utf-8"))
+                self.assertEqual(output["summary"]["scriptVersion"], f"{SCRIPT_VERSION}+{operation}")
+                self.assertEqual(output["summary"]["tierArtifactProvenance"]["base"]["scriptVersion"], base["summary"]["scriptVersion"])
+                self.assertEqual(output["summary"]["tierArtifactProvenance"]["operation"], operation)
+                self.assertEqual(output["summary"]["method"]["tierMetrics"]["version"], 11)
+
     def test_official_tiers_require_the_official_snapshot_and_preserve_recommendations(self) -> None:
         snapshots = {mix: {'charts': [], 'scores': []} for mix in ('phoenix1', 'phoenix2')}
         official = {'source': 'piuscores-official', 'boards': []}

@@ -19,6 +19,7 @@ export interface TierPlayerScoresResponse {
 }
 
 export interface TierMetricResult {
+  initialFit?: Record<string, number | string | null>;
   estimatedDifficulty: number | null;
   difficultyDelta: number | null;
   levelRank: number | null;
@@ -29,6 +30,15 @@ export interface TierMetricResult {
 }
 
 export interface ClearingTierMetric extends TierMetricResult {
+  method?: "submitted-cross-level-clearing-v1";
+  sourceCounts?: Record<string, number>;
+  retainedSources?: string[];
+  comparability?: "comparable" | "changed" | "unknown" | "no-evidence";
+  anchorEligible?: boolean;
+  qualificationExclusions?: Record<string, number>;
+  extrapolated?: boolean;
+  provisionalReasons?: string[];
+  supportedRange?: [number, number] | null;
   clearCount: number;
   ratedClearCount: number;
   missingSkillCount: number;
@@ -78,6 +88,64 @@ export interface OfficialTierEvidence {
   unavailableReason: string | null;
 }
 
+export interface OfficialScoringSourceState {
+  status: "available" | "empty" | "absent-from-catalog" | "not-mirrored";
+  asOf: string | null;
+  rawRowCount: number;
+  maxRank: number;
+  cutoffScore: number | null;
+  possiblyTruncated: boolean;
+}
+
+export interface OfficialScoringEvidence {
+  sourceDates: Record<string, string | null>;
+  sourceCounts: Record<string, number>;
+  sourceStates: Record<string, OfficialScoringSourceState>;
+  mergedPlayerCount: number;
+  comparability: string;
+  component: number | null;
+  anchorEligible: boolean;
+}
+
+export interface OfficialCrossLevelScoringMethod {
+  version: 1;
+  minimumOfficialLevel: 20;
+  sourceDates: Record<string, string | null>;
+  manifestSha256: string;
+  calibration: Record<"Single" | "Double", OfficialCrossLevelCurve | null>;
+  intervalMethod: "conditional-player-bootstrap-fixed-fit-v1";
+}
+
+export interface CrossLevelClearingCurve {
+  version: 1;
+  anchors: Array<{ level: number; threshold: number; difficulty: number; referenceCharts: number; chartIds: string[] }>;
+  tailPolicy: "boundary-linear";
+  supportedRange: [number, number];
+}
+
+export interface CrossLevelClearingMethod {
+  version: 1;
+  source: "piuscores-submitted";
+  baseScoringSchemaVersion: 26 | 41 | 42;
+  skillMethod: { version: 1; topClearCount: 30; minimumScoreRecords: 200; minimumUniqueClears: 30;
+    difficultyBasis: "current-official-level"; scope: "same-mode-current-catalog"; recordDeduplication: "account-chart-across-mixes" };
+  sourceDates: Record<string, string | null>;
+  inputHashes: Record<string, string>;
+  calibration: Record<"Single" | "Double", CrossLevelClearingCurve | null>;
+  intervalMethod: "none";
+}
+
+export interface OfficialCrossLevelCurve {
+  version: 1;
+  anchors: Array<{ level: number; difficulty: number; cost: number; referenceCharts: number; chartIds: string[] }>;
+  offset: number;
+  fit: { growth: number; normalizedOffset: number; normalizedAmplitude: number; normalizedMse: number; boundHit: boolean };
+  tailPolicy: "tangent-linear";
+  supportedRange: [number, number];
+  referenceMinimumPlayers: 10;
+  referenceMinimumCharts: 5;
+}
+
 export interface OfficialTierMethod {
   version: 15;
   enabled: true;
@@ -125,6 +193,7 @@ export interface OfficialScoringSpread {
 }
 
 export interface PumbilityTierMetric extends TierMetricResult {
+  aggregation?: "maximum";
   scoringSupportCount: number;
   clearingSupportCount: number;
 }
@@ -138,6 +207,7 @@ export interface ChartRerate {
 }
 
 export interface ChartResult {
+  initialFit?: Record<string, number | string | null>;
   mode: "Singles" | "Doubles" | "Co-op";
   modeRank: number | null;
   levelRank: number | null;
@@ -161,6 +231,15 @@ export interface ChartResult {
   estimatedDifficulty: number | null;
   officialEvidence?: OfficialTierEvidence;
   officialContributors?: number;
+  scoringMethod?: "official-cross-level-v1";
+  officialScoringEvidence?: OfficialScoringEvidence | null;
+  officialScoringContributors?: number;
+  scoringChartCost?: number | null;
+  scoringChartCostCi95Low?: number | null;
+  scoringChartCostCi95High?: number | null;
+  scoringMainComponent?: boolean;
+  scoringComponent?: number | null;
+  scoringExtrapolated?: boolean;
   scoringPlayerCount?: number;
   scoringMinimumOtherCharts?: number;
   scoringComparisonCharts?: number;
@@ -263,7 +342,7 @@ export interface AnalysisPayload {
   mix: MixInfo | CombinedMixInfo;
   summary: {
     scriptVersion: string;
-    method: Record<string, unknown> & { officialTiers?: OfficialTierMethod };
+    method: Record<string, unknown> & { officialTiers?: OfficialTierMethod; officialCrossLevelScoring?: OfficialCrossLevelScoringMethod; crossLevelClearing?: CrossLevelClearingMethod };
     coverage: Record<string, number>;
     modes: Partial<Record<ModeKey, ModeSummary>>;
   };
