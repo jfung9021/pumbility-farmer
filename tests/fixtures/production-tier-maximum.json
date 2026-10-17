@@ -1,0 +1,1839 @@
+{
+  "mix": {
+    "key": "combined",
+    "label": "Phoenix 1 + 2",
+    "apiValue": "Phoenix+Phoenix2"
+  },
+  "coop": [],
+  "doubles": [
+    {
+      "mode": "Doubles",
+      "type": "Double",
+      "level": 25,
+      "bpmMax": 192.0,
+      "bpmMin": 192.0,
+      "folder": "D25",
+      "chartId": "4a706ace-17bc-49cc-ba64-8db9f22b530b",
+      "imageUrl": "https://piuimages.arroweclip.se/songs/GhostBloodyTrain.png",
+      "modeRank": 332,
+      "songName": "Ghost Bloody Train",
+      "levelRank": 6,
+      "noteCount": 1500.0,
+      "difficulty": "D25",
+      "effectBand": "Very Easy",
+      "stepArtist": "CONRAD",
+      "tierMetrics": {
+        "clearing": {
+          "q10Skill": 24.762,
+          "levelRank": 57,
+          "clearCount": 22,
+          "effectBand": "Hard",
+          "effectBandRank": 5,
+          "evidenceStatus": "Published",
+          "difficultyDelta": 0.1498,
+          "ratedClearCount": 22,
+          "missingSkillCount": 0,
+          "estimatedDifficulty": 25.6498,
+          "folderReferenceSkill": 24.548,
+          "levelComparisonCharts": 69
+        },
+        "pumbility": {
+          "levelRank": 44,
+          "effectBand": "Hard",
+          "effectBandRank": 5,
+          "evidenceStatus": "Published",
+          "difficultyDelta": 0.1498,
+          "estimatedDifficulty": 25.6498,
+          "scoringSupportCount": 236,
+          "clearingSupportCount": 22,
+          "levelComparisonCharts": 69
+        }
+      },
+      "nContributors": 236,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": 2,
+      "evidenceStatus": "Published",
+      "nPlayersScored": 255,
+      "scoringMeanGap": -11817.300521,
+      "difficultyDelta": -0.327713,
+      "levelPercentile": 0.07971,
+      "whatIfEstimates": [],
+      "officialEvidence": {
+        "asOf": "2026-09-27T17:22:05.1222517+00:00",
+        "source": "piuscores-official",
+        "status": "available",
+        "maxRank": 255,
+        "cutoffScore": 853282,
+        "rawRowCount": 255,
+        "possiblyTruncated": false,
+        "unavailableReason": null
+      },
+      "scoringGapStdDev": 10718.497187,
+      "averageDifficulty": 25.5,
+      "difficultyCi95Low": 25.13326,
+      "pumbilityPerLevel": null,
+      "relativeGroupRank": 1,
+      "scoringGapCi95Low": -13224.612033,
+      "difficultyCi95High": 25.208206,
+      "scoringGapCi95High": -10522.079039,
+      "scoringPlayerCount": 236,
+      "scoringProfileRmse": null,
+      "scoringProvisional": false,
+      "estimatedDifficulty": 25.172287,
+      "scoringScoreProfile": null,
+      "folderMeasuredCharts": 69,
+      "officialContributors": 255,
+      "phoenix1Contributors": 0,
+      "phoenix2Contributors": 0,
+      "scoringUnratedReason": null,
+      "levelComparisonCharts": 69,
+      "scoringComponentCount": 1,
+      "scoringExtremeOutlier": false,
+      "scoringPointsPerLevel": 10000.0,
+      "difficultyDeltaCi95Low": -0.36674,
+      "folderRangeCompression": 1.0,
+      "scoringDifficultyScale": 0.277316,
+      "difficultyDeltaCi95High": -0.291794,
+      "scoringComparisonCharts": 69,
+      "scoringSpreadCalibration": {
+        "basis": "folder",
+        "scale": 0.277316,
+        "lowerFence": -3.102681,
+        "upperFence": 3.496522,
+        "referenceLevel": 25,
+        "referenceSpread": 1.622698,
+        "supportedCharts": 69
+      },
+      "scoringMinimumOtherCharts": 3,
+      "scoringProfileExtrapolated": false,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null
+    },
+    {
+      "mode": "Doubles",
+      "type": "Double",
+      "level": 26,
+      "bpmMax": 220.0,
+      "bpmMin": 220.0,
+      "folder": "D26",
+      "chartId": "523887e1-71cf-4ff4-8f1c-de4664c97115",
+      "imageUrl": "https://piuimages.arroweclip.se/songs/QUATTUORUX.png",
+      "modeRank": 888,
+      "songName": "QUATTUORUX",
+      "levelRank": 28,
+      "noteCount": 1737.0,
+      "difficulty": "D26",
+      "effectBand": "Hard",
+      "stepArtist": "FEFEMZ",
+      "tierMetrics": {
+        "clearing": {
+          "q20Skill": 25.748,
+          "levelRank": 14,
+          "clearCount": 48,
+          "effectBand": "Easy",
+          "skillMetric": "official-clearer-ability",
+          "defaultedAtCap": false,
+          "effectBandRank": 3,
+          "evidenceStatus": "Published",
+          "extremeOutlier": false,
+          "abilityCoverage": 0.979167,
+          "capDefaultBasis": null,
+          "difficultyDelta": -0.122209,
+          "q20SkillCi95Low": 25.628,
+          "ratedClearCount": 47,
+          "shrinkageWeight": 0.686878,
+          "q20SkillCi95High": 25.948,
+          "difficultyCi95Low": 26.174108,
+          "missingSkillCount": 1,
+          "spreadCalibration": {
+            "basis": "folder",
+            "scale": 3.530158,
+            "lowerFence": -0.395883,
+            "upperFence": 0.398932,
+            "referenceLevel": 26,
+            "referenceSpread": 0.127473,
+            "supportedCharts": 36
+          },
+          "difficultyCi95High": 26.717261,
+          "estimatedDifficulty": 26.377791,
+          "capDefaultDifficulty": null,
+          "folderReferenceSkill": 25.82,
+          "levelComparisonCharts": 36
+        },
+        "pumbility": {
+          "levelRank": 20,
+          "effectBand": "Hard",
+          "effectBandRank": 5,
+          "evidenceStatus": "Published",
+          "difficultyDelta": 0.211154,
+          "estimatedDifficulty": 26.711154,
+          "scoringSupportCount": 43,
+          "clearingSupportCount": 47,
+          "levelComparisonCharts": 36
+        }
+      },
+      "nContributors": 43,
+      "relativeGroup": "70–80% percentile",
+      "effectBandRank": 5,
+      "evidenceStatus": "Published",
+      "nPlayersScored": 48,
+      "scoringMeanGap": 5608.773119,
+      "difficultyDelta": 0.211154,
+      "levelPercentile": 0.763889,
+      "whatIfEstimates": [],
+      "officialEvidence": {
+        "asOf": "2026-09-27T17:22:05.1222517+00:00",
+        "source": "piuscores-official",
+        "status": "available",
+        "maxRank": 48,
+        "cutoffScore": 891906,
+        "rawRowCount": 48,
+        "possiblyTruncated": false,
+        "unavailableReason": null
+      },
+      "scoringGapStdDev": 16446.858191,
+      "averageDifficulty": 26.5,
+      "difficultyCi95Low": 26.53357,
+      "pumbilityPerLevel": null,
+      "relativeGroupRank": 8,
+      "scoringGapCi95Low": 891.693071,
+      "difficultyCi95High": 26.90581,
+      "scoringGapCi95High": 10779.338815,
+      "scoringPlayerCount": 43,
+      "scoringProfileRmse": null,
+      "scoringProvisional": false,
+      "estimatedDifficulty": 26.711154,
+      "scoringScoreProfile": null,
+      "folderMeasuredCharts": 36,
+      "officialContributors": 48,
+      "phoenix1Contributors": 0,
+      "phoenix2Contributors": 0,
+      "scoringUnratedReason": null,
+      "levelComparisonCharts": 36,
+      "scoringComponentCount": 1,
+      "scoringExtremeOutlier": false,
+      "scoringPointsPerLevel": 10000.0,
+      "difficultyDeltaCi95Low": 0.03357,
+      "folderRangeCompression": 1.0,
+      "scoringDifficultyScale": 0.37647,
+      "difficultyDeltaCi95High": 0.40581,
+      "scoringComparisonCharts": 36,
+      "scoringSpreadCalibration": {
+        "basis": "folder",
+        "scale": 0.37647,
+        "lowerFence": -2.550612,
+        "upperFence": 2.60525,
+        "referenceLevel": 26,
+        "referenceSpread": 1.195313,
+        "supportedCharts": 36
+      },
+      "scoringMinimumOtherCharts": 3,
+      "scoringProfileExtrapolated": false,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null
+    },
+    {
+      "mode": "Doubles",
+      "type": "Double",
+      "level": 27,
+      "bpmMax": 200.1,
+      "bpmMin": 200.1,
+      "folder": "D27",
+      "chartId": "9db1f392-00e8-4c89-8045-de3bf128880b",
+      "imageUrl": "https://piuimages.arroweclip.se/songs/ERRORCODE0.png",
+      "modeRank": 99,
+      "songName": "ERRORCODE: 0",
+      "levelRank": 1,
+      "noteCount": 2400.0,
+      "difficulty": "D27",
+      "effectBand": "Overrated",
+      "stepArtist": "SUNNY",
+      "tierMetrics": {
+        "clearing": {
+          "q20Skill": 26.06,
+          "levelRank": 3,
+          "clearCount": 17,
+          "effectBand": "Easy",
+          "skillMetric": "official-clearer-ability",
+          "defaultedAtCap": false,
+          "effectBandRank": 3,
+          "evidenceStatus": "Published",
+          "extremeOutlier": false,
+          "abilityCoverage": 1.0,
+          "capDefaultBasis": null,
+          "difficultyDelta": -0.212977,
+          "q20SkillCi95Low": 25.74,
+          "ratedClearCount": 17,
+          "shrinkageWeight": 0.459459,
+          "q20SkillCi95High": 26.54,
+          "difficultyCi95Low": 27.032723,
+          "missingSkillCount": 0,
+          "spreadCalibration": {
+            "basis": "folder",
+            "scale": 2.470881,
+            "lowerFence": -0.476077,
+            "upperFence": 0.351969,
+            "referenceLevel": 27,
+            "referenceSpread": 0.182121,
+            "supportedCharts": 5
+          },
+          "difficultyCi95High": 27.668474,
+          "estimatedDifficulty": 27.287023,
+          "capDefaultDifficulty": null,
+          "folderReferenceSkill": 26.328,
+          "levelComparisonCharts": 10
+        },
+        "pumbility": {
+          "levelRank": 2,
+          "effectBand": "Easy",
+          "effectBandRank": 3,
+          "evidenceStatus": "Provisional",
+          "difficultyDelta": -0.212977,
+          "estimatedDifficulty": 27.287023,
+          "scoringSupportCount": 8,
+          "clearingSupportCount": 17,
+          "levelComparisonCharts": 10
+        }
+      },
+      "nContributors": 8,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": 1,
+      "evidenceStatus": "Provisional",
+      "nPlayersScored": 17,
+      "scoringMeanGap": -20942.091622,
+      "difficultyDelta": -0.788408,
+      "levelPercentile": 0.05,
+      "whatIfEstimates": [],
+      "officialEvidence": {
+        "asOf": "2026-09-27T17:22:05.1222517+00:00",
+        "source": "piuscores-official",
+        "status": "available",
+        "maxRank": 17,
+        "cutoffScore": 867842,
+        "rawRowCount": 17,
+        "possiblyTruncated": false,
+        "unavailableReason": null
+      },
+      "scoringGapStdDev": 12839.125571,
+      "averageDifficulty": 27.5,
+      "difficultyCi95Low": 26.388375,
+      "pumbilityPerLevel": null,
+      "relativeGroupRank": 1,
+      "scoringGapCi95Low": -29527.556287,
+      "difficultyCi95High": 27.058526,
+      "scoringGapCi95High": -11726.657662,
+      "scoringPlayerCount": 8,
+      "scoringProfileRmse": null,
+      "scoringProvisional": true,
+      "estimatedDifficulty": 26.711592,
+      "scoringScoreProfile": null,
+      "folderMeasuredCharts": 10,
+      "officialContributors": 17,
+      "phoenix1Contributors": 0,
+      "phoenix2Contributors": 0,
+      "scoringUnratedReason": null,
+      "levelComparisonCharts": 10,
+      "scoringComponentCount": 1,
+      "scoringExtremeOutlier": false,
+      "scoringPointsPerLevel": 10000.0,
+      "difficultyDeltaCi95Low": -1.111625,
+      "folderRangeCompression": 1.0,
+      "scoringDifficultyScale": 0.37647,
+      "difficultyDeltaCi95High": -0.441474,
+      "scoringComparisonCharts": 10,
+      "scoringSpreadCalibration": {
+        "basis": "neighbor-folder",
+        "scale": 0.37647,
+        "lowerFence": null,
+        "upperFence": null,
+        "referenceLevel": 26,
+        "referenceSpread": 1.195313,
+        "supportedCharts": 0
+      },
+      "scoringMinimumOtherCharts": 3,
+      "scoringProfileExtrapolated": false,
+      "scoringProfileMatchCi95Low": null,
+      "scoringProfileMatchCi95High": null,
+      "scoringProfileMatchDifficulty": null,
+      "scoringFolderReferenceDifficulty": null
+    }
+  ],
+  "singles": [
+    {
+      "mode": "Singles",
+      "type": "Single",
+      "level": 18,
+      "bpmMax": 160.0,
+      "bpmMin": 160.0,
+      "folder": "S18",
+      "chartId": "df21f946-3d72-475e-bdb8-527ee07cf0fc",
+      "imageUrl": "https://piuimages.arroweclip.se/songs/Digitalis-p2.png",
+      "modeRank": 25,
+      "songName": "Digitalis",
+      "levelRank": 3,
+      "noteCount": 1133.0,
+      "difficulty": "S18",
+      "effectBand": "Overrated",
+      "stepArtist": "SPHAM",
+      "tierMetrics": {
+        "clearing": {
+          "q10Skill": 18.62,
+          "levelRank": 22,
+          "clearCount": 158,
+          "effectBand": "Overrated",
+          "effectBandRank": 1,
+          "evidenceStatus": "Published",
+          "difficultyDelta": -0.9296,
+          "ratedClearCount": 151,
+          "missingSkillCount": 7,
+          "estimatedDifficulty": 17.5704,
+          "folderReferenceSkill": 19.948,
+          "levelComparisonCharts": 199
+        },
+        "pumbility": {
+          "levelRank": 1,
+          "effectBand": "Overrated",
+          "effectBandRank": 1,
+          "evidenceStatus": "Published",
+          "difficultyDelta": -0.886121,
+          "estimatedDifficulty": 17.613879,
+          "scoringSupportCount": 158,
+          "clearingSupportCount": 151,
+          "levelComparisonCharts": 199
+        }
+      },
+      "nContributors": 158,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": 1,
+      "evidenceStatus": "Published",
+      "nPlayersScored": 158,
+      "difficultyDelta": -0.886121,
+      "levelPercentile": 0.012563,
+      "whatIfEstimates": [],
+      "averageDifficulty": 18.5,
+      "difficultyCi95Low": 17.465033,
+      "pumbilityPerLevel": null,
+      "relativeGroupRank": 1,
+      "difficultyCi95High": 17.815584,
+      "scoringProfileRmse": 904.932815,
+      "estimatedDifficulty": 17.613879,
+      "scoringScoreProfile": [
+        992995.5,
+        998243.0,
+        1000000.0
+      ],
+      "folderMeasuredCharts": 199,
+      "phoenix1Contributors": 0,
+      "phoenix2Contributors": 158,
+      "levelComparisonCharts": 199,
+      "difficultyDeltaCi95Low": -1.034967,
+      "folderRangeCompression": 1.0,
+      "scoringDifficultyScale": 0.26,
+      "difficultyDeltaCi95High": -0.684416,
+      "scoringProfileExtrapolated": true,
+      "scoringProfileMatchCi95Low": 14.487966,
+      "scoringProfileMatchCi95High": 15.836242,
+      "scoringProfileMatchDifficulty": 15.060451,
+      "scoringFolderReferenceDifficulty": 18.468609
+    },
+    {
+      "mode": "Singles",
+      "type": "Single",
+      "level": 19,
+      "bpmMax": 210.0,
+      "bpmMin": 210.0,
+      "folder": "S19",
+      "chartId": "523c6e1f-b88f-4847-abca-d1158e3685f7",
+      "imageUrl": "https://piuimages.arroweclip.se/songs/OVERNIGHTFLOWER-p2.png",
+      "modeRank": 4,
+      "songName": "OVERNIGHT FLOWER",
+      "levelRank": 1,
+      "noteCount": 1150.0,
+      "difficulty": "S19",
+      "effectBand": "Overrated",
+      "stepArtist": "CONRAD",
+      "tierMetrics": {
+        "clearing": {
+          "q10Skill": 19.962,
+          "levelRank": 35,
+          "clearCount": 146,
+          "effectBand": "Very Easy",
+          "effectBandRank": 2,
+          "evidenceStatus": "Published",
+          "difficultyDelta": -0.3276,
+          "ratedClearCount": 142,
+          "missingSkillCount": 4,
+          "estimatedDifficulty": 19.1724,
+          "folderReferenceSkill": 20.43,
+          "levelComparisonCharts": 171
+        },
+        "pumbility": {
+          "levelRank": 15,
+          "effectBand": "Very Easy",
+          "effectBandRank": 2,
+          "evidenceStatus": "Published",
+          "difficultyDelta": -0.3276,
+          "estimatedDifficulty": 19.1724,
+          "scoringSupportCount": 146,
+          "clearingSupportCount": 142,
+          "levelComparisonCharts": 171
+        }
+      },
+      "nContributors": 146,
+      "relativeGroup": "Easiest 10%",
+      "effectBandRank": 1,
+      "evidenceStatus": "Published",
+      "nPlayersScored": 146,
+      "difficultyDelta": -1.205604,
+      "levelPercentile": 0.002924,
+      "whatIfEstimates": [],
+      "averageDifficulty": 19.5,
+      "difficultyCi95Low": 18.117489,
+      "pumbilityPerLevel": null,
+      "relativeGroupRank": 1,
+      "difficultyCi95High": 18.498385,
+      "scoringProfileRmse": 1441.834718,
+      "estimatedDifficulty": 18.294396,
+      "scoringScoreProfile": [
+        992149.5,
+        996836.0,
+        999307.0
+      ],
+      "folderMeasuredCharts": 171,
+      "phoenix1Contributors": 0,
+      "phoenix2Contributors": 146,
+      "levelComparisonCharts": 171,
+      "difficultyDeltaCi95Low": -1.382511,
+      "folderRangeCompression": 1.0,
+      "scoringDifficultyScale": 0.3,
+      "difficultyDeltaCi95High": -1.001615,
+      "scoringProfileExtrapolated": true,
+      "scoringProfileMatchCi95Low": 14.943205,
+      "scoringProfileMatchCi95High": 16.212858,
+      "scoringProfileMatchDifficulty": 15.532898,
+      "scoringFolderReferenceDifficulty": 19.551577
+    }
+  ],
+  "summary": {
+    "scriptVersion": "6.16.0-max-pumbility-clearing070+combined-tier-v26+score-profile-level-scales-v3",
+    "method": {
+      "scoring": {
+        "version": 2,
+        "scaleStep": 0.01,
+        "scoreUnit": 10000.0,
+        "population": "combined",
+        "calibration": "folder-scaled-score-profile",
+        "percentiles": [
+          0.5,
+          0.75,
+          0.9
+        ],
+        "folderCenter": "median-profile-match",
+        "maximumScale": 1.0,
+        "rarityPenalty": 0.05,
+        "profileWeights": [
+          1,
+          1,
+          2
+        ],
+        "rarityThreshold": 10,
+        "spreadQuantiles": [
+          0.1,
+          0.9
+        ],
+        "percentileMethod": "linear interpolation",
+        "neighborSmoothing": 0.05,
+        "referenceSmoothing": 4.0,
+        "minimumSpreadCharts": 10,
+        "preferredCentralWidth": 1.0,
+        "minimumReferenceCharts": 5,
+        "minimumReferencePlayers": 20,
+        "spreadReliabilityCharts": 30,
+        "spreadReliabilityPlayers": 20,
+        "fullReferenceWeightCharts": 20,
+        "minimumSpreadMedianPlayers": 10
+      },
+      "scoreProfileCalibration": {
+        "tails": "raw profile matching uses linear endpoint extrapolation, before folder centering and folder-specific spread calibration",
+        "curves": {
+          "Double": {
+            "profiles": [
+              [
+                985859.277891972,
+                996298.8650898938,
+                999751.6868329856
+              ],
+              [
+                984469.2738428499,
+                995226.0141234156,
+                999321.6110768991
+              ],
+              [
+                982847.450320735,
+                993995.1968844639,
+                998839.6136125663
+              ],
+              [
+                980456.0443919215,
+                992400.8810697113,
+                998170.3699625158
+              ],
+              [
+                977299.1180425204,
+                990325.6101547147,
+                997145.4022461349
+              ],
+              [
+                973492.4721606621,
+                987635.4573476028,
+                995575.3900921822
+              ],
+              [
+                969068.1906238467,
+                984122.9058178258,
+                993151.437567882
+              ],
+              [
+                963992.6142694093,
+                979569.0431479333,
+                989496.3262174135
+              ],
+              [
+                957733.536278723,
+                973415.8554660182,
+                984137.2281929853
+              ],
+              [
+                950363.0962658086,
+                965717.1931131905,
+                976971.2840924524
+              ],
+              [
+                942422.4247750061,
+                957174.0050640551,
+                968842.3274654236
+              ]
+            ],
+            "references": [
+              {
+                "level": 16,
+                "charts": 91,
+                "weight": 1.0,
+                "rawProfile": [
+                  984932.0,
+                  995667.0,
+                  999544.0
+                ]
+              },
+              {
+                "level": 17,
+                "charts": 115,
+                "weight": 1.0,
+                "rawProfile": [
+                  983245.5,
+                  995035.75,
+                  998988.0
+                ]
+              },
+              {
+                "level": 18,
+                "charts": 186,
+                "weight": 1.0,
+                "rawProfile": [
+                  985014.75,
+                  994347.5,
+                  998707.0
+                ]
+              },
+              {
+                "level": 19,
+                "charts": 137,
+                "weight": 1.0,
+                "rawProfile": [
+                  980903.0,
+                  992335.0,
+                  998087.0
+                ]
+              },
+              {
+                "level": 20,
+                "charts": 152,
+                "weight": 1.0,
+                "rawProfile": [
+                  976964.25,
+                  990031.25,
+                  996667.1
+                ]
+              },
+              {
+                "level": 21,
+                "charts": 130,
+                "weight": 1.0,
+                "rawProfile": [
+                  973229.5,
+                  987589.875,
+                  995302.1000000001
+                ]
+              },
+              {
+                "level": 22,
+                "charts": 139,
+                "weight": 1.0,
+                "rawProfile": [
+                  967074.0,
+                  982766.5,
+                  992769.0
+                ]
+              },
+              {
+                "level": 23,
+                "charts": 127,
+                "weight": 1.0,
+                "rawProfile": [
+                  966410.0,
+                  982016.5,
+                  990976.2
+                ]
+              },
+              {
+                "level": 24,
+                "charts": 124,
+                "weight": 1.0,
+                "rawProfile": [
+                  959609.5,
+                  976004.25,
+                  987924.0
+                ]
+              },
+              {
+                "level": 25,
+                "charts": 63,
+                "weight": 1.0,
+                "rawProfile": [
+                  950479.5,
+                  966291.5,
+                  977448.0
+                ]
+              },
+              {
+                "level": 26,
+                "charts": 11,
+                "weight": 0.55,
+                "rawProfile": [
+                  938275.2867540029,
+                  951032.0,
+                  961838.6
+                ]
+              }
+            ],
+            "difficulties": [
+              16.5,
+              17.5,
+              18.5,
+              19.5,
+              20.5,
+              21.5,
+              22.5,
+              23.5,
+              24.5,
+              25.5,
+              26.5
+            ]
+          },
+          "Single": {
+            "profiles": [
+              [
+                987963.6986107166,
+                997282.4643559136,
+                1000000.0
+              ],
+              [
+                985094.044596557,
+                995706.1478888302,
+                999574.1485365723
+              ],
+              [
+                981985.5909297185,
+                993940.9653327684,
+                998837.4678531528
+              ],
+              [
+                978073.6518083822,
+                991495.6386265424,
+                997599.6933475934
+              ],
+              [
+                972945.0186983004,
+                987811.648375774,
+                995364.0300784645
+              ],
+              [
+                966211.3201131293,
+                982365.4405294496,
+                991611.759767438
+              ],
+              [
+                957724.0548919503,
+                974922.048942612,
+                985993.90661657
+              ],
+              [
+                947684.2043455624,
+                965614.1160879419,
+                978516.3423860564
+              ],
+              [
+                936112.8610617769,
+                954802.8972024666,
+                969726.0121819514
+              ],
+              [
+                924172.5665420147,
+                943667.8372512282,
+                960658.4130137945
+              ]
+            ],
+            "references": [
+              {
+                "level": 16,
+                "charts": 197,
+                "weight": 1.0,
+                "rawProfile": [
+                  987008.5,
+                  996527.0,
+                  999565.0
+                ]
+              },
+              {
+                "level": 17,
+                "charts": 196,
+                "weight": 1.0,
+                "rawProfile": [
+                  983790.5,
+                  994496.5,
+                  998763.1
+                ]
+              },
+              {
+                "level": 18,
+                "charts": 199,
+                "weight": 1.0,
+                "rawProfile": [
+                  982591.5,
+                  993672.0,
+                  998258.0
+                ]
+              },
+              {
+                "level": 19,
+                "charts": 171,
+                "weight": 1.0,
+                "rawProfile": [
+                  978173.0,
+                  991635.5,
+                  997512.0
+                ]
+              },
+              {
+                "level": 20,
+                "charts": 137,
+                "weight": 1.0,
+                "rawProfile": [
+                  973904.5,
+                  988966.0,
+                  996043.0
+                ]
+              },
+              {
+                "level": 21,
+                "charts": 170,
+                "weight": 1.0,
+                "rawProfile": [
+                  967609.25,
+                  983835.875,
+                  993031.1499999999
+                ]
+              },
+              {
+                "level": 22,
+                "charts": 107,
+                "weight": 1.0,
+                "rawProfile": [
+                  957004.5,
+                  975836.5,
+                  988158.2
+                ]
+              },
+              {
+                "level": 23,
+                "charts": 66,
+                "weight": 1.0,
+                "rawProfile": [
+                  952250.0,
+                  968886.875,
+                  980470.55
+                ]
+              },
+              {
+                "level": 24,
+                "charts": 27,
+                "weight": 1.0,
+                "rawProfile": [
+                  932938.5,
+                  951380.4816053512,
+                  966693.1
+                ]
+              },
+              {
+                "level": 25,
+                "charts": 9,
+                "weight": 0.45,
+                "rawProfile": [
+                  920893.0,
+                  940789.25,
+                  958193.8
+                ]
+              }
+            ],
+            "difficulties": [
+              16.5,
+              17.5,
+              18.5,
+              19.5,
+              20.5,
+              21.5,
+              22.5,
+              23.5,
+              24.5,
+              25.5
+            ]
+          }
+        },
+        "method": "weighted second-difference smoothing, increasing-loss isotonic projection, ordered profile quantiles",
+        "fallback": "unrated when fewer than two supported levels or all reference profiles are constant",
+        "matching": "minimum weighted mean squared score distance on piecewise linear curve; weights 1/1/2 for q50/q75/q90; midpoint of tied solutions",
+        "objective": {
+          "total": 0.015165584103319819,
+          "widthCost": 0.0028423815992781837,
+          "rarityCost": 0.0,
+          "neighborCost": 0.012323202504041635
+        },
+        "outlierCap": null,
+        "folderScales": {
+          "Double": {
+            "16": 0.22,
+            "17": 0.22,
+            "18": 0.22,
+            "19": 0.22,
+            "20": 0.22,
+            "21": 0.26,
+            "22": 0.25,
+            "23": 0.29,
+            "24": 0.32,
+            "25": 0.36,
+            "26": 0.31,
+            "27": 0.31,
+            "28": 0.31
+          },
+          "Single": {
+            "16": 0.28,
+            "17": 0.25,
+            "18": 0.26,
+            "19": 0.3,
+            "20": 0.31,
+            "21": 0.34,
+            "22": 0.4,
+            "23": 0.47,
+            "24": 0.57,
+            "25": 0.48,
+            "26": 0.48
+          }
+        },
+        "outlierScope": "rated Singles and Doubles at official level 16+, both directions including limited-data charts",
+        "baselineScale": 0.22,
+        "folderCenters": {
+          "Double": {
+            "16": 16.97974568632781,
+            "17": 17.990817149135534,
+            "18": 17.776439487044367,
+            "19": 19.28216261858637,
+            "20": 20.621715770438378,
+            "21": 21.585512730412418,
+            "22": 22.79503083432293,
+            "23": 23.001595421304366,
+            "24": 24.084321523265814,
+            "25": 25.512882819523956,
+            "26": 27.411516519957466,
+            "27": 30.493015040165226,
+            "28": 31.83369757104102
+          },
+          "Single": {
+            "16": 16.89155700928599,
+            "17": 18.033656135517717,
+            "18": 18.468609078228823,
+            "19": 19.551576546843872,
+            "20": 20.279517837038863,
+            "21": 21.20360994900785,
+            "22": 22.376031520486247,
+            "23": 23.188798466130564,
+            "24": 24.86013709296096,
+            "25": 25.85935219768649,
+            "26": 29.05029594197203
+          }
+        },
+        "scaleSelection": "joint dynamic programming over hundredth scales; reliability-weighted width fit, within-mode neighbor smoothing, and a soft penalty beyond ten combined two-grade moves",
+        "finalCalibration": "official level + 0.5 + scale[mode, level] * (raw profile match - official folder median profile match)",
+        "fallbackWidthCost": "((scale - baselineScale) / (baselineScale + 0.01))^2 for modes without supported spreads",
+        "folderDiagnostics": {
+          "Double": {
+            "16": {
+              "fallback": null,
+              "rawWidth": 7.509228616370457,
+              "widthCost": 0.0,
+              "ratedCharts": 91,
+              "achievedWidth": 1.6520302956015005,
+              "selectedScale": 0.22,
+              "twoGradeCount": 0,
+              "preferredScale": 0.22,
+              "preferredWidth": 1.6520302956015005,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 174.0,
+              "maximumAbsoluteMidpointDelta": 1.4070198244437977
+            },
+            "17": {
+              "fallback": null,
+              "rawWidth": 7.194666101672134,
+              "widthCost": 0.0,
+              "ratedCharts": 115,
+              "achievedWidth": 1.5828265423678693,
+              "selectedScale": 0.22,
+              "twoGradeCount": 0,
+              "preferredScale": 0.22,
+              "preferredWidth": 1.5828265423678693,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 166.0,
+              "maximumAbsoluteMidpointDelta": 1.4739362469724773
+            },
+            "18": {
+              "fallback": null,
+              "rawWidth": 6.60259360472239,
+              "widthCost": 0.0,
+              "ratedCharts": 186,
+              "achievedWidth": 1.4525705930389259,
+              "selectedScale": 0.22,
+              "twoGradeCount": 0,
+              "preferredScale": 0.22,
+              "preferredWidth": 1.4525705930389259,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 152.5,
+              "maximumAbsoluteMidpointDelta": 1.333642929042212
+            },
+            "19": {
+              "fallback": null,
+              "rawWidth": 6.836589672562848,
+              "widthCost": 0.0,
+              "ratedCharts": 137,
+              "achievedWidth": 1.5040497279638265,
+              "selectedScale": 0.22,
+              "twoGradeCount": 1,
+              "preferredScale": 0.22,
+              "preferredWidth": 1.5040497279638265,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 132.0,
+              "maximumAbsoluteMidpointDelta": 1.5254878981104891
+            },
+            "20": {
+              "fallback": null,
+              "rawWidth": 4.840196399397336,
+              "widthCost": 0.0,
+              "ratedCharts": 152,
+              "achievedWidth": 1.064843207867414,
+              "selectedScale": 0.22,
+              "twoGradeCount": 1,
+              "preferredScale": 0.22,
+              "preferredWidth": 1.064843207867414,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 151.5,
+              "maximumAbsoluteMidpointDelta": 1.692229252515312
+            },
+            "21": {
+              "fallback": null,
+              "rawWidth": 3.858651160517675,
+              "widthCost": 1.0557961762445902e-05,
+              "ratedCharts": 130,
+              "achievedWidth": 1.0032493017345956,
+              "selectedScale": 0.26,
+              "twoGradeCount": 2,
+              "preferredScale": 0.259157917728391,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 142.0,
+              "maximumAbsoluteMidpointDelta": 1.7523737761062346
+            },
+            "22": {
+              "fallback": null,
+              "rawWidth": 3.9717900347452026,
+              "widthCost": 4.973763372980462e-05,
+              "ratedCharts": 139,
+              "achievedWidth": 0.9929475086863007,
+              "selectedScale": 0.25,
+              "twoGradeCount": 1,
+              "preferredScale": 0.2517756455532654,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 126.0,
+              "maximumAbsoluteMidpointDelta": 1.6113686771621074
+            },
+            "23": {
+              "fallback": null,
+              "rawWidth": 3.429909457233471,
+              "widthCost": 2.8369017915486652e-05,
+              "ratedCharts": 127,
+              "achievedWidth": 0.9946737425977065,
+              "selectedScale": 0.29,
+              "twoGradeCount": 0,
+              "preferredScale": 0.29155288571570326,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 129.0,
+              "maximumAbsoluteMidpointDelta": 0.9751490787453942
+            },
+            "24": {
+              "fallback": null,
+              "rawWidth": 3.0857774199541534,
+              "widthCost": 0.00015753326443037152,
+              "ratedCharts": 124,
+              "achievedWidth": 0.9874487743853291,
+              "selectedScale": 0.32,
+              "twoGradeCount": 0,
+              "preferredScale": 0.32406744359898043,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 82.0,
+              "maximumAbsoluteMidpointDelta": 1.387275725415725
+            },
+            "25": {
+              "fallback": null,
+              "rawWidth": 2.7210291755884883,
+              "widthCost": 0.0004173643390167945,
+              "ratedCharts": 69,
+              "achievedWidth": 0.9795705032118558,
+              "selectedScale": 0.36,
+              "twoGradeCount": 0,
+              "preferredScale": 0.3675080035787289,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 46.0,
+              "maximumAbsoluteMidpointDelta": 1.239583586449996
+            },
+            "26": {
+              "fallback": null,
+              "rawWidth": 3.303834261109561,
+              "widthCost": 0.00038030809906099995,
+              "ratedCharts": 36,
+              "achievedWidth": 1.024188620943964,
+              "selectedScale": 0.31,
+              "twoGradeCount": 0,
+              "preferredScale": 0.302678621555356,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 0.65,
+              "medianContributors": 13.0,
+              "maximumAbsoluteMidpointDelta": 0.9572222484263112
+            },
+            "27": {
+              "fallback": "sparse-folder",
+              "rawWidth": 2.7672769782612163,
+              "widthCost": 0.0,
+              "ratedCharts": 9,
+              "achievedWidth": 0.8578558632609771,
+              "selectedScale": 0.31,
+              "twoGradeCount": 0,
+              "preferredScale": 0.36136606774661834,
+              "preferredWidth": 1.0,
+              "spreadSupported": false,
+              "reliabilityWeight": 0.0,
+              "medianContributors": 1.0,
+              "maximumAbsoluteMidpointDelta": 1.0327337420517895
+            },
+            "28": {
+              "fallback": "flat-folder",
+              "rawWidth": 0.0,
+              "widthCost": 0.0,
+              "ratedCharts": 1,
+              "achievedWidth": 0.0,
+              "selectedScale": 0.31,
+              "twoGradeCount": 0,
+              "preferredScale": null,
+              "preferredWidth": null,
+              "spreadSupported": false,
+              "reliabilityWeight": 0.0,
+              "medianContributors": 2.0,
+              "maximumAbsoluteMidpointDelta": 0.0
+            }
+          },
+          "Single": {
+            "16": {
+              "fallback": null,
+              "rawWidth": 3.5899231088493018,
+              "widthCost": 2.6816556489494007e-05,
+              "ratedCharts": 197,
+              "achievedWidth": 1.0051784704778046,
+              "selectedScale": 0.28,
+              "twoGradeCount": 0,
+              "preferredScale": 0.2785574982191013,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 167.0,
+              "maximumAbsoluteMidpointDelta": 1.1978637210799612
+            },
+            "17": {
+              "fallback": null,
+              "rawWidth": 4.092460376931509,
+              "widthCost": 0.0005343075813947963,
+              "ratedCharts": 196,
+              "achievedWidth": 1.0231150942328773,
+              "selectedScale": 0.25,
+              "twoGradeCount": 1,
+              "preferredScale": 0.2443517854532757,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 157.0,
+              "maximumAbsoluteMidpointDelta": 1.5402216847147008
+            },
+            "18": {
+              "fallback": null,
+              "rawWidth": 3.9171599396475685,
+              "widthCost": 0.00034083009517497036,
+              "ratedCharts": 199,
+              "achievedWidth": 1.0184615843083678,
+              "selectedScale": 0.26,
+              "twoGradeCount": 0,
+              "preferredScale": 0.2552869975715036,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 152.0,
+              "maximumAbsoluteMidpointDelta": 0.9547713860356467
+            },
+            "19": {
+              "fallback": null,
+              "rawWidth": 3.3709774174279055,
+              "widthCost": 0.00012753693605872666,
+              "ratedCharts": 171,
+              "achievedWidth": 1.0112932252283715,
+              "selectedScale": 0.3,
+              "twoGradeCount": 0,
+              "preferredScale": 0.2966498662465118,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 157.0,
+              "maximumAbsoluteMidpointDelta": 1.2056036769161085
+            },
+            "20": {
+              "fallback": null,
+              "rawWidth": 3.192991662256609,
+              "widthCost": 0.00010348147948785458,
+              "ratedCharts": 137,
+              "achievedWidth": 0.9898274152995488,
+              "selectedScale": 0.31,
+              "twoGradeCount": 0,
+              "preferredScale": 0.31318591019848196,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 212.0,
+              "maximumAbsoluteMidpointDelta": 1.2611252224301188
+            },
+            "21": {
+              "fallback": null,
+              "rawWidth": 2.9108932275053907,
+              "widthCost": 0.00010601384822265191,
+              "ratedCharts": 170,
+              "achievedWidth": 0.989703697351833,
+              "selectedScale": 0.34,
+              "twoGradeCount": 0,
+              "preferredScale": 0.34353716259699124,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 171.5,
+              "maximumAbsoluteMidpointDelta": 1.0522195846875415
+            },
+            "22": {
+              "fallback": null,
+              "rawWidth": 2.5090857555835284,
+              "widthCost": 1.3208152723778537e-05,
+              "ratedCharts": 107,
+              "achievedWidth": 1.0036343022334113,
+              "selectedScale": 0.4,
+              "twoGradeCount": 0,
+              "preferredScale": 0.39855154323628683,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 173.0,
+              "maximumAbsoluteMidpointDelta": 1.3792265035361553
+            },
+            "23": {
+              "fallback": null,
+              "rawWidth": 2.112902799986779,
+              "widthCost": 4.810371263405151e-05,
+              "ratedCharts": 66,
+              "achievedWidth": 0.9930643159937861,
+              "selectedScale": 0.47,
+              "twoGradeCount": 0,
+              "preferredScale": 0.47328253813012944,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 1,
+              "medianContributors": 141.5,
+              "maximumAbsoluteMidpointDelta": 1.2701503199695434
+            },
+            "24": {
+              "fallback": null,
+              "rawWidth": 1.7149931087006425,
+              "widthCost": 0.00045376099600856647,
+              "ratedCharts": 27,
+              "achievedWidth": 0.9775460719593662,
+              "selectedScale": 0.57,
+              "twoGradeCount": 0,
+              "preferredScale": 0.5830927220212831,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 0.9,
+              "medianContributors": 92.0,
+              "maximumAbsoluteMidpointDelta": 1.2808356262865899
+            },
+            "25": {
+              "fallback": null,
+              "rawWidth": 2.1044338457031677,
+              "widthCost": 4.44519251673901e-05,
+              "ratedCharts": 13,
+              "achievedWidth": 1.0101282459375205,
+              "selectedScale": 0.48,
+              "twoGradeCount": 0,
+              "preferredScale": 0.4751871873006603,
+              "preferredWidth": 1.0,
+              "spreadSupported": true,
+              "reliabilityWeight": 0.43333333333333335,
+              "medianContributors": 28.0,
+              "maximumAbsoluteMidpointDelta": 0.9688353431644173
+            },
+            "26": {
+              "fallback": "sparse-folder",
+              "rawWidth": 1.311916321378058,
+              "widthCost": 0.0,
+              "ratedCharts": 2,
+              "achievedWidth": 0.6297198342614678,
+              "selectedScale": 0.48,
+              "twoGradeCount": 0,
+              "preferredScale": 0.7622437374279969,
+              "preferredWidth": 1.0,
+              "spreadSupported": false,
+              "reliabilityWeight": 0.0,
+              "medianContributors": 26.5,
+              "maximumAbsoluteMidpointDelta": 0.39357489641341825
+            }
+          }
+        },
+        "actualTwoGradeCount": 6,
+        "maximumAbsoluteMidpointDelta": 1.7523737761062346
+      },
+      "tierMetrics": {
+        "version": 11,
+        "clearing": {
+          "percentile": 0.1,
+          "calibration": "official level + 0.5 + difficultyDeltaScale * (10th-percentile skill - official-folder median 10th-percentile skill)",
+          "skillMethod": {
+            "ranks": [
+              1,
+              50
+            ],
+            "methodVersion": 2,
+            "difficultyBasis": "current-official-level",
+            "requiredClearCount": 50
+          },
+          "skillRating": "current mode-specific clearingRating from official levels of the top 50 unique clears, requiring 50 clears",
+          "clearPopulation": "unique nonbroken current-catalog clearers across both Phoenix versions",
+          "percentileMethod": "linear interpolation",
+          "supportPopulation": "all unique clearers with a finite clearing skill",
+          "difficultyDeltaScale": 0.7,
+          "evidenceMinimumRated": {
+            "Published": 10,
+            "Provisional": 5,
+            "Insufficient": 1
+          },
+          "folderReferenceSkills": {
+            "D16": 17.464000000000002,
+            "D17": 18.35,
+            "D18": 19.674,
+            "D19": 20.85,
+            "D20": 21.17,
+            "D21": 21.648000000000003,
+            "D22": 22.418000000000003,
+            "D23": 23.2,
+            "D24": 23.883,
+            "D25": 24.548,
+            "D26": 25.146,
+            "D27": 25.476,
+            "D28": 25.578,
+            "S16": 17.57,
+            "S17": 19.234,
+            "S18": 19.948,
+            "S19": 20.43,
+            "S20": 20.492,
+            "S21": 21.409999999999997,
+            "S22": 21.994,
+            "S23": 22.516,
+            "S24": 23.152,
+            "S25": 23.424000000000003,
+            "S26": 23.584
+          }
+        },
+        "pumbility": {
+          "evidence": "weaker component status; separate scoring and clearing support counts",
+          "calculation": "max(scoring difficulty, clearing difficulty) before rounding"
+        },
+        "limitedDataSupportThreshold": 20
+      },
+      "officialTiers": {
+        "mix": "Phoenix2",
+        "asOf": "2026-09-27T17:22:05.1222517+00:00",
+        "source": "piuscores-official",
+        "enabled": true,
+        "scoring": {
+          "metric": "equal-player-score-gaps",
+          "formula": "mean over players of (official level + 0.5 + folder scale * (mean of other chart scores adjusted for fitted chart effects - target score) / 10000)",
+          "population": "official players with at least three other same-level charts; smaller folders use provisional comparisons; no comparable history is Unrated",
+          "aggregation": "equal-player-mean",
+          "calibration": {
+            "method": "shared-linear-player-gaps",
+            "version": 6,
+            "minimumIqr": 0.2,
+            "outlierUse": "diagnostic-only",
+            "rangePolicy": "unbounded",
+            "folderScales": {
+              "Double": {
+                "25": 0.27731593954920536,
+                "26": 0.3764704716262131,
+                "27": 0.3764704716262131,
+                "28": 0.3764704716262131,
+                "29": 0.3764704716262131
+              },
+              "Single": {
+                "23": 0.32954245939403704,
+                "24": 0.35987253639339617,
+                "25": 0.2472174126501913,
+                "26": 0.2472174126501913
+              }
+            },
+            "maximumScale": 1.0,
+            "fallbackScale": 0.4,
+            "minimumLevels": {
+              "Double": 25,
+              "Single": 23
+            },
+            "targetHalfWidth": 0.45,
+            "folderParameters": {
+              "Double": {
+                "25": {
+                  "basis": "folder",
+                  "scale": 0.27731593954920536,
+                  "lowerFence": -3.102681377815128,
+                  "upperFence": 3.4965220844409703,
+                  "referenceLevel": 25,
+                  "referenceSpread": 1.6226979261686276,
+                  "supportedCharts": 69
+                },
+                "26": {
+                  "basis": "folder",
+                  "scale": 0.3764704716262131,
+                  "lowerFence": -2.550612224224853,
+                  "upperFence": 2.605249965915073,
+                  "referenceLevel": 26,
+                  "referenceSpread": 1.1953128702396407,
+                  "supportedCharts": 36
+                },
+                "27": {
+                  "basis": "neighbor-folder",
+                  "scale": 0.3764704716262131,
+                  "lowerFence": null,
+                  "upperFence": null,
+                  "referenceLevel": 26,
+                  "referenceSpread": 1.1953128702396407,
+                  "supportedCharts": 0
+                },
+                "28": {
+                  "basis": "neighbor-folder",
+                  "scale": 0.3764704716262131,
+                  "lowerFence": null,
+                  "upperFence": null,
+                  "referenceLevel": 26,
+                  "referenceSpread": 1.1953128702396407,
+                  "supportedCharts": 0
+                },
+                "29": {
+                  "basis": "neighbor-folder",
+                  "scale": 0.3764704716262131,
+                  "lowerFence": null,
+                  "upperFence": null,
+                  "referenceLevel": 26,
+                  "referenceSpread": 1.1953128702396407,
+                  "supportedCharts": 0
+                }
+              },
+              "Single": {
+                "23": {
+                  "basis": "folder",
+                  "scale": 0.32954245939403704,
+                  "lowerFence": -3.1171046294027827,
+                  "upperFence": 3.251049751436501,
+                  "referenceLevel": 23,
+                  "referenceSpread": 1.3655296523169136,
+                  "supportedCharts": 66
+                },
+                "24": {
+                  "basis": "folder",
+                  "scale": 0.35987253639339617,
+                  "lowerFence": -2.1765683353247605,
+                  "upperFence": 2.4620325366578637,
+                  "referenceLevel": 24,
+                  "referenceSpread": 1.2504427387259156,
+                  "supportedCharts": 27
+                },
+                "25": {
+                  "basis": "folder",
+                  "scale": 0.2472174126501913,
+                  "lowerFence": -5.118110414199725,
+                  "upperFence": 5.3163148527543305,
+                  "referenceLevel": 25,
+                  "referenceSpread": 1.8202601312584032,
+                  "supportedCharts": 13
+                },
+                "26": {
+                  "basis": "neighbor-folder",
+                  "scale": 0.2472174126501913,
+                  "lowerFence": null,
+                  "upperFence": null,
+                  "referenceLevel": 25,
+                  "referenceSpread": 1.8202601312584032,
+                  "supportedCharts": 0
+                }
+              }
+            },
+            "referenceQuantile": 0.9,
+            "outlierIqrMultiplier": 2.0,
+            "minimumOutlierPlayers": 10,
+            "minimumSupportedCharts": 8,
+            "minimumReferencePlayers": 10
+          },
+          "folderPanels": {
+            "Double": {
+              "25": {
+                "componentCount": 1,
+                "eligiblePlayers": 418,
+                "minimumOtherCharts": 3
+              },
+              "26": {
+                "componentCount": 1,
+                "eligiblePlayers": 92,
+                "minimumOtherCharts": 3
+              },
+              "27": {
+                "componentCount": 1,
+                "eligiblePlayers": 9,
+                "minimumOtherCharts": 3
+              },
+              "28": {
+                "componentCount": 1,
+                "eligiblePlayers": 1,
+                "minimumOtherCharts": 3
+              },
+              "29": {
+                "componentCount": 1,
+                "eligiblePlayers": 0,
+                "minimumOtherCharts": 1
+              }
+            },
+            "Single": {
+              "23": {
+                "componentCount": 1,
+                "eligiblePlayers": 917,
+                "minimumOtherCharts": 3
+              },
+              "24": {
+                "componentCount": 1,
+                "eligiblePlayers": 447,
+                "minimumOtherCharts": 3
+              },
+              "25": {
+                "componentCount": 1,
+                "eligiblePlayers": 181,
+                "minimumOtherCharts": 3
+              },
+              "26": {
+                "componentCount": 1,
+                "eligiblePlayers": 30,
+                "minimumOtherCharts": 1
+              }
+            }
+          },
+          "sparsePolicy": "provisional-same-level",
+          "pointsPerLevel": 10000.0,
+          "disconnectedPolicy": "separate component median anchors; provisional and not comparable across components",
+          "minimumOtherCharts": 3,
+          "confidenceIntervals": {
+            "method": "1000 deterministic shared-player bootstrap samples",
+            "conditions": "fixed fitted chart effects and folder scale; excludes model-fit uncertainty, effort, selection and leaderboard truncation bias",
+            "minimumPlayers": 5
+          },
+          "separateModesAndLevels": true
+        },
+        "version": 15,
+        "clearing": {
+          "formula": "official level + 0.5 + calibrated(0.70 * shrinkage weight * (20th-percentile clearer ability - folder median ability))",
+          "shrinkage": {
+            "formula": "eligible players / (eligible players + 20) * eligible players / observed unique players",
+            "priorPlayers": 20
+          },
+          "capDefault": "lowest uncapped nonempty chart estimate in the same official folder; midpoint if none",
+          "percentile": 0.2,
+          "population": "official clearers with at least 25 other distinct S22+/D23+ clears in the same mode",
+          "calibration": {
+            "method": "robust-folder-spread",
+            "version": 4,
+            "minimumIqr": 0.07,
+            "outlierUse": "diagnostic-only",
+            "rangePolicy": "unbounded",
+            "maximumScale": null,
+            "fallbackScale": 1.0,
+            "targetHalfWidth": 0.45,
+            "folderParameters": {
+              "Double": {
+                "26": {
+                  "basis": "folder",
+                  "scale": 3.5301578674908742,
+                  "lowerFence": -0.3958828419115935,
+                  "upperFence": 0.3989320870877972,
+                  "referenceLevel": 26,
+                  "referenceSpread": 0.12747305273343085,
+                  "supportedCharts": 36
+                },
+                "27": {
+                  "basis": "folder",
+                  "scale": 2.470880802584583,
+                  "lowerFence": -0.4760769230769269,
+                  "upperFence": 0.3519692307692334,
+                  "referenceLevel": 27,
+                  "referenceSpread": 0.1821212903225815,
+                  "supportedCharts": 5
+                },
+                "28": {
+                  "basis": "neighbor-folder",
+                  "scale": 2.470880802584583,
+                  "lowerFence": null,
+                  "upperFence": null,
+                  "referenceLevel": 27,
+                  "referenceSpread": 0.1821212903225815,
+                  "supportedCharts": 0
+                },
+                "29": {
+                  "basis": "neighbor-folder",
+                  "scale": 2.470880802584583,
+                  "lowerFence": null,
+                  "upperFence": null,
+                  "referenceLevel": 27,
+                  "referenceSpread": 0.1821212903225815,
+                  "supportedCharts": 0
+                }
+              },
+              "Single": {
+                "25": {
+                  "basis": "folder",
+                  "scale": 3.1813494644850895,
+                  "lowerFence": -0.7664818378812862,
+                  "upperFence": 0.8115590782160331,
+                  "referenceLevel": 25,
+                  "referenceSpread": 0.14144940850527837,
+                  "supportedCharts": 13
+                },
+                "26": {
+                  "basis": "neighbor-folder",
+                  "scale": 3.1813494644850895,
+                  "lowerFence": null,
+                  "upperFence": null,
+                  "referenceLevel": 25,
+                  "referenceSpread": 0.14144940850527837,
+                  "supportedCharts": 2
+                }
+              }
+            },
+            "referenceQuantile": 0.9,
+            "outlierIqrMultiplier": 3,
+            "outlierMinimumPlayers": 20,
+            "minimumSupportedCharts": 5,
+            "outlierMinimumCoverage": 0.5,
+            "minimumReferencePlayers": 10,
+            "requireIntervalBeyondFence": true
+          },
+          "capDefaults": {
+            "Double": {},
+            "Single": {}
+          },
+          "playerSkill": {
+            "method": "leave-one-chart-out-top-official-levels",
+            "topCharts": 25,
+            "separateModes": true,
+            "minimumOtherCharts": 25,
+            "levelMidpointOffset": 0.5,
+            "historyMinimumLevels": {
+              "Double": 23,
+              "Single": 22
+            }
+          },
+          "skillMetric": "official-clearer-ability",
+          "uncertainty": {
+            "method": "1000 deterministic player bootstrap samples of the 20th-percentile ability",
+            "conditions": "fixed player histories, folder reference and scale; excludes selection and calibration uncertainty",
+            "minimumPlayers": 5
+          },
+          "minimumLevels": {
+            "Double": 26,
+            "Single": 25
+          },
+          "normalization": "folder-median-player-ability",
+          "folderReferences": {
+            "Double": {
+              "26": 25.82,
+              "27": 26.328000000000003,
+              "28": 26.747999999999998
+            },
+            "Single": {
+              "25": 24.34,
+              "26": 24.64
+            }
+          },
+          "difficultyDeltaScale": 0.7
+        },
+        "capPolicy": "clearing-folder-minimum",
+        "targetCharts": 228,
+        "historyBoards": 586,
+        "minimumLevels": {
+          "Double": 25,
+          "Single": 23
+        },
+        "snapshotSha256": "b036ce55c0e52a370687bd55dc58073c20b44f17d8cf38511b8f472d9c3a1448",
+        "availableBoards": 228,
+        "possiblyTruncatedBoards": 33
+      }
+    },
+    "coverage": {},
+    "modes": {}
+  },
+  "effectBands": [
+    {
+      "low": null,
+      "high": -0.5,
+      "name": "Overrated",
+      "rank": 1
+    },
+    {
+      "low": -0.5,
+      "high": -0.3,
+      "name": "Very Easy",
+      "rank": 2
+    },
+    {
+      "low": -0.3,
+      "high": -0.1,
+      "name": "Easy",
+      "rank": 3
+    },
+    {
+      "low": -0.1,
+      "high": 0.1,
+      "name": "Medium",
+      "rank": 4
+    },
+    {
+      "low": 0.1,
+      "high": 0.3,
+      "name": "Hard",
+      "rank": 5
+    },
+    {
+      "low": 0.3,
+      "high": 0.5,
+      "name": "Very Hard",
+      "rank": 6
+    },
+    {
+      "low": 0.5,
+      "high": null,
+      "name": "Underrated",
+      "rank": 7
+    }
+  ],
+  "schemaVersion": 41,
+  "generatedAtUtc": "2026-10-15T06:09:46.834949+00:00",
+  "relativeGroups": [
+    {
+      "name": "Easiest 10%",
+      "rank": 1
+    },
+    {
+      "name": "10–20% percentile",
+      "rank": 2
+    },
+    {
+      "name": "20–30% percentile",
+      "rank": 3
+    },
+    {
+      "name": "30–40% percentile",
+      "rank": 4
+    },
+    {
+      "name": "40–50% percentile",
+      "rank": 5
+    },
+    {
+      "name": "50–60% percentile",
+      "rank": 6
+    },
+    {
+      "name": "60–70% percentile",
+      "rank": 7
+    },
+    {
+      "name": "70–80% percentile",
+      "rank": 8
+    },
+    {
+      "name": "80–90% percentile",
+      "rank": 9
+    },
+    {
+      "name": "Hardest 10%",
+      "rank": 10
+    }
+  ]
+}

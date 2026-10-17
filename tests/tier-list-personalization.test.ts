@@ -1,6 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chartBpmRange, clampBpmRange, formatTierScore, matchesTierBpm, tierBpmBounds } from "../lib/tier-filters.ts";
+import { chartBpmRange, clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds } from "../lib/tier-filters.ts";
+
+test("Only 20+ selects current official Singles and Doubles levels while composing with BPM and search", () => {
+  const charts = [
+    { songName: "Pavane", type: "Double", level: 23, bpmMin: 160, bpmMax: 160 },
+    { songName: "Low", type: "Single", level: 19, bpmMin: 160, bpmMax: 160 },
+    { songName: "Other", type: "Single", level: 20, bpmMin: 200, bpmMax: 200 },
+    { songName: "Pavane Co-op", type: "CoOp", level: 3, bpmMin: 160, bpmMax: 160 },
+  ];
+  assert.deepEqual(charts.filter((chart) => matchesTierLevel(chart, "20+")).map((chart) => chart.songName), ["Pavane", "Other"]);
+  assert.deepEqual(charts.filter((chart) => matchesTierLevel(chart, "20+")
+    && matchesTierBpm(chart, { min: 150, max: 170 }) && chart.songName.toLowerCase().includes("pavane"))
+    .map((chart) => chart.songName), ["Pavane"]);
+  assert.equal(matchesTierLevel(charts[0], "23"), true);
+  assert.equal(matchesTierLevel(charts[1], "20"), false);
+  assert.equal(matchesTierLevel(charts[3], "All"), true);
+  assert.equal(matchesTierLevel(charts[3], "3"), true);
+});
 
 test("personal tier scores truncate thousands including a perfect score", () => {
   assert.equal(formatTierScore(996999), "996k");

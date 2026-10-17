@@ -9,12 +9,14 @@ import { BpmRangeFilter } from "../_components/bpm-range-filter";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { demoPayload } from "../../lib/demo-data";
+import { resolvePumbilityPolicy, type PumbilityAggregation } from "../../lib/pumbility-policy";
+import { compressDemoPayload, hasMidpointCompression } from "../../lib/tier-postprocessing";
 import {
   formatCoopEstimatedDifficulty,
   formatEstimatedDifficulty,
 } from "../../lib/format-difficulty";
 import { tierMetricFromSearchParams, tierModeFromSearchParams } from "../../lib/page-view-state";
-import { clampBpmRange, formatTierScore, matchesTierBpm, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
+import { clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
 import {
   clearingPercentileRange,
   clearingSkillPercentile,
@@ -57,6 +59,8 @@ const TierScoresContext = createContext<{
   unavailable: boolean;
   scores: Map<string, TierPlayerScore>;
 }>({ selected: false, loading: false, unavailable: false, scores: new Map() });
+const PumbilityPolicyContext = createContext<PumbilityAggregation | null>(null);
+const RatingCompressionContext = createContext(false);
 
 function PersonalChartScore({ chartId }: { chartId: string }) {
   const { selected, loading, unavailable, scores } = useContext(TierScoresContext);
@@ -161,14 +165,24 @@ function WhatIfDifficulty({ chart }: { chart: ChartResult }) {
 }
 
 function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric: TierMetricKey; headingId?: string }) {
+  const compressed = useContext(RatingCompressionContext) && chart.type !== "CoOp";
+  const pumbilityAggregation = useContext(PumbilityPolicyContext);
   const selected = selectedTierMetric(chart, metric);
+  const initialDifficulty = selected.initialFit?.estimatedDifficulty;
   const delta = selected.difficultyDelta;
   const isCoop = chart.type === "CoOp";
-  const profileScoring = "scoringScoreProfile" in chart;
+  const crossScoring = chart.scoringMethod === "official-cross-level-v1";
+  const profileScoring = "scoringScoreProfile" in chart || crossScoring;
+  const scoringEvidence = chart.officialScoringEvidence;
   const clearing = chart.tierMetrics?.clearing;
+  const crossClearing = clearing?.method === "submitted-cross-level-clearing-v1";
   const officialEvidence = chart.officialEvidence;
   const abilityClearing = clearing?.skillMetric === "official-clearer-ability";
-  const selectedOfficialEvidence = officialEvidence && (metric !== "clearing" || abilityClearing);
+  const clearingUnavailable = !crossClearing && crossScoring && !officialEvidence && clearing?.clearCount === 0
+    && chart.level >= (chart.type === "Single" ? 23 : 25);
+  const selectedOfficialEvidence = crossScoring
+    ? metric === "clearing" ? abilityClearing : Boolean(scoringEvidence)
+    : Boolean(officialEvidence && (metric !== "clearing" || abilityClearing));
   const pointPercentile = clearingSkillPercentile(clearing);
   const percentileRange = clearingPercentileRange(clearing);
   const pumbility = chart.tierMetrics?.pumbility;
@@ -189,26 +203,50 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
             : <span><b>{chart.difficulty}</b> official</span>}
           <span><b>{chartGrade(chart, metric)}</b> estimated</span>
           <span>{selected.evidenceStatus}</span>
-          {selectedOfficialEvidence ? <span>{metric === "pumbility" && !abilityClearing ? "Official Scoring + player-submitted Clearing" : "Official PIUScores leaderboard"}</span> : metric === "clearing" ? <span>Player-submitted clears</span> : null}
+          {selectedOfficialEvidence ? <span>{metric === "pumbility" && clearingUnavailable ? "Official Scoring; Clearing unavailable" : metric === "pumbility" && !abilityClearing ? "Official Scoring + player-submitted Clearing" : "Official PIUScores leaderboard"}</span> : metric === "clearing" ? <span>{clearingUnavailable ? "Clearing data unavailable" : "Player-submitted clears"}</span> : null}
           {selectedOfficialEvidence && selected.estimatedDifficulty != null && Math.floor(selected.estimatedDifficulty) !== chart.level ? <span>Estimate outside official level</span> : null}
           {metric === "scoring" ? <span><b>{chart.nContributors}</b> contributors</span> : null}
-          {metric === "scoring" && !officialEvidence && chart.phoenix1Contributors !== undefined && chart.phoenix2Contributors !== undefined ? (
+          {metric === "scoring" && !officialEvidence && !crossScoring && chart.phoenix1Contributors !== undefined && chart.phoenix2Contributors !== undefined ? (
             <span><b>{chart.phoenix1Contributors}/{chart.phoenix2Contributors}</b> P1/P2</span>
           ) : null}
           {!isCoop && selected.levelRank !== null && selected.levelComparisonCharts !== null ? (
             <span><b>#{selected.levelRank}</b> of {selected.levelComparisonCharts} in {chart.difficulty}</span>
           ) : null}
         </div>
-        {selectedOfficialEvidence ? (
+        {compressed && typeof initialDifficulty === "number" ? (
+          <div className="chart-meta metric-details">
+            <span>Initial fit: <b>{chart.type === "Single" ? "S" : "D"}{formatEstimatedDifficulty(initialDifficulty)}</b>. Final rating halves its distance from the official midpoint <b>{(chart.level + .5).toFixed(1)}</b>.</span>
+            {metric === "scoring" ? <span>Displayed difficulty intervals use the same fixed 50% compression; the narrower interval does not represent additional evidence.</span> : null}
+          </div>
+        ) : null}
+        {selectedOfficialEvidence && officialEvidence && (!crossScoring || metric === "clearing") ? (
           <div className="chart-meta metric-details">
             <span><b>{officialEvidence.rawRowCount}</b> leaderboard rows before validation</span>
             {officialEvidence.asOf ? <span>Official snapshot: <time dateTime={officialEvidence.asOf}>{officialEvidence.asOf.replace("T", " ").replace(/\.\d+Z$/, "Z").replace("Z", " UTC")}</time></span> : null}
             {officialEvidence.cutoffScore != null ? <span>Lowest returned score: <b>{officialEvidence.cutoffScore.toLocaleString()}</b></span> : null}
-            {officialEvidence.possiblyTruncated ? <span>The leaderboard reached the 300-score limit. Scoring compares the observed players with their other same-level scores; players omitted by the cap remain unknown. {abilityClearing ? "Clearing uses the lowest uncapped estimate in this official-level folder." : "Clearing uses player-submitted clears and is unaffected by this cap."}</span> : null}
+            {officialEvidence.possiblyTruncated ? <span>{crossScoring ? "The Phoenix 2 leaderboard reached the 300-score limit. Players omitted by that source remain unknown. " : "The leaderboard reached the 300-score limit. Scoring compares the observed players with their other same-level scores; players omitted by the cap remain unknown. "}{abilityClearing ? "Clearing uses the lowest uncapped estimate in this official-level folder." : "Clearing uses player-submitted clears and is unaffected by this cap."}</span> : null}
             {officialEvidence.unavailableReason ? <span>{officialEvidence.unavailableReason}</span> : null}
           </div>
         ) : null}
-        {metric === "scoring" && officialEvidence ? (
+        {(metric === "scoring" || metric === "pumbility") && crossScoring && scoringEvidence ? (
+          <div className="chart-meta metric-details">
+            <span><b>{chart.scoringPlayerCount ?? 0}</b> players with cross-level comparisons, from <b>{chart.officialScoringContributors ?? 0}</b> combined official scores.</span>
+            {Object.entries(scoringEvidence.sourceDates).map(([mix, date]) => {
+              const source = scoringEvidence.sourceStates[mix];
+              if (!source) return <span key={mix}>{mix} official board: no captured board metadata; snapshot {date || "unavailable"}</span>;
+              return <span key={mix}>{mix} official board: {source.status.replaceAll("-", " ")}; snapshot {source.asOf || date || "unavailable"}; {source.rawRowCount} source rows{source.possiblyTruncated ? "; possibly truncated — omitted scores remain unknown" : ""}{source.cutoffScore !== null ? `; lowest returned score ${source.cutoffScore.toLocaleString()}` : ""}</span>;
+            })}
+            <span>Each matched player contributes their higher raw Phoenix 1 or Phoenix 2 score. Players need at least three other level-20+ charts in this mode.</span>
+            {chart.scoringChartCost != null ? <span>Fitted scoring cost: <b>{Math.round(chart.scoringChartCost).toLocaleString()}</b> score points in this mode's shared coordinate.</span> : null}
+            {chart.difficultyCi95Low != null && chart.difficultyCi95High != null ? <span>95% conditional player-bootstrap interval: <b>{chart.difficultyCi95Low.toFixed(2)}–{chart.difficultyCi95High.toFixed(2)}</b>. Chart effects and median anchors are fixed; identity, selection, effort and source truncation uncertainty are excluded.</span> : null}
+            {chart.scoringExtrapolated ? <span>Estimate extends beyond the supported median anchors using the boundary tangent; provisional.</span> : null}
+            {!scoringEvidence.anchorEligible ? <span>Chart comparability: {scoringEvidence.comparability}. This evidence cannot set a median anchor.</span> : null}
+            {chart.scoringProvisional && chart.estimatedDifficulty != null ? <span>Provisional evidence; support, chart comparability or anchor coverage is limited.</span> : null}
+            {chart.scoringUnratedReason ? <span>{chart.scoringUnratedReason}</span> : null}
+          </div>
+        ) : metric === "scoring" && crossScoring ? (
+          <div className="chart-meta metric-details"><span>{chart.scoringUnratedReason || "Official Scoring is available only for current level-20+ charts."}</span></div>
+        ) : metric === "scoring" && officialEvidence ? (
           <div className="chart-meta metric-details">
             <span><b>{chart.scoringPlayerCount ?? 0}</b> players with comparisons, from <b>{chart.officialContributors ?? 0}</b> official leaderboard scores; every eligible player has equal weight.</span>
             {chart.scoringMeanGap != null ? <span>Average adjusted score gap: <b>{chart.scoringMeanGap.toLocaleString(undefined, { maximumFractionDigits: 0 })}</b> points. Positive means higher scoring difficulty than the level's midpoint.</span> : null}
@@ -235,9 +273,24 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
             {chart.estimatedDifficulty == null && chart.scoringScoreProfile && !officialEvidence ? <span>Insufficient mode reference data to estimate difficulty.</span> : null}
           </div>
         ) : null}
-        {metric === "clearing" && clearing ? (
+        {metric === "clearing" && clearingUnavailable ? <div className="chart-meta metric-details"><span>This chart has no record in the preserved Clearing baseline; Clearing is Unrated.</span></div> : metric === "clearing" && clearing ? (
           <div className="chart-meta metric-details">
-            {abilityClearing ? <>
+            {crossClearing ? <>
+              <span><b>{clearing.ratedClearCount}/{clearing.clearCount}</b> observed clearers meet the same-mode 200-record requirement.</span>
+              <span>Clearing skill averages the current official levels of each player's 30 hardest unique clears. Phoenix versions are deduplicated; valid history below level 16 counts.</span>
+              <span><b>{clearing.missingSkillCount}</b> clearers lack qualifying history.</span>
+              {clearing.q10Skill != null ? <span>10th-percentile clearer skill: <b>{clearing.q10Skill.toFixed(3)}</b>.</span> : <span>No qualified clearers; Clearing is Unrated.</span>}
+              {clearing.folderReferenceSkill != null ? <span>Official-folder median threshold: <b>{clearing.folderReferenceSkill.toFixed(3)}</b>, mapped to <b>{(chart.level + .5).toFixed(1)}</b>.</span> : <span>This official folder has no supported median anchor.</span>}
+              {clearing.supportedRange ? <span>Supported {compressed ? "initial-fit " : ""}mode range: <b>{clearing.supportedRange[0].toFixed(1)}–{clearing.supportedRange[1].toFixed(1)}</b>. One piecewise-linear curve maps thresholds across all levels.</span> : null}
+              {clearing.provisionalReasons?.map((reason) => <span key={reason}>{({
+                "fewer-than-20-rated-clearers": "Fewer than 20 qualified clearers.",
+                "chart-comparability-changed": "Historical chart note counts differ from the current chart.",
+                "chart-comparability-unknown": "Historical chart comparability is unknown.",
+                "unsupported-official-folder": "The official folder lacks five supported reference charts.",
+                "outside-supported-anchors": "The threshold is outside the supported anchors; this estimate uses linear extrapolation.",
+              } as Record<string, string>)[reason] ?? reason}</span>)}
+              <span>This describes observed successful players. Missing records are unknown; no pass probability or confidence interval is estimated.</span>
+            </> : abilityClearing ? <>
               <span><b>{clearing.clearCount}</b> official leaderboard scores</span>
               <span><b>{clearing.ratedClearCount}/{chart.officialContributors ?? 0}</b> clearers with at least 25 other distinct S22+ / D23+ clears in this mode</span>
               <span><b>{clearing.missingSkillCount}</b> clearers have insufficient other-chart history</span>
@@ -267,7 +320,7 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
           <div className="chart-meta metric-details">
             <span>Scoring: <b>{chartGrade(chart, "scoring")}</b></span>
             <span>Clearing: <b>{chartGrade(chart, "clearing")}</b></span>
-            <span>Average: <b>{chartGrade(chart, "pumbility")}</b></span>
+            <span>{pumbilityAggregation === "maximum" ? "Maximum" : pumbilityAggregation === "average" ? "Average" : "Estimate"}: <b>{chartGrade(chart, "pumbility")}</b></span>
             <span><b>{pumbility.scoringSupportCount}</b> scoring contributors</span>
             <span><b>{pumbility.clearingSupportCount}</b> {abilityClearing ? "eligible official clearers" : `${pointPercentile ? "rated" : "selected"} clearers`}</span>
           </div>
@@ -278,7 +331,7 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
           <span>difference</span>
           <strong>{delta === null ? "-" : signed(delta)}</strong>
           {metric === "scoring" && chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null && !officialEvidence ? (
-            <small title={profileScoring ? "95% bootstrap interval after calibration, with the mode reference curve, folder center, and selected folder scale held fixed; scale-selection uncertainty is excluded" : undefined}>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
+            <small title={crossScoring ? "95% conditional player-bootstrap interval with fitted chart effects and median anchors held fixed; model-fit, identity, selection, effort, chart-comparability and source-truncation uncertainty are excluded" : profileScoring ? "95% bootstrap interval after calibration, with the mode reference curve, folder center, and selected folder scale held fixed; scale-selection uncertainty is excluded" : undefined}>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
           ) : null}
           {metric === "scoring" && !profileScoring && !officialEvidence ? <WhatIfDifficulty chart={chart} /> : null}
         </div>
@@ -494,6 +547,10 @@ export default function TierListPage() {
   const profileScoring = (payload?.summary.method.scoring as { calibration?: string } | undefined)?.calibration === "folder-scaled-score-profile";
   const upperProfileScoring = (payload?.summary.method.scoring as { version?: number } | undefined)?.version === 2;
   const officialTiers = payload?.summary.method.officialTiers;
+  const crossLevelScoring = payload?.summary.method.officialCrossLevelScoring;
+  const crossLevelClearing = payload?.summary.method.crossLevelClearing;
+  const pumbilityPolicy = resolvePumbilityPolicy(payload);
+  const maximumPumbility = pumbilityPolicy?.aggregation === "maximum";
   const [activeMode, setActiveMode] = useState<ModeKey>("singles");
   const [activeMetric, setActiveMetric] = useState<TierMetricKey>("scoring");
   const [groupingView, setGroupingView] = useState<GroupingView>("estimated");
@@ -609,7 +666,7 @@ export default function TierListPage() {
     const params = new URLSearchParams(window.location.search);
     const useDemo = params.get("demo") === "1" || process.env.NEXT_PUBLIC_DEMO_MODE === "1";
     if (useDemo) {
-      setPayload(demoPayload);
+      setPayload(compressDemoPayload(demoPayload));
       setMessage(null);
       setLoading(false);
       return;
@@ -654,7 +711,7 @@ export default function TierListPage() {
   const filteredCharts = useMemo(() => {
     const query = filter.query.trim().toLocaleLowerCase();
     return modeCharts.filter((chart) => {
-      if (filter.level !== "All" && chart.level !== Number(filter.level)) return false;
+      if (!matchesTierLevel(chart, filter.level)) return false;
       if (!matchesTierBpm(chart, selectedBpm)) return false;
       return !query || `${chart.songName} ${chart.stepArtist || ""}`.toLocaleLowerCase().includes(query);
     });
@@ -665,9 +722,9 @@ export default function TierListPage() {
   );
   const showOfficialMethod = activeMode !== "coop" && officialTiers?.enabled
     && filteredCharts.some((chart) => activeMetric === "clearing"
-      ? chart.tierMetrics?.clearing.skillMetric === "official-clearer-ability" : chart.officialEvidence);
+      ? chart.tierMetrics?.clearing.skillMetric === "official-clearer-ability" : chart.officialScoringEvidence || chart.officialEvidence);
   const showSubmittedMethod = !showOfficialMethod || filteredCharts.some((chart) => activeMetric === "scoring"
-    ? !chart.officialEvidence : chart.tierMetrics?.clearing.skillMetric !== "official-clearer-ability");
+    ? !crossLevelScoring && !chart.officialEvidence : chart.tierMetrics?.clearing.skillMetric !== "official-clearer-ability");
   const unratedCharts = useMemo(
     () => sortTierCharts(filteredCharts.filter((chart) => selectedTierMetric(chart, activeMetric).estimatedDifficulty === null), activeMetric),
     [activeMetric, filteredCharts],
@@ -698,13 +755,16 @@ export default function TierListPage() {
 
   return (
     <TierScoresContext.Provider value={scoreContext}>
+    <PumbilityPolicyContext.Provider value={pumbilityPolicy?.aggregation ?? null}>
+    <RatingCompressionContext.Provider value={hasMidpointCompression(payload)}>
     <main className="tier-list-page">
       <SiteHeader active="tier-list" />
 
       <section className="hero page-title-hero" id="top">
         <h1>{metricTitles[activeMetric]}</h1>
+        {hasMidpointCompression(payload) && activeMode !== "coop" ? <p className="metric-note">After the initial fit, Scoring and Clearing distances from the official level + 0.5 are halved. Pumbility takes the higher adjusted component. Initial fitted values remain available in chart details.</p> : null}
         {phoenix2Only ? <p className="metric-note">Local experiment: Phoenix 2 data only.</p> : null}
-        {activeMode !== "coop" && officialTiers?.enabled ? <p className="metric-note">Scoring uses official PIUScores per-player comparisons for S23+ / D25+. Clearing uses the original player-submitted method through S24 / D25, and official clearer ability for S25+ / D26+, using S22+ / D23+ histories. The 300-score Clearing default applies only to those higher official Clearing tiers.</p> : null}
+        {activeMode !== "coop" && crossLevelClearing && activeMetric !== "scoring" ? <p className="metric-note">Clearing uses submitted PIUScores records, top-30 unique-clear skill, and a 200-record requirement per mode. Median reference thresholds anchor at official level + 0.5 across levels 16+. Scoring keeps its existing method; Pumbility requires both components.</p> : activeMode !== "coop" && crossLevelScoring ? <p className="metric-note">Scoring combines official Phoenix 1 and Phoenix 2 scores across current levels 20+, keeping each matched player's higher score. Median reference chart costs anchor at official level + 0.5. Scoring and Pumbility below level 20 are Unrated. {crossLevelClearing ? "Clearing uses the submitted cross-level method." : "Clearing retains its existing sources and method."}</p> : activeMode !== "coop" && officialTiers?.enabled ? <p className="metric-note">Scoring uses official PIUScores per-player comparisons for S23+ / D25+. Clearing uses the original player-submitted method through S24 / D25, and official clearer ability for S25+ / D26+, using S22+ / D23+ histories. The 300-score Clearing default applies only to those higher official Clearing tiers.</p> : null}
         <RefreshMeta
           generatedAtUtc={payload?.generatedAtUtc}
           label="Tier list updated"
@@ -786,6 +846,7 @@ export default function TierListPage() {
             <span>{activeMode === "coop" ? "Players" : "Official level"}</span>
             <select value={filter.level} onChange={(event) => updateFilter({ level: event.target.value })}>
               <option>All</option>
+              {activeMode !== "coop" ? <option value="20+">Only 20+</option> : null}
               {levels.map((level) => (
                 <option key={level} value={level}>
                   {activeMode === "coop" ? `${level}x` : `${activeMode === "singles" ? "S" : "D"}${level}`}
@@ -880,7 +941,13 @@ export default function TierListPage() {
       </section>
       <footer>
         {activeMetric === "clearing" ? <>
-          {showOfficialMethod ? <>
+          {crossLevelClearing ? <>
+          <p><b>Submitted cross-level Clearing</b> Each player's skill averages the current official levels of their 30 hardest unique clears. Players need 200 distinct valid score records in the same mode across both Phoenix versions; duplicates count once and history below level 16 counts. Personal ratings retain their existing definition.</p>
+          <p>Each chart uses the linearly interpolated 10th percentile of qualified clearers' skills. Reference charts need at least 20 qualified clearers and comparable metadata. Each supported official folder needs five reference charts; its median threshold maps to official level + 0.5. A single piecewise-linear curve per mode maps all charts across levels, with linear boundary extrapolation.</p>
+          <p>Below 20 qualified clearers, unsupported folders, changed or unknown chart metadata, and extrapolation receive weaker evidence. No usable skills means Unrated. These are successful best-record observations, not an attempt log: missing records are unknown and no pass probability or confidence interval is inferred.</p>
+          <p>Submitted source snapshots: {Object.entries(crossLevelClearing.sourceDates).map(([mix, date]) => `${mix === "phoenix1" ? "Phoenix 1" : "Phoenix 2"}: ${date?.slice(0, 10) ?? "date unavailable"}`).join("; ")}.</p>
+          </> : null}
+          {!crossLevelClearing && showOfficialMethod ? <>
           <p><b>How official clearer-ability estimates work (S25+ / D26+)</b> Each player's ability is the average official level + 0.5 of their 25 hardest other distinct clears, requiring at least 25. The chart being rated is excluded. Singles and Doubles are separate, and official S22+ / D23+ boards supply player histories.</p>
           <p>Each uncapped chart uses the linearly interpolated 20th percentile of its eligible clearers' abilities. The raw difficulty difference is 0.70 × evidence weight × (chart ability percentile − folder median ability percentile). The reference uses uncapped charts with usable player histories in the same official folder.</p>
           <p>Calibration uses the 90th percentile of absolute evidence-weighted offsets among uncapped charts with at least ten eligible clearers. The coefficient is 0.45 / that spread, expanding or compressing the reference distribution so roughly 90% falls within level + 0.05 to level + 0.95 (the displayed x.0–x.9 buckets). This applies separately to each official level's reference charts, not exactly 90% of all charts overall. A level needs five supported charts to fit its scale; otherwise it borrows from the nearest supported same-mode level, or keeps coefficient 1 if none exists. Zero spread also keeps coefficient 1. Tails are unbounded.</p>
@@ -888,7 +955,7 @@ export default function TierListPage() {
           <p>Evidence weight is n / (n + 20) × n / N, where n is eligible clearers and N is observed unique clearers. A small or incomplete sample pulls toward the folder midpoint, rather than making an unpopular chart harder. Fewer than 20 eligible clearers means limited data; none means Unrated. Bootstrap intervals describe the observed ability sample, with fixed player histories, and cannot account for player preferences or missing attempts.</p>
           <p>A full 300-score leaderboard may omit lower scores, so Clearing defaults to the lowest uncapped, nonempty chart estimate in the same mode and official-level folder. If none exists, it uses the folder midpoint (official level + 0.5), with that fallback identified in the chart details. Observed appearances on capped boards still support player histories. The capped chart itself receives a provisional default, not an estimate of its lower-tail ability.</p>
           </> : null}
-          {showSubmittedMethod ? <>
+          {!crossLevelClearing && showSubmittedMethod ? <>
           <p><b>Through S24 / D25</b> The original player-submitted clearing method applies.</p>
           <p><b>How clearing estimates work</b> A player's clearing skill is the average current official difficulty of their 50 hardest unique clears. At least 50 unique clears are required separately for Singles and Doubles. Repeat clears and charts cleared in both Phoenix versions count once.</p>
           <p>Each chart uses unique successful players from {phoenix2Only ? "Phoenix 2 only" : "either Phoenix version"}. {pointPercentile ? `We use the single ${pointPercentile.label}-percentile clearing skill, calculated with linear interpolation across all eligible clearers.` : `We average their clearing skills within the ${clearingMethod ? `${clearingMethod.label} percentile interval` : "published percentile interval"}, including both boundaries and ties.`} Players without available clearing skill (50+ unique clears in this mode) are excluded.</p>
@@ -896,9 +963,15 @@ export default function TierListPage() {
           <p>This estimates clearing difficulty from observed successful players, not pass probability or first-clear ability. Skill ratings can change after the recorded clear.</p>
           </> : null}
         </> : activeMetric === "pumbility" ? <>
-          <p><b>How Pumbility estimates work</b> Pumbility is the arithmetic average of a chart’s scoring and clearing difficulty. Both components must be available. The average uses full-precision estimates before one-decimal display truncation, so displayed components may average slightly differently.</p>
-          {showOfficialMethod ? <p>S23+ / D25+ use official per-player Scoring. Through S24 / D25, that combines with the original player-submitted Clearing estimate. S25+ / D26+ combine it with official clearer ability; only these higher Clearing tiers use the capped-leaderboard default. Official Scoring is limited with fewer than 10 players or provisional comparisons; Clearing is limited with fewer than 20 rated clearers from its respective source. Missing either component means Unrated.</p> : null}
+          <p><b>How Pumbility estimates work</b> {maximumPumbility ? "Pumbility takes the higher of a chart’s scoring and clearing difficulty. Both components must be available. The maximum uses full-precision estimates before one-decimal display truncation." : pumbilityPolicy?.aggregation === "average" ? "This legacy generation uses the arithmetic average of a chart’s scoring and clearing difficulty. Both components must be available; calculations use full precision before display truncation." : "Pumbility requires both Scoring and Clearing estimates and a recognized aggregation policy."}</p>
+          {crossLevelScoring ? <p>Current S20+ / D20+ use combined official cross-level Scoring. Below level 20, Scoring and Pumbility are Unrated. {crossLevelClearing ? "Clearing uses the submitted cross-level method." : "Clearing retains its existing submitted or official source."} Evidence follows the weaker component; extrapolated estimates are provisional.</p> : showOfficialMethod ? <p>S23+ / D25+ use official per-player Scoring. Through S24 / D25, that combines with the original player-submitted Clearing estimate. S25+ / D26+ combine it with official clearer ability; only these higher Clearing tiers use the capped-leaderboard default. Official Scoring is limited with fewer than 10 players or provisional comparisons; Clearing is limited with fewer than 20 rated clearers from its respective source. Missing either component means Unrated.</p> : null}
           {showSubmittedMethod ? <p>Evidence follows the weaker component. Player-submitted components have limited data with fewer than 20 contributors or {pointPercentile ? "rated" : "selected"} clearers. Official Scoring uses its 10-player threshold and provisional-comparison flags. Each component's support is shown separately.</p> : null}
+        </> : activeMode !== "coop" && crossLevelScoring ? <>
+          <p><b>Official cross-level Scoring (S20+ / D20+)</b> Official Phoenix 1 and Phoenix 2 leaderboards are combined by chart ID and exact full game tag. Each matched player/chart contributes its higher raw official score. Unresolved identities stay separate; renamed tags may not match. Submitted and supplemented scores are excluded.</p>
+          <p>Singles and Doubles are fitted separately across all eligible levels. Players need at least four distinct eligible charts; shared-player comparisons separate player strength from chart cost. Missing appearances never count as failures. Only the largest connected comparison group has a common calibrated coordinate; disconnected charts are Unrated.</p>
+          <p>The median fitted cost among comparable reference charts in each supported official folder maps to level + 0.5. Each reference chart has at least ten contributing players, and each anchor needs five charts. Exponential segments join the exact median anchors; the curve is inverted after averaging score-point evidence. Score-point differences per level can grow at higher levels. The estimate is not an average of individually transformed player ratings.</p>
+          <p>Unsupported folders and tangent extensions outside the supported anchors are provisional. Five to nine contributing players also give provisional evidence; fewer than five are Unrated. Charts with changed or unknown note counts cannot set anchors. Chart costs and calibrated difficulty use different units.</p>
+          <p>95% conditional intervals resample player evidence 1,000 times with fitted effects and median anchors fixed. They exclude model-fit, identity, chart-comparability, effort, selection and truncated-board uncertainty. Official scores represent observed best scores, and each mix has its own source date. Current levels below 20 are excluded and Unrated for Scoring. {crossLevelClearing ? "Clearing uses the submitted cross-level method; Co-op is unchanged." : "Clearing and Co-op retain their existing methods."}</p>
         </> : activeMode !== "coop" && profileScoring ? <>
           {showOfficialMethod ? <>
           <p><b>Official leaderboard scoring (S23+ / D25+)</b> Each player's best official Phoenix 2 scores are compared within the same mode and official level. A normal comparison needs three other charts. The baseline excludes the target score and adjusts for which charts the player played using shared players across the level. A lower-than-expected score means greater scoring difficulty. Missing leaderboard appearances never count as failures.</p>
@@ -910,14 +983,14 @@ export default function TierListPage() {
           <p><b>How scoring estimates work</b> Each chart uses its {upperProfileScoring ? "50th-, 75th-, and 90th-percentile" : "10th-, 25th-, 50th-, 75th-, and 90th-percentile"} scores among observed successful players, with linear interpolation and one equally weighted score per player. Phoenix 1 scores are normalized to the current chart note count; Phoenix 2 replaces overlapping records. Player skill, Pumbility, and top/recent play windows do not weight or select the scoring sample.</p>
           <p>The {upperProfileScoring ? "three" : "five"} scores are matched against a continuous reference curve, separately for Singles and Doubles. The 90th-percentile squared score difference has double weight; each other percentile has weight one. Final difficulty is official level + 0.5 + folder scale × (profile match − median profile match in the chart's official folder). Each folder's median anchors at level + 0.5. Matching another folder's typical profile does not force a chart to receive that folder's midpoint.</p>
           <p>Each mode and official level has its own spread scale, shown in chart details. Scales seek useful spreads while staying reasonably close to neighboring levels in the same mode; sparse folders borrow support from those neighbors. Narrow folders aim for about 1.0 grade across their middle 80%, while broader folders can retain wider spreads.</p>
-          <p>Two-grade scoring moves should be rare: roughly 3–10 across Singles and Doubles is a guideline, with a soft penalty beyond ten, no minimum quota, and no hard cap. Limited-data charts count. Both directions count: for an S21, estimates of 23.0 or above and below 20.0 count. Pumbility remains the arithmetic average of scoring and clearing.</p>
+          <p>Two-grade scoring moves should be rare: roughly 3–10 across Singles and Doubles is a guideline, with a soft penalty beyond ten, no minimum quota, and no hard cap. Limited-data charts count. Both directions count: for an S21, estimates of 23.0 or above and below 20.0 count. Pumbility uses the higher of scoring and clearing for current generations; historical generations retain their recorded aggregation method.</p>
           <p>References use folders with at least five charts having 20+ successful players each. Raw profile matches outside the reference range use linear extension and are marked in chart details before final calibration. Profile match error shows how closely a chart resembles its reference; lower is a closer fit.</p>
           <p>Limited data means fewer than 20 successful players. Confidence intervals use 1,000 bootstrap samples of the complete score profile, with the same final calibration. The reference curve, folder center, and selected folder scale are held fixed, so scale-selection uncertainty is excluded. Intervals describe the observed best-score population; charts played mainly by strong players can receive lower scoring estimates.</p>
           </> : null}
         </> : activeMode !== "coop" ? <>
           <p><b>How scoring estimates work</b> Scoring difficulty compares player performance within official-level folders using {phoenix2Only ? "Phoenix 2 observations only" : "Phoenix 1 and Phoenix 2 observations"}. Folder ranks, confidence intervals, and official-level What-if estimates describe the scoring model.</p>
           <p>Legacy and new Phoenix 2 charts share one scoring model within each mode. Source-specific normalization is preserved, and Phoenix 1 and Phoenix 2 observations have equal weight. Official level + 0.5 is the folder reference before shrinkage; the final median can differ slightly.</p>
-          <p>Limited data means fewer than 20 scoring contributors. Select Clearing for difficulty based on the skill of successful players, or Pumbility for the average of both estimates.</p>
+          <p>Limited data means fewer than 20 scoring contributors. Select Clearing for difficulty based on the skill of successful players, or Pumbility for the higher of both estimates in current generations.</p>
         </> : <>
         <p><b>How Co-op estimates work</b> Co-op charts share one 2x-5x tier list. Miss points are adjusted for player strength and Phoenix source using all observations, then a conditional 75th-percentile score is estimated for a median-strength Phoenix 2 player. The conditional quantile provides outlier robustness; raw scores and residuals are not trimmed.</p>
         <p>The resulting chart order anchors the easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24.9, then truncates the published difficulty to a whole-number range from 10 through 24. This preserves the observed ordering without forcing a normal distribution. Co-op recommendation letter-grade goals are assigned from these whole-number difficulties.</p>
@@ -925,6 +998,8 @@ export default function TierListPage() {
       </footer>
       {selectedChart ? <ChartDetailDialog chart={selectedChart} metric={activeMetric} onClose={closeChartDialog} /> : null}
     </main>
+    </RatingCompressionContext.Provider>
+    </PumbilityPolicyContext.Provider>
     </TierScoresContext.Provider>
   );
 }

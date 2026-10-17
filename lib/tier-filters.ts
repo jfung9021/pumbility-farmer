@@ -1,6 +1,12 @@
 export type BpmRange = { min: number; max: number };
 type ChartBpm = { bpmMin?: number | null; bpmMax?: number | null };
 
+export function matchesTierLevel(chart: { level: number; type: string }, selected: string): boolean {
+  if (selected === "All") return true;
+  if (selected === "20+") return chart.type !== "CoOp" && chart.level >= 20;
+  return chart.level === Number(selected);
+}
+
 export function chartBpmRange(chart: ChartBpm): BpmRange | null {
   const { bpmMin, bpmMax } = chart;
   if (typeof bpmMin !== "number" || typeof bpmMax !== "number"

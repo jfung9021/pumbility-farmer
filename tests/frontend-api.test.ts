@@ -10,6 +10,7 @@ import {
   LIMITED_DATA_CONTRIBUTOR_THRESHOLD,
 } from "../lib/chart-evidence.ts";
 import { demoPayloads } from "../lib/demo-data.ts";
+import { AVERAGE_PUMBILITY_CALCULATION, MAXIMUM_PUMBILITY_CALCULATION, resolvePumbilityPolicy } from "../lib/pumbility-policy.ts";
 import {
   formatCoopEstimatedDifficulty,
   formatEstimatedDifficulty,
@@ -18,6 +19,7 @@ import {
 } from "../lib/format-difficulty.ts";
 import {
   LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION,
+  LOCAL_CROSS_LEVEL_ANALYSIS_SCHEMA_VERSION,
   LOCAL_OFFICIAL_ANALYSIS_SCHEMA_VERSION,
   LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION,
   LocalAnalysisNotFoundError,
@@ -387,8 +389,16 @@ test("official score-band and eligible clearer support use their own limited-dat
 
 test("tier demo calibrates final folder medians and supports cross-level estimates and missing components", () => {
   const payload = demoPayloads.phoenix2;
+  assert.equal(resolvePumbilityPolicy(payload)?.aggregation, "maximum");
   const vector = payload.singles.find((chart) => chart.songName === "Vector")!;
   assert.equal(formatEstimatedDifficulty(vector.tierMetrics!.clearing.estimatedDifficulty!), "19.2");
+  assert.equal(vector.tierMetrics!.pumbility.estimatedDifficulty, vector.estimatedDifficulty);
+  assert.equal(vector.tierMetrics!.pumbility.effectBand, "Easy");
+  assert.equal(vector.tierMetrics!.pumbility.levelRank, 1);
+  const bar = payload.singles.find((chart) => chart.songName === "Bar Bar Bar")!;
+  assert.equal(bar.tierMetrics!.pumbility.estimatedDifficulty, bar.tierMetrics!.clearing.estimatedDifficulty);
+  assert.equal(bar.tierMetrics!.pumbility.effectBand, "Underrated");
+  assert.equal(bar.tierMetrics!.pumbility.levelRank, 2);
   for (const charts of [payload.singles, payload.doubles]) {
     assert.ok(charts.some((chart) => chart.tierMetrics!.clearing.estimatedDifficulty === null));
     for (const level of new Set(charts.map((chart) => chart.level))) {
@@ -406,9 +416,74 @@ test("tier demo calibrates final folder medians and supports cross-level estimat
       }
       assert.equal("reassessmentStatus" in clearing, false);
       assert.equal(pumbility.estimatedDifficulty, chart.estimatedDifficulty === null || clearing.estimatedDifficulty === null
-        ? null : (chart.estimatedDifficulty + clearing.estimatedDifficulty) / 2);
+        ? null : Math.max(chart.estimatedDifficulty, clearing.estimatedDifficulty));
+      assert.equal(pumbility.aggregation, "maximum");
     }
   }
+});
+
+test("Pumbility generation policy preserves production maximum and historical average contracts", async () => {
+  const production = JSON.parse(await readFile(path.join(process.cwd(), "tests", "fixtures", "production-tier-maximum.json"), "utf8")) as AnalysisPayload;
+  const historical = JSON.parse(await readFile(path.join(process.cwd(), "tests", "fixtures", "historical-tier-average.json"), "utf8")) as AnalysisPayload;
+  assert.equal(resolvePumbilityPolicy(production)?.aggregation, "maximum");
+  assert.equal(resolvePumbilityPolicy(historical)?.aggregation, "average");
+  for (const payload of [production, historical]) {
+    const original = structuredClone(payload);
+    assert.equal(validateLocalAnalysisPayload(payload, "combined").schemaVersion, payload.schemaVersion);
+    assert.deepEqual(payload, original); // Reading never rewrites the historical values or adds markers.
+  }
+  assert.ok(production.doubles.some((row) => row.tierMetrics!.clearing.skillMetric === "official-clearer-ability"
+    && row.tierMetrics!.clearing.q10Skill === undefined));
+  const stale = structuredClone(production);
+  const row = stale.singles.find((r) => r.estimatedDifficulty !== r.tierMetrics!.clearing.estimatedDifficulty)!;
+  row.tierMetrics!.pumbility.estimatedDifficulty = (row.estimatedDifficulty! + row.tierMetrics!.clearing.estimatedDifficulty!) / 2;
+  assert.throws(() => validateLocalAnalysisPayload(stale, "combined"), /Pumbility/);
+  for (const method of [
+    {},
+    {calculation: AVERAGE_PUMBILITY_CALCULATION},
+    {calculation: "maximum of both"},
+    {version: 2, aggregation: "maximum", requiresBoth: true, calculation: AVERAGE_PUMBILITY_CALCULATION},
+    {version: 2, aggregation: "maximum", requiresBoth: false},
+  ]) {
+    const bad = structuredClone(production);
+    (bad.summary.method.tierMetrics as Record<string, unknown>).pumbility = method;
+    assert.equal(resolvePumbilityPolicy(bad), null);
+    assert.throws(() => validateLocalAnalysisPayload(bad, "combined"), /incompatible/);
+  }
+  const contradictory = structuredClone(production);
+  Object.assign(contradictory.singles[0].tierMetrics!.pumbility, {aggregation: "average"});
+  assert.throws(() => validateLocalAnalysisPayload(contradictory, "combined"), /Pumbility/);
+
+  // New base, official, and cross-level Scoring writers use tier-method 11 plus explicit policy.
+  const profile = structuredClone(production);
+  profile.schemaVersion = LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION;
+  profile.doubles = [];
+  delete profile.summary.method.officialTiers;
+  for (const payload of [profile, structuredClone(production), structuredClone(historical)]) {
+    const tiers = payload.summary.method.tierMetrics as Record<string, unknown>;
+    tiers.version = 11;
+    tiers.pumbility = {version: 2, aggregation: "maximum", requiresBoth: true, calculation: MAXIMUM_PUMBILITY_CALCULATION};
+    for (const chart of [...payload.singles, ...payload.doubles]) {
+      chart.tierMetrics!.pumbility.aggregation = "maximum";
+      const clearing = chart.tierMetrics!.clearing.estimatedDifficulty;
+      chart.tierMetrics!.pumbility.estimatedDifficulty = chart.estimatedDifficulty === null || clearing === null
+        ? null : Math.max(chart.estimatedDifficulty, clearing);
+    }
+    assert.equal(resolvePumbilityPolicy(payload)?.aggregation, "maximum");
+    assert.equal(validateLocalAnalysisPayload(payload, "combined").schemaVersion, payload.schemaVersion);
+    const noMarker = structuredClone(payload);
+    delete noMarker.singles[0].tierMetrics!.pumbility.aggregation;
+    assert.throws(() => validateLocalAnalysisPayload(noMarker, "combined"), /Pumbility/);
+  }
+});
+
+test("tier labels share Pumbility dispatch and distinguish Scoring interval methods", async () => {
+  const page = await readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8");
+  assert.match(page, /const pumbilityPolicy = resolvePumbilityPolicy\(payload\)/);
+  assert.match(page, /PumbilityPolicyContext.Provider value=\{pumbilityPolicy\?\.aggregation/);
+  assert.match(page, /pumbilityAggregation === "maximum" \? "Maximum" : pumbilityAggregation === "average" \? "Average"/);
+  assert.match(page, /title=\{crossScoring \? "95% conditional player-bootstrap interval with fitted chart effects and median anchors held fixed/);
+  assert.match(page, /: profileScoring \? "95% bootstrap interval after calibration, with the mode reference curve, folder center, and selected folder scale held fixed/);
 });
 
 test("Co-op methodology derives Master-title goals from tier difficulty", async () => {
@@ -1776,6 +1851,18 @@ test("validates local aggregates against the requested Phoenix version", async (
 });
 
 test("accepts the combined tier-list identity", () => {
+  // These historical fixtures retain the average contract independently of current demo data.
+  const historicalChart = (chart: ChartResult): ChartResult => {
+    const row = structuredClone(chart);
+    delete row.tierMetrics!.pumbility.aggregation;
+    historicalComposite(row);
+    return row;
+  };
+  const historicalComposite = (chart: ChartResult) => {
+    const clearing = chart.tierMetrics!.clearing.estimatedDifficulty;
+    chart.tierMetrics!.pumbility.estimatedDifficulty = chart.estimatedDifficulty === null || clearing === null
+      ? null : (chart.estimatedDifficulty + clearing) / 2;
+  };
   const payload = {
     schemaVersion: LOCAL_COMBINED_ANALYSIS_SCHEMA_VERSION,
     generatedAtUtc: "2026-08-08T00:00:00Z",
@@ -1812,8 +1899,8 @@ test("accepts the combined tier-list identity", () => {
     neighborSmoothing: 0.05, rarityThreshold: 10, rarityPenalty: 0.05,
   };
   percentile.summary.method.scoreProfileCalibration = { folderScales: { Single: { "16": 0.25 }, Double: { "26": 0.32 } } };
-  percentile.singles = [{ ...demoPayloads.phoenix2.singles[0], level: 16, scoringDifficultyScale: 0.25 }];
-  percentile.doubles = [{ ...demoPayloads.phoenix2.doubles[0], level: 26, scoringDifficultyScale: 0.32 }];
+  percentile.singles = [{ ...historicalChart(demoPayloads.phoenix2.singles[0]), level: 16, scoringDifficultyScale: 0.25 }];
+  percentile.doubles = [{ ...historicalChart(demoPayloads.phoenix2.doubles[0]), level: 26, scoringDifficultyScale: 0.32 }];
   assert.equal(validateLocalAnalysisPayload(percentile, "combined").schemaVersion, LOCAL_PERCENTILE_ANALYSIS_SCHEMA_VERSION);
   const upperProfile = structuredClone(percentile);
   upperProfile.summary.method.scoring = {
@@ -1879,7 +1966,98 @@ test("accepts the combined tier-list identity", () => {
   delete officialChart.tierMetrics!.clearing.q50Skill;
   officialChart.tierMetrics!.pumbility.clearingSupportCount = 60;
   officialChart.tierMetrics!.pumbility.scoringSupportCount = 18;
+  historicalComposite(officialChart);
   assert.equal(validateLocalAnalysisPayload(official, "combined").doubles[0].scoringDifficultyScale, 0.5);
+  // Schema 42 keeps merged Scoring counts independent from Phoenix 2 Clearing evidence.
+  const crossLevel = structuredClone(official);
+  crossLevel.schemaVersion = LOCAL_CROSS_LEVEL_ANALYSIS_SCHEMA_VERSION;
+  crossLevel.summary.method.scoring = {
+    version: 1, population: "official-max-per-player-chart",
+    calibration: "official-cross-level-median-anchored-exponential", minimumOfficialLevel: 20,
+  };
+  const sourceDates = { Phoenix: "2026-09-06T00:00:00Z", Phoenix2: "2026-10-11T00:00:00Z" };
+  const curve = {
+    version: 1 as const, anchors: [20, 21, 26].map((level) => ({
+      level, difficulty: level + .5, cost: (level - 20) * 10000,
+      referenceCharts: 5, chartIds: Array.from({ length: 5 }, (_, i) => `d${level}-${i}`),
+    })), offset: -10000,
+    fit: { growth: 1, normalizedOffset: -1, normalizedAmplitude: 1, normalizedMse: 0, boundHit: false },
+    tailPolicy: "tangent-linear" as const, supportedRange: [20.5, 26.5] as [number, number],
+    referenceMinimumPlayers: 10 as const, referenceMinimumCharts: 5 as const,
+  };
+  crossLevel.summary.method.officialCrossLevelScoring = {
+    version: 1, minimumOfficialLevel: 20, sourceDates, manifestSha256: "a".repeat(64),
+    calibration: { Single: null, Double: curve }, intervalMethod: "conditional-player-bootstrap-fixed-fit-v1",
+  };
+  const below20 = crossLevel.singles[0];
+  Object.assign(below20, {
+    scoringMethod: "official-cross-level-v1", officialScoringEvidence: null, officialScoringContributors: 0,
+    scoringPlayerCount: 0, nContributors: 0, scoringChartCost: null, estimatedDifficulty: null,
+    difficultyDelta: null, evidenceStatus: "Unrated", scoringUnratedReason: "Below current official level 20.",
+    scoringScoreProfile: null, scoringDifficultyScale: null, scoringSpreadCalibration: null,
+  });
+  Object.assign(below20.tierMetrics!.pumbility, { scoringSupportCount: 0, clearingSupportCount: below20.tierMetrics!.clearing.ratedClearCount, estimatedDifficulty: null });
+  const crossChart = crossLevel.doubles[0];
+  Object.assign(crossChart, {
+    scoringMethod: "official-cross-level-v1", officialScoringContributors: 355,
+    officialScoringEvidence: { sourceDates, sourceCounts: { Phoenix: 100, Phoenix2: 300 },
+      sourceStates: {
+        Phoenix: { status: "available", asOf: sourceDates.Phoenix, rawRowCount: 100, maxRank: 100, cutoffScore: 980000, possiblyTruncated: true },
+        Phoenix2: { status: "available", asOf: sourceDates.Phoenix2, rawRowCount: 300, maxRank: 300, cutoffScore: 800000, possiblyTruncated: true },
+      }, mergedPlayerCount: 355,
+      comparability: "same", component: 0, anchorEligible: true },
+    scoringMainComponent: true, scoringChartCost: 60000, scoringChartCostCi95Low: 60000, scoringChartCostCi95High: 60000,
+    estimatedDifficulty: 26.5, difficultyDelta: 0, scoringUnratedReason: null,
+    difficultyCi95Low: 26.5, difficultyCi95High: 26.5, scoringDifficultyScale: null, scoringSpreadCalibration: null,
+  });
+  crossChart.tierMetrics!.pumbility.estimatedDifficulty = 26.5;
+  assert.equal(validateLocalAnalysisPayload(crossLevel, "combined").doubles[0].officialScoringContributors, 355);
+  assert.equal(crossChart.officialContributors, 60);
+  assert.equal(crossChart.tierMetrics!.clearing.clearCount, 60);
+  assert.equal(tierSupportLabel(crossChart, "scoring"), "18 players with cross-level official comparisons");
+  assert.equal(validateLocalAnalysisPayload(crossLevel, "combined").doubles[0].officialScoringEvidence!.sourceStates.Phoenix.possiblyTruncated, true);
+  const missingSourceStatus = structuredClone(crossLevel);
+  delete missingSourceStatus.doubles[0].officialScoringEvidence!.sourceStates.Phoenix;
+  assert.throws(() => validateLocalAnalysisPayload(missingSourceStatus, "combined"), /incompatible/);
+  const failedSourceStatus = structuredClone(crossLevel);
+  Object.assign(failedSourceStatus.doubles[0].officialScoringEvidence!.sourceStates.Phoenix, { status: "fetch-failed" });
+  assert.throws(() => validateLocalAnalysisPayload(failedSourceStatus, "combined"), /incompatible/);
+  const invalidSourceCount = structuredClone(crossLevel);
+  invalidSourceCount.doubles[0].officialScoringEvidence!.sourceStates.Phoenix.rawRowCount = 99;
+  assert.throws(() => validateLocalAnalysisPayload(invalidSourceCount, "combined"), /incompatible/);
+  const nonlinearMismatch = structuredClone(crossLevel);
+  nonlinearMismatch.doubles[0].estimatedDifficulty = 26.4;
+  assert.throws(() => validateLocalAnalysisPayload(nonlinearMismatch, "combined"), /incompatible/);
+  const belowFallback = structuredClone(crossLevel);
+  belowFallback.singles[0].estimatedDifficulty = 16.5;
+  assert.throws(() => validateLocalAnalysisPayload(belowFallback, "combined"), /incompatible/);
+  const badAnchors = structuredClone(crossLevel);
+  badAnchors.summary.method.officialCrossLevelScoring!.calibration.Double!.anchors[1].cost = -1;
+  assert.throws(() => validateLocalAnalysisPayload(badAnchors, "combined"), /incompatible/);
+  const twoAnchors = structuredClone(crossLevel);
+  twoAnchors.summary.method.officialCrossLevelScoring!.calibration.Double!.anchors.splice(1, 1);
+  assert.throws(() => validateLocalAnalysisPayload(twoAnchors, "combined"), /incompatible/);
+  const newCatalogChart = structuredClone(crossLevel);
+  const missingBaseline = newCatalogChart.doubles[0];
+  delete missingBaseline.officialEvidence;
+  delete missingBaseline.officialContributors;
+  const emptyMetric = { estimatedDifficulty: null, difficultyDelta: null, levelRank: null,
+    levelComparisonCharts: null, effectBandRank: null, effectBand: null, evidenceStatus: "Unrated" as const };
+  missingBaseline.tierMetrics!.clearing = { ...emptyMetric, clearCount: 0, ratedClearCount: 0, missingSkillCount: 0 };
+  Object.assign(missingBaseline.tierMetrics!.pumbility, emptyMetric, { clearingSupportCount: 0 });
+  assert.equal(validateLocalAnalysisPayload(newCatalogChart, "combined").doubles[0].tierMetrics!.clearing.estimatedDifficulty, null);
+  missingBaseline.tierMetrics!.clearing.q20Skill = 26;
+  assert.throws(() => validateLocalAnalysisPayload(newCatalogChart, "combined"), /official tier/);
+  const noCapturedMetadata = structuredClone(crossLevel);
+  const noBoard = noCapturedMetadata.doubles[0];
+  Object.assign(noBoard, { scoringPlayerCount: 0, nContributors: 0, officialScoringContributors: 0,
+    estimatedDifficulty: null, difficultyDelta: null, evidenceStatus: "Unrated", scoringUnratedReason: "No official evidence.",
+    scoringChartCost: null, scoringChartCostCi95Low: null, scoringChartCostCi95High: null,
+    difficultyCi95Low: null, difficultyCi95High: null });
+  Object.assign(noBoard.officialScoringEvidence!, { sourceCounts: { Phoenix: 0, Phoenix2: 0 },
+    sourceStates: {}, mergedPlayerCount: 0, comparability: "no-evidence" });
+  Object.assign(noBoard.tierMetrics!.pumbility, emptyMetric, { scoringSupportCount: 0 });
+  assert.equal(validateLocalAnalysisPayload(noCapturedMetadata, "combined").doubles[0].estimatedDifficulty, null);
   const mixedSources = structuredClone(official);
   const mixedChart = mixedSources.doubles[0];
   mixedSources.summary.method.scoreProfileCalibration = { folderScales: { Single: { "16": .25 }, Double: { "24": .5 } } };
@@ -1903,6 +2081,7 @@ test("accepts the combined tier-list identity", () => {
   scoringPreview.doubles[0].estimatedDifficulty = 27.2;
   assert.throws(() => validateLocalAnalysisPayload(scoringPreview, "combined"), /official tier/);
   Object.assign(scoringPreview.doubles[0], { scoringMeanGap: 24000, estimatedDifficulty: 27.7, scoringExtremeOutlier: true });
+  historicalComposite(scoringPreview.doubles[0]);
   assert.equal(validateLocalAnalysisPayload(scoringPreview, "combined").doubles[0].estimatedDifficulty, 27.7);
   scoringPreview.doubles[0].scoringExtremeOutlier = false;
   assert.throws(() => validateLocalAnalysisPayload(scoringPreview, "combined"), /official tier/);
@@ -1911,6 +2090,7 @@ test("accepts the combined tier-list identity", () => {
   // Same estimate crosses the level even when the outlier label is unavailable.
   assert.equal(validateLocalAnalysisPayload(scoringPreview, "combined").doubles[0].estimatedDifficulty, 27.7);
   Object.assign(scoringPreview.doubles[0], {scoringMeanGap: 100000, estimatedDifficulty: 31.5});
+  historicalComposite(scoringPreview.doubles[0]);
   assert.equal(validateLocalAnalysisPayload(scoringPreview, "combined").doubles[0].estimatedDifficulty, 31.5);
   scoringPreview.doubles[0].estimatedDifficulty = 27.9;
   assert.throws(() => validateLocalAnalysisPayload(scoringPreview, "combined"), /official tier/);
@@ -1920,11 +2100,13 @@ test("accepts the combined tier-list identity", () => {
     spreadCalibration: { scale: 4.5, referenceSpread: .1, supportedCharts: 5, lowerFence: -.4, upperFence: .4,
       referenceLevel: 26, basis: "folder" }, q20Skill: 27, estimatedDifficulty: 27.68125,
   });
+  historicalComposite(spreadPreview.doubles[0]);
   assert.equal(validateLocalAnalysisPayload(spreadPreview, "combined").doubles[0].tierMetrics!.clearing.estimatedDifficulty, 27.68125);
   spreadMetric.estimatedDifficulty = 26.95;
   assert.throws(() => validateLocalAnalysisPayload(spreadPreview, "combined"), /official tier/);
   Object.assign(spreadMetric, { q20Skill: 28, q20SkillCi95Low: 27.8, q20SkillCi95High: 28.2,
     difficultyCi95Low: 29.57125, difficultyCi95High: 30.51625, extremeOutlier: true, estimatedDifficulty: 30.04375 });
+  historicalComposite(spreadPreview.doubles[0]);
   assert.equal(validateLocalAnalysisPayload(spreadPreview, "combined").doubles[0].tierMetrics!.clearing.estimatedDifficulty, 30.04375);
   spreadMetric.q20SkillCi95Low = 26.5;
   spreadMetric.difficultyCi95Low = 26.5;
@@ -1998,11 +2180,13 @@ test("accepts the combined tier-list identity", () => {
   const referenceDifficulty = 26.5 + .70 * (60 / 80) * (25.8 - 26.5);
   uncappedReference.tierMetrics!.clearing.estimatedDifficulty = referenceDifficulty;
   uncappedReference.tierMetrics!.clearing.q20Skill = 25.8;
+  historicalComposite(uncappedReference);
   capped.doubles.push(uncappedReference);
   assert.throws(() => validateLocalAnalysisPayload(capped, "combined"), /official tier/);
   Object.assign(cappedChart.tierMetrics!.clearing, {
     estimatedDifficulty: referenceDifficulty, capDefaultDifficulty: referenceDifficulty, capDefaultBasis: "uncapped-folder-minimum",
   });
+  historicalComposite(cappedChart);
   assert.equal(validateLocalAnalysisPayload(capped, "combined").doubles[0].tierMetrics!.clearing.estimatedDifficulty, referenceDifficulty);
   const hiddenCap = structuredClone(capped);
   Object.assign(hiddenCap.doubles[0].officialEvidence!, { possiblyTruncated: false, status: "available" });
@@ -2080,6 +2264,7 @@ test("accepts the combined tier-list identity", () => {
   const unrated = structuredClone(percentile);
   unrated.singles[0].estimatedDifficulty = null;
   unrated.singles[0].scoringDifficultyScale = null;
+  historicalComposite(unrated.singles[0]);
   assert.equal(validateLocalAnalysisPayload(unrated, "combined").singles[0].scoringDifficultyScale, null);
   assert.throws(
     () => validateLocalAnalysisPayload({ ...payload, summary: { ...payload.summary, method: {

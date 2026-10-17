@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from tier_difficulty import build_tier_metrics, percentile_skill, tier_metric_method
+from tier_difficulty import build_tier_metrics, percentile_skill, tier_metric_method, pumbility_difficulty, refresh_pumbility_metrics
 
 
 class PercentileSkillTests(unittest.TestCase):
@@ -26,6 +26,34 @@ class PercentileSkillTests(unittest.TestCase):
 
 
 class TierMetricTests(unittest.TestCase):
+    def test_pumbility_maximum_either_component_ties_and_missing(self):
+        self.assertEqual(pumbility_difficulty(24.123456789, 23), 24.123456789)
+        self.assertEqual(pumbility_difficulty(23, 24.987654321), 24.987654321)
+        self.assertEqual(pumbility_difficulty(23, 23), 23)
+        self.assertIsNone(pumbility_difficulty(None, 23))
+        self.assertIsNone(pumbility_difficulty(23, None))
+        self.assertEqual(tier_metric_method({})["pumbility"]["aggregation"], "maximum")
+        self.assertEqual(tier_metric_method({})["version"], 11)
+
+    def test_refresh_maximum_updates_ranks_bands_support_and_weaker_evidence(self):
+        rows = []
+        for index, (scoring, clearing) in enumerate(((23.8, 23.1), (23.2, 24.0123456789), (24.2, 24.2), (None, 24.3))):
+            rows.append({"chartId": str(index), "songName": str(index), "level": 23,
+                         "estimatedDifficulty": scoring, "evidenceStatus": "Provisional", "nContributors": 25,
+                         "tierMetrics": {"clearing": {"estimatedDifficulty": clearing,
+                             "ratedClearCount": 3, "evidenceStatus": "Insufficient"}}})
+        payload = {"singles": rows, "doubles": []}
+        refresh_pumbility_metrics(payload)
+        composites = [row["tierMetrics"]["pumbility"] for row in rows]
+        self.assertEqual([metric["estimatedDifficulty"] for metric in composites], [23.8, 24.0123456789, 24.2, None])
+        self.assertEqual([metric["levelRank"] for metric in composites], [1, 2, 3, None])
+        self.assertEqual([metric["levelComparisonCharts"] for metric in composites], [3, 3, 3, None])
+        self.assertEqual([metric["evidenceStatus"] for metric in composites], ["Insufficient"] * 3 + ["Unrated"])
+        self.assertEqual(composites[1]["difficultyDelta"], 24.0123456789 - 23.5)
+        self.assertEqual(composites[1]["effectBand"], "Underrated")
+        self.assertTrue(all(metric["scoringSupportCount"] == 25 and metric["clearingSupportCount"] == 3 for metric in composites))
+        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["pumbility"]["version"], 2)
+
     def _calculate(self, specs: list[tuple[str, int, float | None]], *, count: int = 1):
         charts, clearers, skills = [], {}, {}
         for index, (chart_type, level, mean) in enumerate(specs):
@@ -113,7 +141,7 @@ class TierMetricTests(unittest.TestCase):
     def test_composite_uses_unrounded_components_and_weaker_evidence(self) -> None:
         charts, metrics, _ = self._calculate([("Single", 20, 21)], count=5)
         clearing, pumbility = metrics[0]["clearing"], metrics[0]["pumbility"]
-        self.assertEqual(pumbility["estimatedDifficulty"], (charts[0]["estimatedDifficulty"] + clearing["estimatedDifficulty"]) / 2)
+        self.assertEqual(pumbility["estimatedDifficulty"], max(charts[0]["estimatedDifficulty"], clearing["estimatedDifficulty"]))
         self.assertEqual(pumbility["evidenceStatus"], "Provisional")
         self.assertEqual((pumbility["scoringSupportCount"], pumbility["clearingSupportCount"]), (30, 5))
         self.assertNotIn("nContributors", pumbility)

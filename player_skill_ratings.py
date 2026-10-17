@@ -16,6 +16,15 @@ CLEARING_SKILL_REQUIRED_CLEAR_COUNT = 50
 CLEARING_SKILL_MODES = ("Single", "Double")
 
 
+def clearing_tier_skill_for_levels(chart_levels: Mapping[str, float], *, record_count: int) -> float | None:
+    """Tier-only top-30 skill; leave the personal top-50 skill contract unchanged."""
+    levels = sorted(((cid, float(level)) for cid, level in chart_levels.items()
+                     if math.isfinite(float(level)) and float(level) > 0), key=lambda row: (-row[1], row[0]))
+    if record_count < 200 or len(levels) < 30:
+        return None
+    return sum(level for _, level in levels[:30]) / 30
+
+
 def clearing_skill_method() -> dict[str, Any]:
     return {
         "methodVersion": CLEARING_SKILL_METHOD_VERSION,

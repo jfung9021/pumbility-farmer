@@ -319,7 +319,7 @@ class OfficialTierTests(unittest.TestCase):
                 continue
             clearing, composite = row["tierMetrics"]["clearing"], row["tierMetrics"]["pumbility"]
             if clearing["estimatedDifficulty"] is not None and row["estimatedDifficulty"] is not None:
-                self.assertAlmostEqual(composite["estimatedDifficulty"], (row["estimatedDifficulty"] + clearing["estimatedDifficulty"])/2, places=5)
+                self.assertAlmostEqual(composite["estimatedDifficulty"], max(row["estimatedDifficulty"], clearing["estimatedDifficulty"]), places=5)
                 self.assertEqual(composite["clearingSupportCount"], clearing["ratedClearCount"])
             else:
                 self.assertIsNone(composite["estimatedDifficulty"])

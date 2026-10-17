@@ -206,7 +206,7 @@ class CombinedEvidenceTests(unittest.TestCase):
         self.assertEqual(consumed, {})
         self.assertTrue(all("tierMetrics" in chart for chart in actual[0]))
         payload = build_combined_tier_payload(actual[0], actual[2])
-        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["version"], 10)
+        self.assertEqual(payload["summary"]["method"]["tierMetrics"]["version"], 11)
         self.assertEqual(payload["summary"]["method"]["tierMetrics"]["clearing"]["percentile"], 0.1)
         for chart in payload["singles"]:
             metrics = chart["tierMetrics"]
@@ -216,7 +216,7 @@ class CombinedEvidenceTests(unittest.TestCase):
             self.assertNotIn("q30Skill", metrics["clearing"])
             self.assertNotIn("q25Skill", metrics["clearing"])
             if chart["estimatedDifficulty"] is not None and metrics["clearing"]["estimatedDifficulty"] is not None:
-                self.assertAlmostEqual(metrics["pumbility"]["estimatedDifficulty"], (chart["estimatedDifficulty"] + metrics["clearing"]["estimatedDifficulty"]) / 2, places=5)
+                self.assertAlmostEqual(metrics["pumbility"]["estimatedDifficulty"], max(chart["estimatedDifficulty"], metrics["clearing"]["estimatedDifficulty"]), places=5)
             self.assertNotIn("playerId", json.dumps(metrics))
             self.assertNotIn("tierMetrics", _recommendation_chart_rows([chart])[0])
 

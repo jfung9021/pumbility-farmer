@@ -43,6 +43,7 @@ from analysis_runtime import (
     VercelRuntimeJobStore,
     _audit_checkpoint_resume,
     _canonical_json_sha256,
+    _fresh_result,
     _checkpoint_continuation,
     _load_typed_checkpoint_combined,
     _load_typed_checkpoint_shard,
@@ -181,6 +182,14 @@ class PrivateBlobStoreTests(unittest.TestCase):
 
 
 class CoordinatorTests(unittest.TestCase):
+    def test_positive_freshness_rejects_the_previous_writer_identity(self) -> None:
+        current = latest_payload(NOW)
+        previous = copy.deepcopy(current)
+        previous["summary"]["scriptVersion"] = "6.15.0-upper-score-profiles-clearing070"
+        with patch("analysis_runtime.FRESHNESS", timedelta(hours=1)):
+            self.assertIsNotNone(_fresh_result(current, NOW + timedelta(minutes=1)))
+            self.assertIsNone(_fresh_result(previous, NOW + timedelta(minutes=1)))
+
     def test_legacy_phoenix2_payload_is_normalized_without_rewriting_it(self) -> None:
         blobs = MemoryBlobStore()
         legacy = latest_payload(NOW)
@@ -1398,7 +1407,7 @@ class WorkerTests(unittest.TestCase):
                 _validate_checkpoint_combined_tier(tier, blobs)
 
     def test_current_tier_schema_rejects_old_scoring_or_clearing_method(self) -> None:
-        for changed_method in ("scoring", "clearing", "weights", "clearingScale", "localExperiment"):
+        for changed_method in ("scoring", "clearing", "weights", "clearingScale", "pumbility", "tierVersion", "localExperiment"):
             with self.subTest(method=changed_method):
                 payload = _combined_tier_payload_fixture(generated_at_utc=isoformat_utc(NOW))
                 method = payload["summary"]["method"]
@@ -1410,6 +1419,10 @@ class WorkerTests(unittest.TestCase):
                     method["scoring"]["profileWeights"] = [1, 1, 1, 1, 1]
                 elif changed_method == "clearingScale":
                     method["tierMetrics"]["clearing"]["difficultyDeltaScale"] = .65
+                elif changed_method == "pumbility":
+                    method["tierMetrics"]["pumbility"] = {"requiresBoth": True, "calculation": "arithmetic mean before rounding"}
+                elif changed_method == "tierVersion":
+                    method["tierMetrics"]["version"] = 10
                 else:
                     method["localExperiment"] = "scoring-profile-level-scales"
                 with self.assertRaisesRegex(ValueError, "incompatible scoring or clearing"):
