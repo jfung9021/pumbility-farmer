@@ -482,7 +482,9 @@ test("tier labels share Pumbility dispatch and distinguish Scoring interval meth
   assert.match(page, /const pumbilityPolicy = resolvePumbilityPolicy\(payload\)/);
   assert.match(page, /PumbilityPolicyContext.Provider value=\{pumbilityPolicy\?\.aggregation/);
   assert.match(page, /pumbilityAggregation === "maximum" \? "Maximum" : pumbilityAggregation === "average" \? "Average"/);
-  assert.match(page, /title=\{crossScoring \? "95% conditional player-bootstrap interval with fitted chart effects and median anchors held fixed/);
+  assert.match(page, /title=\{sssScoring \? `95% conditional player-bootstrap interval, refitting the target model with calibration/);
+  assert.match(page, /chart\.scoringTailPolicy \? ", tail map and exception decision"/);
+  assert.match(page, /: crossScoring \? "95% conditional player-bootstrap interval with fitted chart effects and median anchors held fixed/);
   assert.match(page, /: profileScoring \? "95% bootstrap interval after calibration, with the mode reference curve, folder center, and selected folder scale held fixed/);
 });
 
@@ -1611,7 +1613,7 @@ test("Top 50 export benchmark is deterministic and network-independent", async (
   assert.doesNotMatch(benchmark, /\bfetch\(|https?:\/\//);
 });
 
-test("limited-data presentation uses the shared 20-player boundary", async () => {
+test("Tier List omits limited-data warnings; Recommendations uses the shared 20-player boundary", async () => {
   const pages = await Promise.all([
     readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
@@ -1623,7 +1625,7 @@ test("limited-data presentation uses the shared 20-player boundary", async () =>
   for (const page of pages) {
     assert.doesNotMatch(page, /evidenceStatus\.toLowerCase\(\)/);
   }
-  assert.match(pages[0], /hasLimitedTierData\(chart, metric\)/);
+  assert.doesNotMatch(pages[0], /LimitedDataWarning|hasLimitedTierData|limited-data-warning|compact-warning/);
   assert.match(pages[1], /hasLimitedData\(chart\.nContributors\)/);
 });
 

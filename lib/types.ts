@@ -4,6 +4,185 @@ export type ModeKey = "singles" | "doubles" | "coop";
 export type RecommendationModeKey = "overall" | ModeKey;
 export type EvidenceStatus = "Published" | "Provisional" | "Insufficient" | "Unrated";
 export type TierMetricKey = "scoring" | "clearing" | "pumbility";
+export type ScoringGoal = "general" | "sss" | "sssplus";
+/** Targets are optional so a historical generation cannot imply a new goal exists. */
+export type ScoringVariantMap<T> = { general: T } & Partial<Record<Exclude<ScoringGoal, "general">, T>>;
+export type ScoringMethod = "official-cross-level-v1" | "submitted-score-profile-v2" | "sss-target-rasch-v1" | "sss-boundary-score-gap-v1" | "sss-rare-success-upper-band-v1" | "target-attainment-rasch-v1" | "target-boundary-score-gap-v1" | "target-rare-success-upper-band-v1" | "target-conditional-pooled-prior-v1";
+export type SssEstimateBranch = "first-pass" | "mixed" | "no-sss" | "all-sss" | "rare-sss" | "insufficient-history" | "no-data" | "unsupported-calibration" | "no-target" | "all-target" | "rare-target";
+
+export interface SssFrozenRange {
+  source: "submitted" | "official";
+  mode: "Single" | "Double";
+  level: number;
+  lower: number;
+  upper: number;
+  kind: "observed" | "interpolated" | "nearest";
+  supported: boolean;
+  provisional: boolean;
+  firstPassRatedCharts: number;
+  referenceChartIds: string[];
+  donorLevels: number[];
+  lowerOffset: number;
+  upperOffset: number;
+}
+
+export interface SssRefinementEvidence {
+  version: 1 | 2;
+  branch: SssEstimateBranch;
+  fullBoard: { records: number; successes: number; belowTarget: number; highestScore: number | null; lowestScore: number | null; possiblyTruncated: boolean; topScores?: number[] };
+  modelEligible: { records: number; successes: number; belowTarget: number };
+  range: SssFrozenRange | null;
+  boundary?: { endpointScore: number; endpointPolicy?: "mean-top-3-available-v1"; endpointScoreCount?: number; gapPoints: number; gapScalePointsPerLatentUnit: number; gapDirection: "shortfall" | "surplus";
+    edgeFinal: number; edgeInitial: number; edgeLatent: number; targetLatent: number; initialDifficulty: number; finalDifficulty: number; extrapolated: boolean;
+    calibrationPolicy: string; calibrationScoreRange: [number, number]; calibrationCharts: number; calibrationRecords: number;
+    calibrationValidationCharts: number; calibrationValidationMeanAbsoluteError: number };
+  rare?: { conditionalEffect: number; conditionalInitialDifficulty: number; conditionalDifficulty: number; weightedSuccesses: number;
+    conditionalExpectedSuccesses: number; likelihoodResidual: number; upperBandLow: number; upperBandHigh: number; blendWeight: number;
+    countWeight: number; supportWeight: number; rateWeight: number; candidateCount: number; conditionalRank: number; upperTarget: number;
+    originalDifficulty: number; initialDifficulty: number; finalDifficulty: number };
+}
+
+export interface SssCenteringFolder {
+  source: "official";
+  mode: "Single" | "Double";
+  level: number;
+  basis: "folder" | "interpolated" | "nearest" | "unavailable";
+  donorLevels: number[];
+  mixedFirstPassChartIds: string[];
+  populationChartIds: string[];
+  donorPopulationChartIds: string[];
+  donorMixedChartIds: string[];
+  mixedFirstPassCount: number;
+  ratedChartCount: number;
+  medianBefore: number | null;
+  medianAfter: number | null;
+  finalShift: number;
+  initialShift: number;
+}
+
+export interface SssChartCentering extends Omit<SssCenteringFolder, "mixedFirstPassChartIds" | "populationChartIds" | "donorPopulationChartIds" | "donorMixedChartIds"> {
+  version: 1;
+  uncenteredDifficulty: number | null;
+  uncenteredInitialDifficulty: number | null;
+  effectiveRange: { lower: number; upper: number } | null;
+  effectiveRareBand: { lower: number; upper: number } | null;
+}
+
+export interface TargetTailEvidence {
+  version: 1;
+  method: "target-midpoint-soft-tail-global-exceptions-v1";
+  midpoint: number;
+  preTailDifficulty: number | null;
+  preTailDifficultyCi95Low: number | null;
+  preTailDifficultyCi95High: number | null;
+  ordinaryDifficulty: number | null;
+  exceptionEligible: boolean;
+  rejectionReasons: string[];
+  exceptionSelected: boolean;
+  finalDifficulty: number | null;
+  finalDifficultyCi95Low: number | null;
+  finalDifficultyCi95High: number | null;
+  conservativeDistance: number | null;
+  protectedMedian: boolean;
+  finalFolderRange?: { lower: number; upper: number } | null;
+}
+
+export interface SssPlusMedianCalibration {
+  version: 1 | 2 | 3;
+  method: "sssplus-refined-median-calibration-v1" | "sssplus-refined-median-calibration-v2" | "sssplus-refined-median-calibration-v3";
+  finalCurveScale?: { version: 1; method: "bounded-offset-local-lower-scale-v1"; minimumOffsetMarginAnchorGaps: 1;
+    offsetLimit: number; lowerSlope: number; lowerAnchorLevels: [number, number] } | null;
+  source: "official";
+  mode: "Single" | "Double";
+  refinedLatent: number | null;
+  anchorKind: "derived-provisional-full-folder-median";
+  anchor: {
+    level: number; supported: boolean; populationChartIds: string[]; mixedFirstPassChartIds: string[];
+    branches: Record<string, number>; possiblyTruncatedCharts: number; fewerThanFiveScores: number; medianLatent: number | null;
+  };
+  calibrationError: string | null;
+  preliminaryExtrapolated: boolean;
+  finalExtrapolated: boolean | null;
+  intervals: string;
+}
+
+/** Local spread overlay; the preliminary historical fit remains recoverable. */
+export interface SssPlusSpreadEvidence {
+  version: 1;
+  method: "midpoint-asinh-pre-tail-v1";
+  scale: number;
+  midpoint: number;
+  preSpreadDifficulty: number | null;
+  preSpreadDifficultyCi95Low: number | null;
+  preSpreadDifficultyCi95High: number | null;
+  spreadDifficulty: number | null;
+  spreadDifficultyCi95Low: number | null;
+  spreadDifficultyCi95High: number | null;
+  rare: Record<string, unknown> | null;
+  boundaryEvidence: Record<string, unknown> | null;
+}
+
+/** Public chart aggregates only; the target fit never publishes player identities. */
+export interface FinalFolderWidthEvidence {
+  group: string;
+  input: Record<string, number | null>;
+  parameters: {
+    midpoint: number; basis: string; locationShift: number; medianHalfGap: number;
+    lowerReference: number | null; upperReference: number | null;
+    provisional: boolean; ratedCharts: number;
+  };
+  exceptionPreserved: boolean;
+  initialCompressionApplications: number;
+}
+
+export interface ChartSourceExclusionEvidence {
+  rules: Array<{ source: string; chartId: string; mode: string; label: string; reason: string; enabled: boolean }>;
+  capturedSourceStates: Record<string, OfficialScoringSourceState>;
+  effectiveSourceStates: Record<string, OfficialScoringSourceState>;
+}
+
+export interface ScoringVariant extends TierMetricResult {
+  finalFolderWidth?: FinalFolderWidthEvidence;
+  modeRank?: number | null;
+  levelPercentile?: number | null;
+  relativeGroup?: string | null;
+  relativeGroupRank?: number | null;
+  difficultyCi95Low?: number | null;
+  difficultyCi95High?: number | null;
+  difficultyDeltaCi95Low?: number | null;
+  difficultyDeltaCi95High?: number | null;
+  nContributors: number;
+  nPlayersScored?: number;
+  scoringMethod?: ScoringMethod;
+  scoringEstimateBranch?: SssEstimateBranch;
+  scoringRefinement?: SssRefinementEvidence;
+  scoringFirstPass?: ScoringVariant;
+  scoringFolderCentering?: SssChartCentering;
+  scoringMedianCalibration?: SssPlusMedianCalibration;
+  scoringSpreadPolicy?: SssPlusSpreadEvidence;
+  scoringTailPolicy?: TargetTailEvidence;
+  intervalUnavailableReason?: string;
+  scoringUnratedReason?: string | null;
+  scoringExtrapolated?: boolean;
+  scoringProvisional?: boolean;
+  scoringTarget?: 990000 | 995000;
+  scoringTargetSuccesses?: number;
+  scoringBelowTarget?: number;
+  scoringSource?: "submitted" | "official";
+  scoringComponent?: number | null;
+  scoringMainComponent?: boolean;
+  scoringChartEffect?: number | null;
+  scoringChartEffectCi95Low?: number | null;
+  scoringChartEffectCi95High?: number | null;
+  scoringInformation?: number | null;
+  scoringProvisionalReasons?: string[];
+  scoringComparability?: string;
+  scoringPossiblyTruncated?: boolean;
+  scoringSourceStates?: Record<string, OfficialScoringSourceState>;
+  scoringFitConverged?: boolean;
+  scoringBootstrapValidReplicates?: number;
+  intervalMethod?: string;
+}
 
 export interface TierPlayerScore {
   chartId: string;
@@ -30,7 +209,14 @@ export interface TierMetricResult {
 }
 
 export interface ClearingTierMetric extends TierMetricResult {
-  method?: "submitted-cross-level-clearing-v1" | "submitted-cross-level-clearing-v2" | "submitted-folder-centered-clearing-v1";
+  finalFolderWidth?: FinalFolderWidthEvidence;
+  method?: "submitted-cross-level-clearing-v1" | "submitted-cross-level-clearing-v2" | "submitted-folder-centered-clearing-v1" | "official-d26-clearer-ability-v1" | "official-d26-clearer-ability-combined-v2";
+  clearingEvidence?: OfficialClearingEvidence;
+  observedClearCount?: number;
+  recenteringShift?: number;
+  unrecenteredDifficulty?: number | null;
+  preRecenterCapDefaultDifficulty?: number | null;
+  uncertaintyReason?: string | null;
   unratedReason?: string | null;
   sourceCounts?: Record<string, number>;
   retainedSources?: string[];
@@ -87,6 +273,17 @@ export interface OfficialTierEvidence {
   cutoffScore: number | null;
   status: "available" | "possibly-truncated" | "missing";
   unavailableReason: string | null;
+}
+
+export interface OfficialClearingEvidence extends Omit<OfficialTierEvidence, "status"> {
+  capPolicy?: "phoenix1-diagnostic-phoenix2-default-v1";
+  mix: "Phoenix2" | "Phoenix+Phoenix2";
+  status: "available" | "empty" | "possibly-truncated" | "missing";
+  sourceDates?: Record<string, string | null>;
+  sourceStates?: Record<string, OfficialScoringSourceState>;
+  manifestSha256?: string;
+  comparability?: string;
+  mergedPlayers?: number;
 }
 
 export interface OfficialScoringSourceState {
@@ -205,6 +402,9 @@ export interface OfficialScoringSpread {
 }
 
 export interface PumbilityTierMetric extends TierMetricResult {
+  difficultyCi95Low?: number | null;
+  difficultyCi95High?: number | null;
+  intervalMethod?: string | null;
   aggregation?: "maximum" | "average";
   maximumBaseline?: PumbilityTierMetric;
   scoringSupportCount: number;
@@ -220,6 +420,42 @@ export interface ChartRerate {
 }
 
 export interface ChartResult {
+  combinedOfficialClearingBaseline?: { clearing: ClearingTierMetric; pumbility: PumbilityTierMetric; pumbilityVariants: ScoringVariantMap<PumbilityTierMetric> };
+  sssCenteringBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric };
+  sssplusCenteringBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric };
+  sssplusTailBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric };
+  sssplusMedianBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric; tailBaseline: { scoring: ScoringVariant; pumbility: PumbilityTierMetric } };
+  sssplusSpreadBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric; tailBaseline: { scoring: ScoringVariant; pumbility: PumbilityTierMetric } };
+  sssplusRefinementBaseline?: { sssPumbility: PumbilityTierMetric };
+  scoringVariants?: ScoringVariantMap<ScoringVariant>;
+  pumbilityVariants?: ScoringVariantMap<PumbilityTierMetric>;
+  /** Client projection marker; absent on the immutable General compatibility rows. */
+  scoringGoal?: ScoringGoal;
+  finalFolderWidth?: FinalFolderWidthEvidence;
+  chartSourceExclusions?: ChartSourceExclusionEvidence;
+  scoringEstimateBranch?: SssEstimateBranch;
+  scoringRefinement?: SssRefinementEvidence;
+  scoringFirstPass?: ScoringVariant;
+  scoringFolderCentering?: SssChartCentering;
+  scoringMedianCalibration?: SssPlusMedianCalibration;
+  scoringSpreadPolicy?: SssPlusSpreadEvidence;
+  scoringTailPolicy?: TargetTailEvidence;
+  intervalUnavailableReason?: string;
+  scoringTarget?: 990000 | 995000;
+  scoringTargetSuccesses?: number;
+  scoringBelowTarget?: number;
+  scoringSource?: "submitted" | "official";
+  scoringChartEffect?: number | null;
+  scoringChartEffectCi95Low?: number | null;
+  scoringChartEffectCi95High?: number | null;
+  scoringInformation?: number | null;
+  scoringProvisionalReasons?: string[];
+  scoringComparability?: string;
+  scoringPossiblyTruncated?: boolean;
+  scoringSourceStates?: Record<string, OfficialScoringSourceState>;
+  scoringFitConverged?: boolean;
+  scoringBootstrapValidReplicates?: number;
+  intervalMethod?: string;
   initialFit?: Record<string, number | string | null>;
   mode: "Singles" | "Doubles" | "Co-op";
   modeRank: number | null;
@@ -244,7 +480,7 @@ export interface ChartResult {
   estimatedDifficulty: number | null;
   officialEvidence?: OfficialTierEvidence;
   officialContributors?: number;
-  scoringMethod?: "official-cross-level-v1" | "submitted-score-profile-v2";
+  scoringMethod?: ScoringMethod;
   officialScoringEvidence?: OfficialScoringEvidence | null;
   officialScoringContributors?: number;
   scoringChartCost?: number | null;

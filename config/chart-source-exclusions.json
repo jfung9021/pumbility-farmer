@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "source": "Phoenix1",
+      "chartId": "22ee894e-8601-4b55-9d04-c31187f8fa22",
+      "mode": "Double",
+      "label": "Mopemope D26",
+      "scope": "tier-analysis-performance",
+      "enabled": true,
+      "reason": "Chart changed between Phoenix 1 and Phoenix 2; use Phoenix 2 performance records."
+    }
+  ]
+}

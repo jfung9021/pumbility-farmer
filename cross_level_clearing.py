@@ -44,7 +44,7 @@ def clearing_input_identity(phoenix1: Mapping[str, Any], phoenix2: Mapping[str, 
 
 
 def prepare_clearing_evidence(phoenix1: Mapping[str, Any], phoenix2: Mapping[str, Any],
-                              current_charts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+                              current_charts: Sequence[Mapping[str, Any]], *, exclusions=None) -> dict[str, Any]:
     catalog = {str(c.get("id", c.get("chartId"))): c for c in current_charts
                if c.get("type") in ("Single", "Double") and isinstance(c.get("level"), (int, float))
                and not isinstance(c.get("level"), bool) and math.isfinite(c["level"]) and c["level"] > 0}
@@ -54,6 +54,9 @@ def prepare_clearing_evidence(phoenix1: Mapping[str, Any], phoenix2: Mapping[str
         source_catalogs[mix] = {str(c.get("id", c.get("chartId"))): c for c in snapshot.get("charts", [])}
         memberships, reasons = defaultdict(set), Counter()
         for raw in snapshot.get("scores", []):
+            if exclusions is not None and exclusions.excludes(mix, str(raw.get("chartId"))):
+                reasons["chartSourceExcluded"] += 1
+                continue
             row = sanitize_score(raw)
             if row is None:
                 reasons["invalidOrBroken"] += 1

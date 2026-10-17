@@ -41,7 +41,7 @@ def _comparability(current: dict, old: dict | None, retained: set[str]) -> tuple
     return ("same" if len(retained) == 2 else "single-source-known"), True, False
 
 
-def merge_official_scores(manifest: Mapping[str, Any]) -> dict[str, Any]:
+def merge_official_scores(manifest: Mapping[str, Any], *, exclusions=None) -> dict[str, Any]:
     """Use a manifest returned by load_official_scoring_manifest.
 
     ``boards`` is chart UUID -> opaque player ID -> maximum raw integer score.
@@ -102,6 +102,8 @@ def merge_official_scores(manifest: Mapping[str, Any]) -> dict[str, Any]:
             board = captures[mix]["boards"][cid]
             source_states[mix] = {k: board[k] for k in ("status", "asOf", "rawRowCount", "maxRank", "cutoffScore", "possiblyTruncated")}
             for row in board["entries"]:
+                if exclusions is not None and exclusions.excludes(mix, cid):
+                    continue
                 opaque = canonical[(mix, row["playerId"])]
                 observations[opaque].append({"mix": mix, "playerId": row["playerId"], "score": row["score"],
                                              "place": row["place"], "matchMethod": "full-tag" if (mix, row["playerId"]) in matches else "source-id"})
@@ -127,6 +129,14 @@ def merge_official_scores(manifest: Mapping[str, Any]) -> dict[str, Any]:
                        "unknownNoteCount": known_current is None or ("Phoenix" in retained and known_old is None),
                        "retainedSources": sorted(retained), "sourceStates": source_states,
                        "mergedPlayers": len(merged), "matchedPlayerChartPairs": cross_mix_pairs, "tiedCrossMixMaxima": ties}
+        if exclusions is not None and any(exclusions.excludes(m, cid) for m in MIXES):
+            import copy
+            charts[cid]["capturedSourceStates"] = copy.deepcopy(source_states)
+            charts[cid]["sourceExclusions"] = [r for r in exclusions.public()["rules"] if r["enabled"] and r["chartId"] == cid]
+            for mix in MIXES:
+                if exclusions.excludes(mix, cid):
+                    source_states[mix].update(status="empty", rawRowCount=0, maxRank=0,
+                        cutoffScore=None, possiblyTruncated=False)
         if merged:
             boards[cid] = merged
             provenance[cid] = private
@@ -134,7 +144,13 @@ def merge_official_scores(manifest: Mapping[str, Any]) -> dict[str, Any]:
                        nonemptyCharts=len(boards), targetCharts=len(charts),
                        retainedMaximumSources=dict(sorted(winning_mix_counts.items())),
                        comparabilityCounts=dict(sorted(Counter(c["comparability"] for c in charts.values()).items())))
-    return {"boards": boards, "charts": charts,
+    result = {"boards": boards, "charts": charts,
             "currentCatalog": captures["Phoenix2"]["catalog"],
             "sourceDates": {m: captures[m]["asOf"] for m in MIXES}, "diagnostics": diagnostics,
             "manifestSha256": manifest["_manifestSha256"], "_privateProvenance": provenance}
+    if exclusions is not None:
+        from chart_source_exclusions import canonical_hash
+        result["sourceExclusions"] = exclusions.public()
+        result["effectiveInputSha256"] = canonical_hash({"rawManifest": result["manifestSha256"],
+            "policy": exclusions.semantic_hash(), "boards": boards})
+    return result

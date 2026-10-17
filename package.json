@@ -15,6 +15,7 @@
     "analyze:phoenix2": "python piu_misgrade_analyzer.py cache --mix phoenix2 --raw-dir .local-data/piu-scores/phoenix2/current --output-dir .local-data/piu-scores/phoenix2/analysis",
     "analyze:recommendations": "python scripts/build_local_recommendations.py",
     "analyze:official-tiers": "python scripts/build_local_recommendations.py --official-tiers",
+    "analyze:source-aware": "python scripts/build_local_source_aware_tiers.py",
     "seed:phoenix1": "python scripts/seed_phoenix1_snapshot.py",
     "verify:phoenix1-archive": "python scripts/verify_phoenix1_archive.py",
     "youtube:build": "python scripts/build_nevsister_chart_links.py --refresh",

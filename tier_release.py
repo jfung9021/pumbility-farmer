@@ -39,6 +39,11 @@ def rebuild_submitted_profile(base: Mapping[str, Any], phoenix1: Mapping[str, An
     """Recreate profile inputs from the submitted catalog, skipping recommendation models."""
     from scoring_percentile import build_production_tier_payload
 
+    records, metadata = submitted_tier_inputs(base, phoenix2)
+    return build_production_tier_payload(records, metadata, phoenix1, phoenix2)
+
+
+def submitted_tier_inputs(base, phoenix2):
     records = []
     for chart in phoenix2["charts"]:
         mode, level = chart.get("type"), chart.get("level")
@@ -54,7 +59,7 @@ def rebuild_submitted_profile(base: Mapping[str, Any], phoenix1: Mapping[str, An
     method = base["summary"]["method"]
     metadata = {"modes": copy.deepcopy(base["summary"].get("modes", {})),
                 "phoenix1ScoreOverrides": copy.deepcopy(method.get("phoenix1ScoreOverrides", []))}
-    return build_production_tier_payload(records, metadata, phoenix1, phoenix2)
+    return records, metadata
 
 
 def rebuild_tiers_only(store: Any, jobs: Any) -> dict[str, Any]:
@@ -68,6 +73,8 @@ def rebuild_tiers_only(store: Any, jobs: Any) -> dict[str, Any]:
 
     require_tier_release_policy()
     _require_idle(jobs)
+    if os.getenv("PIU_SOURCE_AWARE_TIERS", "") == "1":
+        return rebuild_source_aware_only(store, jobs)
     base = store.get_json(combined_tier_blob_path())
     if not isinstance(base, Mapping) or base.get("schemaVersion") not in (44, 48):
         raise ValueError("Tier-only release requires the current compressed tier generation.")
@@ -125,3 +132,97 @@ def rebuild_tiers_only(store: Any, jobs: Any) -> dict[str, Any]:
     return {"outcome": "tiers-rebuilt", **audit,
             "ratedPumbility": sum(row["tierMetrics"]["pumbility"]["estimatedDifficulty"] is not None
                                   for mode in ("singles", "doubles") for row in candidate[mode])}
+
+
+def source_aware_inputs(store):
+    from analysis_runtime import current_snapshot_path
+    from official_scoring_sources import hydrate_official_scoring_manifest
+    from phoenix2_sync import sanitize_snapshot
+    from pumbility_contract import official_scoring_manifest_path
+    base = store.get_json(combined_tier_blob_path())
+    if not isinstance(base, Mapping):
+        raise ValueError("The current tier baseline is unavailable.")
+    snapshots = []
+    dates = base["summary"]["method"]["crossLevelClearing"].get("sourceDates", {})
+    for mix, path in (("phoenix1", phoenix1_snapshot_path()), ("phoenix2", current_snapshot_path("phoenix2"))):
+        raw = store.get_json(path)
+        if not isinstance(raw, Mapping):
+            raise ValueError("Both cached submitted snapshots are required.")
+        snapshot = sanitize_snapshot(raw, mix=mix)
+        if not snapshot.get("generatedAtUtc") and dates.get(mix):
+            snapshot["generatedAtUtc"] = dates[mix]
+        snapshots.append(snapshot)
+    path = official_scoring_manifest_path()
+    prefix = path.rsplit("/", 1)[0]
+    manifest = hydrate_official_scoring_manifest(store.get_json(path),
+        lambda relative: store.get_json(f"{prefix}/{relative}"))
+    records, metadata = submitted_tier_inputs(base, snapshots[1])
+    return base, snapshots[0], snapshots[1], manifest, records, metadata
+
+
+def source_aware_fit_status(store):
+    from production_tiers import MODES, cohort, fit_path, load_context, digest
+    base, first, second, manifest, records, _ = source_aware_inputs(store)
+    context = load_context(first, second, manifest, records)
+    identities = []
+    for goal in ("sss", "sssplus"):
+        for source in ("official", "submitted"):
+            for mode, _ in MODES:
+                _, _, identity = cohort(context[-1], goal, source, mode)
+                identities.append({"goal": goal, "source": source, "mode": mode, "identity": identity,
+                    "cached": store.get_json(fit_path(identity)) is not None})
+    return {"schemaVersion": base["schemaVersion"], "tierSha256": digest(base),
+        "sourceDates": context[4]["sourceDates"], "manifestSha256": context[4]["manifestSha256"],
+        "sourcePolicy": context[3].public(), "fits": identities}
+
+
+def seed_source_aware_fit(store, request):
+    from production_tiers import cohort, fit_path, load_context, validate_fit
+    goal, source, mode = (request.get(k) for k in ("goal", "source", "mode"))
+    if goal not in ("sss", "sssplus") or source not in ("official", "submitted") or mode not in ("Single", "Double"):
+        raise ValueError("Unknown target cohort.")
+    _, first, second, manifest, records, _ = source_aware_inputs(store)
+    context = load_context(first, second, manifest, records)
+    boards, _, identity = cohort(context[-1], goal, source, mode)
+    if request.get("identity") != identity:
+        raise ValueError("The uploaded fit has different current production inputs.")
+    fit = request.get("fit", {})
+    validate_fit(fit, identity)
+    if set(fit.get("charts", {})) != set(boards):
+        raise ValueError("The uploaded fit chart population differs.")
+    store.put_json(fit_path(identity), {"identity": identity, "fit": fit})
+    return {"outcome": "target-fit-cached", "goal": goal, "source": source, "mode": mode}
+
+
+def rebuild_source_aware_only(store, jobs):
+    from scoring_percentile import build_production_tier_payload
+    from production_tiers import TierAnalysisPending, validate_public_tiers, digest
+    base, first, second, manifest, records, metadata = source_aware_inputs(store)
+    recommendations = store.get_json(recommendation_blob_path())
+    base_sha, recommendation_sha = digest(base), digest(recommendations)
+    try:
+        candidate = build_production_tier_payload(records, metadata, first, second,
+            official_scoring_manifest=manifest, cross_level_clearing=True,
+            midpoint_compression=True, hybrid_lower_tiers=True, average_pumbility=True, source_aware_store=store)
+    except TierAnalysisPending as exc:
+        return {"outcome": "tier-analysis-progress", "completedTargetFits": exc.completed, "totalTargetFits": 8,
+            "scoreFetches": 0, "recommendationFits": 0}
+    validate_public_tiers(candidate)
+    _require_idle(jobs)
+    if digest(store.get_json(combined_tier_blob_path())) != base_sha or digest(store.get_json(recommendation_blob_path())) != recommendation_sha:
+        raise TierReleaseBusyError("Production changed while preparing the source-aware tiers.")
+    # Recheck the cached source records and manifest before promoting the pointer.
+    _, current_first, current_second, current_manifest, _, _ = source_aware_inputs(store)
+    from official_scoring_sources import canonical_scoring_manifest_sha256
+    inputs = candidate["summary"]["method"]["productionTierPublication"]["inputs"]
+    if (inputs["phoenix1"] != digest(current_first) or inputs["phoenix2"] != digest(current_second)
+            or inputs["officialManifest"] != canonical_scoring_manifest_sha256(current_manifest)):
+        raise TierReleaseBusyError("The cached performance inputs changed during the tier analysis.")
+    audit = {"schemaVersion": 56, "baseTierSha256": base_sha, "tierSha256": digest(candidate),
+        "recommendationsSha256": recommendation_sha, "scoreFetches": 0, "recommendationFits": 0,
+        "generatedAtUtc": candidate["generatedAtUtc"]}
+    if digest(candidate) == base_sha:
+        return {"outcome": "tiers-already-current", **audit}
+    store.put_json_bundle({f"analysis/private/tier-releases/baselines/{base_sha}.json": dict(base),
+        "analysis/private/tier-releases/latest.json": audit, combined_tier_blob_path(): candidate})
+    return {"outcome": "tiers-rebuilt", **audit}

@@ -12,6 +12,11 @@ export const AVERAGE_PUMBILITY_CALCULATION = "(scoring difficulty + clearing dif
 
 /** Resolve declared generations; tier-method 11 alone does not identify the rule. */
 export function resolvePumbilityPolicy(payload: Partial<AnalysisPayload> | null | undefined): PumbilityPolicy | null {
+  if (payload && [49, 50, 51, 52, 53, 56].includes(payload.schemaVersion ?? 0)) {
+    const scoring = payload.summary?.method.sssScoring as { version?: number; baseSchemaVersion?: number } | undefined;
+    return scoring?.version === 1 && scoring.baseSchemaVersion === 48
+      ? resolvePumbilityPolicy({ ...payload, schemaVersion: 48 }) : null;
+  }
   const tiers = payload?.summary?.method?.tierMetrics as {
     version?: number;
     pumbility?: { version?: number; aggregation?: string; requiresBoth?: boolean; calculation?: string };

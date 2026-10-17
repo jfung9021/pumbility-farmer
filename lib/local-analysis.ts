@@ -6,6 +6,14 @@ import { COMBINED_MIX, DEFAULT_MIX, isMixKey, MIXES, type MixKey } from "./mixes
 import { pumbilityReference as aggregatePumbility, resolvePumbilityPolicy } from "./pumbility-policy.ts";
 import { HYBRID_INITIAL_SCHEMA, HYBRID_POSTPROCESSED_SCHEMA, POSTPROCESSED_SCHEMA, recoverInitialFitPayload } from "./tier-postprocessing.ts";
 import { LOCAL_AVERAGE_PUMBILITY_SCHEMA, recoverMaximumPumbility } from "./pumbility-experiment.ts";
+import { validateSssAnalysisPayload } from "./sss-analysis-validation.ts";
+import { validateRefinedAnalysisPayload } from "./refined-analysis-validation.ts";
+import { validateCenteredAnalysisPayload } from "./sss-centering-validation.ts";
+import { validateSssPlusAnalysisPayload } from "./sssplus-analysis-validation.ts";
+import { validateMedianAnalysisPayload } from "./sssplus-median-validation.ts";
+import { validateSpreadAnalysisPayload } from "./sssplus-spread-validation.ts";
+import { validateCombinedClearingPayload } from "./combined-clearing-validation.ts";
+import { validateSourceAwarePayload } from "./source-aware-validation.ts";
 
 
 const SECRET_PATTERN = /(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}/i;
@@ -46,10 +54,32 @@ export const COMBINED_LOCAL_RESULTS_PATH = path.join(
 );
 export const AVERAGE_PUMBILITY_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "average", "web_results.json");
 export const HYBRID_PUMBILITY_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "hybrid", "web_results.json");
+export const SSS_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sss", "web_results.json");
+export const REFINED_SSS_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sss-refined", "web_results.json");
+export const CENTERED_SSS_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sss-centered", "web_results.json");
+
+export const SSSPLUS_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sssplus", "web_results.json");
+export const SSSPLUS_MEDIAN_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sssplus-median", "web_results.json");
+export const SSSPLUS_REFINED_ANCHORS_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sssplus-median-v2", "web_results.json");
+export const SSSPLUS_STABLE_SCALE_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sssplus-median-v3", "web_results.json");
+export const SSSPLUS_SPREAD_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sssplus-spread", "web_results.json");
+export const SSSPLUS_COMBINED_CLEARING_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sssplus-spread-combined-clearing", "web_results.json");
+export const SSSPLUS_P1_OBSERVED_CLEARING_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sssplus-spread-p1-observed-clearing", "web_results.json");
 
 export function localCombinedResultsPath(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): string {
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "source-aware-width") return path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "source-aware-width", "web_results.json");
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sssplus-spread-p1-observed-clearing") return SSSPLUS_P1_OBSERVED_CLEARING_LOCAL_RESULTS_PATH;
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sssplus-spread-combined-clearing") return SSSPLUS_COMBINED_CLEARING_LOCAL_RESULTS_PATH;
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sssplus-spread") return SSSPLUS_SPREAD_LOCAL_RESULTS_PATH;
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sssplus-median-v3") return SSSPLUS_STABLE_SCALE_LOCAL_RESULTS_PATH;
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sssplus-median-v2") return SSSPLUS_REFINED_ANCHORS_LOCAL_RESULTS_PATH;
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sssplus-median") return SSSPLUS_MEDIAN_LOCAL_RESULTS_PATH;
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sssplus") return SSSPLUS_LOCAL_RESULTS_PATH;
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sss-centered") return CENTERED_SSS_LOCAL_RESULTS_PATH;
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sss-refined") return REFINED_SSS_LOCAL_RESULTS_PATH;
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sss") return SSS_LOCAL_RESULTS_PATH;
   const experiment = localAnalysisEnabled(environment) ? environment.PIU_LOCAL_PUMBILITY_EXPERIMENT : undefined;
   return experiment === "hybrid" ? HYBRID_PUMBILITY_LOCAL_RESULTS_PATH
     : experiment === "average" ? AVERAGE_PUMBILITY_LOCAL_RESULTS_PATH : COMBINED_LOCAL_RESULTS_PATH;
@@ -686,6 +716,70 @@ export function validateLocalAnalysisPayload(
     throw new LocalAnalysisValidationError("The local analysis payload must be an object.");
   }
   const payload = value as Partial<AnalysisPayload>;
+  if (expectedMix === "combined" && payload.schemaVersion === 56) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The source-aware aggregate contains private fields or a credential-shaped value.");
+      return validateSourceAwarePayload(payload as AnalysisPayload, base => validateLocalAnalysisPayload(base, expectedMix));
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The source-aware aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
+  if (expectedMix === "combined" && payload.schemaVersion === 55) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The combined Clearing aggregate contains private player fields or a credential-shaped value.");
+      return validateCombinedClearingPayload(payload as AnalysisPayload, base => validateLocalAnalysisPayload(base, expectedMix));
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The combined Clearing aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
+  if (expectedMix === "combined" && payload.schemaVersion === 54) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The spread aggregate contains private player fields or a credential-shaped value.");
+      return validateSpreadAnalysisPayload(payload as AnalysisPayload, base => validateLocalAnalysisPayload(base, expectedMix));
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The spread aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
+  if (expectedMix === "combined" && payload.schemaVersion === 53) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The final median aggregate contains private player fields or a credential-shaped value.");
+      return validateMedianAnalysisPayload(payload as AnalysisPayload, base => validateLocalAnalysisPayload(base, expectedMix));
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The final median aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
+  if (expectedMix === "combined" && payload.schemaVersion === 52) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The SSS+ aggregate contains private player fields or a credential-shaped value.");
+      return validateSssPlusAnalysisPayload(payload as AnalysisPayload, base => validateLocalAnalysisPayload(base, expectedMix));
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The SSS+ aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
+  if (expectedMix === "combined" && payload.schemaVersion === 51) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The centered aggregate contains private player fields or a credential-shaped value.");
+      return validateCenteredAnalysisPayload(payload as AnalysisPayload, base => validateLocalAnalysisPayload(base, expectedMix));
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The centered aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
+  if (expectedMix === "combined" && payload.schemaVersion === 50) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The refined aggregate contains private player fields or a credential-shaped value.");
+      return validateRefinedAnalysisPayload(payload as AnalysisPayload, base => validateLocalAnalysisPayload(base, expectedMix));
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The refined aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
+  if (expectedMix === "combined" && payload.schemaVersion === 49) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The SSS aggregate contains private player fields or a credential-shaped value.");
+      return validateSssAnalysisPayload(payload as AnalysisPayload, base => validateLocalAnalysisPayload(base, expectedMix));
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The SSS aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
   if (expectedMix === "combined" && [LOCAL_AVERAGE_PUMBILITY_SCHEMA, 48].includes(payload.schemaVersion ?? 0)) {
     try {
       validateLocalAnalysisPayload(recoverMaximumPumbility(payload as AnalysisPayload), expectedMix);
