@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gzip
 import json
 import os
 from pathlib import Path
@@ -68,6 +69,9 @@ class HostedTierTests(unittest.TestCase):
         self.assertEqual(project.call_args.args[0]["generatedAtUtc"], timestamp)
         self.assertEqual(project.call_args.args[0]["summary"]["generatedAtUtc"], timestamp)
         self.assertEqual(len(store.binary_values), 1)
+        audit = json.loads(gzip.decompress(next(iter(store.binary_values.values()))))
+        self.assertEqual(audit, project.call_args.args[0])
+        self.assertEqual(project.call_args.kwargs["full_sha256"], digest(audit))
 
     def test_checkpoint_pins_raw_inputs_separately_from_excluded_clearing_records(self):
         store = MemoryBlobStore()

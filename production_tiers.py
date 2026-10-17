@@ -108,14 +108,14 @@ def _public_copy(value):
     return value
 
 
-def public_tiers(full, *, private_path, input_identity):
+def public_tiers(full, *, private_path, input_identity, full_sha256=None):
     """Retain all active values/explanations; rollback history is a private artifact."""
     from source_aware_tiers import validate_source_aware_tiers
     validate_source_aware_tiers(full)
     result = _public_copy(full)
     result["summary"]["scriptVersion"] = VERSION
     publication = {"version": 1, "method": VERSION, "fullArtifactPath": private_path,
-        "fullArtifactSha256": digest(full), "inputs": input_identity, "historyStorage": "private",
+        "fullArtifactSha256": full_sha256 or digest(full), "inputs": input_identity, "historyStorage": "private",
         "scoreFetches": 0, "recommendationFits": 0}
     result["summary"]["method"]["productionTierPublication"] = publication
     publication["publicPayloadSha256"] = public_digest(result)
@@ -129,6 +129,25 @@ def public_digest(payload):
     publication.pop("publicPayloadSha256", None)
     method = {**payload["summary"]["method"], "productionTierPublication": publication}
     return digest({**payload, "summary": {**payload["summary"], "method": method}})
+
+
+def write_private_audit(store, path, full):
+    """Compress the reversible history without allocating its entire JSON twice."""
+    import gzip
+    import io
+    import tempfile
+    with tempfile.TemporaryFile() as staged:
+        with gzip.GzipFile(fileobj=staged, mode="wb", mtime=0) as compressed:
+            with io.TextIOWrapper(compressed, encoding="utf-8") as writer:
+                json.dump(full, writer, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        staged.seek(0)
+        hasher = hashlib.sha256()
+        with gzip.GzipFile(fileobj=staged, mode="rb") as reader:
+            for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        staged.seek(0)
+        store.put_bytes(path, staged.read(), content_type="application/gzip")
+        return hasher.hexdigest()
 
 
 def validate_public_tiers(payload):
@@ -244,9 +263,7 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
     if generated_at_utc is not None:
         full["generatedAtUtc"] = full["summary"]["generatedAtUtc"] = generated_at_utc
     full_path = PREFIX + "generations/" + generation + "/full.json.gz"
-    import gzip
-    store.put_bytes(full_path, gzip.compress(json.dumps(full, sort_keys=True, separators=(",", ":"),
-        ensure_ascii=False, allow_nan=False).encode(), mtime=0), content_type="application/gzip")
-    public = public_tiers(full, private_path=full_path, input_identity=identity)
+    full_sha = write_private_audit(store, full_path, full)
+    public = public_tiers(full, private_path=full_path, input_identity=identity, full_sha256=full_sha)
     store.put_json(public_path, public)
     return public
