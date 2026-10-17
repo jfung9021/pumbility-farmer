@@ -45,6 +45,7 @@ RARITY_PENALTY = .05
 
 def collect_percentile_scores(
     phoenix1: Mapping[str, Any], phoenix2: Mapping[str, Any],
+    *, exclusions=None,
 ) -> dict[tuple[str, str], tuple[str, float]]:
     """Private player/chart records: best raw score within source, P2 precedence."""
     catalog = {str(row['id']): row for row in phoenix2.get('charts', [])}
@@ -56,6 +57,8 @@ def collect_percentile_scores(
         source_types = {str(row['id']): row.get('type') for row in snapshot.get('charts', [])}
         best = {}
         for row in snapshot.get('scores', []):
+            if exclusions is not None and exclusions.excludes(name, str(row.get('chartId'))):
+                continue
             player, cid = str(row.get('playerId') or '').strip(), str(row.get('chartId') or '').strip()
             chart = catalog.get(cid)
             if (not player or not chart or bool(row.get('isBroken', False))
@@ -512,8 +515,23 @@ def build_production_tier_payload(
     midpoint_compression: bool = False,
     hybrid_lower_tiers: bool = False,
     average_pumbility: bool = False,
+    source_exclusions=None,
+    source_aware_store=None,
 ) -> dict[str, Any]:
     """Publish the approved profile model without changing recommendation inputs."""
+    if source_aware_store is not None:
+        if not (hybrid_lower_tiers and average_pumbility and midpoint_compression
+                and cross_level_clearing and official_scoring_manifest is not None):
+            raise ValueError('Source-aware tiers require the enabled hybrid average source policy.')
+        from production_tiers import build_hosted_tiers
+        return build_hosted_tiers(base_records, metadata, phoenix1, phoenix2, store=source_aware_store,
+            generated_at_utc=generated_at_utc, arguments={
+                'official_snapshot': official_snapshot, 'official_scoring_manifest': official_scoring_manifest,
+                'cross_level_clearing': cross_level_clearing, 'midpoint_compression': midpoint_compression,
+                'hybrid_lower_tiers': hybrid_lower_tiers, 'average_pumbility': average_pumbility})
+    if source_exclusions is not None:
+        phoenix1 = source_exclusions.filter_snapshot(phoenix1, 'phoenix1')
+        phoenix2 = source_exclusions.filter_snapshot(phoenix2, 'phoenix2')
     payload = build_percentile_tier_payload(
         base_records, metadata, phoenix1, phoenix2, generated_at_utc=generated_at_utc,
     )
@@ -544,7 +562,7 @@ def build_production_tier_payload(
         from official_score_merge import merge_official_scores
         from official_cross_level_scoring import apply_cross_level_scoring
 
-        merged = merge_official_scores(official_scoring_manifest)
+        merged = merge_official_scores(official_scoring_manifest, exclusions=source_exclusions)
         payload = apply_cross_level_scoring(payload, merged, merged['currentCatalog'],
                                           retain_submitted_below20=hybrid_lower_tiers)
     if cross_level_clearing:

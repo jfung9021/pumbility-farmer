@@ -26,6 +26,7 @@ from phoenix2_sync import (
     utc_now,
 )
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
+from production_tiers import TierAnalysisPending
 from pumbility_contract import (
     COMBINED_TIER_SCHEMA_VERSION,
     OFFICIAL_TIER_SCHEMA_VERSION,
@@ -121,6 +122,10 @@ def _official_tier_arguments(blob_store: Any) -> dict[str, Any]:
         if not arguments.get("hybrid_lower_tiers") or not arguments.get("midpoint_compression"):
             raise RuntimeError("Average Pumbility requires enabled hybrid tiers and midpoint compression.")
         arguments["average_pumbility"] = True
+    if os.getenv("PIU_SOURCE_AWARE_TIERS", "") == "1":
+        if not arguments.get("average_pumbility"):
+            raise RuntimeError("Source-aware tiers require the hybrid average tier policy.")
+        arguments["source_aware_store"] = blob_store
     return arguments
 
 
@@ -1973,6 +1978,18 @@ def _current_recommendation_model(model: Mapping[str, Any]) -> bool:
 
 
 def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: Any = None) -> None:
+    if os.getenv("PIU_SOURCE_AWARE_TIERS", "") == "1":
+        from production_tiers import validate_public_tiers
+        try:
+            validate_public_tiers(payload)
+            if blob_store is not None:
+                from official_scoring_sources import canonical_scoring_manifest_sha256
+                actual = payload["summary"]["method"]["productionTierPublication"]["inputs"]["officialManifest"]
+                if actual != canonical_scoring_manifest_sha256(blob_store.get_json(official_scoring_manifest_path())):
+                    raise ValueError("Official source capture changed.")
+        except (ValueError, KeyError, TypeError) as exc:
+            raise IncompatibleCombinedTierCheckpointError("The source-aware tier checkpoint is incompatible.") from exc
+        return
     hybrid_enabled = (os.getenv("PIU_HYBRID_TIERS", "") == "1" or
                       (os.getenv("PIU_LOCAL_HYBRID_TIERS", "") == "1" and os.getenv("PIU_LOCAL_ANALYSIS", "") == "1"))
     average_enabled = os.getenv("PIU_PUMBILITY_AVERAGE", "") == "1"
@@ -2243,7 +2260,11 @@ def _load_typed_checkpoint_combined(
         raise ValueError("The typed combined checkpoint failed validation.")
     _validate_checkpoint_combined_tier(combined_tier, blob_store)
     clearing_method = combined_tier.get("summary", {}).get("method", {}).get("crossLevelClearing")
-    if clearing_method and any(clearing_method["inputHashes"][mix] != snapshot_hashes[mix]
+    publication = combined_tier.get("summary", {}).get("method", {}).get("productionTierPublication")
+    # Source-aware Clearing hashes describe filtered performance records; the
+    # publication contract separately pins the unfiltered recommendation inputs.
+    tier_inputs = publication["inputs"] if publication else clearing_method["inputHashes"] if clearing_method else None
+    if tier_inputs and any(tier_inputs[mix] != snapshot_hashes[mix]
                                for mix in ("phoenix1", "phoenix2")):
         raise IncompatibleCombinedTierCheckpointError("The cross-level Clearing inputs do not match the pinned checkpoint snapshots.")
     return value
@@ -4300,6 +4321,10 @@ def execute_analysis_job(
             checkpoint_paths=[staging_path, checkpoint_path],
         )
         return completed
+    except TierAnalysisPending as exc:
+        return _checkpoint_continuation(job_store=job_store, job_id=job_id,
+            continuation="combined", sequence=exc.sequence, stage="analyzing", message=str(exc),
+            lease_heartbeat=lease_heartbeat)
     except Exception as exc:
         if isinstance(exc, (
             IncompatibleCombinedTierCheckpointError,

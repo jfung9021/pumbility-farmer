@@ -104,7 +104,8 @@ def _reference_anchors(mode: str, catalog: Mapping[str, Mapping[str, Any]],
 
 def apply_cross_level_scoring(base_payload: Mapping[str, Any], merged: Mapping[str, Any],
                               current_charts: Sequence[Mapping[str, Any]], *,
-                              retain_submitted_below20: bool = False) -> dict[str, Any]:
+                              retain_submitted_below20: bool = False,
+                              modes_to_fit: set[str] | None = None) -> dict[str, Any]:
     """Apply official-only Scoring, preserving each existing Clearing metric exactly."""
     from pumbility_contract import CROSS_LEVEL_TIER_SCHEMA_VERSION
 
@@ -119,6 +120,12 @@ def apply_cross_level_scoring(base_payload: Mapping[str, Any], merged: Mapping[s
     all_target_rows = []
     for mode, key in MODES:
         rows = payload.setdefault(key, [])
+        if modes_to_fit is not None and mode not in modes_to_fit:
+            previous = payload["summary"]["method"]["officialCrossLevelScoring"]
+            curves[mode] = copy.deepcopy(previous["calibration"][mode])
+            mode_diagnostics[mode] = copy.deepcopy(previous["modes"][mode])
+            all_target_rows.extend(r for r in rows if r["level"] >= 20)
+            continue
         existing = {str(row["chartId"]) for row in rows}
         for cid, chart in sorted(catalog.items()):
             if chart["type"] == mode and int(chart["level"]) >= 20 and cid not in existing:

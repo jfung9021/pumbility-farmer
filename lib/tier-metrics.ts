@@ -1,5 +1,6 @@
 import { hasLimitedData } from "./chart-evidence.ts";
 import { truncateCoopEstimatedDifficulty, truncateEstimatedDifficulty } from "./format-difficulty.ts";
+import { isSssScoringChart, isTargetBoundaryChart, scoringTargetForChart } from "./scoring-variants.ts";
 import type { ChartResult, ClearingTierMetric, ModeKey, TierMetricKey, TierMetricResult } from "./types";
 
 export function clearingSkillPercentile(clearing: ClearingTierMetric | undefined) {
@@ -56,12 +57,21 @@ export function tierMetricAvailability(charts: ChartResult[], metric: TierMetric
 }
 
 export function hasLimitedTierData(chart: ChartResult, metric: TierMetricKey): boolean {
+  if (metric !== "scoring" && chart.tierMetrics?.clearing.method === "official-d26-clearer-ability-v1") {
+    const limited = chart.tierMetrics.clearing.evidenceStatus !== "Published" || chart.tierMetrics.clearing.ratedClearCount < 20;
+    if (metric === "clearing" || limited) return limited;
+  }
+  if (isSssScoringChart(chart) && metric !== "clearing") {
+    const limitedScoring = chart.evidenceStatus !== "Published";
+    const clearing = chart.tierMetrics?.clearing;
+    return metric === "scoring" ? limitedScoring : limitedScoring || clearing?.evidenceStatus !== "Published";
+  }
   if (chart.officialEvidence || chart.scoringMethod === "official-cross-level-v1") {
     const limitedScoring = (chart.scoringPlayerCount ?? 0) < 10 || chart.scoringProvisional === true;
     const clearing = chart.tierMetrics?.clearing;
     const limitedClearing = hasLimitedData(clearingSkillPercentile(clearing)
       ? clearing?.ratedClearCount ?? 0 : clearing?.selectedCount ?? 0)
-      || (hasQualifiedSubmittedClearing(clearing) && clearing?.evidenceStatus !== "Published");
+      || ((hasQualifiedSubmittedClearing(clearing) || clearing?.method === "official-d26-clearer-ability-v1") && clearing?.evidenceStatus !== "Published");
     return metric === "scoring" ? limitedScoring : metric === "clearing" ? limitedClearing : limitedScoring || limitedClearing;
   }
   if (metric === "scoring") return hasLimitedData(chart.nContributors);
@@ -76,6 +86,17 @@ export function hasLimitedTierData(chart: ChartResult, metric: TierMetricKey): b
 }
 
 export function tierSupportLabel(chart: ChartResult, metric: TierMetricKey): string {
+  const clearingMetric = chart.tierMetrics?.clearing;
+  const officialClearerLabel = `${clearingMetric?.ratedClearCount ?? 0} eligible official clearers from ${clearingMetric?.clearCount ?? 0} observed`;
+  if (metric === "clearing" && clearingMetric?.method === "official-d26-clearer-ability-v1") return officialClearerLabel;
+  if (isSssScoringChart(chart) && metric !== "clearing") {
+    const board = chart.scoringRefinement?.fullBoard;
+    const target = scoringTargetForChart(chart);
+    const scoring = isTargetBoundaryChart(chart) && board
+      ? `${board.records} available best scores (${board.successes} at ${target.label}, ${board.belowTarget} below); boundary estimate`
+      : `${chart.nContributors} target-fit contributors (${chart.scoringTargetSuccesses ?? 0} at ${target.label}, ${chart.scoringBelowTarget ?? 0} below)`;
+    return metric === "scoring" ? scoring : `${scoring} and ${clearingMetric?.skillMetric === "official-clearer-ability" ? officialClearerLabel : `${clearingMetric?.ratedClearCount ?? 0} rated clearers`}`;
+  }
   if (chart.officialEvidence || chart.scoringMethod === "official-cross-level-v1") {
     const scoring = chart.scoringMethod === "official-cross-level-v1"
       ? `${chart.scoringPlayerCount ?? 0} players with cross-level official comparisons`

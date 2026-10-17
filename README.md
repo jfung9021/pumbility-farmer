@@ -4,6 +4,40 @@ Pumbility Farmer is a PIU Phoenix difficulty analyzer and Vercel web UI with Sco
 
 ## Analysis method
 
+### Source-aware SSS+ tiers
+
+The current tier generation offers **SSS+** (995,000 points, selected by default)
+and **General** Scoring, with Pumbility averaging the selected final Scoring and
+Clearing difficulties before rounding. SSS+ combines Phoenix 1 and Phoenix 2
+official best scores for 20+ charts; lower charts use submitted records. The target
+model, boundary/rare-success estimates, median calibration, smooth tail policy,
+and final folder width follow the approved local methodology. D26+ Clearing uses
+combined official clearer histories, including D24/D25, treating Phoenix 1 caps as
+informational. Other Clearing and player/recommendation methods retain their
+existing definitions.
+
+`config/chart-source-exclusions.json` excludes changed chart/version performance
+before merging, qualification, and fitting. Mopemope D26 initially excludes Phoenix
+1. Raw captures remain available. The 50% midpoint compression applies once;
+final width preserves folder medians, order, ties, and the global extreme budget.
+
+Hosted publication enables `PIU_SOURCE_AWARE_TIERS=1` alongside the existing
+hybrid, average, official-Scoring, submitted-Clearing, and midpoint flags. Daily
+refreshes use the same methodology. Private fits are addressed by observed-board,
+source-board, target, bootstrap, seed, and model-code identities; each missing
+cohort is checkpointed in a separate worker invocation. The protected tier-only
+rebuild (`POST /api/jonathan/refresh?mode=tiers`) resumes those caches without
+fetching scores or fitting recommendations. Repeat while its outcome is
+`tier-analysis-progress`. Protected `/api/jonathan/tier-fits` controls inspect
+input hashes and accept completed fits only when current source identities and
+the converged 200-bootstrap policy match.
+
+The public schema-56 presentation retains active ratings and explanations while
+omitting historical rollback copies. A full validated, compressed audit artifact,
+previous public baseline, and publication hashes remain private. The local builder
+continues to emit the complete reversible generation with
+`npm run analyze:source-aware`.
+
 ### Submitted cross-level Clearing
 
 The local Clearing candidate combines submitted successful PIUScores records from

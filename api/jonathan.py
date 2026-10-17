@@ -28,6 +28,43 @@ def jonathan_authorized(provided: str, expected: str) -> bool:
     return bool(expected) and hmac.compare_digest(provided, expected)
 
 
+def _tier_fit_denial(request: Request):
+    password = os.getenv("JONATHAN_PASSWORD", "").strip()
+    if not password:
+        return _response(503, {"error": "The Jonathan refresh controls are not configured."})
+    if not jonathan_authorized(request.headers.get("x-jonathan-password", ""), password):
+        return _response(401, {"error": "Unauthorized refresh request."})
+    return None
+
+
+@router.get("/api/jonathan/tier-fits")
+def get_tier_fit_status(request: Request):
+    denial = _tier_fit_denial(request)
+    if denial is not None:
+        return denial
+    try:
+        from analysis_runtime import PrivateBlobStore
+        from tier_release import source_aware_fit_status
+        return _response(200, source_aware_fit_status(PrivateBlobStore()))
+    except (ValueError, RuntimeError):
+        return _response(503, {"error": "The cached tier-fit sources could not be inspected."})
+
+
+@router.post("/api/jonathan/tier-fits")
+def cache_tier_fit(request: Request, payload: dict):
+    denial = _tier_fit_denial(request)
+    if denial is not None:
+        return denial
+    try:
+        from analysis_runtime import PrivateBlobStore
+        from tier_release import seed_source_aware_fit
+        return _response(200, seed_source_aware_fit(PrivateBlobStore(), payload))
+    except ValueError as error:
+        return _response(400, {"error": str(error)})
+    except RuntimeError:
+        return _response(503, {"error": "The target fit could not be cached."})
+
+
 @router.post("/api/jonathan/refresh")
 def refresh_from_jonathan(
     request: Request,
