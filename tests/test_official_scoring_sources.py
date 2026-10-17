@@ -66,6 +66,28 @@ class FakeClient:
 
 
 class OfficialScoringSourcesTests(unittest.TestCase):
+    def test_hosted_batches_resume_across_requests_and_publish_only_when_complete(self):
+        from analysis_runtime import MemoryBlobStore
+        from pumbility_contract import official_scoring_manifest_path
+        store = MemoryBlobStore()
+        class Client(FakeClient):
+            def fetch_page_collection(self, path):
+                return [chart(), chart(B, level=21)]
+        first = Client([api_board([row()], OLD), api_board([row()], OLD)])
+        result = refresh_hosted_official_scoring_sources(first, store, max_boards=2)
+        self.assertEqual(result["outcome"], "official-sources-progress")
+        self.assertIsNone(store.get_json(official_scoring_manifest_path()))
+        second = Client([api_board([row()], OLD), api_board([row(99)], NEW)])
+        result = refresh_hosted_official_scoring_sources(second, store, max_boards=2)
+        self.assertEqual(result["outcome"], "official-sources-progress")
+        self.assertIsNone(store.get_json(official_scoring_manifest_path()))
+        third = Client([api_board([row()], OLD), api_board([row(99)], NEW), api_board([row(99)], NEW)])
+        result = refresh_hosted_official_scoring_sources(third, store, max_boards=3)
+        self.assertEqual(result["sourceDates"], {"Phoenix": OLD, "Phoenix2": NEW})
+        self.assertIsNotNone(store.get_json(official_scoring_manifest_path()))
+        pending_key = official_scoring_manifest_path().rsplit("/", 1)[0] + "/refresh-pending.json"
+        self.assertEqual(store.get_json(pending_key), {})
+
     def test_hosted_refresh_stages_complete_sources_and_reuses_archived_boards(self):
         from analysis_runtime import MemoryBlobStore
         from pumbility_contract import official_scoring_manifest_path
