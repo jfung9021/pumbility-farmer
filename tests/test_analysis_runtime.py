@@ -506,6 +506,29 @@ class ApiRouteTests(unittest.TestCase):
             capture.assert_called_once_with(client.return_value, store.return_value)
             start.assert_not_called()
 
+    def test_jonathan_official_status_is_protected_and_read_only(self) -> None:
+        with (
+            patch.dict(os.environ, {"JONATHAN_PASSWORD": "operator-secret"}),
+            patch("analysis_runtime.PrivateBlobStore") as store,
+            patch("official_scoring_sources.refresh_hosted_official_scoring_sources") as capture,
+            patch("api.jonathan.start_or_reuse_analysis") as start,
+        ):
+            unauthorized = API_CLIENT.post("/api/jonathan/refresh?mode=official-status")
+            self.assertEqual(unauthorized.status_code, 401)
+            store.assert_not_called()
+            headers = {"X-Jonathan-Password": "operator-secret"}
+            store.return_value.get_json.return_value = None
+            missing = API_CLIENT.post("/api/jonathan/refresh?mode=official-status", headers=headers)
+            self.assertEqual(missing.json()["outcome"], "official-sources-missing")
+            dates = {"asOf": "2026-10-11T00:00:00Z", "fetchedAtUtc": "2026-10-17T04:00:00Z"}
+            store.return_value.get_json.return_value = {"captures": {"Phoenix2": {**dates, "path": "private", "sha256": "private"}}}
+            ready = API_CLIENT.post("/api/jonathan/refresh?mode=official-status", headers=headers)
+            self.assertEqual(ready.json(), {"outcome": "official-sources-ready", "sources": {"Phoenix2": dates}})
+            self.assertEqual(ready.headers["cache-control"], "no-store")
+            capture.assert_not_called()
+            start.assert_not_called()
+            store.return_value.put_json.assert_not_called()
+
     def test_jonathan_full_refresh_requests_a_complete_resync(self) -> None:
         job = new_job("analysis-full", NOW, full_sync=True)
         with (
