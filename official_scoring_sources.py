@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -233,6 +234,40 @@ def load_official_scoring_manifest(path: Path = DEFAULT_OFFICIAL_SCORING_MANIFES
         return json.loads(capture_bytes)
 
     return hydrate_official_scoring_manifest(manifest, loader, current_charts)
+
+
+def refresh_hosted_official_scoring_sources(client: Any, store: Any) -> dict[str, Any]:
+    """Capture live official boards inside the protected hosted environment.
+
+    Write immutable captures before advancing the private manifest. A failed
+    fetch or storage validation leaves the last complete manifest available.
+    """
+    from pumbility_contract import official_scoring_manifest_path
+
+    key = official_scoring_manifest_path()
+    prefix = key.rsplit("/", 1)[0]
+    with tempfile.TemporaryDirectory(prefix="piu-official-scoring-") as directory:
+        path = Path(directory) / "manifest.json"
+        previous = store.get_json(key)
+        if previous is not None:
+            loaded = hydrate_official_scoring_manifest(
+                previous, lambda relative: store.get_json(f"{prefix}/{relative}"),
+            )
+            publish_official_scoring_manifest(loaded["_captures"], path)
+        catalogs = {mix: client.fetch_page_collection(f"api/v2/charts?mix={mix}&limit=500") for mix in MIXES}
+        loaded = capture_official_scoring_sources(client, catalogs, path)
+        manifest = {k: v for k, v in loaded.items() if not k.startswith("_")}
+        for mix, ref in manifest["captures"].items():
+            store.put_json(f"{prefix}/{ref['path']}", loaded["_captures"][mix])
+        hydrate_official_scoring_manifest(
+            manifest, lambda relative: store.get_json(f"{prefix}/{relative}"),
+        )
+        store.put_json(key, manifest)
+    return {
+        "sourceDates": {mix: ref["asOf"] for mix, ref in manifest["captures"].items()},
+        "boardCounts": {mix: len(loaded["_captures"][mix]["boards"]) for mix in MIXES},
+        "manifestSha256": canonical_scoring_manifest_sha256(manifest),
+    }
 
 
 def hydrate_official_scoring_manifest(manifest: Mapping[str, Any], loader: Callable[[str], Mapping[str, Any]],

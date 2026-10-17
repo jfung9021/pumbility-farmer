@@ -10,6 +10,7 @@ from pathlib import Path
 from official_scoring_sources import (
     MIXES, canonical_scoring_manifest_sha256, capture_official_scoring_sources,
     hydrate_official_scoring_manifest, import_research_scoring_sources, load_official_scoring_manifest,
+    refresh_hosted_official_scoring_sources,
 )
 from official_score_merge import merge_official_scores
 
@@ -65,6 +66,44 @@ class FakeClient:
 
 
 class OfficialScoringSourcesTests(unittest.TestCase):
+    def test_hosted_refresh_stages_complete_sources_and_reuses_archived_boards(self):
+        from analysis_runtime import MemoryBlobStore
+        from pumbility_contract import official_scoring_manifest_path
+        store = MemoryBlobStore()
+        class Client(FakeClient):
+            def fetch_page_collection(self, path):
+                return [chart(), chart(B, level=21)]
+        first = Client([api_board([row()], OLD), api_board([row()], OLD),
+                        api_board([row(99)], NEW), api_board([row(99)], NEW)])
+        result = refresh_hosted_official_scoring_sources(first, store)
+        self.assertEqual(result["boardCounts"], {"Phoenix": 2, "Phoenix2": 2})
+        self.assertNotIn("PLAYER#1234", json.dumps(result))
+        second = Client([api_board([row()], OLD), api_board([row(99)], LATER), api_board([row(99)], LATER)])
+        result = refresh_hosted_official_scoring_sources(second, store)
+        self.assertEqual(len(second.paths), 3)
+        self.assertEqual(result["sourceDates"]["Phoenix2"], LATER)
+        manifest = store.get_json(official_scoring_manifest_path())
+        self.assertEqual(canonical_scoring_manifest_sha256(manifest), result["manifestSha256"])
+        before = copy.deepcopy(store.values)
+        failed = Client([api_board([row()], OLD), RuntimeError("upstream unavailable")])
+        with self.assertRaisesRegex(RuntimeError, "upstream unavailable"):
+            refresh_hosted_official_scoring_sources(failed, store)
+        self.assertEqual(before, store.values)
+
+    def test_hosted_storage_failure_does_not_advance_manifest(self):
+        from analysis_runtime import MemoryBlobStore
+        from pumbility_contract import official_scoring_manifest_path
+        from unittest.mock import patch
+        store = MemoryBlobStore()
+        class Client(FakeClient):
+            def fetch_page_collection(self, path):
+                return [chart()]
+        client = Client([api_board([row()], OLD), api_board([row(99)], NEW)])
+        with patch.object(store, "put_json", side_effect=RuntimeError("storage unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "storage unavailable"):
+                refresh_hosted_official_scoring_sources(client, store)
+        self.assertIsNone(store.get_json(official_scoring_manifest_path()))
+
     def test_research_import_max_raw_and_private_provenance(self):
         with tempfile.TemporaryDirectory() as temp:
             root, output = Path(temp) / "research", Path(temp) / "private/manifest.json"

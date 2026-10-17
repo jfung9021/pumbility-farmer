@@ -486,6 +486,26 @@ class ApiRouteTests(unittest.TestCase):
             trigger="jonathan",
         )
 
+    def test_jonathan_official_capture_requires_password_and_enabled_policy(self) -> None:
+        with (
+            patch.dict(os.environ, {"JONATHAN_PASSWORD": "operator-secret", "PIU_OFFICIAL_CROSS_LEVEL_SCORING": "0"}),
+            patch("official_scoring_sources.refresh_hosted_official_scoring_sources", return_value={"sourceDates": {"Phoenix2": "2026-10-11T00:00:00Z"}}) as capture,
+            patch("analysis_runtime.PrivateBlobStore") as store,
+            patch("analysis_runtime.PiuScoresClient") as client,
+            patch("api.jonathan.start_or_reuse_analysis") as start,
+        ):
+            self.assertEqual(API_CLIENT.post("/api/jonathan/refresh?mode=official").status_code, 401)
+            headers = {"X-Jonathan-Password": "operator-secret"}
+            self.assertEqual(API_CLIENT.post("/api/jonathan/refresh?mode=official", headers=headers).status_code, 409)
+            capture.assert_not_called()
+            with patch.dict(os.environ, {"PIU_OFFICIAL_CROSS_LEVEL_SCORING": "1"}):
+                response = API_CLIENT.post("/api/jonathan/refresh?mode=official", headers=headers)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["outcome"], "official-sources-refreshed")
+            self.assertEqual(response.headers["cache-control"], "no-store")
+            capture.assert_called_once_with(client.return_value, store.return_value)
+            start.assert_not_called()
+
     def test_jonathan_full_refresh_requests_a_complete_resync(self) -> None:
         job = new_job("analysis-full", NOW, full_sync=True)
         with (
