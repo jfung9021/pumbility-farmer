@@ -109,6 +109,18 @@ def _official_tier_arguments(blob_store: Any) -> dict[str, Any]:
         arguments["official_scoring_manifest"] = hydrate_official_scoring_manifest(
             manifest, lambda relative_path: blob_store.get_json(f"{prefix}/{relative_path}"),
         )
+    hybrid_enabled = os.getenv("PIU_HYBRID_TIERS", "") == "1"
+    local_hybrid = os.getenv("PIU_LOCAL_HYBRID_TIERS", "") == "1"
+    if hybrid_enabled or local_hybrid:
+        if ((not hybrid_enabled and os.getenv("PIU_LOCAL_ANALYSIS", "") != "1")
+                or not arguments.get("cross_level_clearing")
+                or "official_scoring_manifest" not in arguments):
+            raise RuntimeError("Hybrid tiers require an explicit enabled source policy, official Scoring and submitted Clearing.")
+        arguments["hybrid_lower_tiers"] = True
+    if os.getenv("PIU_PUMBILITY_AVERAGE", "") == "1":
+        if not arguments.get("hybrid_lower_tiers") or not arguments.get("midpoint_compression"):
+            raise RuntimeError("Average Pumbility requires enabled hybrid tiers and midpoint compression.")
+        arguments["average_pumbility"] = True
     return arguments
 
 
@@ -1961,6 +1973,32 @@ def _current_recommendation_model(model: Mapping[str, Any]) -> bool:
 
 
 def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: Any = None) -> None:
+    hybrid_enabled = (os.getenv("PIU_HYBRID_TIERS", "") == "1" or
+                      (os.getenv("PIU_LOCAL_HYBRID_TIERS", "") == "1" and os.getenv("PIU_LOCAL_ANALYSIS", "") == "1"))
+    average_enabled = os.getenv("PIU_PUMBILITY_AVERAGE", "") == "1"
+    if payload.get("schemaVersion") in (46, 47, 48) or hybrid_enabled or average_enabled:
+        if (not hybrid_enabled
+                or os.getenv("PIU_OFFICIAL_CROSS_LEVEL_SCORING", "") != "1"
+                or os.getenv("PIU_CROSS_LEVEL_CLEARING", "") != "1"):
+            raise IncompatibleCombinedTierCheckpointError("The hybrid tier checkpoint requires its explicit local or production source policy.")
+        compressed = os.getenv("PIU_TIER_MIDPOINT_COMPRESSION", "") == "1"
+        if average_enabled and not compressed:
+            raise IncompatibleCombinedTierCheckpointError("Average Pumbility requires midpoint compression.")
+        expected_schema = 48 if average_enabled else 47 if compressed else 46
+        if payload.get("schemaVersion") != expected_schema:
+            raise IncompatibleCombinedTierCheckpointError("The hybrid tier checkpoint uses an incompatible schema.")
+        from hybrid_tiers import validate_hybrid_tiers
+        try:
+            validate_hybrid_tiers(payload)
+            if blob_store is not None:
+                from official_scoring_sources import canonical_scoring_manifest_sha256
+                current = blob_store.get_json(official_scoring_manifest_path())
+                actual = payload["summary"]["method"]["officialCrossLevelScoring"]["manifestSha256"]
+                if actual != canonical_scoring_manifest_sha256(current):
+                    raise ValueError("Official source capture changed.")
+        except (ValueError, KeyError, TypeError) as exc:
+            raise IncompatibleCombinedTierCheckpointError("The hybrid tier checkpoint method or input identity is incompatible.") from exc
+        return
     official_enabled = os.getenv("PIU_OFFICIAL_HIGH_LEVEL_TIERS", "") == "1"
     cross_enabled = os.getenv("PIU_OFFICIAL_CROSS_LEVEL_SCORING", "") == "1"
     clearing_enabled = os.getenv("PIU_CROSS_LEVEL_CLEARING", "") == "1"

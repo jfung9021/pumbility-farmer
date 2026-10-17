@@ -510,6 +510,8 @@ def build_production_tier_payload(
     official_scoring_manifest: Mapping[str, Any] | None = None,
     cross_level_clearing: bool = False,
     midpoint_compression: bool = False,
+    hybrid_lower_tiers: bool = False,
+    average_pumbility: bool = False,
 ) -> dict[str, Any]:
     """Publish the approved profile model without changing recommendation inputs."""
     payload = build_percentile_tier_payload(
@@ -520,6 +522,10 @@ def build_production_tier_payload(
         '+local-score-profile-level-scales-v3', '+score-profile-level-scales-v3',
     )
     payload['summary']['method'].pop('localExperiment', None)
+    if hybrid_lower_tiers and (official_scoring_manifest is None or not cross_level_clearing):
+        raise ValueError('Hybrid tiers require official 20+ Scoring and submitted cross-level Clearing.')
+    if average_pumbility and (not hybrid_lower_tiers or not midpoint_compression):
+        raise ValueError('Average Pumbility requires hybrid tiers and midpoint compression.')
     if official_snapshot is not None:
         from official_scores import validate_official_snapshot
         from official_tiers import apply_official_tiers
@@ -539,12 +545,22 @@ def build_production_tier_payload(
         from official_cross_level_scoring import apply_cross_level_scoring
 
         merged = merge_official_scores(official_scoring_manifest)
-        payload = apply_cross_level_scoring(payload, merged, merged['currentCatalog'])
+        payload = apply_cross_level_scoring(payload, merged, merged['currentCatalog'],
+                                          retain_submitted_below20=hybrid_lower_tiers)
     if cross_level_clearing:
         from cross_level_clearing import apply_cross_level_clearing, current_clearing_catalog
 
-        payload = apply_cross_level_clearing(payload, phoenix1, phoenix2, current_clearing_catalog(payload, phoenix2))
+        payload = apply_cross_level_clearing(payload, phoenix1, phoenix2, current_clearing_catalog(payload, phoenix2),
+                                           hybrid_lower_tiers=hybrid_lower_tiers)
+    if hybrid_lower_tiers:
+        from hybrid_tiers import refresh_hybrid_summary
+        from pumbility_contract import HYBRID_TIER_SCRIPT_VERSION
+        refresh_hybrid_summary(payload)
+        payload['summary']['scriptVersion'] = HYBRID_TIER_SCRIPT_VERSION
     if midpoint_compression:
         from tier_postprocessing import finalize_tiers
         payload = finalize_tiers(payload, newly_fitted_metrics={"scoring", "clearing"})
+    if average_pumbility:
+        from pumbility_average import apply_average_pumbility
+        payload = apply_average_pumbility(payload)
     return payload

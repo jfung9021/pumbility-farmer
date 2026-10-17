@@ -29,6 +29,12 @@ export function clearingPercentileRange(clearing: ClearingTierMetric | undefined
   return null;
 }
 
+export function hasQualifiedSubmittedClearing(clearing: ClearingTierMetric | undefined): boolean {
+  return clearing?.method === "submitted-cross-level-clearing-v1"
+    || clearing?.method === "submitted-cross-level-clearing-v2"
+    || clearing?.method === "submitted-folder-centered-clearing-v1";
+}
+
 const unratedMetric: TierMetricResult = {
   estimatedDifficulty: null,
   difficultyDelta: null,
@@ -55,17 +61,18 @@ export function hasLimitedTierData(chart: ChartResult, metric: TierMetricKey): b
     const clearing = chart.tierMetrics?.clearing;
     const limitedClearing = hasLimitedData(clearingSkillPercentile(clearing)
       ? clearing?.ratedClearCount ?? 0 : clearing?.selectedCount ?? 0)
-      || (clearing?.method === "submitted-cross-level-clearing-v1" && clearing.evidenceStatus !== "Published");
+      || (hasQualifiedSubmittedClearing(clearing) && clearing?.evidenceStatus !== "Published");
     return metric === "scoring" ? limitedScoring : metric === "clearing" ? limitedClearing : limitedScoring || limitedClearing;
   }
   if (metric === "scoring") return hasLimitedData(chart.nContributors);
   const clearing = chart.tierMetrics?.clearing;
   if (metric === "clearing") return hasLimitedData(clearingSkillPercentile(clearing)
     ? clearing?.ratedClearCount ?? 0 : clearing?.selectedCount ?? 0)
-    || (clearing?.method === "submitted-cross-level-clearing-v1" && clearing.evidenceStatus !== "Published");
+    || (hasQualifiedSubmittedClearing(clearing) && clearing?.evidenceStatus !== "Published");
   const pumbility = chart.tierMetrics?.pumbility;
   return hasLimitedData(pumbility?.scoringSupportCount ?? 0)
-    || hasLimitedData(pumbility?.clearingSupportCount ?? 0);
+    || hasLimitedData(pumbility?.clearingSupportCount ?? 0)
+    || (hasQualifiedSubmittedClearing(clearing) && clearing?.evidenceStatus !== "Published");
 }
 
 export function tierSupportLabel(chart: ChartResult, metric: TierMetricKey): string {

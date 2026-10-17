@@ -31,7 +31,7 @@ def jonathan_authorized(provided: str, expected: str) -> bool:
 @router.post("/api/jonathan/refresh")
 def refresh_from_jonathan(
     request: Request,
-    mode: Literal["incremental", "full", "reanalyze", "official", "official-status"] = Query(default="incremental"),
+    mode: Literal["incremental", "full", "reanalyze", "official", "official-status", "tiers"] = Query(default="incremental"),
 ):
     password = os.getenv("JONATHAN_PASSWORD", "").strip()
     if not password:
@@ -50,6 +50,14 @@ def refresh_from_jonathan(
 
     full_sync = mode == "full"
     try:
+        if mode == "tiers":
+            from analysis_runtime import PrivateBlobStore, RuntimeJobStore
+            from tier_release import rebuild_tiers_only, TierReleaseBusyError
+
+            try:
+                return _response(200, rebuild_tiers_only(PrivateBlobStore(), RuntimeJobStore()))
+            except TierReleaseBusyError as exc:
+                return _response(409, {"error": str(exc)})
         if mode == "official-status":
             from analysis_runtime import PrivateBlobStore
             from pumbility_contract import official_scoring_manifest_path
