@@ -148,6 +148,19 @@ class TierMetricTests(unittest.TestCase):
         for count, status in ((1, "Insufficient"), (5, "Provisional"), (10, "Published")):
             self.assertEqual(self._calculate([("Single", 20, 21)], count=count)[1][0]["clearing"]["evidenceStatus"], status)
 
+    def test_maximum_selects_each_component_and_recomputes_bands_and_ranks(self) -> None:
+        charts, metrics, references = self._calculate([
+            ("Single", 20, 20), ("Single", 20, 22),
+        ], count=10)
+        self.assertGreater(charts[0]["estimatedDifficulty"], metrics[0]["clearing"]["estimatedDifficulty"])
+        self.assertGreater(metrics[1]["clearing"]["estimatedDifficulty"], charts[1]["estimatedDifficulty"])
+        self.assertEqual(metrics[0]["pumbility"]["estimatedDifficulty"], charts[0]["estimatedDifficulty"])
+        self.assertEqual(metrics[1]["pumbility"]["estimatedDifficulty"], metrics[1]["clearing"]["estimatedDifficulty"])
+        self.assertEqual([row["pumbility"]["levelRank"] for row in metrics], [1, 2])
+        self.assertEqual([row["pumbility"]["effectBand"] for row in metrics], ["Hard", "Underrated"])
+        self.assertEqual(tier_metric_method(references)["pumbility"]["calculation"],
+                         "max(scoring difficulty, clearing difficulty) before rounding")
+
     def test_missing_component_and_weaker_scoring_evidence(self) -> None:
         charts = [{"chartId": "a", "type": "Single", "level": 20, "estimatedDifficulty": None, "evidenceStatus": "Unrated", "nContributors": 0}]
         clearers = {"a": {f"p{index}" for index in range(10)}}
