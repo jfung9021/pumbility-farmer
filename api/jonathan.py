@@ -31,7 +31,7 @@ def jonathan_authorized(provided: str, expected: str) -> bool:
 @router.post("/api/jonathan/refresh")
 def refresh_from_jonathan(
     request: Request,
-    mode: Literal["incremental", "full", "reanalyze", "official"] = Query(default="incremental"),
+    mode: Literal["incremental", "full", "reanalyze", "official", "official-status"] = Query(default="incremental"),
 ):
     password = os.getenv("JONATHAN_PASSWORD", "").strip()
     if not password:
@@ -50,6 +50,18 @@ def refresh_from_jonathan(
 
     full_sync = mode == "full"
     try:
+        if mode == "official-status":
+            from analysis_runtime import PrivateBlobStore
+            from pumbility_contract import official_scoring_manifest_path
+
+            manifest = PrivateBlobStore().get_json(official_scoring_manifest_path())
+            if manifest is None:
+                return _response(200, {"outcome": "official-sources-missing"})
+            return _response(200, {
+                "outcome": "official-sources-ready",
+                "sources": {mix: {key: ref[key] for key in ("asOf", "fetchedAtUtc")}
+                            for mix, ref in manifest["captures"].items()},
+            })
         if mode == "official":
             if os.getenv("PIU_OFFICIAL_CROSS_LEVEL_SCORING", "") != "1":
                 return _response(409, {"error": "Official cross-level Scoring is not enabled."})
