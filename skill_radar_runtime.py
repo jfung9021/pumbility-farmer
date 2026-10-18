@@ -10,10 +10,12 @@ from typing import Mapping
 from phoenix2_sync import merge_best_scores
 from pumbility_contract import (combined_tier_blob_path, find_player_metadata,
     recommendation_blob_path, recommendation_phoenix2_shard_path, recommendation_player_state_path)
-from skill_radar import (METHOD_VERSION, build_skill_radar, build_suggestion_catalog, content_digest)
+from pumbility_contract import player_refresh_enabled
+from skill_radar import (BPM_BUCKETS, METHOD_VERSION, PROFILE_VERSION, build_skill_radar, build_suggestion_catalog, content_digest)
 from tier_scores import _sync_time, public_tier_scores
 
 SKILL_METADATA_PATH = "analysis/private/skill-radar/phoenix2-metadata.json"
+MINIMUM_PHOENIX2_SCORES = 100
 PLAYER_KEY = re.compile(r"^[a-f0-9]{20}$")
 _cache = OrderedDict()
 _catalog_cache = OrderedDict()
@@ -24,9 +26,31 @@ class SkillRadarNotFoundError(ValueError):
     pass
 
 
+class SkillRadarIneligibleError(ValueError):
+    pass
+
+
+def read_skill_radar_players(store):
+    index = store.get_json(recommendation_blob_path())
+    if index is None:
+        raise RuntimeError("The player list is unavailable.")
+    counts = store.read_skill_radar_score_counts()
+    players = []
+    for row in index.get("players", []):
+        count = counts.get(str(row.get("internalPlayerId")), 0)
+        if count < MINIMUM_PHOENIX2_SCORES:
+            continue
+        players.append({**{key: row.get(key) for key in ("playerKey", "username", "displayName")},
+            "eligibility": {mode: bool(row.get("eligibility", {}).get(mode)) for mode in ("singles", "doubles", "coop")},
+            "phoenix2ScoreCount": count})
+    return {"generatedAtUtc": index.get("generatedAtUtc"),
+        "refreshSupported": player_refresh_enabled(index),
+        "method": {"minimumPhoenix2Scores": MINIMUM_PHOENIX2_SCORES}, "players": players}
+
+
 def skill_metadata(charts):
     """All chart levels, with no player state or history in the metadata object."""
-    fields = ("id", "type", "level", "songName", "bpmMin", "bpmMax")
+    fields = ("id", "type", "level", "songName", "bpmMin", "bpmMax", "imageUrl")
     return {"schemaVersion": 1, "charts": [{key: row.get(key) for key in fields}
         for row in charts if row.get("type") in ("Single", "Double")]}
 
@@ -39,6 +63,8 @@ def read_skill_radar(store, player_key):
     if metadata is None:
         raise SkillRadarNotFoundError("The selected player was not found.")
     generation, player_id = str(index.get("generationKey") or ""), str(metadata.get("internalPlayerId") or "")
+    if store.read_skill_radar_score_counts(player_id).get(player_id, 0) < MINIMUM_PHOENIX2_SCORES:
+        raise SkillRadarIneligibleError("Skill Radar requires at least 100 submitted Phoenix 2 scores.")
     shard_number = metadata.get("inputShard")
     if not generation or not player_id or isinstance(shard_number, bool) or not isinstance(shard_number, int) or shard_number < 0:
         raise SkillRadarNotFoundError("The selected player's score snapshot is unavailable.")
@@ -72,7 +98,8 @@ def read_skill_radar(store, player_key):
                 _catalog_cache.move_to_end(catalog_key)
                 while len(_catalog_cache) > 8:
                     _catalog_cache.popitem(last=False)
-    revision = content_digest({"method": METHOD_VERSION, "playerKey": player_key, "scores": scores,
+    revision = content_digest({"method": METHOD_VERSION, "profile": PROFILE_VERSION, "playerKey": player_key, "scores": scores,
+        "bpmCalibration": BPM_BUCKETS,
         "metadata": catalog["metadataRevision"], "tier": catalog["tierIdentity"],
         "playerRevision": [(source or {}).get("lastSyncedAtUtc") for source in (base, live)],
         "tierGeneratedAtUtc": catalog["tierGeneratedAtUtc"], "displayName": metadata.get("displayName") or metadata.get("username")})

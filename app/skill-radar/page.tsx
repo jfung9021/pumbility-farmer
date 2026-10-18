@@ -16,16 +16,16 @@ import "./skill-radar.css";
 
 const summaryId = (key: string) => `radar-summary-${encodeURIComponent(key)}`;
 
-function RadarPlot({profile, selected, onSelect}: {profile: SkillRadarResponse; selected: string; onSelect: (key: string) => void}) {
+function RadarPlot({profile, selected, onSelect, onInspect}: {profile: SkillRadarResponse; selected: string; onSelect: (key: string) => void; onInspect: (key: string) => void}) {
   const [visible, setVisible] = useState<Record<RadarMode, boolean>>({singles:true, doubles:true});
   return <figure className="radar-figure">
     <h3 className="radar-chart-title">Skill by BPM</h3>
     <div className="radar-trace-controls" aria-label="Visible radar traces">
       {(["singles", "doubles"] as const).map(mode => <button aria-pressed={visible[mode]} className={`radar-trace-toggle radar-mode-${mode}`} key={mode} onClick={() => setVisible(current => ({...current, [mode]:!current[mode]}))} type="button"><span aria-hidden="true">{mode === "singles" ? "●" : "■"}</span>{RADAR_MODES[mode].label}</button>)}
     </div>
-    <svg aria-labelledby="radar-plot-title radar-plot-description" className="radar-plot" role="img" viewBox="0 0 540 500">
+    <svg aria-labelledby="radar-plot-title radar-plot-description" className="radar-plot" role="group" viewBox="0 0 540 500">
       <title id="radar-plot-title">{profile.player.displayName} Skill Radar</title>
-      <desc id="radar-plot-description">Singles use a solid red line and circles. Doubles use a dashed green line and squares. Values for all eighteen categories follow below.</desc>
+      <desc id="radar-plot-description">Singles use a solid red line and circles. Doubles use a dashed green line and squares. Select a rating to view its contributing charts.</desc>
       <g transform="translate(70 50)">
         {[20,40,60,80,100].map(score => <g key={score}><circle className="radar-ring" cx="200" cy="200" r={132 * score / 100} /><text className="radar-ring-label" x="205" y={196 - 132 * score / 100}>{score}</text></g>)}
         {profile.bpmBuckets.map((bucket, index) => {
@@ -35,7 +35,10 @@ function RadarPlot({profile, selected, onSelect}: {profile: SkillRadarResponse; 
             <text className="radar-axis-label" x={label.x} y={label.labelY} dominantBaseline="middle" textAnchor={label.textAnchor}>{bucket.label}</text>
             {(["singles", "doubles"] as const).filter(mode => visible[mode]).map((mode, line) => {
               const value = profile.buckets.find(value => value.mode === mode && value.bpmBucketId === bucket.id)!;
-              return <text className={`radar-axis-score radar-mode-${mode}`} dominantBaseline="middle" key={mode} textAnchor={label.textAnchor} x={label.x} y={label.scoreY + line * 18}>{RADAR_MODES[mode].prefix} {value.radarScore.toFixed(1)}/100</text>;
+              return <g aria-label={`Show contributing charts for ${RADAR_MODES[mode].label} ${bucket.label} BPM, ${value.radarScore.toFixed(1)}/100${value.needsPlays ? ", insufficient data" : ""}`} aria-haspopup="dialog" className={`radar-skill-trigger radar-mode-${mode}`} key={mode} role="button" tabIndex={0} onClick={event => {event.currentTarget.focus(); onInspect(value.key);}} onKeyDown={event => {if (event.key === "Enter" || event.key === " ") {event.preventDefault(); onInspect(value.key);}}}>
+                <rect className="radar-skill-hit-area" x={label.x - (label.textAnchor === "end" ? 104 : label.textAnchor === "middle" ? 54 : 4)} y={label.scoreY + line * 18 - 9} width="108" height="18" rx="3" />
+                <text className={`radar-axis-score radar-mode-${mode}`} dominantBaseline="middle" textAnchor={label.textAnchor} x={label.x} y={label.scoreY + line * 18}>{RADAR_MODES[mode].prefix} {value.radarScore.toFixed(1)}/100{value.needsPlays ? "*" : ""}</text>
+              </g>;
             })}
           </g>;
         })}
@@ -47,7 +50,7 @@ function RadarPlot({profile, selected, onSelect}: {profile: SkillRadarResponse; 
             {points.map((bucket, index) => {
               const point = radarPoint(index, bucket.radarScore);
               return <g className="radar-point" data-selected={selected === bucket.key || undefined} key={bucket.key} onClick={() => onSelect(bucket.key)}>
-                <title>{RADAR_MODES[mode].label} · {bucket.label} BPM · {bucket.radarScore.toFixed(1)}/100 · PG {bucket.rawPg.toFixed(1)}</title>
+                <title>{RADAR_MODES[mode].label} · {bucket.label} BPM · {bucket.radarScore.toFixed(1)}/100 · UG {bucket.rawEquivalentLevel.toFixed(1)}</title>
                 {mode === "singles" ? <circle cx={point.x} cy={point.y} r="4" /> : <rect x={point.x - 4} y={point.y - 4} height="8" width="8" />}
               </g>;
             })}
@@ -55,7 +58,41 @@ function RadarPlot({profile, selected, onSelect}: {profile: SkillRadarResponse; 
         })}
       </g>
     </svg>
+    {profile.buckets.some(bucket => visible[bucket.mode] && bucket.needsPlays) ? <figcaption className="radar-data-legend">* Insufficient data</figcaption> : null}
   </figure>;
+}
+
+function ContributionDialog({bucket, onClose}: {bucket: RadarBucket; onClose: () => void}) {
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current!;
+    const previous = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    dialog.showModal();
+    return () => {
+      dialog.close();
+      document.body.style.overflow = previousOverflow;
+      if (previous instanceof HTMLElement || previous instanceof SVGElement) previous.focus();
+    };
+  }, []);
+  const mode = RADAR_MODES[bucket.mode];
+  const total = bucket.contributingCharts.reduce((sum, chart) => sum + Math.round(chart.pumbility * 100), 0) / 100;
+  return <dialog aria-labelledby="radar-contributor-title" className={`radar-contributor-dialog radar-mode-${bucket.mode}`} ref={dialogRef} onCancel={event => {event.preventDefault(); onClose();}} onClick={event => {if (event.target === event.currentTarget) onClose();}}>
+    <div className="radar-contributor-content">
+      <header className="radar-contributor-heading"><div><p>{mode.label} · {bucket.label} BPM</p><h2 id="radar-contributor-title">Contributing charts</h2></div><button aria-label="Close contributing charts" onClick={onClose} type="button">×</button></header>
+      <p className="radar-contributor-summary"><strong>{bucket.radarScore.toFixed(1)}<small>/100</small></strong><span>{mode.prefix}{bucket.rawEquivalentLevel.toFixed(1)} UG</span><span>{bucket.selectedCharts}/5 charts</span></p>
+      <div className="radar-contributor-columns"><span>Chart / score</span><span>Pumbility</span></div>
+      <ol className="radar-contributors">{bucket.contributingCharts.map((chart, index) => {
+        return <li className="radar-contribution" key={chart.chartId}>
+          <span className="radar-contribution-rank">{index + 1}</span>
+          <div className="radar-contribution-jacket chart-art" data-chart-type={chart.type} aria-hidden="true">{chart.imageUrl ? <img alt="" src={chart.imageUrl} /> : <span>{chart.difficulty}</span>}</div><div className="radar-contribution-copy"><strong>{chart.songName}</strong><span><b>{chart.difficulty}</b> · {chart.score === null ? "No recorded score" : chart.score.toLocaleString()}{chart.plate ? ` ${chart.plate}` : ""}</span></div><b className="radar-contribution-pumbility">{chart.pumbility.toFixed(2)}</b>
+        </li>;
+      })}</ol>
+      <p className="radar-contributor-total"><span>Average Pumbility</span><strong>{bucket.selectedCharts ? (total / bucket.selectedCharts).toFixed(2) : "—"}</strong></p>
+      {bucket.needsPlays ? <p className="radar-contributor-note">{bucket.selectedCharts ? "Only available charts are averaged." : "No usable chart scores."}</p> : null}
+    </div>
+  </dialog>;
 }
 
 function SuggestionRow({chart}: {chart: RadarSuggestion}) {
@@ -74,12 +111,12 @@ function BucketSummary({bucket, expanded, onSelect}: {bucket: RadarBucket; expan
   return <div className={`radar-bucket radar-mode-${bucket.mode}`}>
     <button aria-controls={`${summaryId(bucket.key)}-ladder`} aria-expanded={expanded} className="radar-bucket-summary" id={summaryId(bucket.key)} onClick={onSelect} type="button">
       <span className="radar-bucket-name"><b>{mode.label}</b><span>{bucket.label} BPM</span></span>
-      <span className="radar-bucket-skill"><b>{bucket.radarScore.toFixed(1)}<small>/100</small></b><span>{mode.prefix}{bucket.rawPg.toFixed(1)} PG</span></span>
+      <span className="radar-bucket-skill"><b>{bucket.radarScore.toFixed(1)}<small>/100</small></b><span>{mode.prefix}{bucket.rawEquivalentLevel.toFixed(1)} UG</span></span>
       {bucket.needsPlays ? <span className="radar-needs-plays">Needs plays · {bucket.selectedCharts}/5</span> : null}
       <span aria-hidden="true" className="radar-expand">{expanded ? "−" : "+"}</span>
     </button>
     {expanded ? <section aria-label={`${mode.label} ${bucket.label} BPM chart suggestions`} className="radar-ladder" id={`${summaryId(bucket.key)}-ladder`}>
-      <h3>Next charts <span>{mode.prefix}{formatEstimatedDifficulty(bucket.minimumSuggestedDifficulty)}+</span></h3>
+      <h3>Next charts <span>{mode.prefix}{bucket.suggestedLevel}{bucket.suggestions.some(chart => chart.level > bucket.suggestedLevel) ? "+" : ""}</span></h3>
       {bucket.suggestions.length ? <ol>{bucket.suggestions.map(chart => <SuggestionRow chart={chart} key={chart.chartId} />)}</ol> : <p>No qualifying charts.</p>}
     </section> : null}
   </div>;
@@ -92,6 +129,7 @@ export default function SkillRadarPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [profile, setProfile] = useState<SkillRadarResponse | null>(null);
   const [selected, setSelected] = useState("");
+  const [inspected, setInspected] = useState("");
   const [loading, setLoading] = useState(false);
   const [playersLoading, setPlayersLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -109,13 +147,14 @@ export default function SkillRadarPage() {
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/recommendations/players", {signal:controller.signal, cache:"no-store"})
+    fetch("/api/skill-radar/players", {signal:controller.signal, cache:"no-store"})
       .then(response => readJsonResponse<RecommendationPlayersResponse>(response)).then(setPlayers)
       .catch(error => {if (!controller.signal.aborted) setPlayersError(error instanceof Error ? error.message : "Players could not be loaded.");})
       .finally(() => {if (!controller.signal.aborted) setPlayersLoading(false);});
     return () => controller.abort();
   }, []);
   useEffect(() => {
+    setInspected("");
     if (!playerKey) {setProfile(null); setError(null); setLoading(false); return;}
     const controller = new AbortController();
     setLoading(true); setError(null); setProfile(null);
@@ -164,6 +203,8 @@ export default function SkillRadarPage() {
   }, []);
   const buckets = useMemo(() => new Map(profile?.buckets.map(bucket => [bucket.key, bucket]) ?? []), [profile]);
   const selectBucket = (key: string) => setSelected(current => current === key ? "" : key);
+  const closeContributions = useCallback(() => setInspected(""), []);
+  const inspectedBucket = buckets.get(inspected);
 
   return <main className="skill-radar-page">
     <SiteHeader active="skill-radar" />
@@ -174,11 +215,12 @@ export default function SkillRadarPage() {
       {refreshMessage ? <p className="radar-error" role="status">{refreshMessage}</p> : null}
       <div aria-busy={loading} className="radar-profile">
         {error ? <div className="radar-empty radar-error" role="alert"><p>{error}</p><button type="button" onClick={() => setAttempt(value => value + 1)}>Retry</button></div> : loading ? <p className="radar-empty" role="status">Loading Skill Radar...</p> : !profile ? <p className="radar-empty">Select a player.</p> : <div className="radar-workspace">
-          <div className="radar-plot-panel"><h2>{profile.player.displayName}</h2><RadarPlot profile={profile} selected={selected} onSelect={key => {setSelected(key); document.getElementById(summaryId(key))?.focus();}} /></div>
+          <div className="radar-plot-panel"><h2>{profile.player.displayName}</h2><RadarPlot profile={profile} selected={selected} onInspect={setInspected} onSelect={key => {setSelected(key); document.getElementById(summaryId(key))?.focus();}} /></div>
           <div className="radar-groups">{RADAR_GROUPS.map(group => <section aria-labelledby={`radar-group-${group.key}`} className="radar-group" key={group.key}><h2 id={`radar-group-${group.key}`}>{group.label}</h2>{profile.groups[group.key].length ? profile.groups[group.key].map(key => {const bucket = buckets.get(key)!; return <BucketSummary bucket={bucket} expanded={selected === key} key={key} onSelect={() => selectBucket(key)} />;}) : <p className="radar-group-empty">No established strengths yet.</p>}</section>)}</div>
         </div>}
       </div>
-      <footer><ExplanatorySection title="About Skill Radar"><p>Each BPM range uses your five highest Phoenix 2 chart Pumbility values. Missing slots count as zero. PG is the equivalent difficulty for SSS+ with a Perfect Game plate.</p><p>Doubles are drawn one level lower: D20.5 aligns with S19.5. The displayed scale maps S10/D11 to 0 and S25/D26 to 100; the drawing stops at those bounds. Your actual PG remains unchanged.</p><p>Strengths and weaknesses compare the adjusted PG values across both modes. Hiding a line changes only the drawing. Empty and incomplete ranges retain their zero-padded results.</p><p>Suggestions use SSS+ Pumbility tier difficulty, beginning at your actual PG +1.5. Existing scores remain eligible. Rated suggestions currently begin at official level 16; fewer than five may qualify. Songs whose BPM spans multiple ranges are excluded.</p></ExplanatorySection></footer>
+      {inspectedBucket ? <ContributionDialog bucket={inspectedBucket} onClose={closeContributions} /> : null}
+      <footer><ExplanatorySection title="About Skill Radar"><p>Each BPM range averages up to five highest Phoenix 2 chart Pumbility values. Missing charts are excluded; ranges with fewer than five have an asterisk. Empty ranges show zero. UG shows the equivalent level for 995,000+ (SSS+) with an Ultimate Game plate. Actual scores, plates and earned Pumbility stay intact.</p><p>S10/D11 maps to 0. Singles and Doubles have independent 100-point ceilings for each BPM range; 220+ BPM keeps S25/D26. Strengths and weaknesses use normalized ratings before clipping. Hiding a line changes only the drawing.</p><p>Suggestions start at your equivalent level +1.5, rounded down to an official folder, starting at level 16. Show five charts, filling from higher folders as needed, then sort by SSS+ Pumbility difficulty. Played charts remain eligible. Songs spanning multiple BPM ranges are excluded.</p></ExplanatorySection></footer>
     </div>
   </main>;
 }

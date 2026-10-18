@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { localAnalysisEnabled } from "../../../lib/local-analysis";
-import { readLocalSkillRadar } from "../../../lib/local-skill-radar";
+import { readLocalSkillRadar, SkillRadarEligibilityError } from "../../../lib/local-skill-radar";
 import { PLAYER_KEY_PATTERN } from "../../../lib/skill-radar";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
   try {
     return NextResponse.json(await readLocalSkillRadar(playerKey), {headers});
   } catch (error) {
+    if (error instanceof SkillRadarEligibilityError) return NextResponse.json({error:error.message}, {status:403, headers});
     const absent = (error as NodeJS.ErrnoException).code === "ENOENT";
     return NextResponse.json({error:absent ? "Skill Radar has not been generated for this player yet." : "Skill Radar is temporarily unavailable."}, {status:absent ? 404 : 503, headers});
   }

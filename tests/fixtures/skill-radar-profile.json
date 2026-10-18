@@ -1,5 +1,10 @@
 {
-  "methodVersion": 1,
+  "methodVersion": 6,
+  "reference": {
+    "grade": "SSS+",
+    "plate": "UG",
+    "minimumScore": 995000
+  },
   "player": {
     "playerKey": "aaaaaaaaaaaaaaaaaaaa",
     "displayName": "PLAYER"
@@ -12,55 +17,145 @@
       "id": "0",
       "label": "<150",
       "min": 0,
-      "max": 150
+      "max": 150,
+      "radarScale": {
+        "singles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 22.834
+        },
+        "doubles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 23.8
+        }
+      }
     },
     {
       "id": "1",
       "label": "150–159",
       "min": 150,
-      "max": 160
+      "max": 160,
+      "radarScale": {
+        "singles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 22.9735
+        },
+        "doubles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 23.95
+        }
+      }
     },
     {
       "id": "2",
       "label": "160–169",
       "min": 160,
-      "max": 170
+      "max": 170,
+      "radarScale": {
+        "singles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 22.4215
+        },
+        "doubles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 23.65
+        }
+      }
     },
     {
       "id": "3",
       "label": "170–179",
       "min": 170,
-      "max": 180
+      "max": 180,
+      "radarScale": {
+        "singles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 23.113
+        },
+        "doubles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 23.95
+        }
+      }
     },
     {
       "id": "4",
       "label": "180–189",
       "min": 180,
-      "max": 190
+      "max": 190,
+      "radarScale": {
+        "singles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 23.113
+        },
+        "doubles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 24.1
+        }
+      }
     },
     {
       "id": "5",
       "label": "190–199",
       "min": 190,
-      "max": 200
+      "max": 200,
+      "radarScale": {
+        "singles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 23.968
+        },
+        "doubles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 24.55
+        }
+      }
     },
     {
       "id": "6",
       "label": "200–209",
       "min": 200,
-      "max": 210
+      "max": 210,
+      "radarScale": {
+        "singles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 24.7
+        },
+        "doubles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 25.0
+        }
+      }
     },
     {
       "id": "7",
       "label": "210–219",
       "min": 210,
-      "max": 220
+      "max": 220,
+      "radarScale": {
+        "singles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 24.25
+        },
+        "doubles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 25.0
+        }
+      }
     },
     {
       "id": "8",
       "label": "220+",
       "min": 220,
-      "max": null
+      "max": null,
+      "radarScale": {
+        "singles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 25.0
+        },
+        "doubles": {
+          "minimumAlignedLevel": 10.0,
+          "maximumAlignedLevel": 25.0
+        }
+      }
     }
   ],
   "buckets": [
@@ -69,109 +164,168 @@
       "mode": "singles",
       "bpmBucketId": "0",
       "label": "<150",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "weaknesses",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:0",
       "mode": "doubles",
       "bpmBucketId": "0",
       "label": "<150",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "weaknesses",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:1",
       "mode": "singles",
       "bpmBucketId": "1",
       "label": "150–159",
-      "rawPg": 17.999999999999993,
-      "displayPg": 17.999999999999993,
-      "radarScore": 53.333333333333286,
+      "rawEquivalentLevel": 18.08899143045484,
+      "displayEquivalentLevel": 18.08899143045484,
+      "radarScore": 62.350109303232266,
       "usableCharts": 5,
       "selectedCharts": 5,
       "needsPlays": false,
-      "minimumSuggestedDifficulty": 19.499999999999993,
+      "suggestedLevel": 19,
       "group": "strengths",
       "suggestions": [
         {
           "chartId": "practice0",
           "songName": "Song practice0",
-          "difficulty": "S20",
+          "difficulty": "S19",
           "type": "Single",
-          "level": 20,
+          "level": 19,
           "imageUrl": null,
           "bpmMin": 155,
           "bpmMax": 155,
-          "estimatedDifficulty": 20.5,
+          "estimatedDifficulty": 19.5,
           "personalScore": null,
           "personalPlate": null
         },
         {
           "chartId": "practice1",
           "songName": "Song practice1",
-          "difficulty": "S20",
+          "difficulty": "S19",
           "type": "Single",
-          "level": 20,
+          "level": 19,
           "imageUrl": null,
           "bpmMin": 155,
           "bpmMax": 155,
-          "estimatedDifficulty": 20.5,
+          "estimatedDifficulty": 19.5,
           "personalScore": null,
           "personalPlate": null
         },
         {
           "chartId": "practice2",
           "songName": "Song practice2",
-          "difficulty": "S20",
+          "difficulty": "S19",
           "type": "Single",
-          "level": 20,
+          "level": 19,
           "imageUrl": null,
           "bpmMin": 155,
           "bpmMax": 155,
-          "estimatedDifficulty": 20.5,
+          "estimatedDifficulty": 19.5,
           "personalScore": null,
           "personalPlate": null
         },
         {
           "chartId": "practice3",
           "songName": "Song practice3",
-          "difficulty": "S20",
+          "difficulty": "S19",
           "type": "Single",
-          "level": 20,
+          "level": 19,
           "imageUrl": null,
           "bpmMin": 155,
           "bpmMax": 155,
-          "estimatedDifficulty": 20.5,
+          "estimatedDifficulty": 19.5,
           "personalScore": null,
           "personalPlate": null
         },
         {
           "chartId": "practice4",
           "songName": "Song practice4",
-          "difficulty": "S20",
+          "difficulty": "S19",
           "type": "Single",
-          "level": 20,
+          "level": 19,
           "imageUrl": null,
           "bpmMin": 155,
           "bpmMax": 155,
-          "estimatedDifficulty": 20.5,
+          "estimatedDifficulty": 19.5,
           "personalScore": null,
           "personalPlate": null
+        }
+      ],
+      "contributingCharts": [
+        {
+          "chartId": "s0",
+          "songName": "Song s0",
+          "type": "Single",
+          "level": 18,
+          "difficulty": "S18",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "s1",
+          "songName": "Song s1",
+          "type": "Single",
+          "level": 18,
+          "difficulty": "S18",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "s2",
+          "songName": "Song s2",
+          "type": "Single",
+          "level": 18,
+          "difficulty": "S18",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "s3",
+          "songName": "Song s3",
+          "type": "Single",
+          "level": 18,
+          "difficulty": "S18",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "s4",
+          "songName": "Song s4",
+          "type": "Single",
+          "level": 18,
+          "difficulty": "S18",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
         }
       ]
     },
@@ -180,225 +334,342 @@
       "mode": "doubles",
       "bpmBucketId": "1",
       "label": "150–159",
-      "rawPg": 18.999999999999993,
-      "displayPg": 17.999999999999993,
-      "radarScore": 53.333333333333286,
+      "rawEquivalentLevel": 19.118733509234836,
+      "displayEquivalentLevel": 18.118733509234836,
+      "radarScore": 58.19880651781245,
       "usableCharts": 5,
       "selectedCharts": 5,
       "needsPlays": false,
-      "minimumSuggestedDifficulty": 20.499999999999993,
-      "group": "strengths",
-      "suggestions": []
+      "suggestedLevel": 20,
+      "group": "everythingElse",
+      "suggestions": [],
+      "contributingCharts": [
+        {
+          "chartId": "d0",
+          "songName": "Song d0",
+          "type": "Double",
+          "level": 19,
+          "difficulty": "D19",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "d1",
+          "songName": "Song d1",
+          "type": "Double",
+          "level": 19,
+          "difficulty": "D19",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "d2",
+          "songName": "Song d2",
+          "type": "Double",
+          "level": 19,
+          "difficulty": "D19",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "d3",
+          "songName": "Song d3",
+          "type": "Double",
+          "level": 19,
+          "difficulty": "D19",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "d4",
+          "songName": "Song d4",
+          "type": "Double",
+          "level": 19,
+          "difficulty": "D19",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        }
+      ]
     },
     {
       "key": "singles:2",
       "mode": "singles",
       "bpmBucketId": "2",
       "label": "160–169",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "weaknesses",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:2",
       "mode": "doubles",
       "bpmBucketId": "2",
       "label": "160–169",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:3",
       "mode": "singles",
       "bpmBucketId": "3",
       "label": "170–179",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:3",
       "mode": "doubles",
       "bpmBucketId": "3",
       "label": "170–179",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:4",
       "mode": "singles",
       "bpmBucketId": "4",
       "label": "180–189",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
-      "radarScore": 0.0,
-      "usableCharts": 0,
-      "selectedCharts": 0,
+      "rawEquivalentLevel": 24.0,
+      "displayEquivalentLevel": 24.0,
+      "radarScore": 100.0,
+      "usableCharts": 3,
+      "selectedCharts": 3,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
-      "group": "everythingElse",
-      "suggestions": []
+      "suggestedLevel": 25,
+      "group": "strengths",
+      "suggestions": [],
+      "contributingCharts": [
+        {
+          "chartId": "sparse-s0",
+          "songName": "Song sparse-s0",
+          "type": "Single",
+          "level": 24,
+          "difficulty": "S24",
+          "imageUrl": null,
+          "pumbility": 394.42,
+          "score": 995000,
+          "plate": "UG"
+        },
+        {
+          "chartId": "sparse-s1",
+          "songName": "Song sparse-s1",
+          "type": "Single",
+          "level": 24,
+          "difficulty": "S24",
+          "imageUrl": null,
+          "pumbility": 394.42,
+          "score": 995000,
+          "plate": "UG"
+        },
+        {
+          "chartId": "sparse-s2",
+          "songName": "Song sparse-s2",
+          "type": "Single",
+          "level": 24,
+          "difficulty": "S24",
+          "imageUrl": null,
+          "pumbility": 394.42,
+          "score": 995000,
+          "plate": "UG"
+        }
+      ]
     },
     {
       "key": "doubles:4",
       "mode": "doubles",
       "bpmBucketId": "4",
       "label": "180–189",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
-      "radarScore": 0.0,
-      "usableCharts": 0,
-      "selectedCharts": 0,
+      "rawEquivalentLevel": 25.000000000000004,
+      "displayEquivalentLevel": 24.000000000000004,
+      "radarScore": 99.290780141844,
+      "usableCharts": 1,
+      "selectedCharts": 1,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
-      "group": "everythingElse",
-      "suggestions": []
+      "suggestedLevel": 26,
+      "group": "strengths",
+      "suggestions": [],
+      "contributingCharts": [
+        {
+          "chartId": "sparse-d0",
+          "songName": "Song sparse-d0",
+          "type": "Double",
+          "level": 25,
+          "difficulty": "D25",
+          "imageUrl": null,
+          "pumbility": 394.16,
+          "score": 995000,
+          "plate": "UG"
+        }
+      ]
     },
     {
       "key": "singles:5",
       "mode": "singles",
       "bpmBucketId": "5",
       "label": "190–199",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:5",
       "mode": "doubles",
       "bpmBucketId": "5",
       "label": "190–199",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:6",
       "mode": "singles",
       "bpmBucketId": "6",
       "label": "200–209",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:6",
       "mode": "doubles",
       "bpmBucketId": "6",
       "label": "200–209",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:7",
       "mode": "singles",
       "bpmBucketId": "7",
       "label": "210–219",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:7",
       "mode": "doubles",
       "bpmBucketId": "7",
       "label": "210–219",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:8",
       "mode": "singles",
       "bpmBucketId": "8",
       "label": "220+",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:8",
       "mode": "doubles",
       "bpmBucketId": "8",
       "label": "220+",
-      "rawPg": 0.0,
-      "displayPg": 0.0,
+      "rawEquivalentLevel": 0.0,
+      "displayEquivalentLevel": 0.0,
       "radarScore": 0.0,
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "suggestedLevel": 16,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     }
   ],
   "groups": {
@@ -408,15 +679,15 @@
       "singles:2"
     ],
     "strengths": [
-      "singles:1",
-      "doubles:1"
+      "singles:4",
+      "doubles:4",
+      "singles:1"
     ],
     "everythingElse": [
+      "doubles:1",
       "doubles:2",
       "singles:3",
       "doubles:3",
-      "singles:4",
-      "doubles:4",
       "singles:5",
       "doubles:5",
       "singles:6",
