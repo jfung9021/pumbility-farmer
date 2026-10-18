@@ -10,6 +10,17 @@ CONTINUATION_FIELD = "_tierPublicationContinuation"
 MAX_IO_RETRIES = 2
 
 
+def _retryable_io(error: Exception) -> bool:
+    import requests
+    import psycopg
+    if isinstance(error, requests.exceptions.HTTPError):
+        response = error.response
+        status = response.status_code if response is not None else None
+        return isinstance(status, int) and (status in (408, 429) or 500 <= status < 600)
+    return isinstance(error, (requests.exceptions.RequestException, ConnectionError,
+                              TimeoutError, psycopg.OperationalError))
+
+
 class TierPublicationConflict(ValueError):
     """A pinned source, candidate, pointer, or generation lease changed."""
 
@@ -150,9 +161,7 @@ def execute_tier_publication_job(job_id: str, *, store=None, jobs=None) -> dict[
         heartbeat = None
         # A deterministic validation/CAS error must not loop. Transient I/O is
         # retried only from the persisted phase, with a small durable budget.
-        import requests
-        import psycopg
-        retry = isinstance(error, (requests.exceptions.RequestException, ConnectionError, TimeoutError, psycopg.OperationalError))
+        retry = _retryable_io(error)
         attempts = int(current.get("attempt", 0))
         failed = {**current, "status": "failed", "error": "tier-publication-failed",
                   "exceptionClass": type(error).__name__, "updatedAtUtc": _timestamp(),
