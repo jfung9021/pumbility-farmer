@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { cachedFileReader } from "./local-file-cache.ts";
 
 import type { AnalysisPayload, CrossLevelClearingCurve, OfficialCrossLevelCurve, OfficialScoringSpread } from "./types";
 import { COMBINED_MIX, DEFAULT_MIX, isMixKey, MIXES, type MixKey } from "./mixes.ts";
@@ -14,6 +15,7 @@ import { validateMedianAnalysisPayload } from "./sssplus-median-validation.ts";
 import { validateSpreadAnalysisPayload } from "./sssplus-spread-validation.ts";
 import { validateCombinedClearingPayload } from "./combined-clearing-validation.ts";
 import { validateSourceAwarePayload } from "./source-aware-validation.ts";
+import { validateSubmittedSssplusCalibrationPayload } from "./submitted-sssplus-calibration-validation.ts";
 
 
 const SECRET_PATTERN = /(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}/i;
@@ -65,10 +67,12 @@ export const SSSPLUS_STABLE_SCALE_LOCAL_RESULTS_PATH = path.join(process.cwd(), 
 export const SSSPLUS_SPREAD_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sssplus-spread", "web_results.json");
 export const SSSPLUS_COMBINED_CLEARING_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sssplus-spread-combined-clearing", "web_results.json");
 export const SSSPLUS_P1_OBSERVED_CLEARING_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "sssplus-spread-p1-observed-clearing", "web_results.json");
+export const SUBMITTED_SSSPLUS_CALIBRATION_LOCAL_RESULTS_PATH = path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "submitted-sssplus-calibration", "web_results.json");
 
 export function localCombinedResultsPath(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): string {
+  if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "submitted-sssplus-calibration") return SUBMITTED_SSSPLUS_CALIBRATION_LOCAL_RESULTS_PATH;
   if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "source-aware-width") return path.join(process.cwd(), ".local-data", "piu-scores", "combined", "experiments", "source-aware-width", "web_results.json");
   if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sssplus-spread-p1-observed-clearing") return SSSPLUS_P1_OBSERVED_CLEARING_LOCAL_RESULTS_PATH;
   if (localAnalysisEnabled(environment) && environment.PIU_LOCAL_SCORING_VARIANT_EXPERIMENT === "sssplus-spread-combined-clearing") return SSSPLUS_COMBINED_CLEARING_LOCAL_RESULTS_PATH;
@@ -716,6 +720,14 @@ export function validateLocalAnalysisPayload(
     throw new LocalAnalysisValidationError("The local analysis payload must be an object.");
   }
   const payload = value as Partial<AnalysisPayload>;
+  if (expectedMix === "combined" && payload.schemaVersion === 57) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The submitted SSS+ aggregate contains private fields or a credential-shaped value.");
+      return validateSubmittedSssplusCalibrationPayload(payload as AnalysisPayload, base => validateLocalAnalysisPayload(base, expectedMix));
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The submitted SSS+ aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
   if (expectedMix === "combined" && payload.schemaVersion === 56) {
     try {
       if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The source-aware aggregate contains private fields or a credential-shaped value.");
@@ -980,10 +992,10 @@ export async function readLocalAnalysisPayload(
   }
 }
 
-export async function readLocalCombinedAnalysisPayload(): Promise<AnalysisPayload> {
+async function readValidatedCombinedAnalysisPayload(resultsPath: string): Promise<AnalysisPayload> {
   let raw: string;
   try {
-    raw = await readFile(localCombinedResultsPath(), "utf8");
+    raw = await readFile(resultsPath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new LocalAnalysisNotFoundError(
@@ -1004,5 +1016,18 @@ export async function readLocalCombinedAnalysisPayload(): Promise<AnalysisPayloa
     throw new LocalAnalysisValidationError(
       "The local combined analysis file is not valid JSON.",
     );
+  }
+}
+
+const readCachedCombinedAnalysis = cachedFileReader(readValidatedCombinedAnalysisPayload);
+
+export async function readLocalCombinedAnalysisPayload(): Promise<AnalysisPayload> {
+  try {
+    return await readCachedCombinedAnalysis(localCombinedResultsPath());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new LocalAnalysisNotFoundError("No local combined tier list exists. Run npm run analyze:recommendations.");
+    }
+    throw error;
   }
 }

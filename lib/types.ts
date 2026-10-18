@@ -141,7 +141,18 @@ export interface ChartSourceExclusionEvidence {
   effectiveSourceStates: Record<string, OfficialScoringSourceState>;
 }
 
+export interface SubmittedSssplusChartCalibration {
+  version: 1;
+  method: "submitted-folder-centered-shared-q90-v1";
+  folder: string;
+  effect: number;
+  effectCi95Low: number | null;
+  effectCi95High: number | null;
+  initialCompressionApplications: 1;
+}
+
 export interface ScoringVariant extends TierMetricResult {
+  scoringSubmittedCalibration?: SubmittedSssplusChartCalibration;
   finalFolderWidth?: FinalFolderWidthEvidence;
   modeRank?: number | null;
   levelPercentile?: number | null;
@@ -420,6 +431,10 @@ export interface ChartRerate {
 }
 
 export interface ChartResult {
+  submittedSssplusCalibrationBaseline?: {
+    scoring: { changed: Record<string, unknown>; added: string[] };
+    pumbility: { changed: Record<string, unknown>; added: string[] };
+  };
   combinedOfficialClearingBaseline?: { clearing: ClearingTierMetric; pumbility: PumbilityTierMetric; pumbilityVariants: ScoringVariantMap<PumbilityTierMetric> };
   sssCenteringBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric };
   sssplusCenteringBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric };
@@ -431,6 +446,7 @@ export interface ChartResult {
   pumbilityVariants?: ScoringVariantMap<PumbilityTierMetric>;
   /** Client projection marker; absent on the immutable General compatibility rows. */
   scoringGoal?: ScoringGoal;
+  scoringSubmittedCalibration?: SubmittedSssplusChartCalibration;
   finalFolderWidth?: FinalFolderWidthEvidence;
   chartSourceExclusions?: ChartSourceExclusionEvidence;
   scoringEstimateBranch?: SssEstimateBranch;

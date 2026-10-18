@@ -1,5 +1,11 @@
 # Chart source exclusions and final folder spread
 
+Current follow-up: [Submitted SSS+ calibration and consistent tier UI](submitted-sssplus-calibration-and-ui-plan.md)
+incorporates the D16–D19 matched-player and weighting findings, the proposed
+lower-folder calibration repair, and stable scoring goals with collapsed UI
+explanations. It keeps those model experiments separate from this approved
+source-exclusion and spread methodology.
+
 Implementation entry point: `npm run analyze:source-aware` uses the existing
 cached snapshots and `config/chart-source-exclusions.json`. It reuses target
 cohorts whose actual merged/source-board identities match and writes a separate

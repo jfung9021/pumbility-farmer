@@ -31,7 +31,11 @@ def _update(metric:dict,level:int):
 def apply_source_aware_tiers(original:Mapping[str,Any],corrected:Mapping[str,Any],provenance:Mapping[str,Any]) -> dict:
     if original.get('schemaVersion')!=55 or corrected.get('schemaVersion')!=55:
         raise ValueError('Source-aware tiers require original and corrected schema-55 generations.')
-    result=copy.deepcopy(original)
+    # Completed historical stages are immutable. Copy the active components below
+    # without duplicating their large rollback trees before final validation.
+    result=dict(original)
+    for _,key in MODES:
+        result[key]=[dict(row) for row in original[key]]
     result['summary']=copy.deepcopy(corrected['summary'])
     result['generatedAtUtc']=datetime.now(timezone.utc).isoformat().replace('+00:00','Z')
     result['summary']['generatedAtUtc']=result['generatedAtUtc']
@@ -126,10 +130,11 @@ def apply_source_aware_tiers(original:Mapping[str,Any],corrected:Mapping[str,Any
     return result
 
 
-def recover_source_aware_tiers(payload:Mapping[str,Any]) -> dict:
+def _recovery_view(payload:Mapping[str,Any]) -> dict:
     if payload.get('schemaVersion')!=SCHEMA:raise ValueError('Source-aware recovery requires schema 56.')
-    base=copy.deepcopy(payload);saved=base.pop('sourceAwareBaseline');base.update(saved);base['schemaVersion']=55
+    base=dict(payload);saved=base.pop('sourceAwareBaseline');base.update(saved);base['schemaVersion']=55
     for _,key in MODES:
+        base[key]=[dict(row) for row in payload[key]]
         for row in base[key]:
             stage=row.pop('sourceAwareBaseline')
             for k in stage['added']:row.pop(k,None)
@@ -137,8 +142,12 @@ def recover_source_aware_tiers(payload:Mapping[str,Any]) -> dict:
     return base
 
 
+def recover_source_aware_tiers(payload:Mapping[str,Any]) -> dict:
+    return copy.deepcopy(_recovery_view(payload))
+
+
 def validate_source_aware_tiers(payload:Mapping[str,Any],original:Mapping[str,Any]|None=None):
-    base=recover_source_aware_tiers(payload);method=payload['summary']['method'][NAMESPACE]
+    base=_recovery_view(payload);method=payload['summary']['method'][NAMESPACE]
     if method['widthPolicy']!=POLICY or method['compressionApplications']!=1 or method['dataFetches']!=0:
         raise ValueError('Source-aware width policy differs.')
     if payload_sha256(base)!=method['basePayloadSha256'] or (original is not None and base!=original):

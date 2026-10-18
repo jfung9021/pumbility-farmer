@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { DEFAULT_SCORING_GOAL, hasSssScoringVariants, HISTORICAL_SSS_UNAVAILABLE, isSssScoringChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUrl, scoringTargetForChart, scoringTargetForPayload } from "../lib/scoring-variants.ts";
+import { DEFAULT_SCORING_GOAL, hasScoringGoalVariants, hasSssScoringVariants, HISTORICAL_SSS_UNAVAILABLE, isSssScoringChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUnavailableMessage, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal, scoringTargetForPayload } from "../lib/scoring-variants.ts";
 import { estimatedTierGroups, hasLimitedTierData, selectedTierMetric, sortTierCharts, tierBandCharts, tierSupportLabel } from "../lib/tier-metrics.ts";
 import type { AnalysisPayload, ChartResult, ScoringVariant } from "../lib/types";
 
@@ -26,14 +26,19 @@ function variantChart(): ChartResult {
   return row;
 }
 
-test("SSS+ defaults on new links while historical SSS and General remain dataset-aware", () => {
+test("SSS+ default and explicit URL goals stay stable before and after every supported analysis loads", () => {
   assert.equal(DEFAULT_SCORING_GOAL, "sssplus");
   const historical = { ...fixture, schemaVersion: 51 };
   const current = { ...fixture, schemaVersion: 52 };
-  for (const query of ["", "mode=doubles&metric=pumbility", "scoring=bad", "scoring=sss", "scoring=sssplus"]) {
-    assert.equal(scoringGoalFromSearchParams(new URLSearchParams(query)), "sssplus");
-    assert.equal(scoringGoalFromSearchParams(new URLSearchParams(query), current), "sssplus");
-    assert.equal(scoringGoalFromSearchParams(new URLSearchParams(query), historical), "sss");
+  for (const schemaVersion of [48, 49, 50, 51, 52, 53, 54, 55, 56, 57]) {
+    for (const [query, expected] of [
+      ["", "sssplus"], ["mode=doubles&metric=pumbility", "sssplus"], ["scoring=bad", "sssplus"],
+      ["scoring=general", "general"], ["scoring=sss", "sss"], ["scoring=sssplus", "sssplus"],
+    ] as const) {
+      const params = new URLSearchParams(query);
+      assert.equal(scoringGoalFromSearchParams(params), expected);
+      assert.equal(scoringGoalFromSearchParams(params, { ...fixture, schemaVersion }), expected);
+    }
   }
   assert.deepEqual(scoringTargetForPayload(current), {goal: "sssplus", label: "SSS+", score: 995000});
   assert.deepEqual(scoringTargetForPayload(historical), {goal: "sss", label: "SSS", score: 990000});
@@ -47,11 +52,37 @@ test("SSS+ defaults on new links while historical SSS and General remain dataset
   const sss = scoringGoalUrl(general.href, "sss");
   assert.equal(scoringGoalFromSearchParams(sss.searchParams, historical), "sss");
   const canonical = scoringGoalUrl(sss.href, scoringGoalFromSearchParams(sss.searchParams, current));
-  assert.equal(canonical.searchParams.get("scoring"), "sssplus");
+  assert.equal(canonical.searchParams.get("scoring"), "sss");
   assert.equal(canonical.searchParams.get("player"), "abc");
   assert.equal(canonical.hash, original.hash);
   // Back/forward reads URL state, rather than persisting a conflicting local preference.
   assert.equal(scoringGoalFromSearchParams(general.searchParams), "general");
+  assert.equal(hasSssScoringVariants({ ...fixture, schemaVersion: 57 }), true);
+  assert.equal(scoringTargetForPayload({ ...fixture, schemaVersion: 57 }).goal, "sssplus");
+});
+
+test("selected target labels do not change to an older payload target", () => {
+  assert.deepEqual(scoringTargetForGoal("sssplus"), { goal: "sssplus", label: "SSS+", score: 995000 });
+  assert.deepEqual(scoringTargetForGoal("sss"), { goal: "sss", label: "SSS", score: 990000 });
+  assert.deepEqual(scoringTargetForGoal("general"), scoringTargetForGoal(DEFAULT_SCORING_GOAL));
+  const params = new URLSearchParams("scoring=sssplus");
+  for (const payload of [null, { ...fixture, schemaVersion: 48 }, { ...fixture, schemaVersion: 51 }, { ...fixture, schemaVersion: 56 }]) {
+    assert.equal(scoringTargetForGoal(scoringGoalFromSearchParams(params, payload)).label, "SSS+");
+  }
+});
+
+test("target availability uses actual variants including unrated ones, without substituting another goal", () => {
+  const row = variantChart();
+  const historical = { ...fixture, schemaVersion: 51, singles: [row], doubles: [] };
+  assert.equal(hasScoringGoalVariants(null, "sssplus"), false);
+  assert.equal(hasScoringGoalVariants(fixture, "sssplus"), false);
+  assert.equal(hasScoringGoalVariants(historical, "general"), true);
+  assert.equal(hasScoringGoalVariants(historical, "sss"), true);
+  assert.equal(hasScoringGoalVariants(historical, "sssplus"), false);
+  row.scoringVariants!.sssplus = { ...row.scoringVariants!.sss!, scoringTarget: 995000, estimatedDifficulty: null, evidenceStatus: "Unrated" };
+  assert.equal(hasScoringGoalVariants(historical, "sssplus"), true);
+  assert.match(scoringGoalUnavailableMessage("sssplus"), /^SSS\+ is unavailable.*Unrated/);
+  assert.match(scoringGoalUnavailableMessage("sss"), /^SSS is unavailable.*Unrated/);
 });
 
 test("SSS+ projection uses only its own target variant and matching Pumbility", () => {
@@ -127,14 +158,24 @@ test("missing SSS stays Unrated in both lists and cannot leak General values or 
   assert.equal(estimatedTierGroups(rows, "pumbility", "singles").flatMap(g => g.charts).length, 1);
 });
 
-test("Clearing, Co-op and historical General remain intact, with explicit historical availability", () => {
+test("Clearing and Co-op remain intact while absent historical targets are accurately Unrated", () => {
   const row = variantChart();
   assert.equal(projectScoringGoal(row, "sss", "clearing"), row);
   const coop = { ...row, type: "CoOp" as const };
   assert.equal(projectScoringGoal(coop, "sss"), coop);
   assert.equal(hasSssScoringVariants(fixture), false);
-  assert.match(HISTORICAL_SSS_UNAVAILABLE, /Showing its existing General estimates/);
-  assert.equal(projectScoringGoal(fixture.singles[0], "sss"), fixture.singles[0]);
+  assert.match(HISTORICAL_SSS_UNAVAILABLE, /remain Unrated/);
+  const original = structuredClone(fixture.singles[0]);
+  for (const goal of ["sss", "sssplus"] as const) {
+    const projected = projectScoringGoal(fixture.singles[0], goal, "pumbility");
+    assert.equal(projected.estimatedDifficulty, null);
+    assert.equal(projected.scoringGoal, goal);
+    assert.equal(projected.scoringTarget, goal === "sss" ? 990000 : 995000);
+    assert.equal(projected.scoringUnratedReason, "target-variant-unavailable");
+    assert.equal(projected.tierMetrics!.pumbility.estimatedDifficulty, null);
+    assert.deepEqual(projected.tierMetrics!.clearing, original.tierMetrics!.clearing);
+    assert.deepEqual(fixture.singles[0], original);
+  }
   assert.equal(hasSssScoringVariants({ ...fixture, schemaVersion: 49 }), true);
   assert.equal(hasSssScoringVariants({ ...fixture, schemaVersion: 50 }), true);
 });

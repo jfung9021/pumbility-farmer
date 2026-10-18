@@ -148,6 +148,29 @@ class HostedTierTests(unittest.TestCase):
             with self.assertRaises(IncompatibleCombinedTierCheckpointError):
                 _validate_checkpoint_combined_tier({"schemaVersion": 48})
 
+    def test_hosted_submitted_calibration_publishes_schema57_without_changing_other_components(self):
+        from tests.test_submitted_sssplus_calibration import calibration_fixture
+        from submitted_sssplus_calibration import apply_submitted_sssplus_calibration
+        base, fit, identity = calibration_fixture()
+        full = apply_submitted_sssplus_calibration(base, fit, fit_identity=identity, local_only=False)
+        policy_sha = base["summary"]["method"]["sourceAwareTiers"]["sourcePolicy"]["effectivePolicySha256"]
+        with patch("chart_source_exclusions.load_exclusions", return_value=SimpleNamespace(semantic_hash=lambda: policy_sha)):
+            public = public_tiers(full, private_path="analysis/private/source-aware-tiers/generations/x/full.json.gz", input_identity={})
+            validate_public_tiers(public)
+            self.assertEqual(public["schemaVersion"], 57)
+            self.assertFalse(public["summary"]["method"]["submittedSssplusCalibration"]["localOnly"])
+            for before, after in zip(full["doubles"], public["doubles"]):
+                for name in ("scoringVariants", "pumbilityVariants"):
+                    for goal in ("general", "sss", "sssplus"):
+                        for field in ("estimatedDifficulty", "difficultyCi95Low", "difficultyCi95High"):
+                            self.assertEqual(before[name][goal].get(field), after[name][goal].get(field))
+                self.assertNotIn("submittedSssplusCalibrationBaseline", after)
+            bad = copy.deepcopy(public)
+            bad["summary"]["method"]["submittedSssplusCalibration"]["localOnly"] = True
+            bad["summary"]["method"]["productionTierPublication"]["publicPayloadSha256"] = public_digest(bad)
+            with self.assertRaisesRegex(ValueError, "production use"):
+                validate_public_tiers(bad)
+
     def test_fit_controls_are_authenticated_and_never_return_private_fits(self):
         app = FastAPI()
         app.include_router(router)

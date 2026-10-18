@@ -23,7 +23,7 @@ test("spread selector is local only; both new schemas default to SSS+",()=>{
   for(const schemaVersion of [54,55]) {
     const p={...candidate,schemaVersion};assert.equal(hasSssScoringVariants(p),true);
     assert.deepEqual(scoringTargetForPayload(p),{goal:"sssplus",label:"SSS+",score:995000});
-    assert.equal(scoringGoalFromSearchParams(new URLSearchParams("scoring=sss"),p),"sssplus");
+    assert.equal(scoringGoalFromSearchParams(new URLSearchParams("scoring=sss"),p),"sss");
   }
 });
 test("spread projection preserves General and Clearing and exposes current target details",()=>{

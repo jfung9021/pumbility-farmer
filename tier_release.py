@@ -218,7 +218,7 @@ def rebuild_source_aware_only(store, jobs):
     if (inputs["phoenix1"] != digest(current_first) or inputs["phoenix2"] != digest(current_second)
             or inputs["officialManifest"] != canonical_scoring_manifest_sha256(current_manifest)):
         raise TierReleaseBusyError("The cached performance inputs changed during the tier analysis.")
-    audit = {"schemaVersion": 56, "baseTierSha256": base_sha, "tierSha256": digest(candidate),
+    audit = {"schemaVersion": candidate["schemaVersion"], "baseTierSha256": base_sha, "tierSha256": digest(candidate),
         "recommendationsSha256": recommendation_sha, "scoreFetches": 0, "recommendationFits": 0,
         "generatedAtUtc": candidate["generatedAtUtc"]}
     if digest(candidate) == base_sha:
