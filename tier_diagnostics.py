@@ -52,6 +52,10 @@ def report_exception(error: BaseException, **fields: Any) -> dict[str, Any]:
     locations = [{"file": Path(frame.filename).name,
                   "line": frame.lineno, "function": frame.name}
                  for frame in traceback.extract_tb(error.__traceback__)[-12:]]
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        fields = {**fields, "status_code": status}
     return event("tier_publication_failed", **{
         **fields, "exception_class": type(error).__name__, "stack": locations,
     })

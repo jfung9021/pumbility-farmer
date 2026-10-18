@@ -1,11 +1,20 @@
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tier_diagnostics import event, phase, report_exception
 
 
 class TierDiagnosticsTests(unittest.TestCase):
+    def test_http_status_is_recorded_without_response_body_or_url(self):
+        error = RuntimeError("private response")
+        error.response = SimpleNamespace(status_code=413, text="private data", url="private URL")
+        with self.assertLogs("tier_publication", level="WARNING") as logs:
+            record = report_exception(error, stage="pin-inputs")
+        self.assertEqual(record["status_code"], 413)
+        self.assertNotIn("private", "".join(logs.output))
+
     def test_error_does_not_log_message_source_text_or_unlisted_fields(self):
         secret = "postgres://operator:password@private-host/player-record"
         with self.assertLogs("tier_publication", level="WARNING") as logs:
