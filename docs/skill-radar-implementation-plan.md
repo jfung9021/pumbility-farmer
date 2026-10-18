@@ -117,6 +117,9 @@ public player URL key and browser Back/Forward behavior.
   personal score/plate and video action. Put exact song BPM in chart details.
 - Use responsive SVG, readable BPM labels and sparse 0–100 rings. Distinguish
   modes with solid/circle and dashed/square styling as well as red/green.
+- Title the chart **Skill by BPM** and keep axis labels to ranges; show smaller
+  matching S/D ratings out of 100 outside the plot. Hide a mode's rating with
+  its trace. Omit the footer caption.
 - Summaries are the accessible value list and reliable keyboard/touch selection
   route. Zero markers overlap at the center; SVG hover cannot be the only route.
   Avoid a second duplicate value table.

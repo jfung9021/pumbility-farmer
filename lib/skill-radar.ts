@@ -64,6 +64,17 @@ export function radarPoint(index: number, score: number, radius = 132) {
   return {x:200 + Math.cos(angle) * radius * score / 100, y:200 + Math.sin(angle) * radius * score / 100};
 }
 
+export function radarAxisLabelLayout(index: number) {
+  const anchor = radarPoint(index, 100, 152);
+  const below = anchor.y > 200;
+  return {
+    x:anchor.x,
+    labelY:anchor.y + (below ? 16 : -44),
+    scoreY:anchor.y + (below ? 34 : -26),
+    textAnchor:Math.abs(anchor.x - 200) < 1e-8 ? "middle" as const : anchor.x > 200 ? "start" as const : "end" as const,
+  };
+}
+
 export function radarPlayerFromUrl(search: string): string {
   const value = new URLSearchParams(search).get("player") ?? "";
   return PLAYER_KEY_PATTERN.test(value) ? value : "";

@@ -10,7 +10,7 @@ import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { formatEstimatedDifficulty } from "../../lib/format-difficulty";
 import { formatTierScore } from "../../lib/tier-filters";
-import { RADAR_GROUPS, RADAR_MODES, radarPlayerFromUrl, radarPlayerUrl, radarPoint, validateSkillRadarResponse, type RadarBucket, type RadarMode, type RadarSuggestion, type SkillRadarResponse } from "../../lib/skill-radar";
+import { RADAR_GROUPS, RADAR_MODES, radarAxisLabelLayout, radarPlayerFromUrl, radarPlayerUrl, radarPoint, validateSkillRadarResponse, type RadarBucket, type RadarMode, type RadarSuggestion, type SkillRadarResponse } from "../../lib/skill-radar";
 import type { PlayerRefreshJob, PlayerRefreshResponse, RecommendationPlayersResponse } from "../../lib/types";
 import "./skill-radar.css";
 
@@ -19,17 +19,25 @@ const summaryId = (key: string) => `radar-summary-${encodeURIComponent(key)}`;
 function RadarPlot({profile, selected, onSelect}: {profile: SkillRadarResponse; selected: string; onSelect: (key: string) => void}) {
   const [visible, setVisible] = useState<Record<RadarMode, boolean>>({singles:true, doubles:true});
   return <figure className="radar-figure">
+    <h3 className="radar-chart-title">Skill by BPM</h3>
     <div className="radar-trace-controls" aria-label="Visible radar traces">
       {(["singles", "doubles"] as const).map(mode => <button aria-pressed={visible[mode]} className={`radar-trace-toggle radar-mode-${mode}`} key={mode} onClick={() => setVisible(current => ({...current, [mode]:!current[mode]}))} type="button"><span aria-hidden="true">{mode === "singles" ? "●" : "■"}</span>{RADAR_MODES[mode].label}</button>)}
     </div>
-    <svg aria-labelledby="radar-plot-title radar-plot-description" className="radar-plot" role="img" viewBox="0 0 440 440">
+    <svg aria-labelledby="radar-plot-title radar-plot-description" className="radar-plot" role="img" viewBox="0 0 540 500">
       <title id="radar-plot-title">{profile.player.displayName} Skill Radar</title>
       <desc id="radar-plot-description">Singles use a solid red line and circles. Doubles use a dashed green line and squares. Values for all eighteen categories follow below.</desc>
-      <g transform="translate(20 20)">
+      <g transform="translate(70 50)">
         {[20,40,60,80,100].map(score => <g key={score}><circle className="radar-ring" cx="200" cy="200" r={132 * score / 100} /><text className="radar-ring-label" x="205" y={196 - 132 * score / 100}>{score}</text></g>)}
         {profile.bpmBuckets.map((bucket, index) => {
-          const point = radarPoint(index, 100), label = radarPoint(index, 100, 174);
-          return <g key={bucket.id}><line className="radar-axis" x1="200" y1="200" x2={point.x} y2={point.y} /><text className="radar-axis-label" x={label.x} y={label.y} dominantBaseline="middle" textAnchor="middle">{bucket.label}</text></g>;
+          const point = radarPoint(index, 100), label = radarAxisLabelLayout(index);
+          return <g key={bucket.id}>
+            <line className="radar-axis" x1="200" y1="200" x2={point.x} y2={point.y} />
+            <text className="radar-axis-label" x={label.x} y={label.labelY} dominantBaseline="middle" textAnchor={label.textAnchor}>{bucket.label}</text>
+            {(["singles", "doubles"] as const).filter(mode => visible[mode]).map((mode, line) => {
+              const value = profile.buckets.find(value => value.mode === mode && value.bpmBucketId === bucket.id)!;
+              return <text className={`radar-axis-score radar-mode-${mode}`} dominantBaseline="middle" key={mode} textAnchor={label.textAnchor} x={label.x} y={label.scoreY + line * 18}>{RADAR_MODES[mode].prefix} {value.radarScore.toFixed(1)}/100</text>;
+            })}
+          </g>;
         })}
         {(["singles", "doubles"] as const).map(mode => {
           if (!visible[mode]) return null;
@@ -47,7 +55,6 @@ function RadarPlot({profile, selected, onSelect}: {profile: SkillRadarResponse; 
         })}
       </g>
     </svg>
-    <figcaption>0–100 · BPM</figcaption>
   </figure>;
 }
 

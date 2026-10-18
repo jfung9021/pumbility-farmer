@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { readLocalSkillRadar } from "../lib/local-skill-radar.ts";
-import { radarPlayerFromUrl, radarPlayerUrl, radarPoint, validateSkillRadarResponse } from "../lib/skill-radar.ts";
+import { radarAxisLabelLayout, radarPlayerFromUrl, radarPlayerUrl, radarPoint, validateSkillRadarResponse } from "../lib/skill-radar.ts";
 
 const fixture = JSON.parse(await readFile(new URL("./fixtures/skill-radar-profile.json", import.meta.url), "utf8"));
 
@@ -54,6 +54,26 @@ test("radar geometry draws zeros at the center and all nine full-scale points in
     const point = radarPoint(index, 100);
     assert.ok(Math.abs(Math.hypot(point.x - 200, point.y - 200) - 132) < 1e-8);
     assert.ok(point.x >= 0 && point.x <= 400 && point.y >= 0 && point.y <= 400);
+  }
+});
+
+test("stacked BPM labels clear the full-scale plot and remain inside the padded view", () => {
+  const blocks: Array<{axis: number; left: number; right: number; top: number; bottom: number}> = [];
+  for (let index = 0; index < 9; index++) {
+    const label = radarAxisLabelLayout(index);
+    for (const [y, width, height] of [[label.labelY, 110, 22], [label.scoreY, 100, 17], [label.scoreY + 18, 100, 17]]) {
+      const left = label.x - (label.textAnchor === "end" ? width : label.textAnchor === "middle" ? width / 2 : 0);
+      const right = left + width, top = y - height / 2, bottom = y + height / 2;
+      const nearestX = Math.max(left, Math.min(200, right)), nearestY = Math.max(top, Math.min(200, bottom));
+      assert.ok(Math.hypot(nearestX - 200, nearestY - 200) > 132, `axis ${index} overlaps the plot`);
+      assert.ok(left + 70 >= 0 && right + 70 <= 540 && top + 50 >= 0 && bottom + 50 <= 500, `axis ${index} leaves the viewport`);
+      assert.ok(right < 205 || left > 225 || bottom < 52 || top > 64, `axis ${index} overlaps the outer-ring 100 label`);
+      blocks.push({axis:index, left, right, top, bottom});
+    }
+  }
+  for (let first = 0; first < blocks.length; first++) for (let second = first + 1; second < blocks.length; second++) {
+    const a = blocks[first], b = blocks[second];
+    if (a.axis !== b.axis) assert.ok(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom, `axes ${a.axis} and ${b.axis} have overlapping labels`);
   }
 });
 

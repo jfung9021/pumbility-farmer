@@ -11,6 +11,7 @@
 .radar-plot-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; min-width: 0; padding: 20px 8px 16px; position: sticky; top: 20px; }
 .radar-plot-panel h2 { font-size: 18px; margin: 0 14px 18px; overflow-wrap: anywhere; }
 .radar-figure { margin: 0; }
+.radar-chart-title { color: #d0d9cc; font-size: 14px; font-weight: 650; margin: 0 0 14px; text-align: center; }
 .radar-trace-controls { display: flex; gap: 8px; justify-content: center; }
 .radar-trace-toggle { align-items: center; background: #101611; border: 1px solid currentColor; border-radius: 999px; color: var(--radar-color); display: flex; font-size: 12px; gap: 8px; min-height: 44px; padding: 8px 14px; }
 .radar-trace-toggle[aria-pressed="false"] { border-color: var(--line); opacity: .5; }
@@ -20,13 +21,13 @@
 .radar-ring, .radar-axis { fill: none; stroke: #455047; stroke-width: 1; }
 .radar-ring { stroke-opacity: .6; }
 .radar-axis { stroke-opacity: .45; }
-.radar-axis-label { fill: #d0d9cc; font-size: 17px; font-weight: 650; }
+.radar-axis-label { fill: #d0d9cc; font-size: 18px; font-weight: 650; }
+.radar-axis-score { fill: var(--radar-color); font-size: 14px; font-variant-numeric: tabular-nums; font-weight: 600; }
 .radar-ring-label { fill: #8a978b; font-size: 12px; paint-order: stroke; stroke: #101611; stroke-width: 4; }
 .radar-trace-line { fill: var(--radar-color); fill-opacity: .035; stroke: var(--radar-color); stroke-linejoin: round; stroke-width: 2.5; }
 .radar-mode-doubles .radar-trace-line { stroke-dasharray: 6 4; }
 .radar-point { cursor: pointer; fill: var(--radar-color); stroke: #0b100c; stroke-width: 1.5; }
 .radar-point[data-selected] { stroke: white; stroke-width: 2.5; }
-.radar-figure figcaption { color: var(--muted); font-size: 11px; margin-top: -4px; text-align: center; }
 .radar-groups { display: grid; gap: 24px; min-width: 0; }
 .radar-group h2 { color: #dce5d7; font-size: 16px; letter-spacing: -.02em; margin: 0 0 12px; }
 .radar-bucket { background: rgba(12, 18, 14, .75); border: 1px solid var(--line); border-radius: 10px; margin-top: 8px; min-width: 0; overflow: hidden; }
@@ -78,6 +79,8 @@
   .radar-score-sync { grid-column: 1; justify-content: center; }
   .radar-plot-panel { padding: 16px 0 14px; }
   .radar-plot-panel h2 { font-size: 16px; }
+  .radar-axis-label { font-size: 22px; }
+  .radar-axis-score { font-size: 17px; }
   .radar-bucket-summary { gap: 4px 8px; padding: 12px; }
   .radar-chart-row { gap: 8px; grid-template-columns: 38px minmax(0, 1fr) auto 44px; padding: 10px; }
   .radar-jacket { height: 38px; width: 38px; }
