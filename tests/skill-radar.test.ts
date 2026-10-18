@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readLocalSkillRadar } from "../lib/local-skill-radar.ts";
+import { readLocalSkillRadar, readLocalSkillRadarPlayers } from "../lib/local-skill-radar.ts";
 import { radarAxisLabelLayout, radarPlayerFromUrl, radarPlayerUrl, radarPoint, validateSkillRadarResponse } from "../lib/skill-radar.ts";
 
 const fixture = JSON.parse(await readFile(new URL("./fixtures/skill-radar-profile.json", import.meta.url), "utf8"));
@@ -15,7 +15,7 @@ test("Python profile satisfies the public contract with all eighteen categories 
   assert.equal(new Set(Object.values(profile.groups).flat()).size, 18);
   assert.equal(profile.groups.weaknesses.length, 3);
   for (const bucket of profile.buckets) {
-    assert.equal(bucket.minimumSuggestedDifficulty, bucket.rawPg + 1.5);
+    assert.equal(bucket.minimumSuggestedDifficulty, Math.floor(bucket.rawPg + 1.5 + 1e-9));
     assert.equal(bucket.displayPg, Math.max(0, bucket.rawPg - (bucket.mode === "doubles" ? 1 : 0)));
     assert.ok(bucket.suggestions.every(chart => chart.estimatedDifficulty >= bucket.minimumSuggestedDifficulty));
     assert.equal(bucket.contributingCharts.length, bucket.selectedCharts);
@@ -99,11 +99,19 @@ test("local reader accepts the shared DTO, rejects traversal and fails on corrup
   const directory = await mkdtemp(path.join(tmpdir(), "piu-skill-radar-"));
   try {
     const key = fixture.player.playerKey, file = path.join(directory, `${key}.json`);
+    const roster = path.join(directory, "players.json");
+    const players = {generatedAtUtc:fixture.generatedAtUtc, method:{minimumPhoenix2Scores:100}, players:[{...fixture.player, username:"PLAYER", phoenix2ScoreCount:100, eligibility:{singles:true,doubles:true,coop:true}}]};
+    await writeFile(roster, JSON.stringify(players));
     await writeFile(file, JSON.stringify(fixture));
-    assert.deepEqual(await readLocalSkillRadar(key, directory), fixture);
-    await assert.rejects(readLocalSkillRadar("../private", directory), /valid playerKey/);
+    assert.deepEqual(await readLocalSkillRadar(key, directory, roster), fixture);
+    await assert.rejects(readLocalSkillRadar("../private", directory, roster), /valid playerKey/);
+    await writeFile(roster, JSON.stringify({...players, players:[]}));
+    await assert.rejects(readLocalSkillRadar(key, directory, roster), /100 submitted Phoenix 2/);
+    await writeFile(roster, JSON.stringify({...players, players:[{...players.players[0],phoenix2ScoreCount:99}]}));
+    await assert.rejects(readLocalSkillRadarPlayers(roster), /invalid/);
+    await writeFile(roster, JSON.stringify(players));
     await writeFile(file, JSON.stringify({...fixture, token:"private"}));
-    await assert.rejects(readLocalSkillRadar(key, directory), /invalid/);
+    await assert.rejects(readLocalSkillRadar(key, directory, roster), /invalid/);
   } finally {
     assert.equal(path.dirname(path.resolve(directory)), path.resolve(tmpdir()));
     await rm(directory, {recursive:true, force:true});

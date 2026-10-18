@@ -1715,6 +1715,34 @@ class PumbilityArtifactStore:
                     raise TierPublicationConflict("The tier publication lease expired during promotion.")
                 cursor.execute("delete from pumbility.job_heads where name='active:tier-publication' and job_id=(select id from pumbility.jobs where external_key=%s)", (job_id,))
 
+    def read_skill_radar_score_counts(self, player_id: str | None = None) -> dict[str, int]:
+        """Count current submitted P2 chart records, across all modes and levels."""
+        with _read_cursor(self.database_url) as cursor:
+            _assert_schema(cursor)
+            # Selected-player refresh artifacts also contain only Phoenix 2
+            # records. Union chart identities so daily/live overlaps count once.
+            cursor.execute("""
+                with records as (
+                    select p.upstream_player_id as player_id, c.upstream_chart_id as chart_id
+                    from pumbility.score_revisions sr
+                    join pumbility.players p on p.id = sr.player_id
+                    join pumbility.charts c on c.id = sr.chart_id
+                    join pumbility.mixes m on m.id = sr.mix_id
+                    where m.mix_key = %s and sr.valid_to is null
+                    union all
+                    select a.payload_json ->> 'playerId', score ->> 'chartId'
+                    from pumbility.artifacts a
+                    cross join lateral jsonb_array_elements(a.payload_json -> 'scores') score
+                    where a.object_key like 'analysis/private/recommendation-player-state/%%'
+                      and a.payload_json ->> 'playerId' is not null
+                      and score ->> 'chartId' is not null
+                )
+                select player_id, count(distinct chart_id) from records
+                """ + (" where player_id = %s" if player_id is not None else "")
+                + " group by player_id",
+                ("phoenix2", player_id) if player_id is not None else ("phoenix2",))
+            return {str(row[0]): int(row[1]) for row in cursor.fetchall()}
+
     def read_skill_radar_metadata(self) -> dict[str, Any]:
         """Read cached all-level P2 metadata without hydrating any player scores."""
         from skill_radar_runtime import skill_metadata

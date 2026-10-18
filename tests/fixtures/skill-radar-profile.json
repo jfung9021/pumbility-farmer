@@ -75,7 +75,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "weaknesses",
       "suggestions": [],
       "contributingCharts": []
@@ -91,7 +91,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "weaknesses",
       "suggestions": [],
       "contributingCharts": []
@@ -107,7 +107,7 @@
       "usableCharts": 5,
       "selectedCharts": 5,
       "needsPlays": false,
-      "minimumSuggestedDifficulty": 19.499999999999993,
+      "minimumSuggestedDifficulty": 19,
       "group": "strengths",
       "suggestions": [
         {
@@ -245,7 +245,7 @@
       "usableCharts": 5,
       "selectedCharts": 5,
       "needsPlays": false,
-      "minimumSuggestedDifficulty": 20.499999999999993,
+      "minimumSuggestedDifficulty": 20,
       "group": "strengths",
       "suggestions": [],
       "contributingCharts": [
@@ -317,7 +317,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "weaknesses",
       "suggestions": [],
       "contributingCharts": []
@@ -333,7 +333,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -349,7 +349,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -365,7 +365,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -381,7 +381,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -397,7 +397,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -413,7 +413,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -429,7 +429,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -445,7 +445,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -461,7 +461,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -477,7 +477,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -493,7 +493,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -509,7 +509,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []
@@ -525,7 +525,7 @@
       "usableCharts": 0,
       "selectedCharts": 0,
       "needsPlays": true,
-      "minimumSuggestedDifficulty": 1.5,
+      "minimumSuggestedDifficulty": 1,
       "group": "everythingElse",
       "suggestions": [],
       "contributingCharts": []

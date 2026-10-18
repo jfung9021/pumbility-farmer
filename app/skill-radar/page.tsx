@@ -147,7 +147,7 @@ export default function SkillRadarPage() {
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/recommendations/players", {signal:controller.signal, cache:"no-store"})
+    fetch("/api/skill-radar/players", {signal:controller.signal, cache:"no-store"})
       .then(response => readJsonResponse<RecommendationPlayersResponse>(response)).then(setPlayers)
       .catch(error => {if (!controller.signal.aborted) setPlayersError(error instanceof Error ? error.message : "Players could not be loaded.");})
       .finally(() => {if (!controller.signal.aborted) setPlayersLoading(false);});
@@ -220,7 +220,7 @@ export default function SkillRadarPage() {
         </div>}
       </div>
       {inspectedBucket ? <ContributionDialog bucket={inspectedBucket} onClose={closeContributions} /> : null}
-      <footer><ExplanatorySection title="About Skill Radar"><p>Each BPM range uses your five highest Phoenix 2 chart Pumbility values. Missing slots count as zero. PG is the equivalent difficulty for SSS+ with a Perfect Game plate.</p><p>Doubles are drawn one level lower: D20.5 aligns with S19.5. The displayed scale maps S10/D11 to 0 and S25/D26 to 100; the drawing stops at those bounds. Your actual PG remains unchanged.</p><p>Strengths and weaknesses compare the adjusted PG values across both modes. Hiding a line changes only the drawing. Empty and incomplete ranges retain their zero-padded results.</p><p>Suggestions use SSS+ Pumbility tier difficulty, beginning at your actual PG +1.5. Existing scores remain eligible. Rated suggestions currently begin at official level 16; fewer than five may qualify. Songs whose BPM spans multiple ranges are excluded.</p></ExplanatorySection></footer>
+      <footer><ExplanatorySection title="About Skill Radar"><p>Each BPM range uses your five highest Phoenix 2 chart Pumbility values. Missing slots count as zero. PG is the equivalent difficulty for SSS+ with a Perfect Game plate.</p><p>Doubles are drawn one level lower: D20.5 aligns with S19.5. The displayed scale maps S10/D11 to 0 and S25/D26 to 100; the drawing stops at those bounds. Your actual PG remains unchanged.</p><p>Strengths and weaknesses compare the adjusted PG values across both modes. Hiding a line changes only the drawing. Empty and incomplete ranges retain their zero-padded results.</p><p>Suggestions use SSS+ Pumbility tier difficulty, beginning at your actual PG +1.5, rounded down to a whole level and sorted from easiest to hardest. Existing scores remain eligible. Rated suggestions currently begin at official level 16; fewer than five may qualify. Songs whose BPM spans multiple ranges are excluded.</p></ExplanatorySection></footer>
     </div>
   </main>;
 }

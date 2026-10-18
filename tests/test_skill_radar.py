@@ -15,7 +15,8 @@ from pumbility_contract import (combined_tier_blob_path, recommendation_blob_pat
     recommendation_phoenix2_shard_path, recommendation_player_state_path)
 from skill_radar import (aggregate_bpm_progression, bpm_bucket, build_skill_radar,
     build_suggestion_catalog, calculate_phoenix2_pumbility, pg_equivalent)
-from skill_radar_runtime import SKILL_METADATA_PATH, read_skill_radar, skill_metadata, _cache, _catalog_cache
+from skill_radar_runtime import (SKILL_METADATA_PATH, SkillRadarIneligibleError,
+    read_skill_radar, read_skill_radar_players, skill_metadata, _cache, _catalog_cache)
 
 KEY = "a"*20
 STAMP = "2026-10-18T00:00:00+00:00"
@@ -149,7 +150,7 @@ class RadarPolicyTests(unittest.TestCase):
         self.assertAlmostEqual(double["rawPg"],19)
         self.assertAlmostEqual(single["displayPg"],double["displayPg"])
         self.assertAlmostEqual(single["radarScore"],double["radarScore"])
-        self.assertAlmostEqual(double["minimumSuggestedDifficulty"],20.5)
+        self.assertEqual(double["minimumSuggestedDifficulty"],20)
 
     def test_empty_and_sparse_groups_partition_all_eighteen_once(self):
         empty=profile([],[])
@@ -169,7 +170,7 @@ class RadarPolicyTests(unittest.TestCase):
         candidates=[chart("c"+str(i),level=20) for i in range(8)]
         candidates += [chart("cross",level=20,bpmMin=150,bpmMax=160)]
         charts=earned+candidates
-        ratings=[18.5]*5+[19.49999,19.5,19.6,19.7,19.8,19.9,20.0,None]+[19.5]
+        ratings=[18.5]*5+[18.99999,19.0,19.1,19.2,19.3,19.4,20.0,None]+[19.0]
         tiers=tiers_for(charts,ratings)
         catalog=build_suggestion_catalog(tiers,charts)
         response=build_skill_radar(charts,[score(c["id"]) for c in earned],catalog,player_key=KEY,
@@ -181,6 +182,19 @@ class RadarPolicyTests(unittest.TestCase):
         self.assertEqual(suggestions[0]["personalPlate"],"PG")
         self.assertNotIn("cross",[row["chartId"] for row in catalog["charts"]])
         self.assertEqual(response["buckets"][0]["suggestions"],[])
+
+    def test_recommendations_truncate_after_adding_and_sort_by_calculated_rating(self):
+        earned=[chart("e"+str(i),level=18) for i in range(5)]
+        candidates=[chart("c"+str(i),level=22) for i in range(7)]
+        rows=[score(c["id"],pumbility=366.32) for c in earned]
+        bucket=profile(earned+candidates,rows,
+            tiers_for(earned+candidates,[18.5]*5+[22.9,21.99999,22.0,22.2,22.1,22.5,23.0]))["buckets"][2]
+        self.assertAlmostEqual(bucket["rawPg"],21.2)
+        self.assertEqual(bucket["minimumSuggestedDifficulty"],22)
+        self.assertEqual([c["chartId"] for c in bucket["suggestions"]],["c2","c4","c3","c5","c0"])
+        for points, expected in ((361,22),(360.99,21)):
+            boundary=profile(earned,[score(c["id"],pumbility=points) for c in earned])["buckets"][2]
+            self.assertEqual(boundary["minimumSuggestedDifficulty"],expected)
 
     def test_all_level_skill_evidence_is_not_limited_to_suggestion_catalog(self):
         low=[chart("low"+str(i),level=12) for i in range(5)]
@@ -196,17 +210,50 @@ class Store:
     def __init__(self):
         self.charts=[chart(str(i),level=12) for i in range(5)]+[chart("rated",level=16)]
         self.values={recommendation_blob_path():{"generationKey":"daily","players":[{
-            "playerKey":KEY,"internalPlayerId":"private-player","inputShard":0,"displayName":"PLAYER"}]},
+            "playerKey":KEY,"internalPlayerId":"private-player","inputShard":0,"displayName":"PLAYER","username":"PLAYER"}]},
             recommendation_phoenix2_shard_path("daily",0):{"players":[{"playerId":"private-player",
                 "lastSyncedAtUtc":STAMP,"scores":[score(str(i),pumbility=296.4) for i in range(5)]}]},
             combined_tier_blob_path():tiers_for([self.charts[-1]]),SKILL_METADATA_PATH:skill_metadata(self.charts)}
+        self.counts={"private-player":100}
     def get_json(self,path):return self.values.get(path)
+    def read_skill_radar_score_counts(self,player_id=None):
+        return dict(self.counts) if player_id is None else {player_id:self.counts.get(player_id,0)}
 
 
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
         _cache.clear()
         _catalog_cache.clear()
+
+    def test_only_skill_radar_uses_the_100_phoenix2_record_minimum(self):
+        store=Store()
+        store.values[recommendation_blob_path()]["players"].append({
+            "playerKey":"b"*20,"internalPlayerId":"under-minimum","username":"LOW","displayName":"LOW",
+            "scoreProgress":{"singles":{"validScoreCount":500,"requiredScoreCount":30}}})
+        store.counts["under-minimum"]=99
+        self.assertEqual([p["playerKey"] for p in read_skill_radar_players(store)["players"]],[KEY])
+        self.assertEqual(len(store.values[recommendation_blob_path()]["players"]),2)
+        read_skill_radar(store,KEY)
+        store.counts["private-player"]=99
+        with self.assertRaisesRegex(SkillRadarIneligibleError,"100 submitted Phoenix 2"):
+            read_skill_radar(store,KEY)
+        self.assertEqual(read_skill_radar_players(store)["players"],[])
+
+    def test_record_count_query_is_phoenix2_only_across_modes_levels_and_broken_plays(self):
+        from pumbility_store import PumbilityArtifactStore
+        with patch("pumbility_store._read_cursor") as read, patch("pumbility_store._assert_schema"):
+            cursor=read.return_value.__enter__.return_value
+            cursor.fetchall.return_value=[("private-player",100)]
+            store=PumbilityArtifactStore(database_url="postgresql://local/test")
+            self.assertEqual(store.read_skill_radar_score_counts("private-player"),{"private-player":100})
+            query,params=cursor.execute.call_args.args
+            self.assertEqual(params,("phoenix2","private-player"))
+            self.assertIn("sr.valid_to is null",query)
+            self.assertIn("count(distinct chart_id)",query)
+            self.assertIn("recommendation-player-state/",query)
+            self.assertIn("jsonb_array_elements",query)
+            self.assertIn("union all",query)
+            self.assertNotIn("is_broken",query)
 
     def test_generation_bound_catalog_cache_avoids_reloading_large_tier_payload(self):
         store=Store()
@@ -256,21 +303,34 @@ class RuntimeTests(unittest.TestCase):
             unavailable=client.get("/api/skill-radar?playerKey="+KEY)
             self.assertEqual(unavailable.status_code,503)
             self.assertNotIn("buckets",unavailable.json())
+            store.counts["private-player"]=99
+            rejected=client.get("/api/skill-radar?playerKey="+KEY)
+            self.assertEqual(rejected.status_code,403)
+            self.assertIn("100 submitted Phoenix 2",rejected.json()["error"])
+            listed=client.get("/api/skill-radar/players")
+            self.assertEqual(listed.status_code,200)
+            self.assertEqual(listed.json()["players"],[])
 
     def test_local_artifact_uses_same_pure_profile_and_atomic_player_file(self):
         from scripts.build_local_skill_radar import build
         from piu_recommendations import public_player_key
         charts=[chart(str(i),level=12) for i in range(5)]+[chart("rated",level=16)]
         rows=[score(str(i),pumbility=296.4) for i in range(5)]
+        rows += [score("broken"+str(i),isBroken=True) for i in range(95)]
+        rows += [score("low"+str(i),playerId="below-minimum",isBroken=True) for i in range(99)]
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);tiers=root/"tiers.json";tiers.write_text(json.dumps(tiers_for([charts[-1]])),encoding="utf-8")
             with patch("scripts.build_local_skill_radar.load_snapshot",return_value=([
-                {"playerId":"private-player","username":"PLAYER","lastSyncedAtUtc":STAMP}],charts,rows)):
+                {"playerId":"private-player","username":"PLAYER","lastSyncedAtUtc":STAMP},
+                {"playerId":"below-minimum","username":"LOW","lastSyncedAtUtc":STAMP}],charts,rows)):
                 report=build(root,root/"output",tiers_path=tiers)
             key=public_player_key("private-player")
             saved=json.loads((root/"output/players"/(key+".json")).read_text(encoding="utf-8"))
             self.assertEqual(report["scoreFetches"],0)
             self.assertAlmostEqual(saved["buckets"][2]["rawPg"],12)
+            roster=json.loads((root/"output/players.json").read_text(encoding="utf-8"))
+            self.assertEqual([p["playerKey"] for p in roster["players"]],[key])
+            self.assertEqual(roster["players"][0]["phoenix2ScoreCount"],100)
             self.assertFalse(list((root/"output").rglob("*.tmp")))
             hosted=Store()
             hosted.values[recommendation_blob_path()]["players"][0]["playerKey"]=key

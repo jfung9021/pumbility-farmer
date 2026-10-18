@@ -16,10 +16,11 @@ For a Windows worktree sharing dependencies, start Next with
 | Item | Rule |
 | --- | --- |
 | Traces | Red Singles; green Doubles. |
+| Players | Skill Radar requires 100+ current submitted Phoenix 2 chart records across all modes and levels, including broken plays. Filter its dedicated username list and enforce the same rule on direct profile access. Other pages retain their existing lists. |
 | Alignment | D20.5 PG equals S19.5 PG. S10/D11 maps to 0; S25/D26 to 100. |
 | Missing scores | Pad missing top-five slots with zero. Three usable scores plus two zeros still divide by five. Empty buckets show zero skill and count as weakness candidates. |
 | Groups | Three weaknesses and three strengths total, across both modes, in any mix. |
-| Suggestions | Five easiest eligible charts at or above actual PG +1.5, ordered by calculated Pumbility difficulty. Include played and already-SSS+ charts. |
+| Suggestions | Five easiest eligible charts at or above floor(actual PG +1.5), ordered by calculated Pumbility difficulty. Include played and already-SSS+ charts. |
 | Personal scores | Show scores and plates using the tier list's formatting. |
 | Rating details | Select an S/D radar rating to open its five contributing charts, including the exact selected score/plate and cent-rounded earned Pumbility. Show missing slots as zeros. |
 
@@ -56,7 +57,7 @@ Per mode and bucket, select the top five unique charts, pad with zeros, then:
 
     displayPG = max(0, rawPG - (Double ? 1 : 0))
     radarScore = clamp(100 * (displayPG - 10) / 15, 0, 100)
-    minimumSuggestedDifficulty = rawPG + 1.5
+    minimumSuggestedDifficulty = floor(rawPG + 1.5 + 1e-9)
 
 Nonpositive totals return zero. Keep full precision after inversion; round labels
 only. Parity anchors: five S24 SSS+ PG records give PG24; four plus a zero give
@@ -77,13 +78,13 @@ score-state merge and refresh jobs. Keep internal IDs and histories server-side.
 
 ## Suggestions and grouping
 
-Match mode and BPM bucket; require a finite calculated rating at least raw PG
-plus 1.5. Sort by full-precision rating, song name, then chart ID. Take five unique
+Match mode and BPM bucket; require a finite calculated rating at least floor(raw PG
+plus 1.5). Use a 1e-9 tolerance for floating-point noise at whole-level boundaries. Sort by full-precision rating, song name, then chart ID. Take five unique
 charts. Ties may share a displayed decimal tier. Existing scores never exclude
 charts. Show fewer if fewer qualify, without relaxing selection rules.
 
-PG18.0 starts at 19.5. D19 raw PG displays like S18, but its candidates start at
-D20.5. The visual offset never lowers D recommendations. For low targets,
+PG18.0 starts at 19.0; PG21.2 starts at 22.0. D19 raw PG displays like S18, but its candidates start at
+D20.0. The visual offset never lowers D recommendations. For low targets,
 available suggestions may start at 16+; do not invent lower calculated ratings.
 
 Partition all 18 combinations:
@@ -152,7 +153,7 @@ public player URL key and browser Back/Forward behavior.
 - All-level skill evidence works alongside the rated 16+ suggestion catalog.
 - Five real contributions and three-plus-two-zeros produce expected PG values.
 - D20.5 aligns with S19.5; offset applies once and never enters raw thresholds.
-- PG18.0 returns five nearest qualifying charts at 19.5+, including existing
+- PG18.0 returns five nearest qualifying charts at 19.0+, including existing
   SSS+ results. Personal score/plate display matches the tier list.
 - Zero/sparse buckets, ties, fewer than three established strengths, shortages
   and missing ratings partition without duplication or invented values.
