@@ -18,7 +18,7 @@ from phoenix2_pumbility import (GRADE_BANDS, GRADE_PENALTY_UNITS_BY_TYPE,
     PLATE_BONUS_UNITS_BY_TYPE, PLATE_CODES, normalize_plate)
 
 METHOD_VERSION = 1
-PROFILE_VERSION = 3
+PROFILE_VERSION = 4
 MODES = (("singles", "Single"), ("doubles", "Double"))
 BPM_BUCKETS = tuple({"id": str(index), "label": label, "min": low, "max": high}
     for index, (label, low, high) in enumerate((
@@ -179,7 +179,7 @@ def build_skill_radar(charts, scores, suggestion_catalog, *, player_key, display
             bar = aggregate["buckets"][index][key]
             raw = bar["equivalentLevel"]
             display = max(0.0, raw-(1 if mode == "Double" else 0))
-            minimum = math.floor(raw+1.5+1e-9)
+            target_level = max(16, math.floor(raw+1.5+1e-9))
             contributing_charts = []
             for selected in bar["contributors"]:
                 chart = metadata[selected["chartId"]]
@@ -197,18 +197,18 @@ def build_skill_radar(charts, scores, suggestion_catalog, *, player_key, display
             suggestions = []
             for chart in suggestion_catalog["charts"]:
                 if (chart["type"] != mode or chart["bpmBucketId"] != bucket["id"]
-                        or chart["estimatedDifficulty"] < minimum):
+                        or chart["level"] != target_level):
                     continue
                 personal = scores_by_chart.get(chart["chartId"], {})
                 suggestions.append({**{k: v for k, v in chart.items() if k != "bpmBucketId"},
                     "personalScore": personal.get("score"), "personalPlate": personal.get("plateCode")})
-                if len(suggestions) == 5:
+                if len(suggestions) == 10:
                     break
             buckets.append({"key": key+":"+bucket["id"], "mode": key, "bpmBucketId": bucket["id"],
                 "label": bucket["label"], "rawPg": raw, "displayPg": display,
                 "radarScore": max(0.0, min(100.0, 100*(display-10)/15)),
                 "usableCharts": bar["usableCharts"], "selectedCharts": bar["scoreCount"],
-                "needsPlays": bar["scoreCount"] < 5, "minimumSuggestedDifficulty": minimum,
+                "needsPlays": bar["scoreCount"] < 5, "suggestedLevel": target_level,
                 "group": "everythingElse", "suggestions": suggestions,
                 "contributingCharts": contributing_charts})
     order = lambda row: (int(row["bpmBucketId"]), 0 if row["mode"] == "singles" else 1)

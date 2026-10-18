@@ -116,7 +116,7 @@ function BucketSummary({bucket, expanded, onSelect}: {bucket: RadarBucket; expan
       <span aria-hidden="true" className="radar-expand">{expanded ? "−" : "+"}</span>
     </button>
     {expanded ? <section aria-label={`${mode.label} ${bucket.label} BPM chart suggestions`} className="radar-ladder" id={`${summaryId(bucket.key)}-ladder`}>
-      <h3>Next charts <span>{mode.prefix}{formatEstimatedDifficulty(bucket.minimumSuggestedDifficulty)}+</span></h3>
+      <h3>Next charts <span>{mode.prefix}{bucket.suggestedLevel}</span></h3>
       {bucket.suggestions.length ? <ol>{bucket.suggestions.map(chart => <SuggestionRow chart={chart} key={chart.chartId} />)}</ol> : <p>No qualifying charts.</p>}
     </section> : null}
   </div>;
@@ -220,7 +220,7 @@ export default function SkillRadarPage() {
         </div>}
       </div>
       {inspectedBucket ? <ContributionDialog bucket={inspectedBucket} onClose={closeContributions} /> : null}
-      <footer><ExplanatorySection title="About Skill Radar"><p>Each BPM range uses your five highest Phoenix 2 chart Pumbility values. Missing slots count as zero. PG is the equivalent difficulty for SSS+ with a Perfect Game plate.</p><p>Doubles are drawn one level lower: D20.5 aligns with S19.5. The displayed scale maps S10/D11 to 0 and S25/D26 to 100; the drawing stops at those bounds. Your actual PG remains unchanged.</p><p>Strengths and weaknesses compare the adjusted PG values across both modes. Hiding a line changes only the drawing. Empty and incomplete ranges retain their zero-padded results.</p><p>Suggestions use SSS+ Pumbility tier difficulty, beginning at your actual PG +1.5, rounded down to a whole level and sorted from easiest to hardest. Existing scores remain eligible. Rated suggestions currently begin at official level 16; fewer than five may qualify. Songs whose BPM spans multiple ranges are excluded.</p></ExplanatorySection></footer>
+      <footer><ExplanatorySection title="About Skill Radar"><p>Each BPM range uses your five highest Phoenix 2 chart Pumbility values. Missing slots count as zero. PG is the equivalent difficulty for SSS+ with a Perfect Game plate.</p><p>Doubles are drawn one level lower: D20.5 aligns with S19.5. The displayed scale maps S10/D11 to 0 and S25/D26 to 100; the drawing stops at those bounds. Your actual PG remains unchanged.</p><p>Strengths and weaknesses compare the adjusted PG values across both modes. Hiding a line changes only the drawing. Empty and incomplete ranges retain their zero-padded results.</p><p>Suggestions use the official chart level from your actual PG +1.5, rounded down, and show up to 10 charts sorted by SSS+ Pumbility difficulty. Existing scores remain eligible. Rated suggestions currently begin at official level 16; fewer than five may qualify. Songs whose BPM spans multiple ranges are excluded.</p></ExplanatorySection></footer>
     </div>
   </main>;
 }

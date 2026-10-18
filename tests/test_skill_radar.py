@@ -150,7 +150,7 @@ class RadarPolicyTests(unittest.TestCase):
         self.assertAlmostEqual(double["rawPg"],19)
         self.assertAlmostEqual(single["displayPg"],double["displayPg"])
         self.assertAlmostEqual(single["radarScore"],double["radarScore"])
-        self.assertEqual(double["minimumSuggestedDifficulty"],20)
+        self.assertEqual(double["suggestedLevel"],20)
 
     def test_empty_and_sparse_groups_partition_all_eighteen_once(self):
         empty=profile([],[])
@@ -165,36 +165,37 @@ class RadarPolicyTests(unittest.TestCase):
         self.assertEqual(len(members),18)
         self.assertEqual(len(set(members)),18)
 
-    def test_suggestions_are_five_nearest_rated_charts_include_played_and_respect_bpm(self):
+    def test_suggestions_are_ten_charts_in_official_folder_sorted_by_pumbility(self):
         earned=[chart("e"+str(i),level=18) for i in range(5)]
-        candidates=[chart("c"+str(i),level=20) for i in range(8)]
-        candidates += [chart("cross",level=20,bpmMin=150,bpmMax=160)]
+        candidates=[chart("c"+str(i),level=19) for i in range(12)]
+        candidates += [chart("cross",level=19,bpmMin=150,bpmMax=160),chart("wrong",level=20)]
         charts=earned+candidates
-        ratings=[18.5]*5+[18.99999,19.0,19.1,19.2,19.3,19.4,20.0,None]+[19.0]
+        ratings=[18.5]*5+[19.8,19.0,18.9,19.5,19.3,19.2,19.7,20.1,19.6,19.4,19.1,None]+[18.7,18.8]
         tiers=tiers_for(charts,ratings)
         catalog=build_suggestion_catalog(tiers,charts)
         response=build_skill_radar(charts,[score(c["id"]) for c in earned],catalog,player_key=KEY,
             display_name="PLAYER",generated_at_utc=STAMP,
             personal_scores=[{"chartId":"c1","score":999999,"plateCode":"PG"}])
         suggestions=response["buckets"][2]["suggestions"]
-        self.assertEqual([row["chartId"] for row in suggestions],["c1","c2","c3","c4","c5"])
-        self.assertEqual(suggestions[0]["personalScore"],999999)
-        self.assertEqual(suggestions[0]["personalPlate"],"PG")
+        self.assertEqual([row["chartId"] for row in suggestions],["c2","c1","c10","c5","c4","c9","c3","c8","c6","c0"])
+        self.assertTrue(all(row["level"]==19 for row in suggestions))
+        self.assertEqual(suggestions[1]["personalScore"],999999)
+        self.assertEqual(suggestions[1]["personalPlate"],"PG")
         self.assertNotIn("cross",[row["chartId"] for row in catalog["charts"]])
         self.assertEqual(response["buckets"][0]["suggestions"],[])
 
     def test_recommendations_truncate_after_adding_and_sort_by_calculated_rating(self):
         earned=[chart("e"+str(i),level=18) for i in range(5)]
-        candidates=[chart("c"+str(i),level=22) for i in range(7)]
+        candidates=[chart("c"+str(i),level=22) for i in range(7)]+[chart("wrong",level=23)]
         rows=[score(c["id"],pumbility=366.32) for c in earned]
         bucket=profile(earned+candidates,rows,
-            tiers_for(earned+candidates,[18.5]*5+[22.9,21.99999,22.0,22.2,22.1,22.5,23.0]))["buckets"][2]
+            tiers_for(earned+candidates,[18.5]*5+[22.9,21.99999,22.0,22.2,22.1,22.5,23.0,21.5]))["buckets"][2]
         self.assertAlmostEqual(bucket["rawPg"],21.2)
-        self.assertEqual(bucket["minimumSuggestedDifficulty"],22)
-        self.assertEqual([c["chartId"] for c in bucket["suggestions"]],["c2","c4","c3","c5","c0"])
+        self.assertEqual(bucket["suggestedLevel"],22)
+        self.assertEqual([c["chartId"] for c in bucket["suggestions"]],["c1","c2","c4","c3","c5","c0","c6"])
         for points, expected in ((361,22),(360.99,21)):
             boundary=profile(earned,[score(c["id"],pumbility=points) for c in earned])["buckets"][2]
-            self.assertEqual(boundary["minimumSuggestedDifficulty"],expected)
+            self.assertEqual(boundary["suggestedLevel"],expected)
 
     def test_all_level_skill_evidence_is_not_limited_to_suggestion_catalog(self):
         low=[chart("low"+str(i),level=12) for i in range(5)]
@@ -204,6 +205,7 @@ class RadarPolicyTests(unittest.TestCase):
         self.assertAlmostEqual(bucket["rawPg"],12)
         self.assertEqual(bucket["selectedCharts"],5)
         self.assertEqual([row["chartId"] for row in bucket["suggestions"]],["rated"])
+        self.assertEqual(bucket["suggestedLevel"],16)
 
 
 class Store:

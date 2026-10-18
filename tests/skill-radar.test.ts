@@ -15,11 +15,23 @@ test("Python profile satisfies the public contract with all eighteen categories 
   assert.equal(new Set(Object.values(profile.groups).flat()).size, 18);
   assert.equal(profile.groups.weaknesses.length, 3);
   for (const bucket of profile.buckets) {
-    assert.equal(bucket.minimumSuggestedDifficulty, Math.floor(bucket.rawPg + 1.5 + 1e-9));
+    assert.equal(bucket.suggestedLevel, Math.max(16, Math.floor(bucket.rawPg + 1.5 + 1e-9)));
     assert.equal(bucket.displayPg, Math.max(0, bucket.rawPg - (bucket.mode === "doubles" ? 1 : 0)));
-    assert.ok(bucket.suggestions.every(chart => chart.estimatedDifficulty >= bucket.minimumSuggestedDifficulty));
+    assert.ok(bucket.suggestions.every(chart => chart.level === bucket.suggestedLevel));
     assert.equal(bucket.contributingCharts.length, bucket.selectedCharts);
   }
+});
+
+test("recommendations allow ten charts from the official target folder even below its calculated rating", () => {
+  const value = structuredClone(fixture);
+  const bucket = value.buckets.find((bucket: any) => bucket.mode === "singles" && bucket.suggestedLevel === 19);
+  bucket.suggestions = Array.from({length:10}, (_, index) => ({...bucket.suggestions[0], chartId:`practice-${index}`, estimatedDifficulty:18.8}));
+  assert.equal(validateSkillRadarResponse(value).buckets.find(bucket => bucket.key === "singles:1")!.suggestions.length, 10);
+  bucket.suggestions.push({...bucket.suggestions[0], chartId:"eleventh"});
+  assert.throws(() => validateSkillRadarResponse(value), /invalid/);
+  bucket.suggestions.pop();
+  bucket.suggestions[0].level = 20;
+  assert.throws(() => validateSkillRadarResponse(value), /invalid/);
 });
 
 test("contributions cannot disagree with the rating, duplicate charts, or disclose histories", () => {
@@ -45,7 +57,7 @@ test("invalid profiles and private histories cannot become a zero radar", () => 
     (value: any) => { value.scores = []; },
     (value: any) => { value.buckets[0].rawPg = Number.NaN; },
     (value: any) => { value.buckets[0].radarScore = 101; },
-    (value: any) => { value.buckets[0].minimumSuggestedDifficulty -= 1; },
+    (value: any) => { value.buckets[0].suggestedLevel -= 1; },
     (value: any) => { value.groups.everythingElse.push(value.groups.weaknesses[0]); },
     (value: any) => { value.buckets[1].mode = value.buckets[0].mode; value.buckets[1].bpmBucketId = value.buckets[0].bpmBucketId; },
   ];

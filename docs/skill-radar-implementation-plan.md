@@ -20,7 +20,7 @@ For a Windows worktree sharing dependencies, start Next with
 | Alignment | D20.5 PG equals S19.5 PG. S10/D11 maps to 0; S25/D26 to 100. |
 | Missing scores | Pad missing top-five slots with zero. Three usable scores plus two zeros still divide by five. Empty buckets show zero skill and count as weakness candidates. |
 | Groups | Three weaknesses and three strengths total, across both modes, in any mix. |
-| Suggestions | Five easiest eligible charts at or above floor(actual PG +1.5), ordered by calculated Pumbility difficulty. Include played and already-SSS+ charts. |
+| Suggestions | Up to ten charts in official level max(16, floor(actual PG +1.5)), ordered by calculated Pumbility difficulty. Include played and already-SSS+ charts. |
 | Personal scores | Show scores and plates using the tier list's formatting. |
 | Rating details | Select an S/D radar rating to open its five contributing charts, including the exact selected score/plate and cent-rounded earned Pumbility. Show missing slots as zeros. |
 
@@ -57,7 +57,7 @@ Per mode and bucket, select the top five unique charts, pad with zeros, then:
 
     displayPG = max(0, rawPG - (Double ? 1 : 0))
     radarScore = clamp(100 * (displayPG - 10) / 15, 0, 100)
-    minimumSuggestedDifficulty = floor(rawPG + 1.5 + 1e-9)
+    suggestedLevel = max(16, floor(rawPG + 1.5 + 1e-9))
 
 Nonpositive totals return zero. Keep full precision after inversion; round labels
 only. Parity anchors: five S24 SSS+ PG records give PG24; four plus a zero give
@@ -78,14 +78,15 @@ score-state merge and refresh jobs. Keep internal IDs and histories server-side.
 
 ## Suggestions and grouping
 
-Match mode and BPM bucket; require a finite calculated rating at least floor(raw PG
-plus 1.5). Use a 1e-9 tolerance for floating-point noise at whole-level boundaries. Sort by full-precision rating, song name, then chart ID. Take five unique
-charts. Ties may share a displayed decimal tier. Existing scores never exclude
-charts. Show fewer if fewer qualify, without relaxing selection rules.
+Match mode, BPM bucket and the exact suggested official level. Use a 1e-9
+tolerance for floating-point noise at whole-level boundaries. Sort by
+full-precision calculated Pumbility rating, song name, then chart ID. Take up to
+ten unique charts. Calculated ratings may be below or above that official level.
+Existing scores never exclude charts. Show fewer when fewer qualify.
 
-PG18.0 starts at 19.0; PG21.2 starts at 22.0. D19 raw PG displays like S18, but its candidates start at
-D20.0. The visual offset never lowers D recommendations. For low targets,
-available suggestions may start at 16+; do not invent lower calculated ratings.
+S18.0 PG selects S19 charts; S21.2 PG selects S22 charts. D19 raw PG displays
+like S18, but selects D20 charts. The visual offset never lowers D targets.
+Targets below 16 use the level 16 folder, the first available rated folder.
 
 Partition all 18 combinations:
 
@@ -111,7 +112,7 @@ public player URL key and browser Back/Forward behavior.
 - **Desktop:** radar beside grouped bucket summaries and the selected ladder.
 - **Mobile:** radar above the same groups in one column. Wrap navigation rather
   than shrinking its labels further.
-- Keep all 18 summaries reachable. Expand one five-chart ladder at a time; open
+- Keep all 18 summaries reachable. Expand one ten-chart ladder at a time; open
   the first weakness initially. Avoid up to 90 expanded chart cards.
 - Summaries show mode, BPM, radar score and actual PG. Show Needs plays · 3/5 only
   when incomplete. Put the target minimum in the expanded ladder heading.
@@ -143,7 +144,7 @@ public player URL key and browser Back/Forward behavior.
 3. Add production GET /api/skill-radar?playerKey=... and a matching local Next
    route. Generate local artifacts through the same Python engine.
 4. Return public player identity, freshness/generation, 18 bucket aggregates and
-   at most five suggestion rows per bucket, including existing score/plate. Use
+   at most ten suggestion rows per bucket, including existing score/plate. Use
    existing visibility and no-store patterns. Never send full analysis/history.
 5. Build the responsive page, focused chart rows, selection state and navigation.
 
@@ -153,7 +154,7 @@ public player URL key and browser Back/Forward behavior.
 - All-level skill evidence works alongside the rated 16+ suggestion catalog.
 - Five real contributions and three-plus-two-zeros produce expected PG values.
 - D20.5 aligns with S19.5; offset applies once and never enters raw thresholds.
-- PG18.0 returns five nearest qualifying charts at 19.0+, including existing
+- S18.0 PG returns up to ten S19 charts ordered by Pumbility rating, including existing
   SSS+ results. Personal score/plate display matches the tier list.
 - Zero/sparse buckets, ties, fewer than three established strengths, shortages
   and missing ratings partition without duplication or invented values.
