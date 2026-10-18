@@ -18,7 +18,7 @@ from phoenix2_pumbility import (GRADE_BANDS, GRADE_PENALTY_UNITS_BY_TYPE,
     PLATE_BONUS_UNITS_BY_TYPE, PLATE_CODES, normalize_plate)
 
 METHOD_VERSION = 1
-PROFILE_VERSION = 4
+PROFILE_VERSION = 5
 MODES = (("singles", "Single"), ("doubles", "Double"))
 BPM_BUCKETS = tuple({"id": str(index), "label": label, "min": low, "max": high}
     for index, (label, low, high) in enumerate((
@@ -206,7 +206,7 @@ def build_skill_radar(charts, scores, suggestion_catalog, *, player_key, display
                     break
             buckets.append({"key": key+":"+bucket["id"], "mode": key, "bpmBucketId": bucket["id"],
                 "label": bucket["label"], "rawPg": raw, "displayPg": display,
-                "radarScore": max(0.0, min(100.0, 100*(display-10)/15)),
+                "radarScore": max(0.0, min(100.0, 100*(display-15)/10)),
                 "usableCharts": bar["usableCharts"], "selectedCharts": bar["scoreCount"],
                 "needsPlays": bar["scoreCount"] < 5, "suggestedLevel": target_level,
                 "group": "everythingElse", "suggestions": suggestions,

@@ -116,6 +116,17 @@ class TrackerParityTests(unittest.TestCase):
 
 
 class RadarPolicyTests(unittest.TestCase):
+    def test_display_scale_uses_s15_d16_zero_and_preserves_s25_d26_ceiling(self):
+        for mode,level,expected in (("Single",14,0),("Double",15,0),
+                ("Single",15,0),("Double",16,0),("Single",20,50),("Double",21,50),
+                ("Single",25,100),("Double",26,100),("Single",26,100),("Double",27,100)):
+            with self.subTest(mode=mode,level=level):
+                charts=[chart(str(i),mode=mode,level=level) for i in range(5)]
+                response=profile(charts,[score(c["id"]) for c in charts])
+                bucket=response["buckets"][2 if mode=="Single" else 3]
+                self.assertAlmostEqual(bucket["rawPg"],level)
+                self.assertAlmostEqual(bucket["radarScore"],expected)
+
     def test_contributions_are_the_exact_unique_top_five_records_used_for_pg(self):
         charts=[chart(str(i),level=12) for i in range(7)]
         rows=[score(str(i),pumbility=300+i) for i in range(7)]

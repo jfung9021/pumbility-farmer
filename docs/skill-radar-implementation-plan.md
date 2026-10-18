@@ -17,7 +17,7 @@ For a Windows worktree sharing dependencies, start Next with
 | --- | --- |
 | Traces | Red Singles; green Doubles. |
 | Players | Skill Radar requires 100+ current submitted Phoenix 2 chart records across all modes and levels, including broken plays. Filter its dedicated username list and enforce the same rule on direct profile access. Other pages retain their existing lists. |
-| Alignment | D20.5 PG equals S19.5 PG. S10/D11 maps to 0; S25/D26 to 100. |
+| Alignment | D20.5 PG equals S19.5 PG. S15/D16 maps to 0; S25/D26 to 100. |
 | Missing scores | Pad missing top-five slots with zero. Three usable scores plus two zeros still divide by five. Empty buckets show zero skill and count as weakness candidates. |
 | Groups | Three weaknesses and three strengths total, across both modes, in any mix. |
 | Suggestions | Up to ten charts in official level max(16, floor(actual PG +1.5)), ordered by calculated Pumbility difficulty. Include played and already-SSS+ charts. |
@@ -56,7 +56,7 @@ Per mode and bucket, select the top five unique charts, pad with zeros, then:
     rawPG = max(0, effectiveLevel + (Double ? 1 : 0))
 
     displayPG = max(0, rawPG - (Double ? 1 : 0))
-    radarScore = clamp(100 * (displayPG - 10) / 15, 0, 100)
+    radarScore = clamp(100 * (displayPG - 15) / 10, 0, 100)
     suggestedLevel = max(16, floor(rawPG + 1.5 + 1e-9))
 
 Nonpositive totals return zero. Keep full precision after inversion; round labels
