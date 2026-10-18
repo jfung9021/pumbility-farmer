@@ -16,7 +16,7 @@ from analysis_runtime import (MemoryBlobStore, _official_tier_arguments, _valida
     _write_typed_checkpoint_combined, _load_typed_checkpoint_combined, IncompatibleCombinedTierCheckpointError)
 from mix_registry import resolve_mix
 from api.jonathan import router
-from production_tiers import (TierAnalysisPending, build_hosted_tiers, cohort, digest,
+from production_tiers import (FINISH_STAGES, TierAnalysisPending, build_hosted_tiers, cohort, digest,
     public_digest, public_tiers, validate_public_tiers)
 from tier_release import seed_source_aware_fit
 
@@ -35,7 +35,7 @@ def context_fixture():
     for source in ("official", "submitted"):
         boards = {cid: {source + ":p": 994000} for cid in catalog}
         prepared[source] = {"boards": boards, "sourceBoards": {source: boards}}
-    policy = SimpleNamespace(semantic_hash=lambda: "policy")
+    policy = SimpleNamespace(semantic_hash=lambda: "policy", public=lambda: {"policy": "policy"})
     merged = {"manifestSha256": "official"}
     return {}, {}, list(catalog.values()), policy, merged, prepared
 
@@ -52,24 +52,34 @@ class HostedTierTests(unittest.TestCase):
              patch("official_scoring_sources.canonical_scoring_manifest_sha256", return_value="official"), \
              patch("scoring_percentile.build_production_tier_payload", return_value={"schemaVersion": 48}) as general, \
              patch("sss_scoring_model.fit_target_model", fitter), \
-             patch("production_tiers.finish_generation", return_value={"full": "audit", "summary": {}}) as finish, \
+             patch("production_tiers._finish_stage", side_effect=lambda stage, *a:
+                   {"schemaVersion": {"centered-sss": 51, "sssplus": 52, "median": 53, "spread": 54,
+                    "combined-clearing": 55, "source-aware": 56, "submitted-calibration": 57}[stage],
+                    "generatedAtUtc": timestamp, "summary": {"generatedAtUtc": timestamp}}) as finish, \
              patch("production_tiers.public_tiers", return_value=public) as project, \
-             patch("production_tiers.validate_public_tiers"):
+             patch("production_tiers.validate_public_tiers"), \
+             patch("tier_public.prepare_tier_publication", return_value=(public, {})), \
+             patch("tier_public.validate_tier_publication"):
             for count in range(1, 9):
                 with self.assertRaises(TierAnalysisPending) as pending:
                     build_hosted_tiers([], {}, {}, {}, store=store, arguments=args, generated_at_utc=timestamp)
                 self.assertEqual(pending.exception.completed, count)
                 self.assertEqual(fitter.call_count, count)
                 finish.assert_not_called()
+            for index, stage in enumerate(("prepared-inputs", *FINISH_STAGES, "archive"), 9):
+                with self.assertRaises(TierAnalysisPending) as pending:
+                    build_hosted_tiers([], {}, {}, {}, store=store, arguments=args, generated_at_utc=timestamp)
+                self.assertEqual(pending.exception.stage, stage)
+                self.assertEqual(pending.exception.progress_ordinal, index)
+                self.assertEqual(fitter.call_count, 8)
             self.assertEqual(build_hosted_tiers([], {}, {}, {}, store=store, arguments=args, generated_at_utc=timestamp), public)
             self.assertEqual(build_hosted_tiers([], {}, {}, {}, store=store, arguments=args, generated_at_utc=timestamp), public)
         self.assertEqual(fitter.call_count, 8)
         general.assert_called_once()
-        finish.assert_called_once()
+        self.assertEqual(finish.call_count, len(FINISH_STAGES))
         self.assertEqual(project.call_args.args[0]["generatedAtUtc"], timestamp)
         self.assertEqual(project.call_args.args[0]["summary"]["generatedAtUtc"], timestamp)
-        self.assertEqual(len(store.binary_values), 1)
-        audit = json.loads(gzip.decompress(next(iter(store.binary_values.values()))))
+        audit = json.loads(gzip.decompress(store.binary_values[project.call_args.kwargs["private_path"]]))
         self.assertEqual(audit, project.call_args.args[0])
         self.assertEqual(project.call_args.kwargs["full_sha256"], digest(audit))
 

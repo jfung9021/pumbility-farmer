@@ -74,6 +74,31 @@ READ_POOL_DEFAULT_MAX_SIZE = 2
 READ_POOL_DEFAULT_MAX_WAITING = 2
 READ_POOL_HEALTH_CHECK_INTERVAL_SECONDS = 30.0
 
+TIER_PUBLICATION_LOCK = "pumbility:tier-publication:inputs"
+
+
+def _source_revision_path(mix: str) -> str:
+    return f"analysis/private/source-revisions/{mix}.json"
+
+
+def bump_tier_source_revision(cursor: Any, mix: str) -> None:
+    """Called in the source import transaction, never after its commit."""
+    cursor.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (TIER_PUBLICATION_LOCK,))
+    PumbilityArtifactStore._put_json_row(cursor, _source_revision_path(mix),
+                                        {"revision": uuid.uuid4().hex})
+
+
+def _tier_publication_revisions(cursor: Any) -> dict[str, dict[str, Any]]:
+    from pumbility_contract import combined_tier_blob_path, recommendation_blob_path
+    keys = [combined_tier_blob_path(), recommendation_blob_path(),
+            _source_revision_path("phoenix1"), _source_revision_path("phoenix2")]
+    cursor.execute(
+        """select object_key, sha256, byte_size, xmin::text from pumbility.artifacts
+           where object_key = any(%s) or object_key like 'analysis/private/official/scoring/%%'
+           order by object_key for update""", (keys,))
+    return {str(row[0]): {"sha256": str(row[1]), "byteSize": int(row[2]), "revision": str(row[3])}
+            for row in cursor.fetchall()}
+
 
 def _enabled(value: str | None) -> bool:
     return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
@@ -1629,6 +1654,73 @@ class PumbilityArtifactStore:
             for pathname, payload in payloads.items():
                 self._put_json_row(cursor, pathname, payload)
 
+    def tier_publication_revisions(self) -> dict[str, dict[str, Any]]:
+        """Small revision tokens, including transactional relational source tokens."""
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (TIER_PUBLICATION_LOCK,))
+            for mix in ("phoenix1", "phoenix2"):
+                cursor.execute("select 1 from pumbility.artifacts where object_key = %s", (_source_revision_path(mix),))
+                if cursor.fetchone() is None:
+                    bump_tier_source_revision(cursor, mix)
+            return _tier_publication_revisions(cursor)
+
+    def promote_tier_publication(self, *, job_id: str, lease_owner: str,
+                                 candidate_path: str, candidate_revision: Mapping[str, Any],
+                                 expected_revisions: Mapping[str, Any], audit: Mapping[str, Any],
+                                 completed_job: Mapping[str, Any]) -> None:
+        """Check source/pointer revisions and the lease in the promotion transaction."""
+        from psycopg.types.json import Jsonb
+        from pumbility_contract import combined_tier_blob_path
+        from tier_publication_jobs import TierPublicationConflict
+        with _connect(self.database_url) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                _assert_schema(cursor)
+                cursor.execute(f"set local lock_timeout = '{PUBLICATION_LOCK_TIMEOUT_MILLISECONDS}ms'")
+                cursor.execute(f"set local statement_timeout = '{PUBLICATION_STATEMENT_TIMEOUT_MILLISECONDS}ms'")
+                cursor.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (TIER_PUBLICATION_LOCK,))
+                cursor.execute("""select id from pumbility.jobs where external_key = %s
+                    and status = 'running' and lease_owner = %s
+                    and lease_expires_at >= clock_timestamp() and cancellation_requested_at is null for update""",
+                    (job_id, lease_owner))
+                if cursor.fetchone() is None:
+                    raise TierPublicationConflict("The tier publication lease is no longer owned.")
+                actual = _tier_publication_revisions(cursor)
+                if actual != dict(expected_revisions):
+                    raise TierPublicationConflict("The tier publication inputs changed.")
+                cursor.execute("""select sha256, byte_size, xmin::text from pumbility.artifacts
+                    where object_key = %s and payload_json is not null for update""", (candidate_path,))
+                row = cursor.fetchone()
+                revision = None if row is None else {"sha256": str(row[0]), "byteSize": int(row[1]), "revision": str(row[2])}
+                if revision != dict(candidate_revision):
+                    raise TierPublicationConflict("The validated tier candidate changed.")
+                tier_path = combined_tier_blob_path()
+                baseline_path = "analysis/private/tier-releases/baselines/" + str(expected_revisions[tier_path]["sha256"]) + ".json"
+                for source, target in ((tier_path, baseline_path), (candidate_path, tier_path)):
+                    cursor.execute("""insert into pumbility.artifacts
+                        (object_key,media_type,payload_json,storage_bucket,storage_object_path,sha256,byte_size,validated_at,updated_at)
+                        select %s,media_type,payload_json,storage_bucket,storage_object_path,sha256,byte_size,validated_at,now()
+                        from pumbility.artifacts where object_key = %s
+                        on conflict(object_key) do update set media_type=excluded.media_type,payload_json=excluded.payload_json,
+                        storage_bucket=excluded.storage_bucket,storage_object_path=excluded.storage_object_path,
+                        sha256=excluded.sha256,byte_size=excluded.byte_size,validated_at=excluded.validated_at,updated_at=excluded.updated_at""",
+                        (target, source))
+                    if cursor.rowcount != 1:
+                        raise TierPublicationConflict("The tier publication artifact disappeared.")
+                self._put_json_row(cursor, "analysis/private/tier-releases/latest.json", audit)
+                cursor.execute("""update pumbility.jobs set status='completed', stage='published', payload=%s,
+                    completed_at=clock_timestamp(),updated_at=clock_timestamp(),lease_owner=null,lease_expires_at=null
+                    where external_key=%s and lease_owner=%s and lease_expires_at >= clock_timestamp()""", (Jsonb(dict(completed_job)), job_id, lease_owner))
+                if cursor.rowcount != 1:
+                    raise TierPublicationConflict("The tier publication lease expired during promotion.")
+                cursor.execute("delete from pumbility.job_heads where name='active:tier-publication' and job_id=(select id from pumbility.jobs where external_key=%s)", (job_id,))
+
+    def artifact_revision(self, pathname: str) -> dict[str, Any] | None:
+        with _read_cursor(self.database_url) as cursor:
+            cursor.execute("select sha256,byte_size,xmin::text from pumbility.artifacts where object_key=%s", (pathname,))
+            row = cursor.fetchone()
+        return None if row is None else {"sha256": str(row[0]), "byteSize": int(row[1]), "revision": str(row[2])}
+
     def publish_generation(
         self,
         payloads: Mapping[str, Mapping[str, Any]],
@@ -2037,6 +2129,78 @@ class PumbilityJobStore:
     def __init__(self, *, database_url: str | None = None) -> None:
         self.database_url = _database_url(database_url)
         self.lease_owner = f"compat-{uuid.uuid4().hex}"
+
+    def request_tier_publication(self, payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
+        """Serialize duplicate operator triggers without loading any score inputs."""
+        from psycopg.types.json import Jsonb
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute("select pg_advisory_xact_lock(hashtextextended('active:tier-publication',0))")
+            cursor.execute("""select j.payload from pumbility.job_heads h join pumbility.jobs j on j.id=h.job_id
+                where h.name='active:tier-publication' and j.status in ('queued','running') for update of j""")
+            row = cursor.fetchone()
+            if row is not None:
+                return dict(row[0]), False
+            cursor.execute("""select 1 from pumbility.job_heads h join pumbility.jobs j on j.id=h.job_id
+                where h.name='active:analysis' and j.status in ('queued','running')""")
+            if cursor.fetchone() is not None:
+                from tier_release import TierReleaseBusyError
+                raise TierReleaseBusyError("Wait for the active score refresh before publishing tiers.")
+            cursor.execute("""insert into pumbility.jobs(external_key,kind,status,stage,mix_key,attempt,payload,created_at,updated_at)
+                values(%s,'analysis','queued','pin-inputs','phoenix2',0,%s,%s::timestamptz,%s::timestamptz) returning id""",
+                (payload['id'], Jsonb(dict(payload)), payload['createdAtUtc'], payload['updatedAtUtc']))
+            job_uuid = cursor.fetchone()[0]
+            for name in ('active:tier-publication','latest:tier-publication'):
+                cursor.execute("""insert into pumbility.job_heads(name,job_id,updated_at) values(%s,%s,now())
+                    on conflict(name) do update set job_id=excluded.job_id,updated_at=excluded.updated_at""", (name,job_uuid))
+            return dict(payload), True
+
+    def tier_publication_job_id(self) -> str | None:
+        return self._get_head('latest:tier-publication')
+
+    def claim_tier_publication(self, payload: Mapping[str, Any]) -> dict[str, Any] | None:
+        """The DB claim primitive also safely reclaims expired running leases."""
+        from psycopg.types.json import Jsonb
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            cursor.execute("select payload,status from pumbility.jobs where external_key=%s for update", (payload['id'],))
+            row = cursor.fetchone()
+            if row is None or row[1] not in ('queued','running'):
+                return None
+            value = {**dict(row[0]), 'status': 'running', 'updatedAtUtc': payload['updatedAtUtc']}
+            cursor.execute("select pumbility.claim_job(%s,%s,%s,%s,%s,%s,%s)",
+                (value['id'],'analysis',value.get('stage','pin-inputs'),'phoenix2',Jsonb(value),self.lease_owner,JOB_LEASE_SECONDS))
+            claim = cursor.fetchone()[0]
+            if not isinstance(claim, Mapping) or not claim.get('claimed'):
+                return None
+            cursor.execute("update pumbility.jobs set payload=%s where external_key=%s and lease_owner=%s",
+                (Jsonb(value),value['id'],self.lease_owner))
+            return value if cursor.rowcount == 1 else None
+
+    def finish_tier_publication(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        from psycopg.types.json import Jsonb
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            cursor.execute("""update pumbility.jobs set status=%s,stage=%s,payload=%s,
+                completed_at=clock_timestamp(),updated_at=clock_timestamp(),lease_owner=null,lease_expires_at=null
+                where external_key=%s and ((status='running' and lease_owner=%s and lease_expires_at >= clock_timestamp())
+                or (status='queued' and lease_owner is null)) returning id""",
+                (payload['status'],payload['stage'],Jsonb(dict(payload)),payload['id'],self.lease_owner))
+            if cursor.fetchone() is None:
+                raise RuntimeError("The tier publication failure no longer owns its job.")
+            cursor.execute("delete from pumbility.job_heads where name='active:tier-publication' and job_id=(select id from pumbility.jobs where external_key=%s) AND exists(select 1 from pumbility.jobs where external_key=%s and status in ('failed','completed'))", (payload['id'],payload['id']))
+        return dict(payload)
+
+    def retry_tier_publication(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        from psycopg.types.json import Jsonb
+        value = {**dict(payload), 'status': 'queued', 'completedAtUtc': None}
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            cursor.execute("""update pumbility.jobs set status='queued',payload=%s,updated_at=clock_timestamp(),
+                lease_owner=null,lease_expires_at=null where external_key=%s and status='running'
+                and lease_owner=%s and lease_expires_at >= clock_timestamp() returning id""",
+                (Jsonb(value),value['id'],self.lease_owner))
+            if cursor.fetchone() is None:
+                raise RuntimeError("The tier publication retry no longer owns its job.")
+        return value
 
     def heartbeat(self, job_id: str) -> None:
         """Renew a lease while preserving the current stage and progress payload."""

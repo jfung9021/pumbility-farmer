@@ -14,6 +14,8 @@ from api.recommendations import router as recommendations_router
 from api.tier_list import router as tier_list_router
 from api.topology import router as topology_router
 from pumbility_store import validate_persistence_configuration
+from tier_diagnostics import report_exception
+from uuid import uuid4
 
 
 validate_persistence_configuration()
@@ -30,7 +32,10 @@ app.include_router(topology_router)
 
 @app.exception_handler(Exception)
 async def unhandled_error(_request: Request, _error: Exception) -> JSONResponse:
+    request_id = uuid4().hex
+    report_exception(_error, request_id=request_id, stage="api", status_code=500)
     return JSONResponse(
         status_code=500,
-        content={"error": "The analysis service failed unexpectedly."},
+        content={"error": "The analysis service failed unexpectedly.", "requestId": request_id},
+        headers={"Cache-Control": "no-store", "X-Request-Id": request_id},
     )

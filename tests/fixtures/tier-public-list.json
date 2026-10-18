@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 57,
+  "generatedAtUtc": "2026-10-18T00:00:00Z",
+  "mix": {
+    "key": "combined"
+  },
+  "relativeGroups": [],
+  "effectBands": [],
+  "summary": {
+    "scriptVersion": "test",
+    "coverage": {},
+    "modes": {},
+    "method": {
+      "sourceAwareTiers": {
+        "sourcePolicy": {
+          "effectivePolicySha256": "policy"
+        }
+      },
+      "sssScoring": {
+        "version": 1,
+        "baseSchemaVersion": 48
+      },
+      "submittedSssplusCalibration": {
+        "version": 1,
+        "localOnly": false
+      }
+    }
+  },
+  "singles": [],
+  "doubles": [
+    {
+      "estimatedDifficulty": 18.12345678912345,
+      "difficultyDelta": -0.37654321087655,
+      "levelRank": 7,
+      "levelComparisonCharts": 91,
+      "modeRank": 123,
+      "effectBandRank": 2,
+      "evidenceStatus": "Provisional",
+      "difficultyCi95Low": 17.987654321,
+      "difficultyCi95High": 18.543210987,
+      "mode": "Doubles",
+      "songName": "Example",
+      "type": "Double",
+      "level": 18,
+      "chartId": "d18",
+      "imageUrl": null,
+      "noteCount": 1234,
+      "stepArtist": "Artist",
+      "bpmMin": 150,
+      "bpmMax": 159,
+      "scoringVariants": {
+        "general": {
+          "estimatedDifficulty": 18.12345678912345
+        },
+        "sss": {
+          "estimatedDifficulty": 18.12345678912345,
+          "difficultyDelta": -0.37654321087655,
+          "levelRank": 7,
+          "levelComparisonCharts": 91,
+          "modeRank": 123,
+          "effectBandRank": 2,
+          "evidenceStatus": "Provisional",
+          "difficultyCi95Low": 17.987654321,
+          "difficultyCi95High": 18.543210987,
+          "scoringTarget": 995000,
+          "scoringSpreadPolicy": {
+            "midpoint": 18.5
+          }
+        },
+        "sssplus": {
+          "estimatedDifficulty": 18.12345678912345,
+          "difficultyDelta": -0.37654321087655,
+          "levelRank": 7,
+          "levelComparisonCharts": 91,
+          "modeRank": 123,
+          "effectBandRank": 2,
+          "evidenceStatus": "Provisional",
+          "difficultyCi95Low": 17.987654321,
+          "difficultyCi95High": 18.543210987,
+          "scoringTarget": 995000,
+          "scoringSpreadPolicy": {
+            "midpoint": 18.5
+          }
+        }
+      },
+      "pumbilityVariants": {
+        "general": {
+          "estimatedDifficulty": 18.411728394561724
+        },
+        "sss": {
+          "estimatedDifficulty": 18.411728394561724,
+          "difficultyDelta": -0.37654321087655,
+          "levelRank": 7,
+          "levelComparisonCharts": 91,
+          "modeRank": 123,
+          "effectBandRank": 2,
+          "evidenceStatus": "Provisional",
+          "difficultyCi95Low": 17.987654321,
+          "difficultyCi95High": 18.543210987,
+          "aggregation": "average"
+        },
+        "sssplus": {
+          "estimatedDifficulty": 18.411728394561724,
+          "difficultyDelta": -0.37654321087655,
+          "levelRank": 7,
+          "levelComparisonCharts": 91,
+          "modeRank": 123,
+          "effectBandRank": 2,
+          "evidenceStatus": "Provisional",
+          "difficultyCi95Low": 17.987654321,
+          "difficultyCi95High": 18.543210987,
+          "aggregation": "average"
+        }
+      },
+      "tierMetrics": {
+        "clearing": {
+          "estimatedDifficulty": 18.7,
+          "difficultyDelta": -0.37654321087655,
+          "levelRank": 7,
+          "levelComparisonCharts": 91,
+          "modeRank": 123,
+          "effectBandRank": 2,
+          "evidenceStatus": "Provisional",
+          "difficultyCi95Low": 17.987654321,
+          "difficultyCi95High": 18.543210987,
+          "method": "submitted-folder-centered-clearing-v1",
+          "ratedClearCount": 42
+        },
+        "pumbility": {
+          "estimatedDifficulty": 18.12345678912345,
+          "difficultyDelta": -0.37654321087655,
+          "levelRank": 7,
+          "levelComparisonCharts": 91,
+          "modeRank": 123,
+          "effectBandRank": 2,
+          "evidenceStatus": "Provisional",
+          "difficultyCi95Low": 17.987654321,
+          "difficultyCi95High": 18.543210987,
+          "aggregation": "average"
+        }
+      }
+    }
+  ],
+  "coop": [],
+  "tierListView": {
+    "version": 1,
+    "kind": "list",
+    "detailsAvailable": true
+  }
+}

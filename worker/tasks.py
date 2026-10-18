@@ -180,6 +180,20 @@ def refresh_analysis(job_id: str) -> dict[str, Any]:
     return result
 
 
+@app.task(queue=QUEUE_NAME, name="worker.tasks.publish_tiers")
+def publish_tiers(job_id: str) -> dict[str, Any]:
+    """Tier-only phases reuse the durable queue without capturing player scores."""
+    from tier_publication_jobs import CONTINUATION_FIELD, execute_tier_publication_job
+    cold_claim = _begin_topology_worker_invocation(QUEUE_NAME)
+    result = execute_tier_publication_job(job_id)
+    sequence = result.pop(CONTINUATION_FIELD, None)
+    if sequence is not None:
+        publish_tiers.apply_async(args=[job_id],
+            task_id=f"{job_id}-phase-{sequence}-attempt-{result.get('attempt', 0)}", queue=QUEUE_NAME)
+    _complete_topology_worker_invocation_best_effort(cold_claim)
+    return result
+
+
 @app.task(
     queue=PLAYER_QUEUE_NAME,
     name="worker.tasks.refresh_player_recommendations",

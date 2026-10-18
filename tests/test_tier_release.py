@@ -108,13 +108,13 @@ class TierReleaseTests(unittest.TestCase):
         client = TestClient(app)
         with patch.dict(os.environ, {"JONATHAN_PASSWORD": "operator"}), \
              patch("analysis_runtime.PrivateBlobStore"), patch("analysis_runtime.RuntimeJobStore"), \
-             patch("tier_release.rebuild_tiers_only", return_value={"outcome": "tiers-rebuilt", "schemaVersion": 48}) as rebuild, \
+             patch("tier_publication_jobs.request_tier_publication", return_value=(202, {"id": "tier-job", "status": "queued"})) as rebuild, \
              patch("api.jonathan.start_or_reuse_analysis") as enqueue:
             self.assertEqual(client.post("/api/jonathan/refresh?mode=tiers").status_code, 401)
             rebuild.assert_not_called()
             response = client.post("/api/jonathan/refresh?mode=tiers", headers={"X-Jonathan-Password": "operator"})
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json()["schemaVersion"], 48)
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(response.json()["id"], "tier-job")
             rebuild.side_effect = TierReleaseBusyError("active")
             self.assertEqual(client.post("/api/jonathan/refresh?mode=tiers", headers={"X-Jonathan-Password": "operator"}).status_code, 409)
             enqueue.assert_not_called()

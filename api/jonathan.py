@@ -5,12 +5,14 @@ from __future__ import annotations
 import hmac
 import os
 from typing import Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from api._shared import start_or_reuse_analysis
 from mix_registry import resolve_mix
+from tier_diagnostics import report_exception
 
 
 router = APIRouter()
@@ -88,13 +90,9 @@ def refresh_from_jonathan(
     full_sync = mode == "full"
     try:
         if mode == "tiers":
-            from analysis_runtime import PrivateBlobStore, RuntimeJobStore
-            from tier_release import rebuild_tiers_only, TierReleaseBusyError
-
-            try:
-                return _response(200, rebuild_tiers_only(PrivateBlobStore(), RuntimeJobStore()))
-            except TierReleaseBusyError as exc:
-                return _response(409, {"error": str(exc)})
+            from tier_publication_jobs import request_tier_publication
+            status, payload = request_tier_publication(enqueue_tier_publication)
+            return _response(status, payload)
         if mode == "official-status":
             from analysis_runtime import PrivateBlobStore
             from pumbility_contract import official_scoring_manifest_path
@@ -126,11 +124,41 @@ def refresh_from_jonathan(
         )
         return _response(status, payload)
     except ValueError as exc:
+        report_exception(exc, stage="operator-trigger", status_code=400)
         return _response(400, {"error": str(exc)})
     except RuntimeError as exc:
+        from tier_release import TierReleaseBusyError
+        report_exception(exc, stage="operator-trigger", status_code=503)
+        if isinstance(exc, TierReleaseBusyError):
+            return _response(409, {"error": str(exc)})
         return _response(503, {"error": str(exc)})
-    except Exception:
+    except Exception as error:
+        request_id = uuid4().hex
+        report_exception(error, request_id=request_id, stage="operator-trigger", status_code=500)
         return _response(
             500,
-            {"error": "The analysis job could not be started."},
+            {"error": "The analysis job could not be started.", "requestId": request_id},
         )
+
+
+def enqueue_tier_publication(job_id: str) -> None:
+    from worker.tasks import publish_tiers
+    from worker.constants import QUEUE_NAME
+    publish_tiers.apply_async(args=[job_id], task_id=job_id, queue=QUEUE_NAME)
+
+
+@router.get("/api/jonathan/tier-publication")
+def tier_publication_status(request: Request, jobId: str | None = Query(default=None)):
+    denial = _tier_fit_denial(request)
+    if denial is not None:
+        return denial
+    try:
+        from tier_publication_jobs import get_tier_publication_status
+        status = get_tier_publication_status(jobId)
+        if status is None:
+            return _response(404, {"error": "Tier publication job not found."})
+        return _response(200, status)
+    except Exception as error:
+        request_id = uuid4().hex
+        report_exception(error, request_id=request_id, stage="operator-status", status_code=503)
+        return _response(503, {"error": "Tier publication status is unavailable.", "requestId": request_id})

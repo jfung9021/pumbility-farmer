@@ -1,0 +1,8 @@
+{
+  "metric": ["estimatedDifficulty", "difficultyDelta", "levelRank", "levelComparisonCharts", "modeRank", "levelPercentile", "relativeGroup", "relativeGroupRank", "effectBandRank", "effectBand", "evidenceStatus", "difficultyCi95Low", "difficultyCi95High", "difficultyDeltaCi95Low", "difficultyDeltaCi95High"],
+  "chart": ["mode", "folder", "songName", "difficulty", "type", "level", "chartId", "imageUrl", "noteCount", "stepArtist", "bpmMin", "bpmMax", "nContributors", "nPlayersScored", "phoenix1Contributors", "phoenix2Contributors", "scoringMethod", "scoringTarget", "scoringSource", "scoringTargetSuccesses", "scoringBelowTarget", "scoringPlayerCount", "scoringProvisional", "scoringUnratedReason", "difficultyModelContinuous"],
+  "scoring": ["nContributors", "scoringMethod", "scoringTarget", "scoringSource", "scoringTargetSuccesses", "scoringBelowTarget", "scoringUnratedReason"],
+  "clearing": ["method", "skillMetric", "clearCount", "ratedClearCount", "selectedCount", "missingSkillCount", "q0Skill", "q10Skill", "q20Skill", "q25Skill", "q30Skill", "q50Skill", "defaultedAtCap", "unratedReason"],
+  "pumbility": ["aggregation", "scoringSupportCount", "clearingSupportCount"],
+  "method": ["sourceSelection", "scoring", "officialTiers", "officialCrossLevelScoring", "crossLevelClearing", "hybridTiers", "tierMetrics", "pumbilityExperiment", "ratingPostprocessing", "phoenix1ScoreOverrides", "sourceAwareTiers", "productionTierPublication"]
+}

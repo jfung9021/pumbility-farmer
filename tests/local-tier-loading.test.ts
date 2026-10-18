@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { cachedFileReader } from "../lib/local-file-cache.ts";
-import { tierBrowserJson } from "../lib/tier-browser-payload.ts";
+import { tierBrowserJson, tierChartDetails } from "../lib/tier-browser-payload.ts";
 import type { AnalysisPayload } from "../lib/types";
 
 async function temporaryFiles(run: (directory: string) => Promise<void>) {
@@ -93,6 +93,7 @@ test("failed validation is retried and cannot evict a newer file's successful lo
 test("browser projection removes rollback copies and retains active tier data without mutation", () => {
   const payload = {
     schemaVersion:57,
+    singles:[],
     sourceAwareBaseline:{privateHistory:"unused"},
     summary:{method:{submittedSssplusCalibration:{sharedScale:.69, fitIdentity:{target:995000}}}},
     doubles:[{
@@ -112,11 +113,14 @@ test("browser projection removes rollback copies and retains active tier data wi
   const json = tierBrowserJson(payload), browser = JSON.parse(json);
   assert.equal(browser.sourceAwareBaseline, undefined);
   assert.equal(browser.doubles[0].submittedSssplusCalibrationBaseline, undefined);
-  assert.deepEqual(browser.doubles[0].scoringVariants, payload.doubles[0].scoringVariants);
+  assert.equal(browser.doubles[0].scoringVariants.sssplus.estimatedDifficulty, payload.doubles[0].scoringVariants?.sssplus?.estimatedDifficulty);
+  assert.equal(browser.doubles[0].scoringVariants.sssplus.scoringRefinement, undefined);
+  assert.deepEqual(tierChartDetails(payload, "chart")?.chart.scoringVariants.sssplus, payload.doubles[0].scoringVariants?.sssplus);
   assert.deepEqual(browser.doubles[0].pumbilityVariants, payload.doubles[0].pumbilityVariants);
   assert.deepEqual(browser.doubles[0].tierMetrics, payload.doubles[0].tierMetrics);
-  assert.deepEqual(browser.doubles[0].chartSourceExclusions, payload.doubles[0].chartSourceExclusions);
-  assert.deepEqual(browser.summary, payload.summary);
+  assert.equal(browser.doubles[0].chartSourceExclusions, undefined);
+  assert.deepEqual(tierChartDetails(payload, "chart")?.chart.chartSourceExclusions, payload.doubles[0].chartSourceExclusions);
+  assert.equal(browser.summary.method.submittedSssplusCalibration.sharedScale, undefined);
   assert.deepEqual(payload, before);
   assert.equal(tierBrowserJson(payload), json);
 });
