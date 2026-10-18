@@ -15,6 +15,16 @@ class TierPublicationApiTests(unittest.TestCase):
         app.include_router(router)
         self.client = TestClient(app)
 
+    def test_storage_preflight_requires_operator_and_returns_only_safe_metadata(self):
+        with patch.dict(os.environ, {"JONATHAN_PASSWORD": "operator"}), \
+             patch("analysis_runtime.PrivateBlobStore") as store:
+            store.return_value.tier_storage_status.return_value = {"httpStatus": 200, "exists": True, "fileSizeLimit": 50_000_000}
+            self.assertEqual(self.client.get("/api/jonathan/tier-storage").status_code, 401)
+            store.assert_not_called()
+            response = self.client.get("/api/jonathan/tier-storage", headers={"X-Jonathan-Password": "operator"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["fileSizeLimit"], 50_000_000)
+
     def test_authenticated_trigger_returns_job_without_running_analysis(self):
         request = Mock(return_value=(202, {"id": "tier-job", "status": "queued"}))
         status = Mock(return_value={"id": "tier-job", "status": "running", "stage": "spread"})
