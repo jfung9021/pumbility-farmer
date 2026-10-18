@@ -115,6 +115,32 @@ class TrackerParityTests(unittest.TestCase):
 
 
 class RadarPolicyTests(unittest.TestCase):
+    def test_contributions_are_the_exact_unique_top_five_records_used_for_pg(self):
+        charts=[chart(str(i),level=12) for i in range(7)]
+        rows=[score(str(i),pumbility=300+i) for i in range(7)]
+        rows += [score("0",pumbility=500,score=980000,plate="TG"),
+                 score("0",pumbility=400,score=999999,plate="PG"),
+                 score("1",pumbility=1000,isBroken=True)]
+        bucket=profile(charts,rows)["buckets"][2]
+        selected=bucket["contributingCharts"]
+        self.assertEqual([c["chartId"] for c in selected],["0","6","5","4","3"])
+        self.assertEqual([c["pumbility"] for c in selected],[500,306,305,304,303])
+        self.assertEqual((selected[0]["score"],selected[0]["plate"]),(980000,"TG"))
+        self.assertTrue(all(c["difficulty"]=="S12" for c in selected))
+        self.assertAlmostEqual(pg_equivalent("Single",sum(c["pumbility"] for c in selected)),bucket["rawPg"])
+        allowed={"chartId","songName","type","level","difficulty","imageUrl","pumbility","score","plate"}
+        self.assertTrue(all(set(c)==allowed for c in selected))
+
+    def test_contributions_retain_sparse_cent_rounding_and_empty_slots(self):
+        bucket=profile([chart("one",level=12)],
+            [score("one",pumbility=1.125,score=None,plate=None)])["buckets"][2]
+        self.assertEqual(bucket["selectedCharts"],1)
+        self.assertEqual(len(bucket["contributingCharts"]),1)
+        self.assertEqual(bucket["contributingCharts"][0]["pumbility"],1.13)
+        self.assertIsNone(bucket["contributingCharts"][0]["score"])
+        self.assertIsNone(bucket["contributingCharts"][0]["plate"])
+        self.assertEqual(profile([],[])["buckets"][0]["contributingCharts"],[])
+
     def test_double_alignment_and_raw_recommendation_threshold(self):
         charts=[chart("s"+str(i),level=18) for i in range(5)]+[chart("d"+str(i),mode="Double",level=19) for i in range(5)]
         response=profile(charts,[score(c["id"]) for c in charts])
@@ -208,8 +234,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertGreater(second["buckets"][2]["rawPg"],first["buckets"][2]["rawPg"])
         encoded=json.dumps(second)
         self.assertNotIn("private-player",encoded)
-        for private in ("recordedAt","pumbility","contributors","playerId","inputShard","letterGrade"):
+        for private in ("recordedAt","contributors","playerId","inputShard","letterGrade"):
             self.assertNotIn('"'+private+'"',encoded)
+        self.assertEqual(second["buckets"][2]["contributingCharts"][0]["pumbility"],400)
         store.values[combined_tier_blob_path()]["generatedAtUtc"]="2026-10-20T00:00:00Z"
         third=read_skill_radar(store,KEY)
         self.assertIsNot(second,third)

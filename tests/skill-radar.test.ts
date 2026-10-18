@@ -18,6 +18,24 @@ test("Python profile satisfies the public contract with all eighteen categories 
     assert.equal(bucket.minimumSuggestedDifficulty, bucket.rawPg + 1.5);
     assert.equal(bucket.displayPg, Math.max(0, bucket.rawPg - (bucket.mode === "doubles" ? 1 : 0)));
     assert.ok(bucket.suggestions.every(chart => chart.estimatedDifficulty >= bucket.minimumSuggestedDifficulty));
+    assert.equal(bucket.contributingCharts.length, bucket.selectedCharts);
+  }
+});
+
+test("contributions cannot disagree with the rating, duplicate charts, or disclose histories", () => {
+  const mutations = [
+    (bucket: any) => {bucket.contributingCharts[0].pumbility += 1;},
+    (bucket: any) => {bucket.contributingCharts[1].chartId = bucket.contributingCharts[0].chartId;},
+    (bucket: any) => {bucket.contributingCharts[0].recordedAt = "private";},
+    (bucket: any) => {bucket.contributingCharts[0].playerId = "private";},
+    (bucket: any) => {bucket.contributingCharts[0].type = "Double";},
+    (bucket: any) => {bucket.contributingCharts.push({...bucket.contributingCharts[0], chartId:"sixth"});},
+    (bucket: any) => {delete bucket.contributingCharts;},
+  ];
+  for (const mutate of mutations) {
+    const value = structuredClone(fixture);
+    mutate(value.buckets.find((bucket: any) => bucket.mode === "singles" && bucket.selectedCharts === 5));
+    assert.throws(() => validateSkillRadarResponse(value), /invalid/);
   }
 });
 

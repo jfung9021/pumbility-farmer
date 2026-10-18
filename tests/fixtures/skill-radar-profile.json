@@ -77,7 +77,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "weaknesses",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:0",
@@ -92,7 +93,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "weaknesses",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:1",
@@ -173,6 +175,63 @@
           "personalScore": null,
           "personalPlate": null
         }
+      ],
+      "contributingCharts": [
+        {
+          "chartId": "s0",
+          "songName": "Song s0",
+          "type": "Single",
+          "level": 18,
+          "difficulty": "S18",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "s1",
+          "songName": "Song s1",
+          "type": "Single",
+          "level": 18,
+          "difficulty": "S18",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "s2",
+          "songName": "Song s2",
+          "type": "Single",
+          "level": 18,
+          "difficulty": "S18",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "s3",
+          "songName": "Song s3",
+          "type": "Single",
+          "level": 18,
+          "difficulty": "S18",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "s4",
+          "songName": "Song s4",
+          "type": "Single",
+          "level": 18,
+          "difficulty": "S18",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        }
       ]
     },
     {
@@ -188,7 +247,64 @@
       "needsPlays": false,
       "minimumSuggestedDifficulty": 20.499999999999993,
       "group": "strengths",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": [
+        {
+          "chartId": "d0",
+          "songName": "Song d0",
+          "type": "Double",
+          "level": 19,
+          "difficulty": "D19",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "d1",
+          "songName": "Song d1",
+          "type": "Double",
+          "level": 19,
+          "difficulty": "D19",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "d2",
+          "songName": "Song d2",
+          "type": "Double",
+          "level": 19,
+          "difficulty": "D19",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "d3",
+          "songName": "Song d3",
+          "type": "Double",
+          "level": 19,
+          "difficulty": "D19",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        },
+        {
+          "chartId": "d4",
+          "songName": "Song d4",
+          "type": "Double",
+          "level": 19,
+          "difficulty": "D19",
+          "imageUrl": null,
+          "pumbility": 342.0,
+          "score": 1000000,
+          "plate": "PG"
+        }
+      ]
     },
     {
       "key": "singles:2",
@@ -203,7 +319,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "weaknesses",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:2",
@@ -218,7 +335,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:3",
@@ -233,7 +351,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:3",
@@ -248,7 +367,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:4",
@@ -263,7 +383,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:4",
@@ -278,7 +399,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:5",
@@ -293,7 +415,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:5",
@@ -308,7 +431,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:6",
@@ -323,7 +447,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:6",
@@ -338,7 +463,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:7",
@@ -353,7 +479,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:7",
@@ -368,7 +495,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "singles:8",
@@ -383,7 +511,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     },
     {
       "key": "doubles:8",
@@ -398,7 +527,8 @@
       "needsPlays": true,
       "minimumSuggestedDifficulty": 1.5,
       "group": "everythingElse",
-      "suggestions": []
+      "suggestions": [],
+      "contributingCharts": []
     }
   ],
   "groups": {

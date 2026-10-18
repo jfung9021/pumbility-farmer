@@ -23,6 +23,10 @@
 .radar-axis { stroke-opacity: .45; }
 .radar-axis-label { fill: #d0d9cc; font-size: var(--radar-range-font-size); font-weight: 650; transform: translateY(calc((var(--radar-score-font-size) - var(--radar-range-font-size)) / 2)); }
 .radar-axis-score { fill: var(--radar-color); font-size: var(--radar-score-font-size); font-variant-numeric: tabular-nums; font-weight: 600; }
+.radar-skill-trigger { cursor: pointer; outline: none; }
+.radar-skill-hit-area { fill: transparent; }
+.radar-skill-trigger:hover .radar-skill-hit-area, .radar-skill-trigger:focus-visible .radar-skill-hit-area { fill: var(--radar-color); fill-opacity: .12; }
+.radar-skill-trigger:focus-visible .radar-skill-hit-area { stroke: var(--radar-color); stroke-width: 1; }
 .radar-ring-label { fill: #8a978b; font-size: 12px; paint-order: stroke; stroke: #101611; stroke-width: 4; }
 .radar-trace-line { fill: var(--radar-color); fill-opacity: .035; stroke: var(--radar-color); stroke-linejoin: round; stroke-width: 2.5; }
 .radar-mode-doubles .radar-trace-line { stroke-dasharray: 6 4; }
@@ -67,6 +71,35 @@
 .radar-error button { background: #1c2619; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); min-height: 44px; padding: 8px 16px; }
 .radar-ladder > p, .radar-group-empty { color: var(--muted); font-size: 12px; padding: 8px 14px; }
 .skill-radar-page footer { margin-top: 32px; padding: 0; }
+.radar-contributor-dialog { background: #101611; border: 1px solid #455047; border-radius: 16px; color: var(--ink); max-height: calc(100dvh - 32px); max-width: none; overflow: auto; padding: 0; width: min(580px, calc(100vw - 24px)); }
+.radar-contributor-dialog::backdrop { background: rgba(0, 0, 0, .72); }
+.radar-contributor-content { padding: 22px; }
+.radar-contributor-heading { align-items: start; display: flex; gap: 12px; justify-content: space-between; }
+.radar-contributor-heading p { color: var(--radar-color); font-size: 12px; margin: 0 0 8px; }
+.radar-contributor-heading h2 { font-size: 22px; margin: 0; }
+.radar-contributor-heading button { background: transparent; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); flex: 0 0 44px; font-size: 24px; height: 44px; }
+.radar-contributor-heading button:focus-visible { outline: 2px solid var(--acid); outline-offset: 2px; }
+.radar-contributor-summary { align-items: baseline; display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 22px 0; }
+.radar-contributor-summary strong { color: var(--radar-color); font-size: 24px; }
+.radar-contributor-summary small { color: var(--muted); font-size: 12px; margin-left: 3px; }
+.radar-contributor-summary > span { color: var(--muted); font-size: 12px; }
+.radar-contributor-columns, .radar-contributor-total { align-items: baseline; display: flex; font-size: 11px; gap: 12px; justify-content: space-between; }
+.radar-contributor-columns { color: var(--muted); padding-bottom: 10px; }
+.radar-contributors { list-style: none; margin: 0; padding: 0; }
+.radar-contribution { align-items: center; border-top: 1px solid var(--line); display: grid; gap: 10px; grid-template-columns: 16px 40px minmax(0, 1fr) 64px; min-height: 78px; padding: 12px 0; }
+.radar-contribution-rank { color: var(--muted); font-size: 11px; }
+.radar-contribution-jacket { border-radius: 6px; height: 40px; overflow: hidden; width: 40px; }
+.radar-contribution-jacket img { height: 100%; object-fit: cover; width: 100%; }
+.radar-contribution-jacket > span { font-size: 10px; }
+.radar-contribution-copy { display: grid; gap: 7px; min-width: 0; overflow-wrap: anywhere; }
+.radar-contribution-copy > strong { font-size: 12px; line-height: 1.4; }
+.radar-contribution-copy > span { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.radar-contribution-copy b { color: var(--ink); }
+.radar-contribution-pumbility { font-size: 13px; font-variant-numeric: tabular-nums; grid-column: 4; text-align: right; }
+.radar-contribution-missing { color: var(--muted); font-size: 12px; grid-column: 2 / 4; }
+.radar-contributor-total { border-top: 1px solid var(--line); margin: 0; padding-top: 18px; }
+.radar-contributor-total strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.radar-contributor-note { color: var(--muted); font-size: 11px; margin: 14px 0 0; }
 .skill-radar-page button:focus-visible, .radar-chart-row a:focus-visible, .radar-song-details summary:focus-visible { outline: 2px solid var(--acid); outline-offset: 3px; }
 @media (max-width: 900px) {
   .radar-workspace { grid-template-columns: minmax(0, 1fr); }
@@ -85,4 +118,9 @@
   .radar-jacket { height: 38px; width: 38px; }
   .radar-chart-copy > strong { font-size: 11px; }
   .radar-chart-copy > span { font-size: 9px; }
+  .radar-contributor-content { padding: 16px; }
+  .radar-contributor-heading h2 { font-size: 20px; }
+  .radar-contribution { gap: 8px; grid-template-columns: 12px 32px minmax(0, 1fr) 58px; }
+  .radar-contribution-jacket { height: 32px; width: 32px; }
+  .radar-contribution-copy > span { font-size: 10px; }
 }

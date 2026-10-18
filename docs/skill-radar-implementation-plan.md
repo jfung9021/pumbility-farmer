@@ -21,6 +21,7 @@ For a Windows worktree sharing dependencies, start Next with
 | Groups | Three weaknesses and three strengths total, across both modes, in any mix. |
 | Suggestions | Five easiest eligible charts at or above actual PG +1.5, ordered by calculated Pumbility difficulty. Include played and already-SSS+ charts. |
 | Personal scores | Show scores and plates using the tier list's formatting. |
+| Rating details | Select an S/D radar rating to open its five contributing charts, including the exact selected score/plate and cent-rounded earned Pumbility. Show missing slots as zeros. |
 
 Use SSS+ Pumbility ratings for suggestions. Keep the initial UI focused without
 an additional scoring-goal control.
@@ -125,6 +126,9 @@ public player URL key and browser Back/Forward behavior.
   Avoid a second duplicate value table.
 - Empty buckets draw at zero. Failed requests show an error, not a zero profile.
   Hiding a trace does not change rankings or suggestions.
+- Rating dialogs support mouse, touch, Enter/Space, Escape, and restored focus.
+  Expose only the selected five public chart contributions, without internal
+  player IDs, timestamps or full play histories. Suggestions remain separate.
 - Keep copy to labels, numbers and short statuses. Put formulas, offset details,
   sparse-data effects and catalog limits in a closed **About Skill Radar** at the
   bottom. No **About player scores** or inline method essays.

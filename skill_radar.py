@@ -2,7 +2,8 @@
 
 Pricing, unique-chart selection and PG inversion follow PIU Training Tracker
 237e9f00b728c27150cb927dba8b8f79195526db/src/domain/bpm-progression.ts.
-All player identifiers and contributing play records stay outside the public DTO.
+Internal player identifiers and play histories stay outside the public DTO.
+Only the selected five chart contributions are exposed for the rating dialog.
 """
 from __future__ import annotations
 
@@ -14,9 +15,10 @@ import math
 from typing import Any, Mapping, Sequence
 
 from phoenix2_pumbility import (GRADE_BANDS, GRADE_PENALTY_UNITS_BY_TYPE,
-    PLATE_BONUS_UNITS_BY_TYPE, normalize_plate)
+    PLATE_BONUS_UNITS_BY_TYPE, PLATE_CODES, normalize_plate)
 
 METHOD_VERSION = 1
+PROFILE_VERSION = 2
 MODES = (("singles", "Single"), ("doubles", "Double"))
 BPM_BUCKETS = tuple({"id": str(index), "label": label, "min": low, "max": high}
     for index, (label, low, high) in enumerate((
@@ -111,7 +113,7 @@ def aggregate_bpm_progression(charts: Sequence[Mapping], scores: Sequence[Mappin
             earned = supplied if finite(supplied) and supplied >= 0 else calculate_phoenix2_pumbility(
                 mode, chart.get("level"), row.get("score"), row.get("plate"))
             if earned is not None:
-                priced.append({"chartId": chart_id, "pumbility": earned, "score": row.get("score"),
+                priced.append({"chartId": chart_id, "pumbility": earned, "score": row.get("score"), "plate": row.get("plate"),
                                "recordedAt": row.get("recordedAt") or ""})
         if not priced:
             excluded["unpriced"] += 1
@@ -169,6 +171,7 @@ def build_suggestion_catalog(tiers: Mapping, chart_metadata: Sequence[Mapping]):
 def build_skill_radar(charts, scores, suggestion_catalog, *, player_key, display_name,
                       generated_at_utc, player_synced_at_utc=None, personal_scores=None):
     aggregate = aggregate_bpm_progression(charts, scores)
+    metadata = {str(row.get("chartId", row.get("id"))): row for row in charts}
     scores_by_chart = {row["chartId"]: row for row in personal_scores or []}
     buckets = []
     for index, bucket in enumerate(BPM_BUCKETS):
@@ -176,6 +179,20 @@ def build_skill_radar(charts, scores, suggestion_catalog, *, player_key, display
             bar = aggregate["buckets"][index][key]
             raw = bar["equivalentLevel"]
             display = max(0.0, raw-(1 if mode == "Double" else 0))
+            contributing_charts = []
+            for selected in bar["contributors"]:
+                chart = metadata[selected["chartId"]]
+                selected_score = selected.get("score")
+                valid_score = (finite(selected_score) and float(selected_score).is_integer()
+                               and 0 <= selected_score <= 1_000_000)
+                contributing_charts.append({"chartId": selected["chartId"],
+                    "songName": str(chart.get("songName") or ""), "type": mode,
+                    "level": int(chart["level"]),
+                    "difficulty": ("S" if mode == "Single" else "D")+str(int(chart["level"])),
+                    "imageUrl": chart.get("imageUrl") or None,
+                    "pumbility": math.floor(selected["pumbility"]*100+.5)/100,
+                    "score": int(selected_score) if valid_score else None,
+                    "plate": PLATE_CODES.get(normalize_plate(selected.get("plate")))})
             suggestions = []
             for chart in suggestion_catalog["charts"]:
                 if (chart["type"] != mode or chart["bpmBucketId"] != bucket["id"]
@@ -191,7 +208,8 @@ def build_skill_radar(charts, scores, suggestion_catalog, *, player_key, display
                 "radarScore": max(0.0, min(100.0, 100*(display-10)/15)),
                 "usableCharts": bar["usableCharts"], "selectedCharts": bar["scoreCount"],
                 "needsPlays": bar["scoreCount"] < 5, "minimumSuggestedDifficulty": raw+1.5,
-                "group": "everythingElse", "suggestions": suggestions})
+                "group": "everythingElse", "suggestions": suggestions,
+                "contributingCharts": contributing_charts})
     order = lambda row: (int(row["bpmBucketId"]), 0 if row["mode"] == "singles" else 1)
     weaknesses = sorted(buckets, key=lambda row: (row["displayPg"], *order(row)))[:3]
     weak_keys = {row["key"] for row in weaknesses}

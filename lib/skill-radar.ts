@@ -22,6 +22,18 @@ export interface RadarSuggestion {
   personalPlate: string | null;
 }
 
+export interface RadarContribution {
+  chartId: string;
+  songName: string;
+  difficulty: string;
+  type: "Single" | "Double";
+  level: number;
+  imageUrl: string | null;
+  pumbility: number;
+  score: number | null;
+  plate: string | null;
+}
+
 export interface RadarBucket {
   key: string;
   mode: RadarMode;
@@ -36,6 +48,7 @@ export interface RadarBucket {
   minimumSuggestedDifficulty: number;
   group: RadarGroup;
   suggestions: RadarSuggestion[];
+  contributingCharts: RadarContribution[];
 }
 
 export interface SkillRadarResponse {
@@ -106,11 +119,22 @@ export function validateSkillRadarResponse(value: unknown, expectedPlayerKey?: s
   if (binIds.size !== 9 || !Array.isArray(value.buckets) || value.buckets.length !== 18) return invalid();
   const keys = new Set<string>();
   for (const bucket of value.buckets) {
-    if (!record(bucket) || !exact(bucket, ["key", "mode", "bpmBucketId", "label", "rawPg", "displayPg", "radarScore", "usableCharts", "selectedCharts", "needsPlays", "minimumSuggestedDifficulty", "group", "suggestions"]) || typeof bucket.key !== "string" || typeof bucket.bpmBucketId !== "string" || !binIds.has(bucket.bpmBucketId) || (bucket.mode !== "singles" && bucket.mode !== "doubles") || typeof bucket.label !== "string" || keys.has(bucket.key)) return invalid();
+    if (!record(bucket) || !exact(bucket, ["key", "mode", "bpmBucketId", "label", "rawPg", "displayPg", "radarScore", "usableCharts", "selectedCharts", "needsPlays", "minimumSuggestedDifficulty", "group", "suggestions", "contributingCharts"]) || typeof bucket.key !== "string" || typeof bucket.bpmBucketId !== "string" || !binIds.has(bucket.bpmBucketId) || (bucket.mode !== "singles" && bucket.mode !== "doubles") || typeof bucket.label !== "string" || keys.has(bucket.key)) return invalid();
     keys.add(bucket.key);
     if (![bucket.rawPg, bucket.displayPg, bucket.radarScore, bucket.minimumSuggestedDifficulty].every(finite) || (bucket.rawPg as number) < 0 || !whole(bucket.usableCharts) || !whole(bucket.selectedCharts) || bucket.selectedCharts > 5 || bucket.usableCharts < bucket.selectedCharts || bucket.needsPlays !== (bucket.selectedCharts < 5)) return invalid();
     if (!close(bucket.displayPg as number, Math.max(0, (bucket.rawPg as number) - (bucket.mode === "doubles" ? 1 : 0))) || !close(bucket.radarScore as number, Math.max(0, Math.min(100, 100 * ((bucket.displayPg as number) - 10) / 15))) || !close(bucket.minimumSuggestedDifficulty as number, (bucket.rawPg as number) + 1.5)) return invalid();
     if (!RADAR_GROUPS.some(group => group.key === bucket.group) || !Array.isArray(bucket.suggestions) || bucket.suggestions.length > 5) return invalid();
+    if (!Array.isArray(bucket.contributingCharts) || bucket.contributingCharts.length !== bucket.selectedCharts) return invalid();
+    const contributionIds = new Set<string>();
+    let contributionCents = 0;
+    for (const chart of bucket.contributingCharts) {
+      if (!record(chart) || !exact(chart, ["chartId", "songName", "difficulty", "type", "level", "imageUrl", "pumbility", "score", "plate"]) || typeof chart.chartId !== "string" || contributionIds.has(chart.chartId) || typeof chart.songName !== "string" || chart.type !== (bucket.mode === "singles" ? "Single" : "Double") || !whole(chart.level) || chart.level < 1 || chart.level > 30 || chart.difficulty !== `${bucket.mode === "singles" ? "S" : "D"}${chart.level}` || !(chart.imageUrl === null || typeof chart.imageUrl === "string") || !finite(chart.pumbility) || chart.pumbility < 0 || !(chart.score === null || whole(chart.score) && chart.score <= 1_000_000) || !(chart.plate === null || ["RG", "FG", "TG", "MG", "SG", "EG", "UG", "PG"].includes(chart.plate as string))) return invalid();
+      contributionIds.add(chart.chartId);
+      contributionCents += Math.round(chart.pumbility * 100);
+    }
+    const base = contributionCents / 100 / 5 / (760 / 750);
+    const contributedPg = contributionCents > 0 ? Math.max(0, (base <= 375 ? base / 7.5 - 27 : 23 + (base - 375) / 15) + (bucket.mode === "doubles" ? 1 : 0)) : 0;
+    if (!close(bucket.rawPg as number, contributedPg)) return invalid();
     const ids = new Set<string>();
     let prior = -Infinity;
     for (const chart of bucket.suggestions) {
