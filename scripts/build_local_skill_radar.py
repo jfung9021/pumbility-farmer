@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 from piu_misgrade_analyzer import load_snapshot
 from piu_recommendations import public_player_key
 from phoenix2_sync import merge_best_scores
-from skill_radar import build_skill_radar, build_suggestion_catalog
+from skill_radar import METHOD_VERSION, build_skill_radar, build_suggestion_catalog
 from skill_radar_runtime import MINIMUM_PHOENIX2_SCORES, skill_metadata
 from tier_scores import public_tier_scores, _sync_time
 
@@ -79,7 +79,7 @@ def build(source_root, output_dir, *, tiers_path=None, player_key=None):
     public_players.sort(key=lambda row: (row["displayName"].casefold(), row["playerKey"]))
     write_json(output_dir/"players.json", {"generatedAtUtc": created, "refreshSupported": False,
         "method": {"minimumPhoenix2Scores": MINIMUM_PHOENIX2_SCORES}, "players": public_players})
-    report = {"methodVersion": 1, "generatedAtUtc": created, "tierGeneratedAtUtc": catalog["tierGeneratedAtUtc"],
+    report = {"methodVersion": METHOD_VERSION, "generatedAtUtc": created, "tierGeneratedAtUtc": catalog["tierGeneratedAtUtc"],
         "players": counts, "allLevelCharts": len(charts), "ratedSuggestions": len(catalog["charts"]),
         "scoreFetches": 0, "modelRefits": 0}
     write_json(output_dir/"manifest.json", report)

@@ -4,33 +4,177 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { readLocalSkillRadar, readLocalSkillRadarPlayers } from "../lib/local-skill-radar.ts";
-import { radarAxisLabelLayout, radarPlayerFromUrl, radarPlayerUrl, radarPoint, validateSkillRadarResponse } from "../lib/skill-radar.ts";
+import { radarAxisLabelLayout, radarPlayerFromUrl, radarPlayerUrl, radarPoint, radarScoreForLevel, validateSkillRadarResponse } from "../lib/skill-radar.ts";
 
 const fixture = JSON.parse(await readFile(new URL("./fixtures/skill-radar-profile.json", import.meta.url), "utf8"));
 
 test("Python profile satisfies the public contract with all eighteen categories and exact mappings", () => {
   const profile = validateSkillRadarResponse(fixture, fixture.player.playerKey);
+  assert.equal(profile.methodVersion, 6);
+  assert.deepEqual(profile.reference, {grade:"SSS+", plate:"UG", minimumScore:995000});
   assert.equal(profile.bpmBuckets.length, 9);
   assert.equal(profile.buckets.length, 18);
   assert.equal(new Set(Object.values(profile.groups).flat()).size, 18);
   assert.equal(profile.groups.weaknesses.length, 3);
   for (const bucket of profile.buckets) {
-    assert.equal(bucket.suggestedLevel, Math.max(16, Math.floor(bucket.rawPg + 1.5 + 1e-9)));
-    assert.equal(bucket.displayPg, Math.max(0, bucket.rawPg - (bucket.mode === "doubles" ? 1 : 0)));
-    assert.ok(bucket.suggestions.every(chart => chart.level === bucket.suggestedLevel));
+    assert.equal(bucket.suggestedLevel, Math.max(16, Math.floor(bucket.rawEquivalentLevel + 1.5 + 1e-9)));
+    assert.equal(bucket.displayEquivalentLevel, Math.max(0, bucket.rawEquivalentLevel - (bucket.mode === "doubles" ? 1 : 0)));
+    assert.equal(bucket.radarScore, radarScoreForLevel(bucket.displayEquivalentLevel, profile.bpmBuckets.find(bin => bin.id === bucket.bpmBucketId)!, bucket.mode));
+    assert.ok(bucket.suggestions.length <= 5);
+    assert.ok(bucket.suggestions.every(chart => chart.level >= bucket.suggestedLevel && chart.level <= 30));
     assert.equal(bucket.contributingCharts.length, bucket.selectedCharts);
   }
 });
 
-test("recommendations allow ten charts from the official target folder even below its calculated rating", () => {
+test("old methods and incorrect reference metadata are rejected", () => {
+  for (const mutate of [
+    (value: any) => {value.methodVersion = 1;},
+    (value: any) => {value.methodVersion = 2;},
+    (value: any) => {value.methodVersion = 3;},
+    (value: any) => {value.methodVersion = 4;},
+    (value: any) => {value.methodVersion = 5;},
+    (value: any) => {delete value.reference;},
+    (value: any) => {value.reference.plate = "PG";},
+    (value: any) => {value.reference.minimumScore = 1_000_000;},
+    (value: any) => {value.reference.extra = "private";},
+  ]) {
+    const value = structuredClone(fixture); mutate(value);
+    assert.throws(() => validateSkillRadarResponse(value), /invalid/);
+  }
+});
+
+test("all nine BPM ceilings preserve Singles calibration and restore independent Doubles bounds", () => {
+  const profile = validateSkillRadarResponse(fixture);
+  assert.deepEqual(profile.bpmBuckets.map(bin => bin.radarScale.singles.maximumAlignedLevel), [22.834, 22.9735, 22.4215, 23.113, 23.113, 23.968, 24.7, 24.25, 25]);
+  assert.deepEqual(profile.bpmBuckets.map(bin => bin.radarScale.doubles.maximumAlignedLevel), [23.8, 23.95, 23.65, 23.95, 24.1, 24.55, 25, 25, 25]);
+  for (const bin of profile.bpmBuckets) {
+    for (const mode of ["singles", "doubles"] as const) {
+      const {minimumAlignedLevel: lower, maximumAlignedLevel: upper} = bin.radarScale[mode];
+      assert.equal(lower, 10);
+      const offset = mode === "doubles" ? 1 : 0;
+      const raw = upper + offset;
+      assert.ok(Math.abs(radarScoreForLevel(raw - offset, bin, mode) - 100) < 1e-8);
+      assert.equal(radarScoreForLevel(lower, bin, mode), 0);
+      assert.ok(Math.abs(radarScoreForLevel((lower + upper) / 2, bin, mode) - 50) < 1e-8);
+      assert.equal(radarScoreForLevel(upper + 1, bin, mode), 100);
+      assert.equal(radarScoreForLevel(lower - 1, bin, mode), 0);
+    }
+  }
+  assert.ok(radarScoreForLevel(22.97, profile.bpmBuckets[1], "singles") < 100);
+  assert.ok(radarScoreForLevel(20, profile.bpmBuckets[0], "singles") > radarScoreForLevel(20, profile.bpmBuckets[0], "doubles"));
+});
+
+test("220+ BPM remains unchanged while only Singles uses the latest requested targets", () => {
+  const profile = validateSkillRadarResponse(fixture);
+  const unchanged = profile.bpmBuckets[8];
+  for (const level of [0, 10, 18.1234567, 24.95, 25, 26]) {
+    for (const mode of ["singles", "doubles"] as const) {
+      assert.equal(radarScoreForLevel(level, unchanged, mode), Math.max(0, Math.min(100, 100 * (level - 10) / 15)));
+    }
+  }
+  const previousCeilings = [23.8, 23.95, 23.65, 23.95, 24.1, 24.55, 25, 25, 25];
+  const targets = [93, 93, 91, 94, 93, 96, 98, 95, 100];
+  for (const [index, bin] of profile.bpmBuckets.entries()) {
+    const level = 18.1234567;
+    const previousScore = (alignedLevel: number) => 100 * (alignedLevel - 10) / (previousCeilings[index] - 10);
+    assert.ok(Math.abs(previousScore(bin.radarScale.singles.maximumAlignedLevel) - targets[index]) < 1e-8);
+    assert.ok(Math.abs(radarScoreForLevel(level, bin, "singles") - previousScore(level) / (targets[index] / 100)) < 1e-8);
+    assert.equal(radarScoreForLevel(level, bin, "doubles"), previousScore(level));
+  }
+});
+
+test("scale metadata is required, strictly bounded and used for score reconstruction", () => {
+  for (const mutate of [
+    (value: any) => {delete value.bpmBuckets[0].radarScale;},
+    (value: any) => {value.bpmBuckets[0].radarScale = null;},
+    (value: any) => {value.bpmBuckets[0].radarScale = {minimumAlignedLevel:10, maximumAlignedLevel:22.834};},
+    (value: any) => {delete value.bpmBuckets[0].radarScale.doubles;},
+    (value: any) => {delete value.bpmBuckets[0].radarScale.singles.maximumAlignedLevel;},
+    (value: any) => {value.bpmBuckets[0].radarScale.singles.minimumAlignedLevel = 9;},
+    (value: any) => {value.bpmBuckets[0].radarScale.doubles.minimumAlignedLevel = Number.NaN;},
+    (value: any) => {value.bpmBuckets[0].radarScale.singles.maximumAlignedLevel = Number.NaN;},
+    (value: any) => {value.bpmBuckets[0].radarScale.doubles.maximumAlignedLevel = Infinity;},
+    (value: any) => {value.bpmBuckets[0].radarScale.singles.maximumAlignedLevel = 10;},
+    (value: any) => {value.bpmBuckets[0].radarScale.doubles.maximumAlignedLevel = 25.1;},
+    (value: any) => {value.bpmBuckets[0].radarScale.extra = "private";},
+    (value: any) => {value.bpmBuckets[0].radarScale.singles.extra = "private";},
+    (value: any) => {value.bpmBuckets[8].radarScale.singles.maximumAlignedLevel = 24;},
+    (value: any) => {value.bpmBuckets[8].radarScale.doubles.maximumAlignedLevel = 24;},
+    (value: any) => {value.bpmBuckets[1].radarScale.singles.maximumAlignedLevel = 24;},
+  ]) {
+    const value = structuredClone(fixture); mutate(value);
+    assert.throws(() => validateSkillRadarResponse(value), /invalid/);
+  }
+  for (const index of [1, 6, 7, 8]) {
+    const value = structuredClone(fixture);
+    const bin = value.bpmBuckets[index];
+    bin.radarScale.singles.maximumAlignedLevel = 24;
+    bin.radarScale.doubles.maximumAlignedLevel = 24;
+    for (const bucket of value.buckets.filter((bucket: any) => bucket.bpmBucketId === bin.id)) {
+      bucket.radarScore = radarScoreForLevel(bucket.displayEquivalentLevel, bin, bucket.mode);
+    }
+    if (index === 8) assert.throws(() => validateSkillRadarResponse(value), /invalid/);
+    else assert.doesNotThrow(() => validateSkillRadarResponse(value));
+  }
+});
+
+test("Doubles ratings must reconstruct from Doubles bounds rather than the Singles scale", () => {
+  const changed = structuredClone(fixture);
+  const bucket = changed.buckets.find((bucket: any) => bucket.key === "doubles:1");
+  const bin = changed.bpmBuckets.find((bin: any) => bin.id === bucket.bpmBucketId);
+  bucket.radarScore = radarScoreForLevel(bucket.displayEquivalentLevel, bin, "singles");
+  assert.throws(() => validateSkillRadarResponse(changed), /invalid/);
+});
+
+test("mode-specific UG references reconstruct genuine PG performances without changing plates", () => {
+  const profile = validateSkillRadarResponse(fixture);
+  const single = profile.buckets.find(bucket => bucket.key === "singles:1")!;
+  const double = profile.buckets.find(bucket => bucket.key === "doubles:1")!;
+  assert.ok(single.rawEquivalentLevel > 18);
+  assert.ok(double.rawEquivalentLevel > 19);
+  assert.notEqual(single.displayEquivalentLevel, double.displayEquivalentLevel);
+  assert.ok(single.contributingCharts.every(chart => chart.plate === "PG"));
+  assert.ok(double.contributingCharts.every(chart => chart.plate === "PG"));
+  const changed = structuredClone(fixture);
+  const wrong = changed.buckets.find((bucket: any) => bucket.key === "doubles:1");
+  wrong.rawEquivalentLevel = single.rawEquivalentLevel + 1;
+  wrong.displayEquivalentLevel = single.displayEquivalentLevel;
+  wrong.radarScore = single.radarScore;
+  assert.throws(() => validateSkillRadarResponse(changed), /invalid/);
+});
+
+test("sparse buckets average their available contributions rather than five slots", () => {
+  const profile = validateSkillRadarResponse(fixture);
+  const sparse = profile.buckets.find(bucket => bucket.key === "singles:4")!;
+  assert.equal(sparse.selectedCharts, 3);
+  assert.equal(sparse.needsPlays, true);
+  assert.ok(Math.abs(sparse.rawEquivalentLevel - 24) < 1e-8);
+  const one = profile.buckets.find(bucket => bucket.key === "doubles:4")!;
+  assert.equal(one.selectedCharts, 1);
+  assert.equal(one.needsPlays, true);
+  assert.ok(Math.abs(one.rawEquivalentLevel - 25) < 1e-8);
+  const empty = profile.buckets.find(bucket => bucket.selectedCharts === 0)!;
+  assert.equal(empty.rawEquivalentLevel, 0);
+  assert.equal(empty.radarScore, 0);
+  const changed = structuredClone(fixture);
+  changed.buckets.find((bucket: any) => bucket.key === "singles:4").needsPlays = false;
+  assert.throws(() => validateSkillRadarResponse(changed), /invalid/);
+});
+
+test("recommendations allow five sorted charts from the target and higher folders", () => {
   const value = structuredClone(fixture);
   const bucket = value.buckets.find((bucket: any) => bucket.mode === "singles" && bucket.suggestedLevel === 19);
-  bucket.suggestions = Array.from({length:10}, (_, index) => ({...bucket.suggestions[0], chartId:`practice-${index}`, estimatedDifficulty:18.8}));
-  assert.equal(validateSkillRadarResponse(value).buckets.find(bucket => bucket.key === "singles:1")!.suggestions.length, 10);
-  bucket.suggestions.push({...bucket.suggestions[0], chartId:"eleventh"});
+  bucket.suggestions = Array.from({length:5}, (_, index) => ({...bucket.suggestions[0], chartId:`practice-${index}`, level:index === 0 ? 20 : 19, difficulty:index === 0 ? "S20" : "S19", estimatedDifficulty:18.8 + index/10}));
+  assert.equal(validateSkillRadarResponse(value).buckets.find(bucket => bucket.key === "singles:1")!.suggestions.length, 5);
+  bucket.suggestions.push({...bucket.suggestions[4], chartId:"sixth"});
   assert.throws(() => validateSkillRadarResponse(value), /invalid/);
   bucket.suggestions.pop();
+  bucket.suggestions[0].level = 18;
+  assert.throws(() => validateSkillRadarResponse(value), /invalid/);
+  bucket.suggestions[0].level = 31;
+  assert.throws(() => validateSkillRadarResponse(value), /invalid/);
   bucket.suggestions[0].level = 20;
+  bucket.suggestions[0].estimatedDifficulty = 25;
   assert.throws(() => validateSkillRadarResponse(value), /invalid/);
 });
 
@@ -55,7 +199,7 @@ test("invalid profiles and private histories cannot become a zero radar", () => 
   const mutations = [
     (value: any) => { value.player.playerId = "private"; },
     (value: any) => { value.scores = []; },
-    (value: any) => { value.buckets[0].rawPg = Number.NaN; },
+    (value: any) => { value.buckets[0].rawEquivalentLevel = Number.NaN; },
     (value: any) => { value.buckets[0].radarScore = 101; },
     (value: any) => { value.buckets[0].suggestedLevel -= 1; },
     (value: any) => { value.groups.everythingElse.push(value.groups.weaknesses[0]); },
@@ -91,7 +235,7 @@ test("stacked BPM labels clear the full-scale plot and remain inside the padded 
   const blocks: Array<{axis: number; left: number; right: number; top: number; bottom: number}> = [];
   for (let index = 0; index < 9; index++) {
     const label = radarAxisLabelLayout(index);
-    for (const [y, width, height] of [[label.labelY, 110, 22], [label.scoreY, 100, 17], [label.scoreY + 18, 100, 17]]) {
+    for (const [y, width, height] of [[label.labelY, 110, 22], [label.scoreY, 108, 17], [label.scoreY + 18, 108, 17]]) {
       const left = label.x - (label.textAnchor === "end" ? width : label.textAnchor === "middle" ? width / 2 : 0);
       const right = left + width, top = y - height / 2, bottom = y + height / 2;
       const nearestX = Math.max(left, Math.min(200, right)), nearestY = Math.max(top, Math.min(200, bottom));

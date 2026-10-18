@@ -23,6 +23,7 @@
 .radar-axis { stroke-opacity: .45; }
 .radar-axis-label { fill: #d0d9cc; font-size: var(--radar-range-font-size); font-weight: 650; transform: translateY(calc((var(--radar-score-font-size) - var(--radar-range-font-size)) / 2)); }
 .radar-axis-score { fill: var(--radar-color); font-size: var(--radar-score-font-size); font-variant-numeric: tabular-nums; font-weight: 600; }
+.radar-data-legend { color: var(--muted); font-size: 11px; margin: 0 0 8px; text-align: center; }
 .radar-skill-trigger { cursor: pointer; outline: none; }
 .radar-skill-hit-area { fill: transparent; }
 .radar-skill-trigger:hover .radar-skill-hit-area, .radar-skill-trigger:focus-visible .radar-skill-hit-area { fill: var(--radar-color); fill-opacity: .12; }

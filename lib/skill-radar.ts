@@ -1,11 +1,14 @@
 export type RadarMode = "singles" | "doubles";
 export type RadarGroup = "weaknesses" | "strengths" | "everythingElse";
 
+export const RADAR_REFERENCE = {grade:"SSS+", plate:"UG", minimumScore:995000} as const;
+
 export interface RadarBpmBucket {
   id: string;
   label: string;
   min: number | null;
   max: number | null;
+  radarScale: Record<RadarMode, {minimumAlignedLevel: number; maximumAlignedLevel: number}>;
 }
 
 export interface RadarSuggestion {
@@ -39,8 +42,8 @@ export interface RadarBucket {
   mode: RadarMode;
   bpmBucketId: string;
   label: string;
-  rawPg: number;
-  displayPg: number;
+  rawEquivalentLevel: number;
+  displayEquivalentLevel: number;
   radarScore: number;
   usableCharts: number;
   selectedCharts: number;
@@ -52,7 +55,8 @@ export interface RadarBucket {
 }
 
 export interface SkillRadarResponse {
-  methodVersion: 1;
+  methodVersion: 6;
+  reference: typeof RADAR_REFERENCE;
   player: {playerKey: string; displayName: string};
   generatedAtUtc: string;
   tierGeneratedAtUtc: string;
@@ -71,6 +75,11 @@ export const RADAR_GROUPS = [
 
 export const RADAR_MODES = {singles:{label:"Singles", prefix:"S", color:"#ff4a4a"}, doubles:{label:"Doubles", prefix:"D", color:"#39d96a"}} as const;
 export const PLAYER_KEY_PATTERN = /^[a-f0-9]{20}$/;
+
+export function radarScoreForLevel(alignedLevel: number, bucket: RadarBpmBucket, mode: RadarMode) {
+  const {minimumAlignedLevel, maximumAlignedLevel} = bucket.radarScale[mode];
+  return Math.max(0, Math.min(100, 100 * (alignedLevel - minimumAlignedLevel) / (maximumAlignedLevel - minimumAlignedLevel)));
+}
 
 export function radarPoint(index: number, score: number, radius = 132) {
   const angle = -Math.PI / 2 + index * 2 * Math.PI / 9;
@@ -110,20 +119,29 @@ const close = (a: number, b: number) => Math.abs(a - b) < 1e-8;
 /** Reject histories/private fields and malformed profiles rather than drawing zeros. */
 export function validateSkillRadarResponse(value: unknown, expectedPlayerKey?: string): SkillRadarResponse {
   const invalid = () => { throw new Error("The Skill Radar data is unavailable or invalid."); };
-  if (!record(value) || !exact(value, ["methodVersion", "player", "generatedAtUtc", "tierGeneratedAtUtc", "bpmBuckets", "buckets", "groups"], ["playerSyncedAtUtc", "revision"]) || value.methodVersion !== 1 || value.revision !== undefined && typeof value.revision !== "string") return invalid();
+  if (!record(value) || !exact(value, ["methodVersion", "reference", "player", "generatedAtUtc", "tierGeneratedAtUtc", "bpmBuckets", "buckets", "groups"], ["playerSyncedAtUtc", "revision"]) || value.methodVersion !== 6 || value.revision !== undefined && typeof value.revision !== "string") return invalid();
+  if (!record(value.reference) || !exact(value.reference, ["grade", "plate", "minimumScore"]) || value.reference.grade !== RADAR_REFERENCE.grade || value.reference.plate !== RADAR_REFERENCE.plate || value.reference.minimumScore !== RADAR_REFERENCE.minimumScore) return invalid();
   if (!record(value.player) || !exact(value.player, ["playerKey", "displayName"]) || typeof value.player.playerKey !== "string" || !PLAYER_KEY_PATTERN.test(value.player.playerKey) || typeof value.player.displayName !== "string" || expectedPlayerKey && value.player.playerKey !== expectedPlayerKey) return invalid();
   for (const key of ["generatedAtUtc", "tierGeneratedAtUtc"]) if (typeof value[key] !== "string" || !Number.isFinite(Date.parse(value[key] as string))) return invalid();
   if (value.playerSyncedAtUtc !== undefined && value.playerSyncedAtUtc !== null && (typeof value.playerSyncedAtUtc !== "string" || !Number.isFinite(Date.parse(value.playerSyncedAtUtc)))) return invalid();
-  if (!Array.isArray(value.bpmBuckets) || value.bpmBuckets.length !== 9 || !value.bpmBuckets.every(bin => record(bin) && exact(bin, ["id", "label", "min", "max"]) && typeof bin.id === "string" && typeof bin.label === "string" && optionalNumber(bin.min) && optionalNumber(bin.max))) return invalid();
-  const binIds = new Set(value.bpmBuckets.map(bin => bin.id));
+  if (!Array.isArray(value.bpmBuckets) || value.bpmBuckets.length !== 9 || !value.bpmBuckets.every(bin => {
+    if (!record(bin) || !exact(bin, ["id", "label", "min", "max", "radarScale"]) || typeof bin.id !== "string" || typeof bin.label !== "string" || !optionalNumber(bin.min) || !optionalNumber(bin.max) || !record(bin.radarScale) || !exact(bin.radarScale, ["singles", "doubles"])) return false;
+    const scales = bin.radarScale;
+    return ["singles", "doubles"].every(mode => {
+      const scale = scales[mode];
+      return record(scale) && exact(scale, ["minimumAlignedLevel", "maximumAlignedLevel"]) && scale.minimumAlignedLevel === 10 && finite(scale.maximumAlignedLevel) && scale.maximumAlignedLevel > 10 && scale.maximumAlignedLevel <= 25 && !(finite(bin.min) && bin.min >= 220 && scale.maximumAlignedLevel !== 25);
+    });
+  })) return invalid();
+  const bins = new Map((value.bpmBuckets as RadarBpmBucket[]).map(bin => [bin.id, bin]));
+  const binIds = new Set(bins.keys());
   if (binIds.size !== 9 || !Array.isArray(value.buckets) || value.buckets.length !== 18) return invalid();
   const keys = new Set<string>();
   for (const bucket of value.buckets) {
-    if (!record(bucket) || !exact(bucket, ["key", "mode", "bpmBucketId", "label", "rawPg", "displayPg", "radarScore", "usableCharts", "selectedCharts", "needsPlays", "suggestedLevel", "group", "suggestions", "contributingCharts"]) || typeof bucket.key !== "string" || typeof bucket.bpmBucketId !== "string" || !binIds.has(bucket.bpmBucketId) || (bucket.mode !== "singles" && bucket.mode !== "doubles") || typeof bucket.label !== "string" || keys.has(bucket.key)) return invalid();
+    if (!record(bucket) || !exact(bucket, ["key", "mode", "bpmBucketId", "label", "rawEquivalentLevel", "displayEquivalentLevel", "radarScore", "usableCharts", "selectedCharts", "needsPlays", "suggestedLevel", "group", "suggestions", "contributingCharts"]) || typeof bucket.key !== "string" || typeof bucket.bpmBucketId !== "string" || !binIds.has(bucket.bpmBucketId) || (bucket.mode !== "singles" && bucket.mode !== "doubles") || typeof bucket.label !== "string" || keys.has(bucket.key)) return invalid();
     keys.add(bucket.key);
-    if (![bucket.rawPg, bucket.displayPg, bucket.radarScore, bucket.suggestedLevel].every(finite) || (bucket.rawPg as number) < 0 || !whole(bucket.usableCharts) || !whole(bucket.selectedCharts) || bucket.selectedCharts > 5 || bucket.usableCharts < bucket.selectedCharts || bucket.needsPlays !== (bucket.selectedCharts < 5)) return invalid();
-    if (!close(bucket.displayPg as number, Math.max(0, (bucket.rawPg as number) - (bucket.mode === "doubles" ? 1 : 0))) || !close(bucket.radarScore as number, Math.max(0, Math.min(100, 100 * ((bucket.displayPg as number) - 10) / 15))) || bucket.suggestedLevel !== Math.max(16, Math.floor((bucket.rawPg as number) + 1.5 + 1e-9))) return invalid();
-    if (!RADAR_GROUPS.some(group => group.key === bucket.group) || !Array.isArray(bucket.suggestions) || bucket.suggestions.length > 10) return invalid();
+    if (![bucket.rawEquivalentLevel, bucket.displayEquivalentLevel, bucket.radarScore, bucket.suggestedLevel].every(finite) || (bucket.rawEquivalentLevel as number) < 0 || !whole(bucket.usableCharts) || !whole(bucket.selectedCharts) || bucket.selectedCharts > 5 || bucket.usableCharts < bucket.selectedCharts || bucket.needsPlays !== (bucket.selectedCharts < 5)) return invalid();
+    if (!close(bucket.displayEquivalentLevel as number, Math.max(0, (bucket.rawEquivalentLevel as number) - (bucket.mode === "doubles" ? 1 : 0))) || !close(bucket.radarScore as number, radarScoreForLevel(bucket.displayEquivalentLevel as number, bins.get(bucket.bpmBucketId)!, bucket.mode)) || bucket.suggestedLevel !== Math.max(16, Math.floor((bucket.rawEquivalentLevel as number) + 1.5 + 1e-9))) return invalid();
+    if (!RADAR_GROUPS.some(group => group.key === bucket.group) || !Array.isArray(bucket.suggestions) || bucket.suggestions.length > 5) return invalid();
     if (!Array.isArray(bucket.contributingCharts) || bucket.contributingCharts.length !== bucket.selectedCharts) return invalid();
     const contributionIds = new Set<string>();
     let contributionCents = 0;
@@ -132,13 +150,15 @@ export function validateSkillRadarResponse(value: unknown, expectedPlayerKey?: s
       contributionIds.add(chart.chartId);
       contributionCents += Math.round(chart.pumbility * 100);
     }
-    const base = contributionCents / 100 / 5 / (760 / 750);
-    const contributedPg = contributionCents > 0 ? Math.max(0, (base <= 375 ? base / 7.5 - 27 : 23 + (base - 375) / 15) + (bucket.mode === "doubles" ? 1 : 0)) : 0;
-    if (!close(bucket.rawPg as number, contributedPg)) return invalid();
+    const referenceMultiplier = (bucket.mode === "doubles" ? 758 : 758.5) / 750;
+    const count = bucket.contributingCharts.length;
+    const base = count > 0 ? contributionCents / 100 / count / referenceMultiplier : 0;
+    const contributedEquivalentLevel = contributionCents > 0 ? Math.max(0, (base <= 375 ? base / 7.5 - 27 : 23 + (base - 375) / 15) + (bucket.mode === "doubles" ? 1 : 0)) : 0;
+    if (!close(bucket.rawEquivalentLevel as number, contributedEquivalentLevel)) return invalid();
     const ids = new Set<string>();
     let prior = -Infinity;
     for (const chart of bucket.suggestions) {
-      if (!record(chart) || !exact(chart, ["chartId", "songName", "difficulty", "type", "level", "imageUrl", "bpmMin", "bpmMax", "estimatedDifficulty", "personalScore", "personalPlate"]) || typeof chart.chartId !== "string" || ids.has(chart.chartId) || typeof chart.songName !== "string" || typeof chart.difficulty !== "string" || chart.type !== (bucket.mode === "singles" ? "Single" : "Double") || !whole(chart.level) || !(chart.imageUrl === null || typeof chart.imageUrl === "string") || !optionalNumber(chart.bpmMin) || !optionalNumber(chart.bpmMax) || !finite(chart.estimatedDifficulty) || chart.level !== bucket.suggestedLevel || chart.estimatedDifficulty < prior || !(chart.personalScore === null || whole(chart.personalScore) && chart.personalScore <= 1_000_000) || !(chart.personalPlate === null || ["RG", "FG", "TG", "MG", "SG", "EG", "UG", "PG"].includes(chart.personalPlate as string))) return invalid();
+      if (!record(chart) || !exact(chart, ["chartId", "songName", "difficulty", "type", "level", "imageUrl", "bpmMin", "bpmMax", "estimatedDifficulty", "personalScore", "personalPlate"]) || typeof chart.chartId !== "string" || ids.has(chart.chartId) || typeof chart.songName !== "string" || typeof chart.difficulty !== "string" || chart.type !== (bucket.mode === "singles" ? "Single" : "Double") || !whole(chart.level) || chart.level > 30 || !(chart.imageUrl === null || typeof chart.imageUrl === "string") || !optionalNumber(chart.bpmMin) || !optionalNumber(chart.bpmMax) || !finite(chart.estimatedDifficulty) || chart.level < (bucket.suggestedLevel as number) || chart.estimatedDifficulty < prior || !(chart.personalScore === null || whole(chart.personalScore) && chart.personalScore <= 1_000_000) || !(chart.personalPlate === null || ["RG", "FG", "TG", "MG", "SG", "EG", "UG", "PG"].includes(chart.personalPlate as string))) return invalid();
       ids.add(chart.chartId); prior = chart.estimatedDifficulty;
     }
   }

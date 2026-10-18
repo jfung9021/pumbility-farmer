@@ -11,7 +11,7 @@ from phoenix2_sync import merge_best_scores
 from pumbility_contract import (combined_tier_blob_path, find_player_metadata,
     recommendation_blob_path, recommendation_phoenix2_shard_path, recommendation_player_state_path)
 from pumbility_contract import player_refresh_enabled
-from skill_radar import (METHOD_VERSION, PROFILE_VERSION, build_skill_radar, build_suggestion_catalog, content_digest)
+from skill_radar import (BPM_BUCKETS, METHOD_VERSION, PROFILE_VERSION, build_skill_radar, build_suggestion_catalog, content_digest)
 from tier_scores import _sync_time, public_tier_scores
 
 SKILL_METADATA_PATH = "analysis/private/skill-radar/phoenix2-metadata.json"
@@ -99,6 +99,7 @@ def read_skill_radar(store, player_key):
                 while len(_catalog_cache) > 8:
                     _catalog_cache.popitem(last=False)
     revision = content_digest({"method": METHOD_VERSION, "profile": PROFILE_VERSION, "playerKey": player_key, "scores": scores,
+        "bpmCalibration": BPM_BUCKETS,
         "metadata": catalog["metadataRevision"], "tier": catalog["tierIdentity"],
         "playerRevision": [(source or {}).get("lastSyncedAtUtc") for source in (base, live)],
         "tierGeneratedAtUtc": catalog["tierGeneratedAtUtc"], "displayName": metadata.get("displayName") or metadata.get("username")})
