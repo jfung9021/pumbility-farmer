@@ -14,6 +14,7 @@ import {
 import { RefreshMeta } from "../_components/refresh-meta";
 import { PlayerPicker } from "../_components/player-picker";
 import { ChartVideoLink } from "../_components/chart-video-link";
+import { ExplanatorySection } from "../_components/explanatory-section";
 import { ScoreSyncLink } from "../_components/score-sync-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
@@ -130,18 +131,22 @@ function SkillStats({
 }) {
   const skills = playerSkillDisplay(modeKey, mode, manual);
   return (
-    <section aria-label={`${modeKey === "singles" ? "Singles" : "Doubles"} skill ratings`} className="player-skill-grid">
-      <article>
-        <span>Scoring skill</span>
-        <strong>{skills.scoring.value}</strong>
-        <p>{skills.scoring.description}</p>
-      </article>
-      <article>
-        <span>Clearing skill</span>
-        <strong>{skills.clearing.value}</strong>
-        <p>{skills.clearing.description}</p>
-      </article>
-    </section>
+    <>
+      <section aria-label={`${modeKey === "singles" ? "Singles" : "Doubles"} skill ratings`} className="player-skill-grid">
+        <article>
+          <span>Scoring skill</span>
+          <strong>{skills.scoring.value}</strong>
+        </article>
+        <article>
+          <span>Clearing skill</span>
+          <strong>{skills.clearing.value}</strong>
+        </article>
+      </section>
+      <ExplanatorySection title="About skill ratings">
+        <p><strong>Scoring skill.</strong> {skills.scoring.description}</p>
+        <p><strong>Clearing skill.</strong> {skills.clearing.description}</p>
+      </ExplanatorySection>
+    </>
   );
 }
 
@@ -1265,6 +1270,9 @@ export default function RecommendationsPage() {
             <ScoreSyncLink className="player-score-sync-link" />
           </div>
         </div>
+        <ExplanatorySection title="About recommendations">
+          <p>Recommendations show your Top 50 scores. Tier lists can also show your saved scores and plates for the selected mode. Your internal player ID and raw score history stay private.</p>
+        </ExplanatorySection>
         {error ? <div className="recommendation-notice error-notice">{error}</div> : null}
         {refreshWarning ? (
           <div className="recommendation-notice stale-notice" role="status">
@@ -1279,7 +1287,6 @@ export default function RecommendationsPage() {
           <div className="recommendation-empty">
             <span>PF</span>
             <h2>Select a username</h2>
-            <p>Recommendations show your Top 50 scores. Tier lists can also show your saved scores and plates for the selected mode. Your internal player ID and raw score history stay private.</p>
           </div>
         ) : loadingPlayer && !playerPayload && !hasAnyPlayerPayload ? (
           <div className="recommendation-empty"><span className="spinner" /><h2>Calculating your route</h2></div>

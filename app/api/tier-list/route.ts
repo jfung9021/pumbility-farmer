@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { tierBrowserJson } from "../../../lib/tier-browser-payload";
 
 import {
   LocalAnalysisNotFoundError,
@@ -20,8 +21,8 @@ export async function GET() {
   }
   try {
     const payload = await readLocalCombinedAnalysisPayload();
-    return NextResponse.json(payload, {
-      headers: { "Cache-Control": "no-store, max-age=0" },
+    return new Response(tierBrowserJson(payload), {
+      headers: { "Cache-Control": "no-store, max-age=0", "Content-Type": "application/json; charset=utf-8" },
     });
   } catch (error) {
     if (error instanceof LocalAnalysisNotFoundError) {

@@ -3,10 +3,30 @@ import type { AnalysisPayload, ChartResult, ScoringGoal, ScoringVariant, TierMet
 export const DEFAULT_SCORING_GOAL: ScoringGoal = "sssplus";
 export const SSS_SCORE_TARGET = 990000;
 export const SSSPLUS_SCORE_TARGET = 995000;
-export const HISTORICAL_SSS_UNAVAILABLE = "SSS is unavailable in this analysis generation. Showing its existing General estimates.";
+export const HISTORICAL_SSS_UNAVAILABLE = "SSS is unavailable in this analysis generation. Its charts remain Unrated; General is available separately.";
+
+/** The selected goal owns its label, even while older analysis data is loading. */
+export function scoringTargetForGoal(goal: ScoringGoal) {
+  return goal === "sss"
+    ? { goal: "sss" as const, label: "SSS", score: SSS_SCORE_TARGET }
+    : { goal: "sssplus" as const, label: "SSS+", score: SSSPLUS_SCORE_TARGET };
+}
+
+export function scoringGoalUnavailableMessage(goal: Exclude<ScoringGoal, "general">): string {
+  const target = scoringTargetForGoal(goal);
+  return `${target.label} is unavailable in this analysis generation. Its charts remain Unrated; General is available separately.`;
+}
+
+/** An unrated estimate is still a supported variant; do not infer availability from its point value. */
+export function hasScoringGoalVariants(payload: AnalysisPayload | null | undefined, goal: ScoringGoal): boolean {
+  if (!payload) return false;
+  if (goal === "general") return true;
+  return payload.singles.some(chart => Boolean(chart.scoringVariants?.[goal]))
+    || payload.doubles.some(chart => Boolean(chart.scoringVariants?.[goal]));
+}
 
 export function scoringTargetForPayload(payload: AnalysisPayload | null | undefined) {
-  return [52, 53, 54, 55, 56].includes(payload?.schemaVersion ?? 0) || !payload
+  return [52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0) || !payload
     ? { goal: "sssplus" as const, label: "SSS+", score: SSSPLUS_SCORE_TARGET }
     : { goal: "sss" as const, label: "SSS", score: SSS_SCORE_TARGET };
 }
@@ -17,8 +37,9 @@ export function scoringTargetForChart(chart: ChartResult) {
     : { goal: "sss" as const, label: "SSS", score: SSS_SCORE_TARGET };
 }
 
-export function scoringGoalFromSearchParams(params: URLSearchParams, payload?: AnalysisPayload | null): ScoringGoal {
-  return params.get("scoring") === "general" ? "general" : scoringTargetForPayload(payload).goal;
+export function scoringGoalFromSearchParams(params: URLSearchParams, _payload?: AnalysisPayload | null): ScoringGoal {
+  const goal = params.get("scoring");
+  return goal === "general" || goal === "sss" || goal === "sssplus" ? goal : DEFAULT_SCORING_GOAL;
 }
 
 /** Preserve player, filters represented by the URL, and unrelated navigation state. */
@@ -29,7 +50,7 @@ export function scoringGoalUrl(href: string, goal: ScoringGoal): URL {
 }
 
 export function hasSssScoringVariants(payload: AnalysisPayload | null | undefined): boolean {
-  return [49, 50, 51, 52, 53, 54, 55, 56].includes(payload?.schemaVersion ?? 0);
+  return [49, 50, 51, 52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
 }
 
 export function isSssScoringChart(chart: ChartResult): boolean {
@@ -64,8 +85,8 @@ const unavailableTarget: ScoringVariant = {
  */
 export function projectScoringGoal(chart: ChartResult, goal: ScoringGoal, metric: TierMetricKey = "scoring"): ChartResult {
   if (goal === "general" || metric === "clearing" || chart.type === "CoOp") return chart;
-  if (!chart.scoringVariants && goal === "sss") return chart;
-  const target = chart.scoringVariants?.[goal] ?? unavailableTarget;
+  const unavailable = { ...unavailableTarget, scoringTarget: scoringTargetForGoal(goal).score };
+  const target = chart.scoringVariants?.[goal] ?? unavailable;
   const projected = { ...chart };
   // General-only model metadata must not describe the selected target estimate.
   for (const key of Object.keys(projected)) {
@@ -84,7 +105,7 @@ export function projectScoringGoal(chart: ChartResult, goal: ScoringGoal, metric
   Object.assign(projected, target, { scoringGoal: goal });
   if (chart.tierMetrics) {
     projected.tierMetrics = { ...chart.tierMetrics, pumbility: chart.pumbilityVariants?.[goal] ?? {
-      ...unavailableTarget, aggregation: "average", scoringSupportCount: 0,
+      ...unavailable, aggregation: "average", scoringSupportCount: 0,
       clearingSupportCount: chart.tierMetrics.clearing.ratedClearCount,
     } };
   }

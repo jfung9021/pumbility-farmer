@@ -12,7 +12,8 @@ import math
 from pathlib import Path
 from typing import Any, Mapping
 
-VERSION = "6.20.0-source-aware-sssplus"
+VERSION = "6.21.0-submitted-sssplus"
+PREVIOUS_VERSION = "6.20.0-source-aware-sssplus"
 PREFIX = "analysis/private/source-aware-tiers/"
 SEED = 20261018
 SAMPLES = 200
@@ -26,8 +27,8 @@ class TierAnalysisPending(RuntimeError):
 
 
 def digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
-        ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+    from canonical_json import canonical_json_sha256
+    return canonical_json_sha256(value)
 
 
 def model_code_identity() -> str:
@@ -111,10 +112,15 @@ def _public_copy(value):
 def public_tiers(full, *, private_path, input_identity, full_sha256=None):
     """Retain all active values/explanations; rollback history is a private artifact."""
     from source_aware_tiers import validate_source_aware_tiers
-    validate_source_aware_tiers(full)
+    if full.get("schemaVersion") == 57:
+        from submitted_sssplus_calibration import validate_submitted_sssplus_calibration
+        validate_source_aware_tiers(validate_submitted_sssplus_calibration(full))
+    else:
+        validate_source_aware_tiers(full)
     result = _public_copy(full)
-    result["summary"]["scriptVersion"] = VERSION
-    publication = {"version": 1, "method": VERSION, "fullArtifactPath": private_path,
+    version = VERSION if full.get("schemaVersion") == 57 else PREVIOUS_VERSION
+    result["summary"]["scriptVersion"] = version
+    publication = {"version": 1, "method": version, "fullArtifactPath": private_path,
         "fullArtifactSha256": full_sha256 or digest(full), "inputs": input_identity, "historyStorage": "private",
         "scoreFetches": 0, "recommendationFits": 0}
     result["summary"]["method"]["productionTierPublication"] = publication
@@ -152,13 +158,16 @@ def write_private_audit(store, path, full):
 
 def validate_public_tiers(payload):
     from chart_source_exclusions import load_exclusions
-    if payload.get("schemaVersion") != 56:
-        raise ValueError("The hosted source-aware tier schema must be 56.")
+    schema = payload.get("schemaVersion")
+    if schema not in (56, 57):
+        raise ValueError("The hosted source-aware tier schema must be 56 or 57.")
     method = payload["summary"]["method"]
     publication = method.get("productionTierPublication", {})
-    if (publication.get("version") != 1 or publication.get("method") != VERSION
+    if (publication.get("version") != 1 or publication.get("method") != (VERSION if schema == 57 else PREVIOUS_VERSION)
             or publication.get("publicPayloadSha256") != public_digest(payload)):
         raise ValueError("The public source-aware tier artifact failed its publication identity.")
+    if schema == 57 and method.get("submittedSssplusCalibration", {}).get("localOnly") is not False:
+        raise ValueError("The hosted submitted SSS+ calibration must declare production use.")
     rows = payload["singles"] + payload["doubles"]
     policy = load_exclusions([{**r, "id": r["chartId"]} for r in rows])
     if method["sourceAwareTiers"]["sourcePolicy"]["effectivePolicySha256"] != policy.semantic_hash():
@@ -204,7 +213,12 @@ def finish_generation(general, context, fits, identities):
     provenance = {**policy.public(), "manifestSha256": merged["manifestSha256"],
         "effectiveInputSha256": merged["effectiveInputSha256"], "sourceDates": merged["sourceDates"],
         "excludedCharts": exclusions, "targetFits": identities, "correctedSourceHashes": hashes}
-    return apply_source_aware_tiers(result, result, provenance)
+    result = apply_source_aware_tiers(result, result, provenance)
+    from submitted_sssplus_calibration import apply_submitted_sssplus_calibration
+    submitted_identity = next(item["identity"] for item in identities
+        if (item["goal"], item["source"], item["mode"]) == ("sssplus", "submitted", "Double"))
+    return apply_submitted_sssplus_calibration(result, fits["sssplus"]["submitted"]["Double"],
+        fit_identity=submitted_identity, local_only=False)
 
 
 def build_hosted_tiers(records, metadata, first, second, *, store, arguments, generated_at_utc=None):
@@ -228,6 +242,11 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
         return cached
     general_path = PREFIX + "generations/" + generation + "/general.json"
     general = store.get_json(general_path)
+    if general is None:
+        # This release changes the final submitted SSS+ scale only. The previous
+        # generation's General fit has the same exact source and model identities.
+        previous = digest({**identity, "version": PREVIOUS_VERSION})
+        general = store.get_json(PREFIX + "generations/" + previous + "/general.json")
     if general is None:
         general = build_production_tier_payload(records, metadata, p1, p2,
             generated_at_utc=generated_at_utc, source_exclusions=policy, **arguments)

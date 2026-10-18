@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ExplanatorySection } from "./_components/explanatory-section";
 import { ScoreSyncLink } from "./_components/score-sync-link";
 import { SiteHeader } from "./_components/site-header";
 
@@ -11,36 +12,40 @@ export default function HomePage() {
 
       <section className="home-hero">
         <div className="feature-grid">
-          <Link className="feature-card feature-recommendations" href="/recommendations">
-            <div>
-              <p>PERSONALIZED ROUTE</p>
-              <h2>Recommendations</h2>
-              <span>
+          <div className="home-feature">
+            <Link className="feature-card feature-recommendations" href="/recommendations">
+              <div>
+                <p>PERSONALIZED ROUTE</p>
+                <h2>Recommendations</h2>
+              </div>
+              <b aria-hidden="true">↗</b>
+            </Link>
+            <ExplanatorySection title="About Recommendations">
+              <p>
                 Select a username, see which version supplies your skill rating,
                 and rank charts against your current Phoenix 2 history.
-              </span>
-            </div>
-            <b aria-hidden="true">↗</b>
-          </Link>
+              </p>
+            </ExplanatorySection>
+          </div>
 
-          <Link className="feature-card feature-tier" href="/tier-list">
-            <div>
-              <p>GLOBAL ANALYSIS</p>
-              <h2>Tier List</h2>
-              <span>
+          <div className="home-feature">
+            <Link className="feature-card feature-tier" href="/tier-list">
+              <div>
+                <p>GLOBAL ANALYSIS</p>
+                <h2>Tier List</h2>
+              </div>
+              <b aria-hidden="true">↗</b>
+            </Link>
+            <ExplanatorySection title="About the Tier List">
+              <p>
                 Compare Scoring, Clearing, and Pumbility difficulty estimates
                 in compact or detailed views, using Phoenix 1 and Phoenix 2 scores.
-              </span>
-            </div>
-            <b aria-hidden="true">↗</b>
-          </Link>
+              </p>
+            </ExplanatorySection>
+          </div>
         </div>
 
-        <section className="home-how-to" aria-labelledby="home-how-to-title">
-          <div>
-            <p>HOW TO</p>
-            <h2 id="home-how-to-title">Sync your scores before you start</h2>
-          </div>
+        <ExplanatorySection className="home-how-to" title="Sync your scores before you start">
           <div className="home-how-to-copy">
             <ol>
               <li>Log in to PIU Scores and make your account public so your scores can pass through the API.</li>
@@ -49,12 +54,14 @@ export default function HomePage() {
             </ol>
             <ScoreSyncLink>Open PIU Scores upload</ScoreSyncLink>
           </div>
-        </section>
+        </ExplanatorySection>
       </section>
 
       <footer className="home-footer">
-        <p>Built from consented score data. Top 50 display scores are public; player IDs and complete score histories stay private.</p>
-        <p>Phoenix 2 is authoritative for every recommendation chart and overlapping score.</p>
+        <ExplanatorySection title="About the data">
+          <p>Built from consented score data. Top 50 display scores are public; player IDs and complete score histories stay private.</p>
+          <p>Phoenix 2 is authoritative for every recommendation chart and overlapping score.</p>
+        </ExplanatorySection>
       </footer>
     </main>
   );

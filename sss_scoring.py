@@ -35,8 +35,8 @@ MODES = (("Single", "singles"), ("Double", "doubles"))
 
 def payload_sha256(value: Any) -> str:
     """Private replay identity (canonical Python JSON, including its final newline)."""
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    from canonical_json import canonical_json_sha256
+    return canonical_json_sha256(value, trailing_newline=True)
 
 
 def general_scoring_view(row: Mapping[str, Any]) -> dict[str, Any]:

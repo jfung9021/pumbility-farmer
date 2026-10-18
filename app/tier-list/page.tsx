@@ -6,6 +6,7 @@ import { RefreshMeta } from "../_components/refresh-meta";
 import { ChartVideoLink } from "../_components/chart-video-link";
 import { PlayerPicker } from "../_components/player-picker";
 import { BpmRangeFilter } from "../_components/bpm-range-filter";
+import { ExplanatorySection } from "../_components/explanatory-section";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { demoPayload } from "../../lib/demo-data";
@@ -16,7 +17,7 @@ import {
   formatEstimatedDifficulty,
 } from "../../lib/format-difficulty";
 import { tierMetricFromSearchParams, tierModeFromSearchParams } from "../../lib/page-view-state";
-import { DEFAULT_SCORING_GOAL, hasSssScoringVariants, HISTORICAL_SSS_UNAVAILABLE, isSssScoringChart, isTargetBoundaryChart, isTargetRareChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUrl, scoringTargetForChart, scoringTargetForPayload } from "../../lib/scoring-variants";
+import { DEFAULT_SCORING_GOAL, hasScoringGoalVariants, isSssScoringChart, isTargetBoundaryChart, isTargetRareChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUnavailableMessage, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal } from "../../lib/scoring-variants";
 import { clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
 import {
   clearingPercentileRange,
@@ -295,6 +296,7 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
             <span><b>#{selected.levelRank}</b> of {selected.levelComparisonCharts} in {chart.difficulty}</span>
           ) : null}
         </div>
+        <ExplanatorySection title="Calculation and evidence" className="chart-calculation-details">
         {compressed && typeof initialDifficulty === "number" ? (
           <div className="chart-meta metric-details">
             <span>{chart.scoringFolderCentering && metric === "scoring" ? "After folder offset, before midpoint adjustment" : chart.scoringRefinement && metric === "scoring" ? "Before midpoint adjustment" : "Initial fit"}: <b>{chart.type === "Single" ? "S" : "D"}{formatEstimatedDifficulty(initialDifficulty)}</b>. {chart.scoringTailPolicy && metric === "scoring" ? "The pre-tail rating halves" : "Final rating halves"} its distance from the official midpoint <b>{(chart.level + .5).toFixed(1)}</b>{chart.scoringTailPolicy && metric === "scoring" ? "; the tail policy follows afterward" : ""}.</span>
@@ -327,6 +329,10 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
             {!boundaryScoring ? <span><b>{chart.nContributors}</b> usable contributors: <b>{chart.scoringTargetSuccesses ?? 0}</b> at {target.label} ≥{target.score.toLocaleString()}; <b>{chart.scoringBelowTarget ?? 0}</b> observed best scores below {target.label}.</span> : null}
             <span>{boundaryScoring ? "Score boundaries extend the frozen first-pass range." : "Player and chart effects compare recorded target attainment within this source cohort."} Missing records remain unknown; this is not a single-attempt success probability.</span>
             {chart.scoringSource === "official" ? <span>Each matched player contributes their higher official Phoenix 1 or Phoenix 2 score. Exact full game tags identify players; omitted leaderboard scores remain unknown.</span> : <span>Successful submitted best scores use the existing Phoenix normalization and cross-version selection. Submitted and official player identities are fitted separately.</span>}
+            {chart.scoringSubmittedCalibration ? <>
+              <span><b>Submitted folder calibration:</b> this chart uses the cached shared-player SSS+ effect of <b>{chart.scoringSubmittedCalibration.effect.toFixed(3)}</b>. The eligible D{chart.scoringSubmittedCalibration.folder} median maps to <b>{(chart.level + .5).toFixed(1)}</b>, with one shared residual scale from D16–D19.</span>
+              <span>The initial map is followed by one 50% midpoint adjustment, continuous spread, fixed folder-width calibration and the ordinary tail safeguard. This is a rating-scale policy; it does not establish an effort-adjusted distance between folders. Intervals transform cached player-bootstrap endpoints with this fixed map and exclude effort and scale-selection uncertainty.</span>
+            </> : null}
             {Object.entries(chart.scoringSourceStates ?? {}).map(([mix, state]) => <span key={mix}>{mix} official snapshot: {state.asOf || "unavailable"}; {state.rawRowCount} {chart.chartSourceExclusions ? "used rows" : "returned rows"}{state.possiblyTruncated ? "; possibly truncated — omitted scores remain unknown" : ""}.</span>)}
             <SssRefinementDetails chart={chart} />
             <SssCenteringDetails chart={chart} />
@@ -443,6 +449,7 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
             {pumbility.estimatedDifficulty === null ? <span>Both components are required. {chart.estimatedDifficulty === null ? `Scoring unavailable${chart.scoringUnratedReason ? `: ${chart.scoringUnratedReason}` : "."}` : ""} {clearing?.estimatedDifficulty === null ? `Clearing unavailable${clearing.unratedReason ? `: ${clearing.unratedReason}` : "."}` : ""}</span> : null}
           </div>
         ) : null}
+        </ExplanatorySection>
       </div>
       {isCoop ? null : (
         <div className={`delta ${delta !== null && delta < 0 ? "delta-easy" : "delta-hard"}`}>
@@ -670,19 +677,20 @@ export default function TierListPage() {
   const pumbilityPolicy = resolvePumbilityPolicy(payload);
   const maximumPumbility = pumbilityPolicy?.aggregation === "maximum";
   const localAveragePumbility = payload?.schemaVersion === 45 && pumbilityPolicy?.aggregation === "average";
-  const adjustedAveragePumbility = [45, 48, 49, 50, 51, 52, 53, 54, 55, 56].includes(payload?.schemaVersion ?? 0) && pumbilityPolicy?.aggregation === "average";
+  const adjustedAveragePumbility = [45, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0) && pumbilityPolicy?.aggregation === "average";
   const [activeMode, setActiveMode] = useState<ModeKey>("singles");
   const [activeMetric, setActiveMetric] = useState<TierMetricKey>("scoring");
   const [scoringGoal, setScoringGoal] = useState<ScoringGoal>(DEFAULT_SCORING_GOAL);
-  const target = scoringTargetForPayload(payload);
+  const target = scoringTargetForGoal(scoringGoal);
   const showScoringGoal = activeMode !== "coop" && activeMetric !== "clearing";
-  const sssAvailable = hasSssScoringVariants(payload);
+  const sssAvailable = hasScoringGoalVariants(payload, scoringGoal);
   const showSssMethod = showScoringGoal && scoringGoal === target.goal && sssAvailable;
-  const refinedSss = [50, 51, 52, 53, 54, 55, 56].includes(payload?.schemaVersion ?? 0);
-  const medianCalibrated = [53, 54, 55, 56].includes(payload?.schemaVersion ?? 0);
-  const spreadCalibrated = [54, 55, 56].includes(payload?.schemaVersion ?? 0);
-  const centeredSss = [51, 52, 53, 54, 55, 56].includes(payload?.schemaVersion ?? 0);
-  const tailPolicy = [52, 53, 54, 55, 56].includes(payload?.schemaVersion ?? 0);
+  const refinedSss = [50, 51, 52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
+  const medianCalibrated = scoringGoal === "sssplus" && [53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
+  const spreadCalibrated = scoringGoal === "sssplus" && [54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
+  const centeredSss = [51, 52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
+  const tailPolicy = scoringGoal === "sssplus" && [52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
+  const submittedSssplusCalibrated = scoringGoal === "sssplus" && payload?.schemaVersion === 57;
   const topThreeNoSss = tailPolicy || (payload?.summary.method.sssRefinement as { version?: number } | undefined)?.version === 2;
   const [groupingView, setGroupingView] = useState<GroupingView>("estimated");
   const [layoutView, setLayoutView] = useState<LayoutView>("compact");
@@ -810,17 +818,14 @@ export default function TierListPage() {
       const params = new URLSearchParams(window.location.search);
       setActiveMode(tierModeFromSearchParams(params));
       setActiveMetric(tierMetricFromSearchParams(params));
-      const selectedGoal = scoringGoalFromSearchParams(params, payload);
+      const selectedGoal = scoringGoalFromSearchParams(params);
       setScoringGoal(selectedGoal);
-      if ([52, 53, 54, 55, 56].includes(payload?.schemaVersion ?? 0) && params.get("scoring") !== selectedGoal) {
-        window.history.replaceState(window.history.state, "", scoringGoalUrl(window.location.href, selectedGoal));
-      }
       setSelectedChart(null);
     };
     applyModeFromUrl();
     window.addEventListener("popstate", applyModeFromUrl);
     return () => window.removeEventListener("popstate", applyModeFromUrl);
-  }, [payload]);
+  }, []);
 
   useEffect(() => {
     setNowMs(Date.now());
@@ -909,16 +914,6 @@ export default function TierListPage() {
 
       <section className="hero page-title-hero" id="top">
         <h1>{metricTitles[activeMetric]}</h1>
-        {(hasMidpointCompression(payload) || localAveragePumbility) && activeMode !== "coop" ? <p className="metric-note">After the initial fit, Scoring and Clearing distances from the official level + 0.5 are halved. Pumbility {localAveragePumbility ? "averages the adjusted components in this local experiment" : adjustedAveragePumbility ? "averages the adjusted components" : "takes the higher adjusted component"}. Initial fitted values remain available in chart details.</p> : null}
-        {localAveragePumbility && activeMetric === "pumbility" && activeMode !== "coop" ? <p className="metric-note"><b>Local experiment:</b> Pumbility = (Scoring + Clearing) / 2, using full precision. Both components are required.</p> : null}
-        {phoenix2Only ? <p className="metric-note">Local experiment: Phoenix 2 data only.</p> : null}
-        {showSssMethod ? <p className="metric-note"><b>{target.label} ≥{target.score.toLocaleString()}:</b> Scoring compares target attainment in recorded best scores, adjusting for the players observed on each chart. Levels 16–19 use submitted scores; 20+ use merged official leaderboards. Missing records are unknown. Pumbility averages this {target.label} estimate with the selected Clearing estimate; both are required.</p> : activeMode !== "coop" && hybridTiers ? <p className="metric-note">General Scoring uses submitted PIUScores score profiles for levels 16–19 and combined official Phoenix 1 / Phoenix 2 scores for 20+. Submitted Clearing uses full-history top-30 unique-clear skill with 200 valid records per mode. Its cross-level curve uses only 20+ anchors; levels 16–19 use their folder median and scale 0.70. Pumbility requires both displayed components.</p> : activeMode !== "coop" && crossLevelClearing && activeMetric !== "scoring" ? <p className="metric-note">Clearing uses submitted PIUScores records, top-30 unique-clear skill, and a 200-record requirement per mode. Median reference thresholds anchor at official level + 0.5 across levels 16+. Scoring keeps its existing method; Pumbility requires both displayed components.</p> : activeMode !== "coop" && crossLevelScoring ? <p className="metric-note">Scoring combines official Phoenix 1 and Phoenix 2 scores across current levels 20+, keeping each matched player's higher score. Median reference chart costs anchor at official level + 0.5. Scoring and Pumbility below level 20 are Unrated. {crossLevelClearing ? "Clearing uses the submitted cross-level method." : "Clearing retains its existing sources and method."}</p> : activeMode !== "coop" && officialTiers?.enabled ? <p className="metric-note">Scoring uses official PIUScores per-player comparisons for S23+ / D25+. Clearing uses the original player-submitted method through S24 / D25, and official clearer ability for S25+ / D26+, using S22+ / D23+ histories. The 300-score Clearing default applies only to those higher official Clearing tiers.</p> : null}
-        {!loading && payload && showScoringGoal && scoringGoal === "sss" && !sssAvailable ? <p className="metric-note" role="status">{HISTORICAL_SSS_UNAVAILABLE}</p> : null}
-        {showSssMethod && refinedSss ? <p className="metric-note">{spreadCalibrated ? <>At official level 20+, one-sided boards use their score gap to {target.score.toLocaleString()}, while rare-{target.label} charts use continuous conditional estimates with frozen player abilities and a folder prior. These corrected estimates remain provisional and have no formal interval.</> : <>{target.label} uses two passes: freeze the current rated range, then extend one-sided boards using their score gap to {target.score.toLocaleString()} and move well-supported rare-{target.label} charts toward its upper edge. These corrected estimates are provisional and have no formal interval.</>}</p> : null}
-        {showSssMethod && medianCalibrated ? <p className="metric-note"><b>Final median calibration:</b> at official level 20+, each supported folder anchors its median refined chart effect at level + 0.5. The final exponential curve recalibrates spacing across levels, followed by a residual median offset, one 50% midpoint adjustment{spreadCalibrated ? ", a scale-0.55 continuous spread adjustment" : ""} and the tail policy. Derived anchors remain provisional. SSS+ Pumbility averages final Scoring with selected Clearing.</p> : null}
-        {showSssMethod && centeredSss && !medianCalibrated ? <p className="metric-note"><b>{target.label} folder centering:</b> At official level 20+, supported folders have a final median of level + 0.5. Sparse folders borrow an offset within the same mode. Folder centering preserves ordering and spacing. {target.label} Pumbility averages the {tailPolicy ? "final post-policy" : "centered"} Scoring and existing Clearing values.</p> : null}
-        {showSssMethod && tailPolicy ? <p className="metric-note"><b>{spreadCalibrated ? "Spread and tails" : "Tail limits"}:</b> {spreadCalibrated ? "A smooth asinh curve moves distant charts toward the midpoint and retains continuous separation. The ordinary tail safeguard follows; evidence-based exceptions share a global budget of ten charts." : "Distances within ±1.5 of the official midpoint are unchanged; larger distances taper smoothly toward ±1.9. At most ten strongly supported exceptions across both modes and all levels may reach ±2 to ±2.5."} Supported folder medians remain at level + 0.5. {medianCalibrated ? "Preliminary diagnostics and recalibrated values remain in chart details." : "Original centered estimates remain in chart details."}</p> : null}
-        {officialD26Clearing && activeMetric !== "scoring" ? <p className="metric-note"><b>D26+ Clearing:</b> {combinedD26Clearing ? "Combined Phoenix 1 and Phoenix 2" : "Phoenix 2"} official clearer ability replaces the submitted method at D26 and above. It averages each player's 25 hardest other D23+ clears and uses the chart's 20th-percentile ability. Folder medians are recentered at level + 0.5 before midpoint adjustment.</p> : null}
         <RefreshMeta
           generatedAtUtc={payload?.generatedAtUtc}
           label="Tier list updated"
@@ -945,7 +940,7 @@ export default function TierListPage() {
           />
           {selectedPlayerKey ? <button className="tier-clear-player" onClick={() => selectPlayer("")} type="button">Clear selection</button> : null}
           <div className="tier-player-status">
-            {selectedPlayerKey ? <RefreshMeta generatedAtUtc={activePlayerScores?.syncedAtUtc} label="Player scores synced" loading={loadingScores} loadingLabel="Loading player scores..." nowMs={nowMs} /> : <p>Select a username to see scores and plates.</p>}
+            {selectedPlayerKey ? <RefreshMeta generatedAtUtc={activePlayerScores?.syncedAtUtc} label="Player scores synced" loading={loadingScores} loadingLabel="Loading player scores..." nowMs={nowMs} /> : null}
             {selectedPlayerKey && activePlayerScores && !activePlayerScores.syncedAtUtc ? <p>Saved player scores · sync time unavailable</p> : null}
             {playersError || scoresError ? <p role="status">{playersError || scoresError}</p> : null}
           </div>
@@ -1060,7 +1055,7 @@ export default function TierListPage() {
         </div>
 
         {groupingView === "tiers" && activeMode !== "coop" ? (
-          <p className="metric-note">Within each band, charts are sorted by estimated difficulty − (official level + 0.5), from smallest difference to largest.</p>
+          <ExplanatorySection title="About tier bands"><p>Within each band, charts are sorted by estimated difficulty − (official level + 0.5), from smallest difference to largest.</p></ExplanatorySection>
         ) : null}
         <div className="tiers">
           {groupingView === "tiers" && activeMode !== "coop"
@@ -1103,7 +1098,21 @@ export default function TierListPage() {
         </>}
       </section>
       <footer>
-        {payload?.schemaVersion === 56 && activeMode !== "coop" ? <p>Configured chart-version exclusions apply before score merging, player histories and fitting. Final SSS+ Scoring at level 20+ and official D26+ Clearing spread expands only narrow sides in displayed difficulty units, preserving supported folder medians and allowing cross-level outliers. Four-chart folder calibration remains provisional.</p> : null}
+        <ExplanatorySection title="About this tier list">
+        {(hasMidpointCompression(payload) || localAveragePumbility) && activeMode !== "coop" ? <p className="metric-note">After the initial fit, Scoring and Clearing distances from the official level + 0.5 are halved. Pumbility {localAveragePumbility ? "averages the adjusted components in this local experiment" : adjustedAveragePumbility ? "averages the adjusted components" : "takes the higher adjusted component"}. Initial fitted values remain available in chart details.</p> : null}
+        {localAveragePumbility && activeMetric === "pumbility" && activeMode !== "coop" ? <p className="metric-note"><b>Local experiment:</b> Pumbility = (Scoring + Clearing) / 2, using full precision. Both components are required.</p> : null}
+        {phoenix2Only ? <p className="metric-note">Local experiment: Phoenix 2 data only.</p> : null}
+        {showSssMethod ? <p className="metric-note"><b>{target.label} ≥{target.score.toLocaleString()}:</b> Scoring compares target attainment in recorded best scores, adjusting for the players observed on each chart. Levels 16–19 use submitted scores; 20+ use merged official leaderboards. Missing records are unknown. Pumbility averages this {target.label} estimate with the selected Clearing estimate; both are required.</p> : activeMode !== "coop" && hybridTiers ? <p className="metric-note">General Scoring uses submitted PIUScores score profiles for levels 16–19 and combined official Phoenix 1 / Phoenix 2 scores for 20+. Submitted Clearing uses full-history top-30 unique-clear skill with 200 valid records per mode. Its cross-level curve uses only 20+ anchors; levels 16–19 use their folder median and scale 0.70. Pumbility requires both displayed components.</p> : activeMode !== "coop" && crossLevelClearing && activeMetric !== "scoring" ? <p className="metric-note">Clearing uses submitted PIUScores records, top-30 unique-clear skill, and a 200-record requirement per mode. Median reference thresholds anchor at official level + 0.5 across levels 16+. Scoring keeps its existing method; Pumbility requires both displayed components.</p> : activeMode !== "coop" && crossLevelScoring ? <p className="metric-note">Scoring combines official Phoenix 1 and Phoenix 2 scores across current levels 20+, keeping each matched player's higher score. Median reference chart costs anchor at official level + 0.5. Scoring and Pumbility below level 20 are Unrated. {crossLevelClearing ? "Clearing uses the submitted cross-level method." : "Clearing retains its existing sources and method."}</p> : activeMode !== "coop" && officialTiers?.enabled ? <p className="metric-note">Scoring uses official PIUScores per-player comparisons for S23+ / D25+. Clearing uses the original player-submitted method through S24 / D25, and official clearer ability for S25+ / D26+, using S22+ / D23+ histories. The 300-score Clearing default applies only to those higher official Clearing tiers.</p> : null}
+        {!loading && payload && showScoringGoal && scoringGoal !== "general" && !sssAvailable ? <p className="metric-note">{scoringGoalUnavailableMessage(scoringGoal)}</p> : null}
+        {showSssMethod && refinedSss ? <p className="metric-note">{spreadCalibrated ? <>At official level 20+, one-sided boards use their score gap to {target.score.toLocaleString()}, while rare-{target.label} charts use continuous conditional estimates with frozen player abilities and a folder prior. These corrected estimates remain provisional and have no formal interval.</> : <>{target.label} uses two passes: freeze the current rated range, then extend one-sided boards using their score gap to {target.score.toLocaleString()} and move well-supported rare-{target.label} charts toward its upper edge. These corrected estimates are provisional and have no formal interval.</>}</p> : null}
+        {showSssMethod && medianCalibrated ? <p className="metric-note"><b>Final median calibration:</b> at official level 20+, each supported folder anchors its median refined chart effect at level + 0.5. The final exponential curve recalibrates spacing across levels, followed by a residual median offset, one 50% midpoint adjustment{spreadCalibrated ? ", a scale-0.55 continuous spread adjustment" : ""} and the tail policy. Derived anchors remain provisional. SSS+ Pumbility averages final Scoring with selected Clearing.</p> : null}
+        {showSssMethod && centeredSss && !medianCalibrated ? <p className="metric-note"><b>{target.label} folder centering:</b> At official level 20+, supported folders have a final median of level + 0.5. Sparse folders borrow an offset within the same mode. Folder centering preserves ordering and spacing. {target.label} Pumbility averages the {tailPolicy ? "final post-policy" : "centered"} Scoring and existing Clearing values.</p> : null}
+        {showSssMethod && tailPolicy ? <p className="metric-note"><b>{spreadCalibrated ? "Spread and tails" : "Tail limits"}:</b> {spreadCalibrated ? "A smooth asinh curve moves distant charts toward the midpoint and retains continuous separation. The ordinary tail safeguard follows; evidence-based exceptions share a global budget of ten charts." : "Distances within ±1.5 of the official midpoint are unchanged; larger distances taper smoothly toward ±1.9. At most ten strongly supported exceptions across both modes and all levels may reach ±2 to ±2.5."} Supported folder medians remain at level + 0.5. {medianCalibrated ? "Preliminary diagnostics and recalibrated values remain in chart details." : "Original centered estimates remain in chart details."}</p> : null}
+        {officialD26Clearing && activeMetric !== "scoring" ? <p className="metric-note"><b>D26+ Clearing:</b> {combinedD26Clearing ? "Combined Phoenix 1 and Phoenix 2" : "Phoenix 2"} official clearer ability replaces the submitted method at D26 and above. It averages each player's 25 hardest other D23+ clears and uses the chart's 20th-percentile ability. Folder medians are recentered at level + 0.5 before midpoint adjustment.</p> : null}
+        </ExplanatorySection>
+        <ExplanatorySection title={`How ${activeMode === "coop" ? "Co-op" : metricLabels[activeMetric]} estimates work`}>
+        {[56, 57].includes(payload?.schemaVersion ?? 0) && activeMode !== "coop" ? <p>Configured chart-version exclusions apply before score merging, player histories and fitting. Final SSS+ Scoring at level 20+ and official D26+ Clearing spread expands only narrow sides in displayed difficulty units, preserving supported folder medians and allowing cross-level outliers. Four-chart folder calibration remains provisional.</p> : null}
+        {submittedSssplusCalibrated && activeMode === "doubles" && activeMetric !== "clearing" ? <p><b>Submitted D16–D19 SSS+ calibration:</b> the shared-player fit retains all eligible submitted Double 16+ histories. Each eligible lower folder is centered on its median chart effect at level + 0.5, using the median of the folders' 90th-percentile absolute effect residuals as one common scale. The initial scale multiplier is 0.8, followed by one 50% midpoint adjustment, the scale-0.55 asinh spread, fixed final width and the ordinary tail safeguard. No new fit or score pull is performed. These folder-relative estimates remain provisional; they measure observed best-score attainment and cannot separate practice effort from chart difficulty.</p> : null}
         {activeMetric === "clearing" ? <>
           {officialD26Clearing ? <>
           <p><b>Official {combinedD26Clearing ? "Phoenix 1 + Phoenix 2" : "Phoenix 2"} Clearing (D26+)</b> Player ability averages the current official midpoints of the 25 hardest other unique D23+ clears, requiring 25 other clears and excluding the target. Each directly estimated chart uses the interpolated 20th-percentile ability. The evidence weight is n / (n + 20) × n / N, with n eligible and N observed clearers; its raw offset is 0.70 × that weight × (chart threshold − folder median threshold).</p>
@@ -1138,7 +1147,7 @@ export default function TierListPage() {
         </> : showSssMethod ? <>
           <p><b>How {target.label} Scoring estimates work</b> The target is a successful recorded best score of at least {target.score.toLocaleString()}, inclusive. A regularized logistic model fits separate player and chart effects. Players need four observed eligible charts. Their total observation weight is balanced so longer recorded histories do not dominate. Missing scores and broken records do not add failures.</p>
           <p>Submitted and official cohorts are fitted and calibrated independently for Singles and Doubles. The submitted fit uses valid 16+ histories and supplies levels 16–19; the official fit uses merged official 20+ scores and supplies 20+. Official Phoenix versions are matched by exact full game tag, keeping the higher score. Submitted and official identities are never joined by display name.</p>
-          <p>Each source uses its own supported folder medians as anchors at official level + 0.5, with exponential segments and labeled boundary tangent extrapolation. Reference charts need at least 20 usable contributors, at least five observed outcomes on each side of the target, and comparable metadata. Each reference folder needs five charts; at least three increasing anchors including the source's lowest level are required. {target.label} initial estimates and intervals receive the fixed 50% midpoint adjustment once.</p>
+          <p>{submittedSssplusCalibrated && activeMode === "doubles" ? "Submitted D16–D19 centers eligible chart effects within each folder and uses one common residual scale. Other cohorts retain their own supported median anchors at official level + 0.5, exponential segments and labeled boundary tangent extrapolation." : "Each source uses its own supported folder medians as anchors at official level + 0.5, with exponential segments and labeled boundary tangent extrapolation."} Reference charts for those exponential anchors need at least 20 usable contributors, at least five observed outcomes on each side of the target, and comparable metadata. Each reference folder needs five charts; at least three increasing anchors including the source's lowest level are required. {target.label} initial estimates and intervals receive the fixed 50% midpoint adjustment once.</p>
           <p>First-pass charts need both observed outcomes, five usable contributors, a calibrated comparison component and a stable converged fit. {refinedSss ? `The second pass classifies the complete available board before the history filter: no-${target.label} boards extend its frozen upper edge using the shortfall of ${topThreeNoSss ? "the average of the best three available scores (or fewer when fewer exist)" : "the highest score"} to ${target.score.toLocaleString()}, and all-${target.label} boards extend the lower edge from the lowest returned score's surplus. A held-out mixed-chart calibration converts score gaps into latent ${target.label} units. Sparse folders borrow range offsets within the same source and mode; unsupported calibration stays Unrated.` : "One-sided outcomes remain Unrated."} Sparse outcomes, weak information, truncated boards, comparability issues and extrapolation receive provisional evidence.</p>
           {refinedSss ? spreadCalibrated ? <p>At official level 20+, rare-{target.label} charts use continuous conditional estimates from observed player abilities and outcomes, with a folder prior. Prior spread is estimated within the same source and mode; unsupported estimates fall back to the frozen model's regularization. These effects replace the preliminary upper-band allocation before final folder calibration. Player abilities remain fixed, and the new conditional estimates have no formal interval. Submitted levels below 20 retain their existing refinement.</p> : <p>For one to four {target.label} results with matching full-board and usable evidence, a conditional chart-only fit supplies ordering within the highest 5% of the frozen numeric range. The correction blends by success count, usable support and success rate: one {target.label} among 20+ usable players gets full weight, while one among two does not. Player abilities, first-pass ranges and anchors stay fixed. Both boundary and rare-success corrections receive the midpoint adjustment once and have no formal interval.</p> : null}
           {centeredSss && !medianCalibrated ? <p>Final official {target.label} folders need five finite mixed first-pass charts with a positive range and five rated final charts to supply their own centering offset. All finite final estimates, including boundary and rare-success results, set the median at official level + 0.5. Sparse folders interpolate or borrow the nearest offset within their source and mode; their own medians need not equal that midpoint. The fixed offset is applied before the single 50% compression. Original fit values and frozen edges remain visible; effective ranges and existing intervals move by the same amount. {tailPolicy ? "The tail policy follows without recentering or changing player abilities and anchors. " : ""}Pumbility is averaged afterward and receives no independent centering.</p> : null}
@@ -1177,6 +1186,7 @@ export default function TierListPage() {
         <p><b>How Co-op estimates work</b> Co-op charts share one 2x-5x tier list. Miss points are adjusted for player strength and Phoenix source using all observations, then a conditional 75th-percentile score is estimated for a median-strength Phoenix 2 player. The conditional quantile provides outlier robustness; raw scores and residuals are not trimmed.</p>
         <p>The resulting chart order anchors the easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24.9, then truncates the published difficulty to a whole-number range from 10 through 24. This preserves the observed ordering without forcing a normal distribution. Co-op recommendation letter-grade goals are assigned from these whole-number difficulties.</p>
         </>}
+        </ExplanatorySection>
       </footer>
       {selectedChart ? <ChartDetailDialog chart={selectedChart} metric={activeMetric} onClose={closeChartDialog} /> : null}
     </main>
