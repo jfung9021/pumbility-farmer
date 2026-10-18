@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 type SiteHeaderProps = {
-  active?: "recommendations" | "tier-list";
+  active?: "recommendations" | "tier-list" | "skill-radar";
 };
 
 export function SiteHeader({ active }: SiteHeaderProps) {
@@ -26,6 +26,7 @@ export function SiteHeader({ active }: SiteHeaderProps) {
           ) : (
             <Link href="/tier-list">Tier List</Link>
           )}
+          {active === "skill-radar" ? <span aria-current="page">Skill Radar</span> : <Link href="/skill-radar">Skill Radar</Link>}
         </nav>
       ) : null}
     </header>

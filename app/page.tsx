@@ -43,6 +43,10 @@ export default function HomePage() {
               </p>
             </ExplanatorySection>
           </div>
+          <div className="home-feature">
+            <Link className="feature-card feature-radar" href="/skill-radar"><div><p>YOUR BPM PROFILE</p><h2>Skill Radar</h2></div><b aria-hidden="true">↗</b></Link>
+            <ExplanatorySection title="About Skill Radar"><p>Compare your Singles and Doubles across BPM ranges and find your next charts.</p></ExplanatorySection>
+          </div>
         </div>
 
         <ExplanatorySection className="home-how-to" title="Sync your scores before you start">

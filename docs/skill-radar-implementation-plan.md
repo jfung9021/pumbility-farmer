@@ -1,10 +1,15 @@
 # Skill Radar implementation plan
 
-Status: saved for later. Complete deployment reliability work before implementation.
+Status: implemented locally in the Skill Radar worktree. Production deployment is separate.
 
 Add /skill-radar using the PIU Training Tracker's BPM progression calculation,
 presented as a radar with targeted chart suggestions. User choices are confirmed.
-This plan does not implement the feature.
+The original implementation requirements follow below.
+
+Local preview: `/skill-radar`. Generate profiles from cached inputs with
+`scripts/build_local_skill_radar.py --source-root <existing-workspace>`.
+For a Windows worktree sharing dependencies, start Next with
+`npm run dev -- --webpack --hostname 127.0.0.1 --port 3001`.
 
 ## Confirmed behavior
 
@@ -150,4 +155,4 @@ public player URL key and browser Back/Forward behavior.
   reachable without hover, including overlapping zeros.
 - One ladder starts expanded; explanations start collapsed. Run affected tests,
   type checking, build and one desktop/mobile interaction pass. Stop when
-  acceptance passes. Implementation and deployment require a later request.
+  acceptance passes. Production deployment requires a separate request.
