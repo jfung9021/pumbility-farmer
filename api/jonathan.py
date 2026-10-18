@@ -162,3 +162,17 @@ def tier_publication_status(request: Request, jobId: str | None = Query(default=
         request_id = uuid4().hex
         report_exception(error, request_id=request_id, stage="operator-status", status_code=503)
         return _response(503, {"error": "Tier publication status is unavailable.", "requestId": request_id})
+
+
+@router.get("/api/jonathan/tier-storage")
+def tier_storage_status(request: Request):
+    denial = _tier_fit_denial(request)
+    if denial is not None:
+        return denial
+    try:
+        from analysis_runtime import PrivateBlobStore
+        return _response(200, PrivateBlobStore().tier_storage_status())
+    except Exception as error:
+        request_id = uuid4().hex
+        report_exception(error, request_id=request_id, stage="storage-preflight", status_code=503)
+        return _response(503, {"error": "Tier storage status is unavailable.", "requestId": request_id})

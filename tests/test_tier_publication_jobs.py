@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 from analysis_runtime import MemoryBlobStore, MemoryJobStore
 from tier_publication_jobs import (CONTINUATION_FIELD, TierPublicationConflict,
-    execute_tier_publication_job, get_tier_publication_status, request_tier_publication)
+    _retryable_io, execute_tier_publication_job, get_tier_publication_status, request_tier_publication)
 
 
 class Jobs(MemoryJobStore):
@@ -178,6 +178,32 @@ class TierPublicationJobTests(unittest.TestCase):
         self.assertNotIn(CONTINUATION_FIELD, result)
         self.assertEqual(result['exceptionClass'], 'ValueError')
         self.assertNotIn('private', str(result))
+
+    def test_http_retry_policy_rejects_deterministic_errors(self):
+        import requests
+        for status in (400, 401, 403, 404, 413, 415, 422):
+            response = requests.Response()
+            response.status_code = status
+            with self.subTest(status=status):
+                self.assertFalse(_retryable_io(requests.HTTPError('private response', response=response)))
+        for status in (408, 429, 500, 502, 503, 504):
+            response = requests.Response()
+            response.status_code = status
+            with self.subTest(status=status):
+                self.assertTrue(_retryable_io(requests.HTTPError('private response', response=response)))
+        self.assertFalse(_retryable_io(requests.HTTPError('unknown response')))
+
+    def test_storage_rejection_finishes_after_one_attempt_without_continuation(self):
+        import requests
+        identity, _ = self.pin()
+        response = requests.Response()
+        response.status_code = 415
+        with patch('production_tiers.advance_tier_publication', side_effect=requests.HTTPError('private response', response=response)):
+            result = execute_tier_publication_job(identity, jobs=self.jobs, store=self.store)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['attempt'], 1)
+        self.assertNotIn(CONTINUATION_FIELD, result)
+        self.assertIsNone(self.jobs.active_tier)
 
     def test_transient_io_retry_is_bounded_and_retains_active_job(self):
         identity, _ = self.pin()

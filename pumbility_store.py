@@ -1972,6 +1972,30 @@ class PumbilityArtifactStore:
                 (pathname, content_type, self.bucket, pathname, digest, len(payload)),
             )
 
+    def tier_storage_status(self) -> dict[str, Any]:
+        """Read the configured bucket's upload contract without exposing its identity."""
+        response = requests.get(
+            f"{self.supabase_url}/storage/v1/bucket/{quote(self.bucket, safe='')}",
+            headers=self._storage_headers(), timeout=self.timeout_seconds,
+        )
+        result: dict[str, Any] = {"statusCode": int(response.status_code),
+            "exists": False if response.status_code == 404 else None,
+            "fileSizeLimit": None, "allowedMimeTypes": None}
+        if not response.ok:
+            return result
+        metadata = response.json()
+        if not isinstance(metadata, Mapping):
+            raise ValueError("The private Storage bucket metadata is invalid.")
+        result["exists"] = bool(metadata.get("id"))
+        limit = metadata.get("file_size_limit")
+        if isinstance(limit, int) and not isinstance(limit, bool) and limit >= 0:
+            result["fileSizeLimit"] = limit
+        allowed = metadata.get("allowed_mime_types")
+        if isinstance(allowed, list):
+            result["allowedMimeTypes"] = [mime for mime in allowed if isinstance(mime, str)
+                and re.fullmatch(r"[A-Za-z0-9!#$&^_.+*-]+/[A-Za-z0-9!#$&^_.+*-]+", mime)]
+        return result
+
     def delete(self, pathnames: str | Sequence[str]) -> None:
         targets = [pathnames] if isinstance(pathnames, str) else list(pathnames)
         if not targets:

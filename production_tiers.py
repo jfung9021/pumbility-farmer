@@ -204,7 +204,7 @@ def write_private_audit(store, path, full):
             for chunk in iter(lambda: reader.read(1024 * 1024), b""):
                 hasher.update(chunk)
         staged.seek(0)
-        store.put_bytes(path, staged.read(), content_type="application/gzip")
+        store.put_bytes(path, staged.read(), content_type="application/octet-stream")
         return hasher.hexdigest()
 
 
