@@ -9,6 +9,7 @@ import { BpmRangeFilter } from "../_components/bpm-range-filter";
 import { ExplanatorySection } from "../_components/explanatory-section";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
+import { loadTierChartDetails } from "../../lib/tier-chart-details";
 import { demoPayload } from "../../lib/demo-data";
 import { resolvePumbilityPolicy, type PumbilityAggregation } from "../../lib/pumbility-policy";
 import { compressDemoPayload, hasMidpointCompression } from "../../lib/tier-postprocessing";
@@ -17,7 +18,7 @@ import {
   formatEstimatedDifficulty,
 } from "../../lib/format-difficulty";
 import { tierMetricFromSearchParams, tierModeFromSearchParams } from "../../lib/page-view-state";
-import { DEFAULT_SCORING_GOAL, hasScoringGoalVariants, isSssScoringChart, isTargetBoundaryChart, isTargetRareChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUnavailableMessage, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal } from "../../lib/scoring-variants";
+import { DEFAULT_SCORING_GOAL, hasScoringGoalVariants, isSssScoringChart, isTargetBoundaryChart, isTargetRareChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal } from "../../lib/scoring-variants";
 import { clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
 import {
   clearingPercentileRange,
@@ -63,6 +64,7 @@ const TierScoresContext = createContext<{
 }>({ selected: false, loading: false, unavailable: false, scores: new Map() });
 const PumbilityPolicyContext = createContext<PumbilityAggregation | null>(null);
 const RatingCompressionContext = createContext(false);
+const TierDetailContext = createContext<{compact: boolean; generatedAtUtc: string; goal: ScoringGoal; select: (chart: ChartResult) => void}>({compact:false, generatedAtUtc:"", goal:"general", select:() => {}});
 
 function PersonalChartScore({ chartId }: { chartId: string }) {
   const { selected, loading, unavailable, scores } = useContext(TierScoresContext);
@@ -239,7 +241,9 @@ function TargetTailDetails({ chart }: { chart: ChartResult }) {
   </>;
 }
 
-function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric: TierMetricKey; headingId?: string }) {
+function ChartDetails({ chart, metric, headingId, detailsLoaded = false }: { chart: ChartResult; metric: TierMetricKey; headingId?: string; detailsLoaded?: boolean }) {
+  const detailSource = useContext(TierDetailContext);
+  const listOnly = detailSource.compact && !detailsLoaded;
   const compressed = useContext(RatingCompressionContext) && chart.type !== "CoOp";
   const pumbilityAggregation = useContext(PumbilityPolicyContext);
   const selected = selectedTierMetric(chart, metric);
@@ -296,7 +300,7 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
             <span><b>#{selected.levelRank}</b> of {selected.levelComparisonCharts} in {chart.difficulty}</span>
           ) : null}
         </div>
-        <ExplanatorySection title="Calculation and evidence" className="chart-calculation-details">
+        {listOnly ? <button type="button" onClick={() => detailSource.select(chart)}>Calculation and evidence</button> : <ExplanatorySection title="Calculation and evidence" className="chart-calculation-details">
         {compressed && typeof initialDifficulty === "number" ? (
           <div className="chart-meta metric-details">
             <span>{chart.scoringFolderCentering && metric === "scoring" ? "After folder offset, before midpoint adjustment" : chart.scoringRefinement && metric === "scoring" ? "Before midpoint adjustment" : "Initial fit"}: <b>{chart.type === "Single" ? "S" : "D"}{formatEstimatedDifficulty(initialDifficulty)}</b>. {chart.scoringTailPolicy && metric === "scoring" ? "The pre-tail rating halves" : "Final rating halves"} its distance from the official midpoint <b>{(chart.level + .5).toFixed(1)}</b>{chart.scoringTailPolicy && metric === "scoring" ? "; the tail policy follows afterward" : ""}.</span>
@@ -449,7 +453,7 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
             {pumbility.estimatedDifficulty === null ? <span>Both components are required. {chart.estimatedDifficulty === null ? `Scoring unavailable${chart.scoringUnratedReason ? `: ${chart.scoringUnratedReason}` : "."}` : ""} {clearing?.estimatedDifficulty === null ? `Clearing unavailable${clearing.unratedReason ? `: ${clearing.unratedReason}` : "."}` : ""}</span> : null}
           </div>
         ) : null}
-        </ExplanatorySection>
+        </ExplanatorySection>}
       </div>
       {isCoop ? null : (
         <div className={`delta ${delta !== null && delta < 0 ? "delta-easy" : "delta-hard"}`}>
@@ -458,7 +462,7 @@ function ChartDetails({ chart, metric, headingId }: { chart: ChartResult; metric
           {metric === "scoring" && chart.difficultyCi95Low !== null && chart.difficultyCi95High !== null && !officialEvidence ? (
             <small title={sssScoring ? `95% conditional player-bootstrap interval, refitting the target model with calibration${chart.scoringFolderCentering ? " and folder offset" : ""}${chart.scoringTailPolicy ? ", tail map and exception decision" : ""} fixed; anchor uncertainty, effort and selective observation are excluded` : crossScoring ? "95% conditional player-bootstrap interval with fitted chart effects and median anchors held fixed; model-fit, identity, selection, effort, chart-comparability and source-truncation uncertainty are excluded" : profileScoring ? "95% bootstrap interval after calibration, with the mode reference curve, folder center, and selected folder scale held fixed; scale-selection uncertainty is excluded" : undefined}>{formatEstimatedDifficulty(chart.difficultyCi95Low)}-{formatEstimatedDifficulty(chart.difficultyCi95High)} CI</small>
           ) : null}
-          {metric === "scoring" && !profileScoring && !officialEvidence ? <WhatIfDifficulty chart={chart} /> : null}
+          {!listOnly && metric === "scoring" && !profileScoring && !officialEvidence ? <WhatIfDifficulty chart={chart} /> : null}
         </div>
       )}
     </>
@@ -483,6 +487,25 @@ function ChartCard({ chart, metric }: { chart: ChartResult; metric: TierMetricKe
       <ChartDetails chart={chart} metric={metric} />
     </article>
   );
+}
+
+function LazyChartDetails({chart, metric}: {chart: ChartResult; metric: TierMetricKey}) {
+  const source = useContext(TierDetailContext);
+  const [loaded, setLoaded] = useState<ChartResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!source.compact) return;
+    let cancelled = false;
+    setLoaded(null); setError(null);
+    loadTierChartDetails(chart.chartId, source.generatedAtUtc).then(response => {
+      if (!cancelled) setLoaded(projectScoringGoal(response.chart, source.goal, metric));
+    }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Chart details could not be loaded."); });
+    return () => { cancelled = true; };
+  }, [attempt, chart.chartId, metric, source.compact, source.generatedAtUtc, source.goal]);
+  if (!source.compact) return <ChartDetails chart={chart} metric={metric} headingId="chart-detail-dialog-title" detailsLoaded />;
+  if (loaded) return <ChartDetails chart={loaded} metric={metric} headingId="chart-detail-dialog-title" detailsLoaded />;
+  return <div className="chart-copy"><h3 id="chart-detail-dialog-title">{chart.songName}</h3><p role="status">{error || "Loading chart details..."}</p>{error ? <button type="button" onClick={() => setAttempt(value => value + 1)}>Retry</button> : null}</div>;
 }
 
 function CompactChartCard({ chart, onSelect }: { chart: ChartResult; onSelect: (chart: ChartResult) => void }) {
@@ -602,7 +625,7 @@ function ChartDetailDialog({ chart, metric, onClose }: { chart: ChartResult; met
               variant="dialog"
             />
           </div>
-          <ChartDetails chart={chart} metric={metric} headingId="chart-detail-dialog-title" />
+          <LazyChartDetails chart={chart} metric={metric} />
         </div>
       </div>
     </div>
@@ -843,6 +866,7 @@ export default function TierListPage() {
   } | undefined;
   const clearingScale = tierMethod?.clearing?.difficultyDeltaScale ?? 1;
   const metricAvailability = tierMetricAvailability(modeCharts, activeMetric, activeMode);
+  const goalUnavailable = !loading && Boolean(payload) && showScoringGoal && scoringGoal !== "general" && !sssAvailable;
   const filter = filters[activeMode];
   const bpmBounds = useMemo(() => tierBpmBounds(modeCharts), [modeCharts]);
   const selectedBpm = useMemo(() => filter.bpm && bpmBounds ? clampBpmRange(filter.bpm, bpmBounds) : null, [bpmBounds, filter.bpm]);
@@ -909,6 +933,7 @@ export default function TierListPage() {
     <TierScoresContext.Provider value={scoreContext}>
     <PumbilityPolicyContext.Provider value={pumbilityPolicy?.aggregation ?? null}>
     <RatingCompressionContext.Provider value={hasMidpointCompression(payload) || localAveragePumbility}>
+    <TierDetailContext.Provider value={{compact:payload?.tierListView?.kind === "list", generatedAtUtc:payload?.generatedAtUtc ?? "", goal:scoringGoal, select:setSelectedChart}}>
     <main className="tier-list-page">
       <SiteHeader active="tier-list" />
 
@@ -982,7 +1007,7 @@ export default function TierListPage() {
           ))}
         </div>
 
-        {metricAvailability !== "available" ? (
+        {goalUnavailable ? <p className="metric-unavailable" role="status">{target.label} is unavailable in this analysis. <button type="button" onClick={() => selectScoringGoal("general")}>View General</button></p> : metricAvailability !== "available" ? (
           <p className="metric-unavailable" role="status">
             {metricAvailability === "unsupported"
               ? `${metricLabels[activeMetric]} difficulty is unavailable for Co-op. Select Singles or Doubles, or switch to Scoring.`
@@ -1103,7 +1128,6 @@ export default function TierListPage() {
         {localAveragePumbility && activeMetric === "pumbility" && activeMode !== "coop" ? <p className="metric-note"><b>Local experiment:</b> Pumbility = (Scoring + Clearing) / 2, using full precision. Both components are required.</p> : null}
         {phoenix2Only ? <p className="metric-note">Local experiment: Phoenix 2 data only.</p> : null}
         {showSssMethod ? <p className="metric-note"><b>{target.label} ≥{target.score.toLocaleString()}:</b> Scoring compares target attainment in recorded best scores, adjusting for the players observed on each chart. Levels 16–19 use submitted scores; 20+ use merged official leaderboards. Missing records are unknown. Pumbility averages this {target.label} estimate with the selected Clearing estimate; both are required.</p> : activeMode !== "coop" && hybridTiers ? <p className="metric-note">General Scoring uses submitted PIUScores score profiles for levels 16–19 and combined official Phoenix 1 / Phoenix 2 scores for 20+. Submitted Clearing uses full-history top-30 unique-clear skill with 200 valid records per mode. Its cross-level curve uses only 20+ anchors; levels 16–19 use their folder median and scale 0.70. Pumbility requires both displayed components.</p> : activeMode !== "coop" && crossLevelClearing && activeMetric !== "scoring" ? <p className="metric-note">Clearing uses submitted PIUScores records, top-30 unique-clear skill, and a 200-record requirement per mode. Median reference thresholds anchor at official level + 0.5 across levels 16+. Scoring keeps its existing method; Pumbility requires both displayed components.</p> : activeMode !== "coop" && crossLevelScoring ? <p className="metric-note">Scoring combines official Phoenix 1 and Phoenix 2 scores across current levels 20+, keeping each matched player's higher score. Median reference chart costs anchor at official level + 0.5. Scoring and Pumbility below level 20 are Unrated. {crossLevelClearing ? "Clearing uses the submitted cross-level method." : "Clearing retains its existing sources and method."}</p> : activeMode !== "coop" && officialTiers?.enabled ? <p className="metric-note">Scoring uses official PIUScores per-player comparisons for S23+ / D25+. Clearing uses the original player-submitted method through S24 / D25, and official clearer ability for S25+ / D26+, using S22+ / D23+ histories. The 300-score Clearing default applies only to those higher official Clearing tiers.</p> : null}
-        {!loading && payload && showScoringGoal && scoringGoal !== "general" && !sssAvailable ? <p className="metric-note">{scoringGoalUnavailableMessage(scoringGoal)}</p> : null}
         {showSssMethod && refinedSss ? <p className="metric-note">{spreadCalibrated ? <>At official level 20+, one-sided boards use their score gap to {target.score.toLocaleString()}, while rare-{target.label} charts use continuous conditional estimates with frozen player abilities and a folder prior. These corrected estimates remain provisional and have no formal interval.</> : <>{target.label} uses two passes: freeze the current rated range, then extend one-sided boards using their score gap to {target.score.toLocaleString()} and move well-supported rare-{target.label} charts toward its upper edge. These corrected estimates are provisional and have no formal interval.</>}</p> : null}
         {showSssMethod && medianCalibrated ? <p className="metric-note"><b>Final median calibration:</b> at official level 20+, each supported folder anchors its median refined chart effect at level + 0.5. The final exponential curve recalibrates spacing across levels, followed by a residual median offset, one 50% midpoint adjustment{spreadCalibrated ? ", a scale-0.55 continuous spread adjustment" : ""} and the tail policy. Derived anchors remain provisional. SSS+ Pumbility averages final Scoring with selected Clearing.</p> : null}
         {showSssMethod && centeredSss && !medianCalibrated ? <p className="metric-note"><b>{target.label} folder centering:</b> At official level 20+, supported folders have a final median of level + 0.5. Sparse folders borrow an offset within the same mode. Folder centering preserves ordering and spacing. {target.label} Pumbility averages the {tailPolicy ? "final post-policy" : "centered"} Scoring and existing Clearing values.</p> : null}
@@ -1190,6 +1214,7 @@ export default function TierListPage() {
       </footer>
       {selectedChart ? <ChartDetailDialog chart={selectedChart} metric={activeMetric} onClose={closeChartDialog} /> : null}
     </main>
+    </TierDetailContext.Provider>
     </RatingCompressionContext.Provider>
     </PumbilityPolicyContext.Provider>
     </TierScoresContext.Provider>

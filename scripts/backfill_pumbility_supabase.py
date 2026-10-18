@@ -405,6 +405,8 @@ def _import_mix(connection: Any, mix_key: str, manifest: Mapping[str, Any], snap
     manifest_hash = hashlib.sha256(_canonical_bytes(manifest)).hexdigest()
     run_key = f"local:{mix_key}:{manifest_hash}"
     with connection.cursor() as cursor:
+        from pumbility_store import TIER_PUBLICATION_LOCK
+        cursor.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (TIER_PUBLICATION_LOCK,))
         cursor.execute(
             """
             insert into pumbility.data_sources (source_key, display_name, is_frozen, metadata)
@@ -796,6 +798,9 @@ def _import_mix(connection: Any, mix_key: str, manifest: Mapping[str, Any], snap
     )
     if counts != expected:
         raise RuntimeError(f"Imported {mix_key} counts {counts} do not match source counts {expected}.")
+    from pumbility_store import bump_tier_source_revision
+    with connection.cursor() as cursor:
+        bump_tier_source_revision(cursor, mix_key)
     return {"players": counts[0], "charts": counts[1], "scores": counts[2]}
 
 

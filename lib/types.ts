@@ -602,6 +602,8 @@ export interface ModeSummary {
 }
 
 export interface AnalysisPayload {
+  /** Compact list rows keep calculation evidence in the on-demand chart route. */
+  tierListView?: { version: 1; kind: "list"; detailsAvailable: boolean; detailsPrefix?: string };
   schemaVersion?: number;
   generatedAtUtc: string;
   mix: MixInfo | CombinedMixInfo;
@@ -621,6 +623,11 @@ export interface AnalysisPayload {
     low: number | null;
     high: number | null;
   }>;
+}
+
+export interface TierChartDetailsResponse {
+  generatedAtUtc: string;
+  chart: ChartResult;
 }
 
 export type AnalysisJobState = "queued" | "running" | "completed" | "failed";
