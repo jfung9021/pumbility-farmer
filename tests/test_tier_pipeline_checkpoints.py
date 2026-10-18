@@ -13,6 +13,20 @@ from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
 
 
 class CheckpointTests(TestCase):
+    def test_gzip_uploads_use_the_private_buckets_allowed_binary_mime(self):
+        import gzip
+        store = MemoryBlobStore()
+        value = {"schemaVersion": 57, "value": 20.5}
+        with patch.object(store, "put_bytes", wraps=store.put_bytes) as upload:
+            reference = write_checkpoint(store, value, stage="pinned-inputs", identity="inputs")
+            self.assertEqual(upload.call_args.kwargs["content_type"], "application/octet-stream")
+        self.assertEqual(json.loads(gzip.decompress(store.get_bytes(reference["path"]))), value)
+        with patch.object(store, "put_bytes", wraps=store.put_bytes) as upload:
+            result = tiers.write_private_audit(store, "legacy-audit.json.gz", value)
+            self.assertEqual(upload.call_args.kwargs["content_type"], "application/octet-stream")
+        self.assertEqual(json.loads(gzip.decompress(store.get_bytes("legacy-audit.json.gz"))), value)
+        self.assertEqual(result, tiers.digest(value))
+
     def test_general_cache_adoption_is_portable_across_checkout_line_endings(self):
         with patch("pathlib.Path.read_bytes", return_value=b"same source\r\nnext line\r\n"):
             windows = tiers.general_code_identity()

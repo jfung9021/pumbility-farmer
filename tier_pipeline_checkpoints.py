@@ -33,7 +33,8 @@ def write_checkpoint(store, payload: Mapping[str, Any], *, stage: str,
     path = PREFIX + blob_sha + ".json.gz"
     # An identical content-addressed write is idempotent. No mutable artifact
     # path is used for checkpoint payloads, including concurrent retries.
-    store.put_bytes(path, body, content_type="application/gzip")
+    # The private bucket accepts opaque binary artifacts, including gzip files.
+    store.put_bytes(path, body, content_type="application/octet-stream")
     return {"version": 1, "stage": stage, "identity": identity,
             "predecessorSha256": predecessor, "path": path,
             "blobSha256": blob_sha, "payloadSha256": content.hexdigest(),
