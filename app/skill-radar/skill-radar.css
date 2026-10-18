@@ -17,12 +17,12 @@
 .radar-trace-toggle[aria-pressed="false"] { border-color: var(--line); opacity: .5; }
 .radar-mode-singles { --radar-color: #ff4a4a; }
 .radar-mode-doubles { --radar-color: #39d96a; }
-.radar-plot { display: block; height: auto; overflow: visible; width: 100%; }
+.radar-plot { --radar-range-font-size: 18px; --radar-score-font-size: 14px; display: block; height: auto; overflow: visible; width: 100%; }
 .radar-ring, .radar-axis { fill: none; stroke: #455047; stroke-width: 1; }
 .radar-ring { stroke-opacity: .6; }
 .radar-axis { stroke-opacity: .45; }
-.radar-axis-label { fill: #d0d9cc; font-size: 18px; font-weight: 650; }
-.radar-axis-score { fill: var(--radar-color); font-size: 14px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.radar-axis-label { fill: #d0d9cc; font-size: var(--radar-range-font-size); font-weight: 650; transform: translateY(calc((var(--radar-score-font-size) - var(--radar-range-font-size)) / 2)); }
+.radar-axis-score { fill: var(--radar-color); font-size: var(--radar-score-font-size); font-variant-numeric: tabular-nums; font-weight: 600; }
 .radar-ring-label { fill: #8a978b; font-size: 12px; paint-order: stroke; stroke: #101611; stroke-width: 4; }
 .radar-trace-line { fill: var(--radar-color); fill-opacity: .035; stroke: var(--radar-color); stroke-linejoin: round; stroke-width: 2.5; }
 .radar-mode-doubles .radar-trace-line { stroke-dasharray: 6 4; }
@@ -79,8 +79,7 @@
   .radar-score-sync { grid-column: 1; justify-content: center; }
   .radar-plot-panel { padding: 16px 0 14px; }
   .radar-plot-panel h2 { font-size: 16px; }
-  .radar-axis-label { font-size: 22px; }
-  .radar-axis-score { font-size: 17px; }
+  .radar-plot { --radar-range-font-size: 22px; --radar-score-font-size: 17px; }
   .radar-bucket-summary { gap: 4px 8px; padding: 12px; }
   .radar-chart-row { gap: 8px; grid-template-columns: 38px minmax(0, 1fr) auto 44px; padding: 10px; }
   .radar-jacket { height: 38px; width: 38px; }
