@@ -1715,6 +1715,22 @@ class PumbilityArtifactStore:
                     raise TierPublicationConflict("The tier publication lease expired during promotion.")
                 cursor.execute("delete from pumbility.job_heads where name='active:tier-publication' and job_id=(select id from pumbility.jobs where external_key=%s)", (job_id,))
 
+    def read_skill_radar_metadata(self) -> dict[str, Any]:
+        """Read cached all-level P2 metadata without hydrating any player scores."""
+        from skill_radar_runtime import skill_metadata
+        with _read_cursor(self.database_url) as cursor:
+            _assert_schema(cursor)
+            cursor.execute("""
+                select cr.payload
+                from pumbility.chart_revisions cr
+                join pumbility.charts c on c.id = cr.chart_id
+                join pumbility.mixes m on m.id = c.mix_id
+                where m.mix_key = %s and c.is_active and cr.valid_to is null
+                order by c.upstream_chart_id
+                """, ("phoenix2",))
+            charts = [dict(row[0]) for row in cursor.fetchall()]
+        return skill_metadata(charts)
+
     def artifact_revision(self, pathname: str) -> dict[str, Any] | None:
         with _read_cursor(self.database_url) as cursor:
             cursor.execute("select sha256,byte_size,xmin::text from pumbility.artifacts where object_key=%s", (pathname,))

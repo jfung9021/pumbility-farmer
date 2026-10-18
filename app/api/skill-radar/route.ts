@@ -1,0 +1,20 @@
+import { NextRequest, NextResponse } from "next/server";
+import { localAnalysisEnabled } from "../../../lib/local-analysis";
+import { readLocalSkillRadar } from "../../../lib/local-skill-radar";
+import { PLAYER_KEY_PATTERN } from "../../../lib/skill-radar";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+const headers = {"Cache-Control":"no-store"};
+
+export async function GET(request: NextRequest) {
+  if (!localAnalysisEnabled()) return NextResponse.json({error:"Local analysis mode is disabled."}, {status:404, headers});
+  const playerKey = request.nextUrl.searchParams.get("playerKey")?.trim() ?? "";
+  if (!PLAYER_KEY_PATTERN.test(playerKey)) return NextResponse.json({error:"A valid playerKey is required."}, {status:400, headers});
+  try {
+    return NextResponse.json(await readLocalSkillRadar(playerKey), {headers});
+  } catch (error) {
+    const absent = (error as NodeJS.ErrnoException).code === "ENOENT";
+    return NextResponse.json({error:absent ? "Skill Radar has not been generated for this player yet." : "Skill Radar is temporarily unavailable."}, {status:absent ? 404 : 503, headers});
+  }
+}

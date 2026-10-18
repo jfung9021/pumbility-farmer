@@ -13,6 +13,7 @@ from api.operator import router as operator_router
 from api.recommendations import router as recommendations_router
 from api.tier_list import router as tier_list_router
 from api.topology import router as topology_router
+from api.skill_radar import router as skill_radar_router
 from pumbility_store import validate_persistence_configuration
 from tier_diagnostics import report_exception
 from uuid import uuid4
@@ -28,6 +29,7 @@ app.include_router(operator_router)
 app.include_router(recommendations_router)
 app.include_router(tier_list_router)
 app.include_router(topology_router)
+app.include_router(skill_radar_router)
 
 
 @app.exception_handler(Exception)

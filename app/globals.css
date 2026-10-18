@@ -575,6 +575,7 @@ footer b { color: #929b93; }
 .feature-card:hover > b { background: var(--acid); color: #12160f; }
 .feature-recommendations { background: linear-gradient(145deg, rgba(24, 36, 18, 0.95), rgba(13, 18, 14, 0.92)); }
 .home-feature { display: grid; gap: 12px; min-width: 0; }
+.feature-radar { background: linear-gradient(145deg, rgba(19, 33, 24, .95), rgba(13, 18, 14, .92)); }
 .home-how-to { margin-top: 18px; }
 .home-how-to-copy { align-items: flex-start; display: flex; flex-direction: column; gap: 22px; }
 .home-how-to ol { display: grid; gap: 10px; }
@@ -796,8 +797,8 @@ footer b { color: #929b93; }
   .feature-card { gap: 13px; grid-template-columns: minmax(0, 1fr); max-width: 100%; min-height: 0; min-width: 0; padding: 22px 18px; width: 100%; }
   .feature-card h2 { font-size: 27px; }
   .feature-card > b { display: none; }
-  .page-nav { flex: 1 1 150px; gap: 2px; justify-content: flex-end; min-width: 0; }
-  .page-nav a, .page-nav span { font-size: 8px; padding: 7px 8px; }
+  .page-nav { flex: 1 1 100%; flex-wrap: wrap; gap: 4px; justify-content: flex-start; min-width: 0; }
+  .page-nav a, .page-nav span { font-size: 10px; padding: 10px 9px; }
   .header-actions { flex-basis: 100%; width: 100%; }
   .tier-header-actions { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto; }
   .tier-header-actions .page-nav { justify-content: flex-start; }
