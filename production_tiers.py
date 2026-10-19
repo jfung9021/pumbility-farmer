@@ -454,7 +454,8 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
                             "targetSamples": SAMPLES, "targetSeed": SEED}
     state["numericIdentity"] = {**{key: value for key, value in semantic_inputs.items() if key != "modelCode"},
                                 "numericalRecipe": numerical_pipeline_recipe()}
-    goal_inputs = {key: value for key, value in semantic_inputs.items() if key not in {"modelCode", "generalArguments"}}
+    goal_inputs = goal_input_identity(first, second, catalog=catalog,
+        manifest_sha256=identity["officialManifest"], policy=policy.public())
     goal_artifacts = matching_goal_artifacts(store, goal_inputs)
     state["goalInputIdentity"] = goal_inputs
     state["goalArtifacts"] = goal_artifacts
@@ -1118,6 +1119,20 @@ def _ready_worker_result(state, candidate):
         ("generation", "stage", "progressOrdinal", "candidatePath", "candidateSha256", "archivePath", "archiveSha256")}}}
 
 
+def goal_input_identity(first, second, *, catalog, manifest_sha256, policy):
+    """Bind goal artifacts to consumed sources, independently of General DTOs.
+
+    Operator backfills reconstruct stripped chart records, whereas global jobs
+    carry General/recommendation estimates. Both feed the same current catalog;
+    those unrelated record/metadata fields are not inputs to target analysis.
+    """
+    from tier_computation_cache import snapshot_identity
+    return {"version": 1, "method": "independent-scoring-goal-inputs-v1",
+            "phoenix1": snapshot_identity(first), "phoenix2": snapshot_identity(second),
+            "catalog": digest(catalog), "officialManifest": manifest_sha256,
+            "sourcePolicy": digest(policy)}
+
+
 def _goal_recipe(goal):
     from numeric_recipe import benchmark_recipe, producer_dependencies, target_kernel_recipe
     return {"target": _scoring_target(goal).public(), "kernel": target_kernel_recipe(),
@@ -1125,7 +1140,8 @@ def _goal_recipe(goal):
             "calibration": digest(producer_dependencies({
                 "scoring_goal_tiers.py": {"build_goal_artifact"},
                 "sss_scoring.py": {"prepare_target_observations"},
-                "production_tiers.py": {"_cohort_observations", "_general_target_predictions"}}))}
+                "production_tiers.py": {"load_context", "goal_input_identity",
+                                        "_cohort_observations", "_general_target_predictions"}}))}
 
 
 def _goal_index_path(inputs, goal):
@@ -1157,7 +1173,6 @@ def advance_goal_backfill(store, *, pinned_inputs_reference, goal, on_progress=N
     from scoring_targets import BACKFILL_GOALS
     from scoring_goal_tiers import build_goal_artifact
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
-    from tier_computation_cache import input_identity
     from official_scoring_sources import canonical_scoring_manifest_sha256
     from target_fit_cache import load_or_fit_target, hydrate_point_context
     if goal not in BACKFILL_GOALS:
@@ -1172,10 +1187,8 @@ def advance_goal_backfill(store, *, pinned_inputs_reference, goal, on_progress=N
         captured = read_checkpoint(store, pinned_inputs_reference, stage="pinned-inputs", identity=pinned_inputs_reference["identity"])
         context = load_context(captured["first"], captured["second"], captured["manifest"], captured["records"])
         first, second, catalog, policy, merged, prepared = context
-        inputs = input_identity(captured["first"], captured["second"], records=captured["records"],
-            metadata=captured["metadata"], catalog=catalog,
-            manifest_sha256=canonical_scoring_manifest_sha256(captured["manifest"]), policy=policy.public(), model_code=None)
-        inputs.pop("modelCode", None)
+        inputs = goal_input_identity(captured["first"], captured["second"], catalog=catalog,
+            manifest_sha256=canonical_scoring_manifest_sha256(captured["manifest"]), policy=policy.public())
         generation = digest(task_identity)
         context_ref = write_checkpoint(store, {"first": first, "second": second, "catalog": catalog,
             "policy": policy.public(), "policySemanticSha256": policy.semantic_hash(),

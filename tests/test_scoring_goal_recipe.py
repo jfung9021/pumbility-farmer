@@ -3,7 +3,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from production_tiers import _goal_recipe
+from production_tiers import _goal_index_path, _goal_recipe
 
 
 class GoalRecipeTests(unittest.TestCase):
@@ -38,6 +38,18 @@ class GoalRecipeTests(unittest.TestCase):
         with self.changed_source("scoring_goal_tiers.py", b"Missing scoring-goal baseline hash.",
                                  b"The predecessor hash is missing."):
             self.assertEqual(_goal_recipe("ss"), expected)
+
+    def test_official_preprocessing_changes_invalidate_both_goal_artifacts(self):
+        inputs = {"epoch": "unchanged-synthetic-captures"}
+        expected = {goal: (_goal_recipe(goal), _goal_index_path(inputs, goal))
+                    for goal in ("ss", "ssplus")}
+        with self.changed_source("official_score_merge.py",
+                b'score = max(r["score"] for r in records)',
+                b'score = min(r["score"] for r in records)'):
+            for goal, (recipe, path) in expected.items():
+                with self.subTest(goal=goal):
+                    self.assertNotEqual(_goal_recipe(goal), recipe)
+                    self.assertNotEqual(_goal_index_path(inputs, goal), path)
 
 
 if __name__ == "__main__":
