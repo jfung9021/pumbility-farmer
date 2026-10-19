@@ -199,14 +199,16 @@ def publish_tiers(job_id: str) -> dict[str, Any]:
     name="worker.tasks.refresh_player_recommendations",
 )
 def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
+    from analysis_runtime import _start_job_lease_heartbeat, _pulse_job_lease, _stop_job_lease
     from piu_misgrade_analyzer import ApiError
+    from pumbility_store import JobLeaseHeldError, JobLeaseLostError
 
     cold_claim = _begin_topology_worker_invocation(PLAYER_QUEUE_NAME)
     jobs = RuntimeJobStore()
     job = jobs.get(job_id)
     if job is None:
         raise RuntimeError("The queued player refresh status was not found.")
-    if job.get("status") == "completed":
+    if job.get("status") in {"completed", "failed"} or job.get("cancelRequested"):
         _complete_topology_worker_invocation_best_effort(cold_claim)
         return job
     started = perf_counter()
@@ -215,19 +217,25 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
     queue_wait_ms = round(
         max(0.0, (started_at - created_at).total_seconds() * 1000), 3
     ) if created_at else None
-    update_job(
-        jobs,
-        job_id,
-        status="running",
-        stage="syncing",
-        progress={
-            "current": 0,
-            "total": 1,
-            "percent": 10,
-            "message": "Synchronizing this player's latest Phoenix 2 scores.",
-        },
-    )
     try:
+        update_job(
+            jobs,
+            job_id,
+            status="running",
+            stage="syncing",
+            progress={
+                "current": 0,
+                "total": 1,
+                "percent": 10,
+                "message": "Synchronizing this player's latest Phoenix 2 scores.",
+            },
+        )
+    except JobLeaseHeldError:
+        return jobs.get(job_id) or job
+    heartbeat = None
+    try:
+        heartbeat = _start_job_lease_heartbeat(jobs, job_id)
+        _pulse_job_lease(heartbeat)
         import os
 
         api_key = os.getenv("PIU_SCORES_API_KEY", "").strip()
@@ -236,13 +244,24 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
                 "PIU_SCORES_API_KEY is not configured as a server-side environment variable."
             )
         timings: dict[str, float] = {}
+        refresh_options: dict[str, Any] = {}
+        publisher = getattr(jobs, "publish_player_artifacts", None)
+        if callable(publisher):
+            def publish(payloads):
+                _pulse_job_lease(heartbeat)
+                publisher(job_id, payloads)
+            refresh_options["publish"] = publish
         response = refresh_one_player(
             PrivateBlobStore(),
             PiuScoresClient(api_key=api_key),
             index_path=recommendation_blob_path(),
             player_key=str(job.get("playerKey") or ""),
             timings=timings,
+            **refresh_options,
         )
+        _pulse_job_lease(heartbeat)
+        _stop_job_lease(heartbeat)
+        heartbeat = None
         completed = update_job(
             jobs,
             job_id,
@@ -273,22 +292,26 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
         _complete_topology_worker_invocation_best_effort(cold_claim)
         return completed
     except Exception as exc:
-        failed = update_job(
-            jobs,
-            job_id,
-            status="failed",
-            stage="syncing",
-            durationMs=round((perf_counter() - started) * 1000, 3),
-            queueWaitMs=queue_wait_ms,
-            retryAllowedAtUtc=isoformat_utc(utc_now() + timedelta(seconds=60)),
-            error=safe_error(exc),
-            progress={
-                "current": 0,
-                "total": 1,
-                "percent": 0,
-                "message": "The player refresh failed; cached recommendations remain available.",
-            },
-        )
+        try:
+            failed = update_job(
+                jobs,
+                job_id,
+                status="failed",
+                stage="syncing",
+                durationMs=round((perf_counter() - started) * 1000, 3),
+                queueWaitMs=queue_wait_ms,
+                retryAllowedAtUtc=isoformat_utc(utc_now() + timedelta(seconds=60)),
+                error=safe_error(exc),
+                progress={
+                    "current": 0,
+                    "total": 1,
+                    "percent": 0,
+                    "message": "The player refresh failed; cached recommendations remain available.",
+                },
+            )
+        except JobLeaseLostError:
+            # A replacement worker owns the job. Its status and artifacts win.
+            return jobs.get(job_id) or job
         print(json.dumps({
             "event": "player_recommendation_refresh",
             "status": "failed",
@@ -296,6 +319,13 @@ def refresh_player_recommendations(job_id: str) -> dict[str, Any]:
             "durationMs": failed.get("durationMs"),
         }, separators=(",", ":"), sort_keys=True))
         return failed
+    finally:
+        try:
+            _stop_job_lease(heartbeat)
+        except RuntimeError:
+            # Lease failures were surfaced at a phase boundary or while saving
+            # failure status; cleanup must not mask the authoritative outcome.
+            pass
 
 
 def _run_topology_queue_probe(

@@ -296,7 +296,7 @@ def finish_generation(general, context, fits, identities, *, generated_at_utc=No
 
 
 def build_hosted_tiers(records, metadata, first, second, *, store, arguments, generated_at_utc=None,
-                       on_stage_start=None, input_reference_sha256=None):
+                       on_stage_start=None, input_reference_sha256=None, on_progress=None):
     """Advance one validated phase; never capture scores or fit recommendations."""
     from scoring_percentile import build_production_tier_payload
     from sss_scoring_model import fit_target_model
@@ -317,6 +317,7 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
     cached = store.get_json(public_path)
     if cached is not None:
         validate_public_tiers(cached)
+        _report_progress(on_progress, generation, 9 + len(FINISH_STAGES) + 2, "public")
         return cached
     state_path = generation_prefix + "state.json"
     state = store.get_json(state_path)
@@ -335,6 +336,7 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
             "generalCode": general_code_identity(), "records": digest(records), "metadata": digest(metadata)})
     general_reference = state.get("general") or store.get_json(PREFIX + "general/" + general_identity + ".json")
     if general_reference is None:
+        _report_progress(on_progress, generation, 0, "general")
         if on_stage_start: on_stage_start("general")
         general = None
         if general_code_identity() == LEGACY_GENERAL_CODE_IDENTITY:
@@ -364,6 +366,7 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
                 path = fit_path(fit_identity)
                 cached_fit = store.get_json(path)
                 if cached_fit is None:
+                    _report_progress(on_progress, generation, completed, "target-fit")
                     if on_stage_start: on_stage_start(f"target-fit-{goal}-{source}-{mode.lower()}")
                     fit = fit_target_model(boards, score_target=fit_identity["target"], bootstrap_samples=SAMPLES,
                         seed=SEED, source_boards=sources,
@@ -375,6 +378,7 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
                         fit["diagnostics"]["validation"]["generalTargetBenchmarkReason"] = "Submitted General uses score profiles rather than additive score costs; no equivalent training-only target predictor."
                     validate_fit(fit, fit_identity)
                     store.put_json(path, {"identity": fit_identity, "fit": fit})
+                    _report_progress(on_progress, generation, completed + 1, "target-fit")
                     raise TierAnalysisPending(generation[:16] + "-fit-" + str(completed + 1), completed + 1,
                         stage="target-fit", generation=generation)
                 if cached_fit["identity"] != fit_identity:
@@ -385,18 +389,25 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
                 identities.append({"goal": goal, "source": source, "mode": mode, "identity": fit_identity, "reusedOriginal": False})
                 completed += 1
     if "phaseInputs" not in state:
+        _report_progress(on_progress, generation, 8, "prepared-inputs")
         if on_stage_start: on_stage_start("prepared-inputs")
         with phase("prepared-inputs", generation=generation):
             state["phaseInputs"] = _pin_phase_inputs(store, generation, context)
             state["fitReferences"] = [{**item, "path": fit_path(item["identity"]),
                 "fitSha256": digest(fits[item["goal"]][item["source"]][item["mode"]])} for item in identities]
             store.put_json(state_path, state)
+        _report_progress(on_progress, generation, 9, "prepared-inputs")
         raise TierAnalysisPending(generation[:16]+"-9", 8, stage="prepared-inputs",
                                   generation=generation, progress_ordinal=9)
-    return _advance_finish(store, state, on_stage_start=on_stage_start)
+    return _advance_finish(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
 
 
-def _advance_finish(store, state, *, on_stage_start=None):
+def _report_progress(callback, generation, ordinal, stage):
+    if callback is not None:
+        callback({"version": 1, "generation": generation, "ordinal": ordinal, "stage": stage})
+
+
+def _advance_finish(store, state, *, on_stage_start=None, on_progress=None):
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
     from tier_diagnostics import event, phase
     generation, identity, created = state["generation"], state["identity"], state["createdAtUtc"]
@@ -405,6 +416,7 @@ def _advance_finish(store, state, *, on_stage_start=None):
     cached = store.get_json(public_path)
     if cached is not None:
         validate_public_tiers(cached)
+        _report_progress(on_progress, generation, 9 + len(FINISH_STAGES) + 2, "public")
         return cached
     general_reference = state["general"]
     general_identity = general_reference["identity"]
@@ -420,6 +432,9 @@ def _advance_finish(store, state, *, on_stage_start=None):
             raise ValueError("The tier generation checkpoint chain is stale or corrupt.")
         reference = saved
     completed_stages = len(state["stages"])
+    _report_progress(on_progress, generation,
+        9 + completed_stages + int("archive" in state),
+        "archive" if "archive" in state else (FINISH_STAGES[completed_stages-1] if completed_stages else "prepared-inputs"))
     if completed_stages < len(FINISH_STAGES):
         stage = FINISH_STAGES[completed_stages]
         if on_stage_start: on_stage_start(stage)
@@ -439,6 +454,7 @@ def _advance_finish(store, state, *, on_stage_start=None):
         state["stages"].append(checkpoint)
         state.pop("activeStage", None)
         store.put_json(state_path, state)
+        _report_progress(on_progress, generation, 9 + completed_stages + 1, stage)
         event("tier_checkpoint_saved", generation=generation, stage=stage,
               artifact_bytes=checkpoint["compressedBytes"], output_hash=checkpoint["payloadSha256"])
         ordinal = 9 + completed_stages + 1
@@ -451,6 +467,7 @@ def _advance_finish(store, state, *, on_stage_start=None):
         state["archive"] = reference
         store.put_json(state_path, state)
         ordinal = 9 + len(FINISH_STAGES) + 1
+        _report_progress(on_progress, generation, ordinal, "archive")
         raise TierAnalysisPending(generation[:16]+"-"+str(ordinal), 8, stage="archive",
                                   generation=generation, progress_ordinal=ordinal)
     state["activeStage"] = "public"
@@ -471,6 +488,7 @@ def _advance_finish(store, state, *, on_stage_start=None):
                       "archivePath": reference["path"], "archiveSha256": reference["payloadSha256"]}
     state.pop("activeStage", None)
     store.put_json(state_path, state)
+    _report_progress(on_progress, generation, 9 + len(FINISH_STAGES) + 2, "public")
     return compact
 
 

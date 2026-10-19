@@ -1017,6 +1017,7 @@ def refresh_player_recommendations(
     player_key: str,
     now: Callable[[], datetime] = utc_now,
     timings: dict[str, float] | None = None,
+    publish: Callable[[Mapping[str, Mapping[str, Any]]], None] | None = None,
 ) -> dict[str, Any]:
     """Synchronize one player's scores and publish a compact recommendation."""
     started = now()
@@ -1102,8 +1103,6 @@ def refresh_player_recommendations(
     }
     if timings is not None:
         timings["mergeMs"] = round((perf_counter() - merge_started) * 1000, 3)
-    store.put_json(recommendation_player_state_path(player_key), refreshed_state)
-
     compute_started = perf_counter()
     response = player_recommendation_response(
         metadata=metadata,
@@ -1124,10 +1123,15 @@ def refresh_player_recommendations(
     if timings is not None:
         timings["computeMs"] = round((perf_counter() - compute_started) * 1000, 3)
     publish_started = perf_counter()
-    store.put_json(
-        recommendation_player_path(player_key),
-        compact_player_recommendation_cache(response),
-    )
+    payloads = {
+        recommendation_player_state_path(player_key): refreshed_state,
+        recommendation_player_path(player_key): compact_player_recommendation_cache(response),
+    }
+    if publish is not None:
+        publish(payloads)
+    else:
+        for pathname, payload in payloads.items():
+            store.put_json(pathname, payload)
     if timings is not None:
         timings["publishMs"] = round((perf_counter() - publish_started) * 1000, 3)
         timings["totalMs"] = round((perf_counter() - total_started) * 1000, 3)

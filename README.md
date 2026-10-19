@@ -884,9 +884,10 @@ when their tabs are opened and are cached by model generation and recommendation
 loads its official-difficulty candidates one selected difficulty at a time. If the upstream request or worker
 fails, the previous cached result remains visible with a warning. This keeps the interactive path
 independent of the hundreds of player score endpoints and the population-wide model fitting.
-Interactive refreshes have a rolling 60-second deduplication window, a 30-second browser and
-server deadline, and a queue concurrency cap of four so independent workers cannot overwhelm the
-score API. Worker logs include queue wait, model load, upstream fetch, merge, compute, publish, and
+Interactive refreshes have a rolling 60-second deduplication window and a queue concurrency cap
+of four so independent workers cannot overwhelm the score API. Status reads do not cancel workers.
+The browser shows a pending message after 30 seconds and stops active polling after five minutes;
+the job continues independently. Worker logs include queue wait, model load, upstream fetch, merge, compute, publish, and
 end-to-end timings for percentile monitoring.
 
 The interactive path is guarded by `PLAYER_RECOMMENDATION_REFRESH_ENABLED`, which defaults to
@@ -944,8 +945,9 @@ The only daily cron in `vercel.json` refreshes Phoenix 2 and rebuilds the global
 ### Cost controls
 
 The global fit runs only once per day. Interactive work runs only when the rollout switch is enabled,
-is deduplicated for 60 seconds per player, stops browser/server waiting after 30 seconds, and is capped
-at four concurrent queue consumers. Failed player tasks return a cached-safe failure instead of
+is deduplicated for 60 seconds per player, and is capped at four concurrent queue consumers.
+The browser shows pending after 30 seconds and stops active polling after five minutes while the
+job continues; status reads do not cancel workers. Failed player tasks return a cached-safe failure instead of
 requesting queue redelivery. Artifacts use compressed numeric surfaces and bounded generation
 retention to limit Supabase Storage and database usage.
 

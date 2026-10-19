@@ -82,7 +82,31 @@ def build_combined_chart_results(*args: Any, **kwargs: Any) -> Any:
     return implementation(*args, **kwargs)
 
 
-def build_combined_tier_payload(*args: Any, **kwargs: Any) -> Any:
+def build_combined_tier_payload(
+    *args: Any, on_tier_progress: Callable[[Mapping[str, Any]], None] | None = None,
+    **kwargs: Any,
+) -> Any:
+    # Keep operational progress plumbing outside scoring_percentile.py: that
+    # module's code identity also keys the expensive, reusable General fit.
+    if on_tier_progress is not None and kwargs.get("source_aware_store") is not None:
+        from production_tiers import build_hosted_tiers
+
+        if not (
+            all(kwargs.get(name) for name in (
+                "hybrid_lower_tiers", "average_pumbility", "midpoint_compression",
+                "cross_level_clearing",
+            )) and kwargs.get("official_scoring_manifest") is not None
+        ):
+            raise ValueError("Source-aware tiers require the enabled hybrid average source policy.")
+        return build_hosted_tiers(
+            *args, store=kwargs["source_aware_store"],
+            generated_at_utc=kwargs.get("generated_at_utc"),
+            on_progress=on_tier_progress,
+            arguments={name: kwargs.get(name) for name in (
+                "official_snapshot", "official_scoring_manifest", "cross_level_clearing",
+                "midpoint_compression", "hybrid_lower_tiers", "average_pumbility",
+            )},
+        )
     from scoring_percentile import build_production_tier_payload as implementation
 
     return implementation(*args, **kwargs)
@@ -972,23 +996,31 @@ def request_refresh(
             last_heartbeat is None
             or effective_now - last_heartbeat > ACTIVE_JOB_STALE_AFTER
         ):
-            update_job(
-                jobs,
-                str(active["id"]),
-                now=effective_now,
-                status="failed",
-                error="The analysis worker stopped reporting progress.",
-                retryAllowedAtUtc=isoformat_utc(effective_now),
-                progress={
-                    "current": 0,
-                    "total": 0,
-                    "percent": 0,
-                    "message": "The stale analysis worker was released for a safe retry.",
-                },
-            )
-            jobs.set_active_job_id(None)
-            active_id = None
-            active = None
+            from pumbility_store import JobLeaseLostError
+
+            try:
+                update_job(
+                    jobs,
+                    str(active["id"]),
+                    now=effective_now,
+                    status="failed",
+                    error="The analysis worker stopped reporting progress.",
+                    retryAllowedAtUtc=isoformat_utc(effective_now),
+                    progress={
+                        "current": 0,
+                        "total": 0,
+                        "percent": 0,
+                        "message": "The stale analysis worker was released for a safe retry.",
+                    },
+                )
+            except JobLeaseLostError:
+                # Payload age cannot revoke a worker's database lease. An
+                # expired lease is reclaimed by queue redelivery instead.
+                active = jobs.get(str(active["id"]))
+            else:
+                jobs.set_active_job_id(None)
+                active_id = None
+                active = None
     if active and active.get("status") in {"queued", "running"}:
         active_mix = resolve_mix(active.get("mix")).key
         if active_mix == mix_spec.key:
@@ -1235,6 +1267,27 @@ def _publication_error_fields(error: BaseException | None) -> dict[str, str]:
         "category": category,
         "sqlstate": sqlstate,
     }
+
+
+def _analysis_terminal_event(
+    job_id: str, jobs: JobStore, blobs: JsonBlobStore, checkpoint_path: str,
+    error: BaseException,
+) -> None:
+    """Report terminal worker failures without raw exceptions or private input data."""
+    try:
+        job = jobs.get(job_id) or {}
+        checkpoint = blobs.get_json(checkpoint_path) or {}
+        stage = str(job.get("stage") or "unknown")
+        phase = str(checkpoint.get("phase") or "none")
+    except Exception:
+        stage, phase = "unknown", "unknown"
+    _PUBLICATION_LOGGER.error(json.dumps({
+        "event": "analysis_terminal_failure",
+        "jobId": re.sub(r"[^A-Za-z0-9_-]", "", job_id)[:120],
+        "stage": re.sub(r"[^A-Za-z0-9_-]", "", stage)[:80],
+        "checkpointPhase": re.sub(r"[^A-Za-z0-9_-]", "", phase)[:80],
+        **_publication_error_fields(error),
+    }, separators=(",", ":"), sort_keys=True))
 
 
 def _publication_event(
@@ -2338,7 +2391,43 @@ def _database_cursor_token(checkpoint: Mapping[str, Any]) -> str:
             dataset=int(cursor.get("dataset") or 0),
             shard=int(cursor.get("shard") or 0),
         )
-    return str(checkpoint.get("phase") or "")
+    phase = str(checkpoint.get("phase") or "")
+    progress = checkpoint.get("tierProgress")
+    if phase == TYPED_CHECKPOINT_ANALYSIS_PHASE and progress is not None:
+        progress = _validated_tier_progress(progress)
+        if progress["ordinal"] > 0:
+            return f"{phase}:{progress['generation']}:{progress['ordinal']}"
+    return phase
+
+
+def _validated_tier_progress(progress: Any) -> dict[str, Any]:
+    from production_tiers import FINISH_STAGES
+
+    if (
+        not isinstance(progress, Mapping)
+        or progress.get("version") != 1
+        or not re.fullmatch(r"[0-9a-f]{64}", str(progress.get("generation") or ""))
+        or type(progress.get("ordinal")) is not int
+        or not 0 <= progress["ordinal"] <= 9 + len(FINISH_STAGES) + 2
+        or progress.get("stage") not in {"general", "target-fit", "prepared-inputs", "archive", "public", *FINISH_STAGES}
+    ):
+        raise ValueError("The typed tier progress checkpoint is invalid.")
+    return dict(progress)
+
+
+def _reconcile_tier_progress(
+    checkpoint: Mapping[str, Any], progress: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Only committed progress from the input-validated hosted pipeline advances the audit."""
+    current = _validated_tier_progress(progress)
+    previous = checkpoint.get("tierProgress")
+    if previous is not None:
+        previous = _validated_tier_progress(previous)
+        if current["generation"] != previous["generation"]:
+            raise ValueError("The typed tier progress belongs to a different generation.")
+        if current["ordinal"] < previous["ordinal"]:
+            raise ValueError("The committed typed tier progress regressed.")
+    return {**checkpoint, "tierProgress": current}
 
 
 def _audit_checkpoint_resume(
@@ -2824,10 +2913,13 @@ def _build_combined_analysis_checkpoint(
     payload: Mapping[str, Any],
     eligible_player_count: int,
     lease_heartbeat: Any | None,
+    on_tier_progress: Callable[[Mapping[str, Any] | None], None] | None = None,
 ) -> dict[str, Any] | None:
     """Build and persist compact combined inputs without fitting the model."""
     frozen_phoenix1 = blob_store.get_json(phoenix1_snapshot_path())
     if frozen_phoenix1 is None:
+        if on_tier_progress is not None:
+            on_tier_progress(None)
         return None
     update_job(
         job_store,
@@ -2854,10 +2946,14 @@ def _build_combined_analysis_checkpoint(
             snapshot,
         )
     )
+    tier_arguments = _official_tier_arguments(blob_store)
+    if on_tier_progress is not None and tier_arguments.get("source_aware_store") is None:
+        on_tier_progress(None)
     combined_tier = build_combined_tier_payload(
         combined_charts, combined_metadata, phoenix1_snapshot, snapshot,
         generated_at_utc=payload.get("generatedAtUtc"),
-        **_official_tier_arguments(blob_store),
+        on_tier_progress=on_tier_progress,
+        **tier_arguments,
     )
     reference = _write_typed_checkpoint_combined(
         blob_store,
@@ -3253,11 +3349,11 @@ def _resume_typed_analysis_checkpoint(
             raw_combined_tier = recovered_combined_tier
             raw_model = recovered_metadata
             recovered_model_checkpoint = True
-    if not recovered_model_checkpoint:
+    if not recovered_model_checkpoint and checkpoint_phase != TYPED_CHECKPOINT_ANALYSIS_PHASE:
         checkpoint = _audit_checkpoint_resume(
             blob_store, checkpoint_path, checkpoint
         )
-    elif yield_after_checkpoint:
+    elif recovered_model_checkpoint and yield_after_checkpoint:
         return _checkpoint_continuation(
             job_store=job_store,
             job_id=job_id,
@@ -3271,6 +3367,19 @@ def _resume_typed_analysis_checkpoint(
         )
 
     if checkpoint_phase == TYPED_CHECKPOINT_ANALYSIS_PHASE:
+        progress_audited = False
+
+        def record_tier_progress(progress: Mapping[str, Any] | None) -> None:
+            nonlocal checkpoint, progress_audited
+            if progress is not None:
+                checkpoint = _reconcile_tier_progress(checkpoint, progress)
+                blob_store.put_json(checkpoint_path, checkpoint)
+            if not progress_audited:
+                # Reconcile committed fits/stages first, including work committed
+                # before a worker died without returning its continuation.
+                checkpoint = _audit_checkpoint_resume(blob_store, checkpoint_path, checkpoint)
+                progress_audited = True
+
         combined_reference = _build_combined_analysis_checkpoint(
             blob_store=blob_store,
             job_store=job_store,
@@ -3281,7 +3390,10 @@ def _resume_typed_analysis_checkpoint(
             payload=payload,
             eligible_player_count=eligible_player_count,
             lease_heartbeat=lease_heartbeat,
+            on_tier_progress=record_tier_progress,
         )
+        if not progress_audited:
+            record_tier_progress(None)
         next_phase = (
             TYPED_CHECKPOINT_COMBINED_PHASE
             if combined_reference is not None
@@ -3971,6 +4083,7 @@ def execute_analysis_job(
 ) -> dict[str, Any]:
     """Run one idempotent, checkpointed refresh in a queue worker."""
     from piu_misgrade_analyzer import AnalysisConfig, ApiError
+    from pumbility_store import JobLeaseHeldError
 
     blob_store = blobs or PrivateBlobStore()
     job_store = jobs or RuntimeJobStore()
@@ -4015,9 +4128,9 @@ def execute_analysis_job(
             job_store,
             job_id,
             status="running",
-            stage="discovering",
+            stage=existing.get("stage") or "discovering",
             error=None,
-            progress={
+            progress=existing.get("progress") if existing.get("startedAtUtc") else {
                 "current": 0,
                 "total": 0,
                 "percent": 0,
@@ -4028,7 +4141,7 @@ def execute_analysis_job(
                 ),
             },
         )
-    except RuntimeError:
+    except JobLeaseHeldError:
         current = job_store.get(job_id)
         if current is not None and current.get("status") == "running":
             # At-least-once delivery may overlap the worker already holding this
@@ -4326,6 +4439,7 @@ def execute_analysis_job(
             continuation="combined", sequence=exc.sequence, stage="analyzing", message=str(exc),
             lease_heartbeat=lease_heartbeat)
     except Exception as exc:
+        _analysis_terminal_event(job_id, job_store, blob_store, checkpoint_path, exc)
         if isinstance(exc, (
             IncompatibleCombinedTierCheckpointError,
             IncompatibleRecommendationCheckpointError,

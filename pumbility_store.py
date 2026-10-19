@@ -77,6 +77,14 @@ READ_POOL_HEALTH_CHECK_INTERVAL_SECONDS = 30.0
 TIER_PUBLICATION_LOCK = "pumbility:tier-publication:inputs"
 
 
+class JobLeaseHeldError(RuntimeError):
+    """Another live worker already owns this delivery's job."""
+
+
+class JobLeaseLostError(RuntimeError):
+    """This worker no longer owns a live, uncancelled job lease."""
+
+
 def _source_revision_path(mix: str) -> str:
     return f"analysis/private/source-revisions/{mix}.json"
 
@@ -2286,9 +2294,9 @@ class PumbilityJobStore:
             )
             current = cursor.fetchone()
             if current is None or current[1] != "running":
-                raise RuntimeError("The Pumbility job is no longer running.")
+                raise JobLeaseLostError("The Pumbility job is no longer running.")
             if str(current[2] or "") != self.lease_owner:
-                raise RuntimeError("The Pumbility job lease is held by another worker.")
+                raise JobLeaseLostError("The Pumbility job lease is held by another worker.")
             progress = current[4] if isinstance(current[4], Mapping) else {}
             cursor.execute(
                 "select pumbility.heartbeat_job(%s, %s, %s, %s, %s)",
@@ -2301,7 +2309,7 @@ class PumbilityJobStore:
                 ),
             )
             if cursor.fetchone()[0] is not True:
-                raise RuntimeError("The Pumbility job lease expired before heartbeat.")
+                raise JobLeaseLostError("The Pumbility job lease expired before heartbeat.")
             cursor.execute(
                 """
                 update pumbility.jobs
@@ -2313,6 +2321,32 @@ class PumbilityJobStore:
 
     def start_lease_heartbeat(self, job_id: str) -> _ContinuousLeaseHeartbeat:
         return _ContinuousLeaseHeartbeat(lambda: self.heartbeat(job_id)).start()
+
+    def publish_player_artifacts(
+        self, job_id: str, payloads: Mapping[str, Mapping[str, Any]]
+    ) -> None:
+        """Publish player state and recommendations under the current job lease."""
+        with _connect(self.database_url) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                _assert_schema(cursor)
+                lease_query = """
+                    select id from pumbility.jobs
+                    where external_key = %s and kind = 'player_recommendation'
+                      and status = 'running' and lease_owner = %s
+                      and lease_expires_at >= clock_timestamp()
+                      and cancellation_requested_at is null
+                    for update
+                """
+                cursor.execute(lease_query, (job_id, self.lease_owner))
+                if cursor.fetchone() is None:
+                    raise JobLeaseLostError("The player publication no longer owns its job.")
+                for pathname, payload in payloads.items():
+                    PumbilityArtifactStore._put_json_row(cursor, pathname, payload)
+                # A transaction can outlive its lease even while holding the row
+                # lock. Roll back both artifacts if expiry occurred during writes.
+                cursor.execute(lease_query, (job_id, self.lease_owner))
+                if cursor.fetchone() is None:
+                    raise JobLeaseLostError("The player publication lease expired during publication.")
 
     def handoff_continuation(
         self, job_id: str, payload: Mapping[str, Any]
@@ -2460,7 +2494,11 @@ class PumbilityJobStore:
                 return value
 
             if requested_status == "running":
-                if current is None or current[1] != "running":
+                if (
+                    current is None
+                    or current[1] != "running"
+                    or str(current[2] or "") != self.lease_owner
+                ):
                     cursor.execute(
                         "select pumbility.claim_job(%s, %s, %s, %s, %s, %s, %s)",
                         (
@@ -2475,12 +2513,10 @@ class PumbilityJobStore:
                     )
                     claim = cursor.fetchone()[0]
                     if not isinstance(claim, Mapping) or not claim.get("claimed"):
-                        raise RuntimeError("The Pumbility job lease is held by another worker.")
+                        raise JobLeaseHeldError("The Pumbility job lease is held by another worker.")
                     job_row = claim.get("job")
                     job_uuid = job_row.get("id") if isinstance(job_row, Mapping) else None
                 else:
-                    if str(current[2] or "") != self.lease_owner:
-                        raise RuntimeError("The Pumbility job lease is held by another worker.")
                     job_uuid = current[0]
                     cursor.execute(
                         "select pumbility.heartbeat_job(%s, %s, %s, %s, %s)",
@@ -2493,7 +2529,7 @@ class PumbilityJobStore:
                         ),
                     )
                     if cursor.fetchone()[0] is not True:
-                        raise RuntimeError("The Pumbility job lease expired before heartbeat.")
+                        raise JobLeaseLostError("The Pumbility job lease expired before heartbeat.")
                 cursor.execute(
                     "update pumbility.jobs set payload = %s, updated_at = coalesce(%s::timestamptz, now()) where id = %s",
                     (Jsonb(value), value.get("updatedAtUtc"), job_uuid),
@@ -2521,16 +2557,28 @@ class PumbilityJobStore:
                         ),
                     )
                     if cursor.fetchone()[0] is not True:
-                        raise RuntimeError("The Pumbility job could not be completed under its lease.")
-                elif requested_status == "failed":
+                        raise JobLeaseLostError("The Pumbility job could not be completed under its lease.")
+                elif requested_status == "failed" and value.get("cancelRequested"):
                     cursor.execute("select pumbility.cancel_job(%s, null)", (job_uuid,))
                 else:
-                    raise RuntimeError("The Pumbility job lease is held by another worker.")
+                    raise JobLeaseLostError("The Pumbility job lease is held by another worker.")
                 cursor.execute(
                     "update pumbility.jobs set payload = %s, stage = %s, updated_at = coalesce(%s::timestamptz, now()) where id = %s",
                     (Jsonb(value), stage, value.get("updatedAtUtc"), job_uuid),
                 )
                 return value
+
+            if (
+                requested_status in {"completed", "failed"}
+                and current is not None
+                and current[1] in {"completed", "failed", "cancelled"}
+                and not (
+                    requested_status == "failed"
+                    and value.get("cancelRequested")
+                    and current[1] in {"failed", "cancelled"}
+                )
+            ):
+                raise JobLeaseLostError("The Pumbility job already has a terminal outcome.")
 
             cursor.execute(
                 """

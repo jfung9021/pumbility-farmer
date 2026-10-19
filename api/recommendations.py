@@ -41,7 +41,6 @@ from worker.constants import PLAYER_QUEUE_NAME
 router = APIRouter()
 PLAYER_LIST_CACHE_CONTROL = "public, max-age=30, s-maxage=30, must-revalidate"
 NO_STORE_CACHE_CONTROL = "no-store"
-PLAYER_JOB_STALE_AFTER = timedelta(seconds=30)
 
 
 def _read_index(*, canary_domain: str | None = None) -> dict | None:
@@ -470,28 +469,6 @@ def get_player_recommendation_refresh(
                 status_code=404,
                 content={"error": "Player refresh job not found or expired."},
                 headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
-            )
-        updated = parse_utc(job.get("updatedAtUtc"))
-        effective_now = utc_now()
-        if (
-            job.get("status") in {"queued", "running"}
-            and updated is not None
-            and effective_now - updated >= PLAYER_JOB_STALE_AFTER
-        ):
-            job = update_job(
-                jobs,
-                normalized_id,
-                now=effective_now,
-                status="failed",
-                stage=str(job.get("stage") or "queued"),
-                retryAllowedAtUtc=isoformat_utc(effective_now),
-                error="The player refresh timed out. Please retry.",
-                progress={
-                    "current": 0,
-                    "total": 1,
-                    "percent": 0,
-                    "message": "The player refresh timed out; cached recommendations remain available.",
-                },
             )
         return JSONResponse(
             content=job,
