@@ -375,38 +375,40 @@ def build_percentile_tier_payload(
         if len(values) >= MINIMUM_REFERENCE_PLAYERS:
             reference_folders[row['type']].setdefault(row['level'], []).append(profile)
     curves = {mode: fit_profile_curve(reference_folders[mode]) for mode in ('Single', 'Double')}
-    for row in scoring_rows:
-        cid, level = row['chartId'], row['level']
-        values = samples[cid]
-        profile, curve = row['scoringScoreProfile'], curves[row['type']]
-        midpoint = level + .5
-        estimate = error = None
-        if profile is not None and curve is not None:
-            matched, errors = match_profiles([profile], curve)
-            estimate, error = float(matched[0]), float(errors[0])
-        low, high = profile_difficulty_interval(values, cid, curve, cache_store=cache_store)
-        for field in ('scoringPercentileScore', 'scoringFolderReferenceScore',
-                      'scoringPercentileCi95Low', 'scoringPercentileCi95High'):
-            row.pop(field, None)
-        row.update({
-            'scoringProfileMatchDifficulty': estimate,
-            'scoringProfileMatchCi95Low': low, 'scoringProfileMatchCi95High': high,
-            'scoringProfileRmse': error,
-            'scoringProfileExtrapolated': bool(estimate is not None and
-                (estimate < curve['difficulties'][0] or estimate > curve['difficulties'][-1])),
-            'estimatedDifficulty': estimate, 'averageDifficulty': midpoint,
-            'difficultyDelta': estimate - midpoint if estimate is not None else None,
-            'difficultyCi95Low': low, 'difficultyCi95High': high,
-            'difficultyDeltaCi95Low': low - midpoint if low is not None else None,
-            'difficultyDeltaCi95High': high - midpoint if high is not None else None,
-            'nContributors': len(values), 'nPlayersScored': len(values),
-            'phoenix1Contributors': sources[cid]['phoenix1'], 'phoenix2Contributors': sources[cid]['phoenix2'],
-            'evidenceStatus': ('Unrated' if estimate is None else 'Published' if len(values) >= 10
-                               else 'Provisional' if len(values) >= 5 else 'Insufficient'),
-            'folderRangeCompression': 1.0, 'folderMeasuredCharts': len(folders[(row['type'], level)]),
-            'pumbilityPerLevel': None,
-            'whatIfEstimates': [],  # No hypothetical reassessment in this experiment.
-        })
+    from score_profile_cache import ScoreProfileCache
+    with ScoreProfileCache(cache_store) as profile_cache:
+        for row in profile_cache.ordered_rows(scoring_rows):
+            cid, level = row['chartId'], row['level']
+            values = samples[cid]
+            profile, curve = row['scoringScoreProfile'], curves[row['type']]
+            midpoint = level + .5
+            estimate = error = None
+            if profile is not None and curve is not None:
+                matched, errors = match_profiles([profile], curve)
+                estimate, error = float(matched[0]), float(errors[0])
+            low, high = profile_difficulty_interval(values, cid, curve, cache_store=profile_cache if cache_store is not None else None)
+            for field in ('scoringPercentileScore', 'scoringFolderReferenceScore',
+                          'scoringPercentileCi95Low', 'scoringPercentileCi95High'):
+                row.pop(field, None)
+            row.update({
+                'scoringProfileMatchDifficulty': estimate,
+                'scoringProfileMatchCi95Low': low, 'scoringProfileMatchCi95High': high,
+                'scoringProfileRmse': error,
+                'scoringProfileExtrapolated': bool(estimate is not None and
+                    (estimate < curve['difficulties'][0] or estimate > curve['difficulties'][-1])),
+                'estimatedDifficulty': estimate, 'averageDifficulty': midpoint,
+                'difficultyDelta': estimate - midpoint if estimate is not None else None,
+                'difficultyCi95Low': low, 'difficultyCi95High': high,
+                'difficultyDeltaCi95Low': low - midpoint if low is not None else None,
+                'difficultyDeltaCi95High': high - midpoint if high is not None else None,
+                'nContributors': len(values), 'nPlayersScored': len(values),
+                'phoenix1Contributors': sources[cid]['phoenix1'], 'phoenix2Contributors': sources[cid]['phoenix2'],
+                'evidenceStatus': ('Unrated' if estimate is None else 'Published' if len(values) >= 10
+                                   else 'Provisional' if len(values) >= 5 else 'Insufficient'),
+                'folderRangeCompression': 1.0, 'folderMeasuredCharts': len(folders[(row['type'], level)]),
+                'pumbilityPerLevel': None,
+                'whatIfEstimates': [],  # No hypothetical reassessment in this experiment.
+            })
     matched_folders = defaultdict(list)
     rated = [row for row in scoring_rows if row['scoringProfileMatchDifficulty'] is not None]
     for row in rated:
