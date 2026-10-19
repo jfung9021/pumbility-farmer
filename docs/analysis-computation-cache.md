@@ -23,6 +23,41 @@ components are rebuilt from current inputs. Corrupt pinned recovery checkpoints,
 changed source revisions, or incompatible publication inputs still refuse to
 advance. Visible publication pointers continue through the existing fenced join.
 
+### General profile cache storage and recovery
+
+General confidence profiles use version 2 private PostgreSQL JSONB shards rather
+than one Supabase Storage upload per chart. A stable chart hash selects one of
+64 shards; each chart retains its own exact score/recipe identity. Each entry
+contains compressed NumPy bytes with a checksum, so JSONB numeric normalization
+cannot change the cached vectors. The independent confidence-interval loop
+groups work by shard while preserving the published chart order and subsequent
+calibration order. A General build reads each touched shard once and atomically
+writes it at most once, only when it changed. Unchanged siblings can still be
+reused when one chart's inputs change.
+
+Only one shard is retained in memory at a time. Shards are capped at 128 entries
+and 4 MiB, with a 128 KiB compressed-profile limit. Entries exceeding the cache
+bounds are computed normally. Version 1 per-chart cache objects are not adopted;
+they remain private and may be removed by a separately scoped cleanup.
+
+A cache connection, timeout, or HTTP failure opens a circuit for that General
+build. Already computed profiles remain usable, and subsequent charts compute
+in memory without further optional-cache I/O. Invalid cached data is a miss;
+programming errors and required checkpoint/publication failures still raise.
+The 1,000 samples, chart seed, quantile method, projection batches, and scoring
+formulas are unchanged. Each build emits aggregate hit/miss/bypass, read/write
+count and duration, byte, and failure-class diagnostics without chart/player
+identities, raw scores, credentials, or exception messages.
+
+Required Supabase binary operations reuse a separate HTTP session per thread.
+They retain checksum validation and upload-before-metadata ordering. Known
+transient connection failures and selected retryable HTTP statuses receive at
+most three attempts within the configured socket-timeout budget, with short
+backoff. Certificate errors, unknown TLS failures, and authorization/policy
+responses are not retried. Exhausted required operations still fail. Requests'
+socket timeout is not a hard end-to-end transfer deadline. Retry/failure events
+include sanitized TLS categories; ordinary first-attempt success stays quiet.
+
 ## Execution and timestamps
 
 The global tier continuation pins combined preparation once and resumes the

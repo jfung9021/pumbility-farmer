@@ -20,6 +20,9 @@ _FIELDS = frozenset({
     "duration_ms", "artifact_bytes", "schema_version", "exception_class",
     "source_hash", "output_hash", "rss_bytes", "peak_rss_bytes", "status_code",
     "attempt", "checkpoint", "cache_hit", "completed_fits", "stack",
+    "tls_category", "cache_reads", "cache_writes", "cache_hits", "cache_misses",
+    "cache_bypassed", "cache_failures", "cache_corruptions", "cache_shards", "read_duration_ms",
+    "write_duration_ms",
 })
 
 

@@ -7,6 +7,22 @@ from tier_diagnostics import event, phase, report_exception
 
 
 class TierDiagnosticsTests(unittest.TestCase):
+    def test_cache_transport_metrics_exclude_private_context(self):
+        with self.assertLogs("tier_publication", level="WARNING") as logs:
+            record = event("score_profile_cache", cache_reads=2, cache_writes=1,
+                           cache_hits=12, cache_misses=3, cache_bypassed=4,
+                           cache_failures=1, cache_shards=2,
+                           read_duration_ms=1.5, write_duration_ms=2.5,
+                           tls_category="eof", exception_class="SSLError",
+                           url="private-url", headers="private-token",
+                           chart_id="private-chart", payload="private-scores")
+        self.assertEqual(record["cache_hits"], 12)
+        self.assertEqual(record["tls_category"], "eof")
+        self.assertEqual(record["read_duration_ms"], 1.5)
+        self.assertNotIn("private", "".join(logs.output))
+        for key in ("url", "headers", "chart_id", "payload"):
+            self.assertNotIn(key, record)
+
     def test_http_status_is_recorded_without_response_body_or_url(self):
         error = RuntimeError("private response")
         error.response = SimpleNamespace(status_code=413, text="private data", url="private URL")

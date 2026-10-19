@@ -23,6 +23,8 @@ from urllib.parse import quote, urlparse
 
 import requests
 
+from private_storage_transport import PrivateStorageTransport
+
 
 BACKEND_ENV = "PUMBILITY_DATA_BACKEND"
 DATABASE_URL_ENV = "PUMBILITY_DATABASE_URL"
@@ -692,6 +694,7 @@ class PumbilityArtifactStore:
             bucket if bucket is not None else os.getenv(STORAGE_BUCKET_ENV, DEFAULT_BUCKET)
         ).strip() or DEFAULT_BUCKET
         self.timeout_seconds = timeout_seconds
+        self._binary_transport = PrivateStorageTransport()
 
     def _storage_headers(self, *, content_type: str | None = None) -> dict[str, str]:
         if not self.supabase_url or not self.service_key:
@@ -1954,8 +1957,8 @@ class PumbilityArtifactStore:
         )
         fetch_started = _read_phase_started()
         try:
-            response = requests.get(
-                url, headers=self._storage_headers(), timeout=self.timeout_seconds
+            response = self._binary_transport.request(
+                "GET", url, headers=self._storage_headers(), timeout=self.timeout_seconds
             )
             if response.status_code == 404:
                 raise ValueError(
@@ -1982,8 +1985,8 @@ class PumbilityArtifactStore:
         )
         headers = self._storage_headers(content_type=content_type)
         headers["x-upsert"] = "true"
-        response = requests.post(
-            url, headers=headers, data=payload, timeout=self.timeout_seconds
+        response = self._binary_transport.request(
+            "POST", url, headers=headers, data=payload, timeout=self.timeout_seconds
         )
         response.raise_for_status()
         digest = hashlib.sha256(payload).hexdigest()
