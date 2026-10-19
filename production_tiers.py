@@ -38,9 +38,13 @@ def digest(value: Any) -> str:
 
 
 def model_code_identity() -> str:
+    from importlib import metadata as packages
+    import sys
     root = Path(__file__).resolve().parent
-    return digest({name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-        for name in ("sss_scoring_model.py", "official_player_scoring.py", "scoring_targets.py")})
+    return digest({"sources": {name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+        for name in ("sss_scoring_model.py", "official_player_scoring.py", "scoring_targets.py", "target_fit_cache.py")},
+        "libraries": {name: packages.version(name) for name in ("numpy", "scipy", "pandas")},
+        "python": list(sys.version_info[:3])})
 
 
 FINISH_STAGES = ("centered-sss", "sssplus", "median", "spread", "combined-clearing",
@@ -51,7 +55,8 @@ GENERAL_FILES = ("scoring_percentile.py", "official_cross_level_scoring.py", "of
                  "hybrid_tiers.py", "pumbility_average.py", "tier_postprocessing.py", "tier_difficulty.py",
                  "piu_recommendations.py", "piu_misgrade_analyzer.py", "player_skill_ratings.py",
                  "phoenix1_score_overrides.py", "official_score_merge.py", "official_scoring_sources.py",
-                 "official_cross_level_calibration.py", "chart_source_exclusions.py", "pumbility_contract.py")
+                 "official_cross_level_calibration.py", "chart_source_exclusions.py", "pumbility_contract.py",
+                 "score_profile_cache.py", "tier_computation_cache.py")
 STAGE_FILES = {
     "centered-sss": ("sss_scoring.py", "refined_tiers.py", "sss_scoring_refinement.py", "sss_folder_centering.py"),
     "sssplus": ("sssplus_tiers.py", "sss_scoring_refinement.py", "target_tail_policy.py"),
@@ -71,7 +76,9 @@ LEGACY_GENERAL_CODE_IDENTITY = "cba011919588bcfff6db2a8db79878db23359896d6ed4020
 
 def stage_code_identity(stage):
     root = Path(__file__).resolve().parent
-    names = set(STAGE_FILES.get(stage, GENERAL_FILES)) | {"production_tiers.py", "canonical_json.py"}
+    names = set(STAGE_FILES.get(stage, GENERAL_FILES)) | {
+        "production_tiers.py", "canonical_json.py", "tier_computation_cache.py",
+        "tier_pipeline_checkpoints.py"}
     # Include every numeric dependency even when a helper is shared across stages.
     names |= set(GENERAL_FILES) | {n for values in STAGE_FILES.values() for n in values}
     return digest({name: hashlib.sha256((root/name).read_bytes()).hexdigest()
@@ -161,7 +168,8 @@ def _public_copy(value):
     return value
 
 
-def public_tiers(full, *, private_path, input_identity, full_sha256=None):
+def public_tiers(full, *, private_path, input_identity, full_sha256=None, component_provenance=None,
+                 computation_identity=None):
     """Retain all active values/explanations; rollback history is a private artifact."""
     from source_aware_tiers import validate_source_aware_tiers
     if full.get("schemaVersion") == 57:
@@ -175,6 +183,12 @@ def public_tiers(full, *, private_path, input_identity, full_sha256=None):
     publication = {"version": 1, "method": version, "fullArtifactPath": private_path,
         "fullArtifactSha256": full_sha256 or digest(full), "inputs": input_identity, "historyStorage": "private",
         "scoreFetches": 0, "recommendationFits": 0}
+    if component_provenance:
+        publication["componentComputations"] = component_provenance
+    if computation_identity is not None:
+        publication.update(computedAtUtc=full.get("generatedAtUtc"), computedInputs=input_identity,
+                           computedGeneration=digest(input_identity),
+                           computationIdentity=digest(computation_identity), reusedComputation=False)
     result["summary"]["method"]["productionTierPublication"] = publication
     publication["publicPayloadSha256"] = public_digest(result)
     validate_public_tiers(result)
@@ -302,6 +316,9 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
     from sss_scoring_model import fit_target_model
     from official_scoring_sources import canonical_scoring_manifest_sha256
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
+    from tier_computation_cache import input_identity, read_index, write_index, TierComputationCacheError
+    from tier_pipeline_checkpoints import CheckpointValidationError
+    from pumbility_store import PumbilityArtifactIntegrityError
     from tier_diagnostics import event, phase
     manifest = arguments["official_scoring_manifest"]
     context = load_context(first, second, manifest, records)
@@ -311,6 +328,10 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
         "catalog": digest(catalog), "officialManifest": canonical_scoring_manifest_sha256(manifest),
         "sourcePolicy": policy.semantic_hash(), "modelCode": model_code_identity(),
         "generationTimestamp": generated_at_utc, "pipelineCode": pipeline_code_identity()}
+    general_arguments = {key: value for key, value in arguments.items()
+                         if key != "official_scoring_manifest"}
+    if general_arguments:
+        identity["generalArguments"] = digest(general_arguments)
     generation = digest(identity)
     generation_prefix = PREFIX + "generations/" + generation + "/"
     public_path = generation_prefix + "public.json"
@@ -331,10 +352,72 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
             raise ValueError("The tier generation is bound to different pinned inputs.")
         state["pinnedInputsSha256"] = input_reference_sha256
     created = state["createdAtUtc"]
+    semantic_inputs = input_identity(first, second, records=records, metadata=metadata,
+        catalog=catalog, manifest_sha256=identity["officialManifest"],
+        policy=policy.public(), model_code=identity["modelCode"])
+    if "generalArguments" in identity:
+        semantic_inputs["generalArguments"] = identity["generalArguments"]
+    computation_identity = {**semantic_inputs, "pipelineCode": identity["pipelineCode"],
+                            "targetSamples": SAMPLES, "targetSeed": SEED}
+    state["computationIdentity"] = computation_identity
+    if state.get("computationGeneration"):
+        return _advance_finish(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
+    try:
+        saved = read_index(store, "pipeline", computation_identity)
+        original = (_optional_computation(store, saved.get("generation"), computation_identity)
+                    if saved is not None and saved.get("generation") != generation else None)
+    except (TierComputationCacheError, CheckpointValidationError, PumbilityArtifactIntegrityError,
+            json.JSONDecodeError):
+        # Optional cross-run reuse is an optimization. Never hide storage/network
+        # failures or failures from a pinned in-progress computation.
+        original = None
+    if original is not None:
+        if original.get("phaseInputs"):
+            # Borrow the original immutable computation, including its timestamps
+            # and audit hashes. Only the enclosing run/publication is new.
+            state["computationGeneration"] = original["generation"]
+            state["computationCreatedAtUtc"] = original["createdAtUtc"]
+            store.put_json(state_path, state)
+            return _advance_finish(store, state, on_stage_start=on_stage_start, on_progress=on_progress,
+                                   verified_computation=original)
     general_identity = digest({key: value for key, value in identity.items()
         if key not in {"version", "generationTimestamp", "pipelineCode"}} | {
             "generalCode": general_code_identity(), "records": digest(records), "metadata": digest(metadata)})
-    general_reference = state.get("general") or store.get_json(PREFIX + "general/" + general_identity + ".json")
+    general_reference = state.get("general")
+    general_computation_identity = {**semantic_inputs, "generalCode": general_code_identity()}
+    general_cached = None
+    if general_reference is None:
+        try:
+            general_cached = read_index(store, "general", general_computation_identity)
+            if general_cached is not None:
+                reference = general_cached.get("reference")
+                if (not isinstance(reference, dict) or reference.get("stage") != "general"
+                        or reference.get("schemaVersion") != 48
+                        or not isinstance(general_cached.get("provenance"), dict)):
+                    raise TierComputationCacheError("The cached General checkpoint is incompatible.")
+                read_checkpoint(store, reference, stage="general", identity=reference.get("identity"))
+        except (TierComputationCacheError, CheckpointValidationError):
+            general_cached = None
+    if general_reference is None and general_cached is not None:
+        general_reference = general_cached.get("reference")
+        if not isinstance(general_reference, dict) or general_reference.get("stage") != "general":
+            raise ValueError("The cached General checkpoint is incompatible.")
+        state.setdefault("componentComputations", {})["general"] = general_cached["provenance"]
+    if general_reference is None:
+        legacy_reference = store.get_json(PREFIX + "general/" + general_identity + ".json")
+        if legacy_reference is not None:
+            try:
+                if (not isinstance(legacy_reference, dict) or legacy_reference.get("stage") != "general"
+                        or legacy_reference.get("schemaVersion") != 48):
+                    raise TierComputationCacheError("The cached General checkpoint is incompatible.")
+                legacy_general = read_checkpoint(store, legacy_reference, stage="general",
+                                                 identity=legacy_reference.get("identity"))
+                general_reference = legacy_reference
+                state.setdefault("componentComputations", {})["general"] = {
+                    "computedAtUtc": legacy_general.get("generatedAtUtc"),
+                    "checkpointSha256": legacy_reference["payloadSha256"], "legacy": True}
+            except (TierComputationCacheError, CheckpointValidationError):
+                pass
     if general_reference is None:
         _report_progress(on_progress, generation, 0, "general")
         if on_stage_start: on_stage_start("general")
@@ -351,9 +434,17 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
         if general is None:
             with phase("general", generation=generation):
                 general = build_production_tier_payload(records, metadata, p1, p2,
-                    generated_at_utc=created, source_exclusions=policy, **arguments)
+                    generated_at_utc=created, source_exclusions=policy, cache_store=store, **arguments)
+            provenance = {"computedAtUtc": general.get("generatedAtUtc", created),
+                          "inputs": identity}
+        else:
+            provenance = {"computedAtUtc": general.get("generatedAtUtc"), "legacy": True}
         general_reference = write_checkpoint(store, general, stage="general", identity=general_identity)
         store.put_json(PREFIX + "general/" + general_identity + ".json", general_reference)
+        provenance["checkpointSha256"] = general_reference["payloadSha256"]
+        state.setdefault("componentComputations", {})["general"] = provenance
+        write_index(store, "general", general_computation_identity,
+                    reference=general_reference, provenance=provenance)
         del general
     state["general"] = general_reference
     store.put_json(state_path, state)
@@ -368,7 +459,8 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
                 if cached_fit is None:
                     _report_progress(on_progress, generation, completed, "target-fit")
                     if on_stage_start: on_stage_start(f"target-fit-{goal}-{source}-{mode.lower()}")
-                    fit = fit_target_model(boards, score_target=fit_identity["target"], bootstrap_samples=SAMPLES,
+                    from target_fit_cache import load_or_fit_target
+                    fit = load_or_fit_target(store, boards, score_target=fit_identity["target"], bootstrap_samples=SAMPLES,
                         seed=SEED, source_boards=sources,
                         general_predictor=training_predictor(fit_identity["target"]) if source == "official" else None)
                     if source == "official":
@@ -396,6 +488,7 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
             state["fitReferences"] = [{**item, "path": fit_path(item["identity"]),
                 "fitSha256": digest(fits[item["goal"]][item["source"]][item["mode"]])} for item in identities]
             store.put_json(state_path, state)
+            write_index(store, "pipeline", computation_identity, generation=generation)
         _report_progress(on_progress, generation, 9, "prepared-inputs")
         raise TierAnalysisPending(generation[:16]+"-9", 8, stage="prepared-inputs",
                                   generation=generation, progress_ordinal=9)
@@ -407,7 +500,129 @@ def _report_progress(callback, generation, ordinal, stage):
         callback({"version": 1, "generation": generation, "ordinal": ordinal, "stage": stage})
 
 
-def _advance_finish(store, state, *, on_stage_start=None, on_progress=None):
+def _captured_computation(store, generation, expected_identity=None):
+    from tier_computation_cache import TierComputationCacheError
+    if (not isinstance(generation, str) or len(generation) != 64
+            or any(character not in "0123456789abcdef" for character in generation)):
+        raise TierComputationCacheError("The tier computation generation reference is invalid.")
+    state = store.get_json(PREFIX + "generations/" + generation + "/state.json")
+    if (not isinstance(state, dict) or state.get("version") != 1
+            or state.get("generation") != generation
+            or not isinstance(state.get("identity"), dict)
+            or digest(state["identity"]) != generation
+            or state["identity"].get("pipelineCode") != pipeline_code_identity()
+            or not isinstance(state.get("createdAtUtc"), str)
+            or (expected_identity is not None and
+                (state.get("computationIdentity") != expected_identity
+                 or state.get("computationGeneration")))):
+        raise TierComputationCacheError("The captured tier computation has incompatible inputs or code.")
+    if not state.get("computationGeneration"):
+        _validate_stage_chain(state)
+    return state
+
+
+def _validate_stage_chain(state):
+    from tier_computation_cache import TierComputationCacheError
+    reference = state.get("general")
+    stages = state.get("stages")
+    if (not isinstance(reference, dict) or reference.get("stage") != "general"
+            or not isinstance(reference.get("payloadSha256"), str)
+            or not isinstance(stages, list) or len(stages) > len(FINISH_STAGES)):
+        raise TierComputationCacheError("The tier generation checkpoint chain is stale or corrupt.")
+    for index, saved in enumerate(stages):
+        stage = FINISH_STAGES[index]
+        expected = _stage_identity(state["generation"], stage, reference["payloadSha256"], state["createdAtUtc"])
+        if (not isinstance(saved, dict) or saved.get("stage") != stage
+                or saved.get("identity") != expected
+                or saved.get("predecessorSha256") != reference["payloadSha256"]
+                or saved.get("schemaVersion") != STAGE_SCHEMAS[stage]):
+            raise TierComputationCacheError("The tier generation checkpoint chain is stale or corrupt.")
+        reference = saved
+
+
+def resume_tier_generation(store, generation, *, generated_at_utc, on_progress=None,
+                           on_stage_start=None):
+    """Resume a pinned generation before reconstructing any raw source context."""
+    state = _captured_computation(store, generation)
+    if (state["createdAtUtc"] != generated_at_utc
+            or not (state.get("phaseInputs") or state.get("computationGeneration"))):
+        raise ValueError("The pinned tier generation has incompatible time or phase inputs.")
+    return _advance_finish(store, state, on_progress=on_progress, on_stage_start=on_stage_start)
+
+
+def _optional_computation(store, generation, identity):
+    from tier_computation_cache import TierComputationCacheError
+    from tier_pipeline_checkpoints import verified_checkpoint_bytes
+    original = _captured_computation(store, generation, identity)
+    if not original.get("phaseInputs"):
+        return None
+    reference = original["stages"][-1] if original["stages"] else original["general"]
+    verified_checkpoint_bytes(store, reference, stage=reference["stage"], identity=reference["identity"])
+    if original.get("ready"):
+        public = store.get_json(PREFIX + "generations/" + generation + "/public.json")
+        try:
+            validate_public_tiers(public)
+            publication = public["summary"]["method"]["productionTierPublication"]
+            if (len(original["stages"]) != len(FINISH_STAGES)
+                    or publication["inputs"] != original["identity"]
+                    or digest(public) != original["ready"]["payloadSha256"]
+                    or publication["fullArtifactPath"] != reference["path"]
+                    or publication["fullArtifactSha256"] != reference["payloadSha256"]):
+                raise ValueError("Publication reference differs.")
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            raise TierComputationCacheError("The cached tier publication is incompatible.") from error
+    return original
+
+
+def _advance_reused_computation(store, state, *, on_stage_start=None, on_progress=None,
+                               verified_computation=None):
+    from tier_pipeline_checkpoints import verified_checkpoint_bytes
+    original = verified_computation or _captured_computation(
+        store, state["computationGeneration"], state["computationIdentity"])
+    verified_reference = (original["stages"][-1]["blobSha256"]
+                          if verified_computation and original["stages"] else None)
+    if original["createdAtUtc"] != state.get("computationCreatedAtUtc"):
+        raise ValueError("The reused tier computation time differs.")
+
+    def progress(value):
+        _report_progress(on_progress, state["generation"], value["ordinal"], value["stage"])
+
+    try:
+        computed = _advance_finish(store, original, on_stage_start=on_stage_start, on_progress=progress)
+    except TierAnalysisPending as pending:
+        raise TierAnalysisPending(state["generation"][:16] + "-" + str(pending.progress_ordinal),
+            pending.completed, stage=pending.stage, generation=state["generation"],
+            progress_ordinal=pending.progress_ordinal) from None
+    original = _captured_computation(store, original["generation"], state["computationIdentity"])
+    publication = computed["summary"]["method"]["productionTierPublication"]
+    if (publication["inputs"] != original["identity"]
+            or (original.get("ready") and digest(computed) != original["ready"]["payloadSha256"])):
+        raise ValueError("The reused tier publication differs from its computed generation.")
+    # The transition-validated canonical content is unchanged if its compressed
+    # bytes match. Verify those bytes without replaying or inflating the full tree.
+    reference = original["stages"][-1]
+    if reference["blobSha256"] != verified_reference:
+        verified_checkpoint_bytes(store, reference, stage="submitted-calibration", identity=reference["identity"])
+    compact = {**computed, "generatedAtUtc": state["createdAtUtc"],
+               "summary": {**computed["summary"], "generatedAtUtc": state["createdAtUtc"],
+                           "method": dict(computed["summary"]["method"])}}
+    run_publication = {**publication, "inputs": state["identity"],
+        "computedAtUtc": computed["generatedAtUtc"], "computedInputs": original["identity"],
+        "computedGeneration": original["generation"],
+        "computationIdentity": digest(state["computationIdentity"]), "reusedComputation": True}
+    compact["summary"]["method"]["productionTierPublication"] = run_publication
+    run_publication["publicPayloadSha256"] = public_digest(compact)
+    validate_public_tiers(compact)
+    public_path = PREFIX + "generations/" + state["generation"] + "/public.json"
+    store.put_json(public_path, compact)
+    state["ready"] = {"path": public_path, "payloadSha256": digest(compact),
+        "archivePath": publication["fullArtifactPath"], "archiveSha256": publication["fullArtifactSha256"]}
+    store.put_json(PREFIX + "generations/" + state["generation"] + "/state.json", state)
+    _report_progress(on_progress, state["generation"], 9 + len(FINISH_STAGES) + 2, "public")
+    return compact
+
+
+def _advance_finish(store, state, *, on_stage_start=None, on_progress=None, verified_computation=None):
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
     from tier_diagnostics import event, phase
     generation, identity, created = state["generation"], state["identity"], state["createdAtUtc"]
@@ -418,6 +633,9 @@ def _advance_finish(store, state, *, on_stage_start=None, on_progress=None):
         validate_public_tiers(cached)
         _report_progress(on_progress, generation, 9 + len(FINISH_STAGES) + 2, "public")
         return cached
+    if state.get("computationGeneration"):
+        return _advance_reused_computation(store, state, on_stage_start=on_stage_start,
+                                          on_progress=on_progress, verified_computation=verified_computation)
     general_reference = state["general"]
     general_identity = general_reference["identity"]
     reference = general_reference
@@ -476,12 +694,13 @@ def _advance_finish(store, state, *, on_stage_start=None, on_progress=None):
     with phase("public", generation=generation):
         full = read_checkpoint(store, reference, stage="submitted-calibration", identity=reference["identity"])
         public = public_tiers(full, private_path=reference["path"], input_identity=identity,
-                              full_sha256=reference["payloadSha256"])
+                              full_sha256=reference["payloadSha256"],
+                              component_provenance=state.get("componentComputations"),
+                              computation_identity=state.get("computationIdentity"))
         from tier_public import prepare_tier_publication, validate_tier_publication
         compact, details = prepare_tier_publication(public, generation)
         validate_tier_publication(public, compact)
-        for path, artifact in details.items():
-            store.put_json(path, artifact)
+        _write_detail_shards(store, details)
         validate_public_tiers(compact)
         store.put_json(public_path, compact)
     state["ready"] = {"path": public_path, "payloadSha256": digest(compact),
@@ -490,6 +709,17 @@ def _advance_finish(store, state, *, on_stage_start=None, on_progress=None):
     store.put_json(state_path, state)
     _report_progress(on_progress, generation, 9 + len(FINISH_STAGES) + 2, "public")
     return compact
+
+
+def _write_detail_shards(store, details):
+    """Join bounded immutable writes before the public generation commit marker."""
+    if not details:
+        return
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=min(4, len(details)), thread_name_prefix="tier-details") as executor:
+        pending = [executor.submit(store.put_json, path, artifact) for path, artifact in details.items()]
+        for future in as_completed(pending):
+            future.result()
 
 
 def _stage_identity(generation, stage, predecessor, created):
@@ -540,6 +770,10 @@ def _load_phase_inputs(store, state, stage):
                 or digest(cached.get("fit")) != item["fitSha256"]):
             raise ValueError("A captured target fit changed during tier publication.")
         validate_fit(cached["fit"], item["identity"])
+        if prepared:
+            from target_fit_cache import hydrate_point_context
+            boards, _, _ = cohort(prepared, item["goal"], item["source"], item["mode"])
+            hydrate_point_context(store, boards, cached["fit"], score_target=item["identity"]["target"])
         fits.setdefault(item["goal"], {}).setdefault(item["source"], {})[item["mode"]] = cached["fit"]
     policy = SimpleNamespace(public=lambda: provenance["policy"])
     return (None, None, None, policy, merged, prepared), fits, identities
@@ -566,7 +800,7 @@ def advance_tier_publication(store, state, *, on_stage_start=None):
                 or captured.get("createdAtUtc") != created
                 or captured.get("pinnedInputsSha256") != state["inputs"]["payloadSha256"]):
             raise ValueError("The pinned tier generation has incompatible code, time or inputs.")
-        if captured.get("phaseInputs"):
+        if captured.get("phaseInputs") or captured.get("computationGeneration"):
             try:
                 candidate = _advance_finish(store, captured, on_stage_start=on_stage_start)
             except TierAnalysisPending as pending:

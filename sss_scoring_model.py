@@ -173,12 +173,50 @@ def _calibration_bins(outcome: np.ndarray, probability: np.ndarray) -> list[dict
     return bins
 
 
+def _general_validation(validation: dict[str, Any], data: Mapping[str, Any],
+                        boards: Mapping[str, Mapping[str, float]], heldout: np.ndarray,
+                        probability: np.ndarray, baseline: np.ndarray, *,
+                        general_predictor=None, general_predictions=None) -> None:
+    """Refresh raw-score diagnostics without repeating binary target fitting."""
+    y = data["y"]
+    entries = [(data["records"][i][0], data["records"][i][1]) for i in np.flatnonzero(heldout)]
+    if general_predictor is not None:
+        training_boards: dict[str, dict[str, float]] = {cid: {} for cid in data["mainCharts"]}
+        for index in np.flatnonzero(~heldout):
+            cid, player, _ = data["records"][index]
+            training_boards[cid][player] = boards[cid][player]
+        predicted = general_predictor(training_boards, entries)
+        if isinstance(predicted, Mapping):
+            predicted = [predicted.get((cid, player)) for cid, player in entries]
+        values = np.asarray([np.nan if value is None else value for value in predicted], dtype=float)
+        if len(values) != len(entries):
+            raise ValueError("General holdout predictor returned the wrong number of entries.")
+        finite = np.isfinite(values) & (values >= 0) & (values <= 1)
+        if np.any(finite):
+            validation["generalTargetBenchmark"] = {**_losses(y[heldout][finite], values[finite]),
+                "records": int(np.sum(finite)), "trainingOnly": True,
+                "targetModelSameRecords": _losses(y[heldout][finite], probability[finite]),
+                "chartRateSameRecords": _losses(y[heldout][finite], baseline[finite])}
+            validation["generalTargetBenchmarkReason"] = None
+        else:
+            validation["generalTargetBenchmarkReason"] = "General training-only fit supplied no usable predictions."
+    if general_predictions is not None:
+        values = np.asarray([general_predictions.get(cid, {}).get(player, np.nan)
+            if isinstance(general_predictions.get(cid), Mapping) else general_predictions.get(cid, np.nan)
+            for cid, player in entries], dtype=float)
+        finite = np.isfinite(values) & (values >= 0) & (values <= 1)
+        validation["externalGeneralPredictionDiagnostic"] = {
+            **(_losses(y[heldout][finite], values[finite]) if np.any(finite) else {}),
+            "records": int(np.sum(finite)), "trainingOnly": False}
+
+
 def fit_target_model(boards: Mapping[str, Mapping[str, float]], *, score_target: int = 990000,
                      bootstrap_samples: int = DEFAULT_BOOTSTRAP_SAMPLES, seed: int = 20261017,
                      regularization_grid: Sequence[float] = REGULARIZATION_GRID,
                      general_predictions: Mapping[str, Any] | None = None,
                      general_predictor: Callable[[dict, list[tuple[str, str]]], Any] | None = None,
-                     source_boards: Mapping[str, Mapping[str, Mapping[str, float]]] | None = None) -> dict[str, Any]:
+                     source_boards: Mapping[str, Mapping[str, Mapping[str, float]]] | None = None,
+                     _private_context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Fit an observed-best target model; returned diagnostics contain no player IDs.
 
     ``general_predictor`` receives training boards and held-out chart/player keys,
@@ -258,40 +296,18 @@ def fit_target_model(boards: Mapping[str, Mapping[str, float]], *, score_target:
         validation.update(targetModel=_losses(y[heldout], probability),
                           chartRateBaseline=_losses(y[heldout], baseline),
                           calibrationBins=_calibration_bins(y[heldout], probability))
-        entries = [(data["records"][i][0], data["records"][i][1]) for i in np.flatnonzero(heldout)]
-        if general_predictor is not None:
-            training_boards: dict[str, dict[str, float]] = {cid: {} for cid in data["mainCharts"]}
-            for index in np.flatnonzero(train):
-                cid, player, _ = data["records"][index]
-                training_boards[cid][player] = boards[cid][player]
-            predicted = general_predictor(training_boards, entries)
-            if isinstance(predicted, Mapping):
-                predicted = [predicted.get((cid, player)) for cid, player in entries]
-            values = np.asarray([np.nan if value is None else value for value in predicted], dtype=float)
-            if len(values) != len(entries):
-                raise ValueError("General holdout predictor returned the wrong number of entries.")
-            finite = np.isfinite(values) & (values >= 0) & (values <= 1)
-            if np.any(finite):
-                validation["generalTargetBenchmark"] = {**_losses(y[heldout][finite], values[finite]),
-                    "records": int(np.sum(finite)), "trainingOnly": True,
-                    "targetModelSameRecords": _losses(y[heldout][finite], probability[finite]),
-                    "chartRateSameRecords": _losses(y[heldout][finite], baseline[finite])}
-                validation["generalTargetBenchmarkReason"] = None
-            else:
-                validation["generalTargetBenchmarkReason"] = "General training-only fit supplied no usable predictions."
-        if general_predictions is not None:
-            values = np.asarray([general_predictions.get(cid, {}).get(player, np.nan)
-                if isinstance(general_predictions.get(cid), Mapping) else general_predictions.get(cid, np.nan)
-                for cid, player in entries], dtype=float)
-            finite = np.isfinite(values) & (values >= 0) & (values <= 1)
-            validation["externalGeneralPredictionDiagnostic"] = {
-                **(_losses(y[heldout][finite], values[finite]) if np.any(finite) else {}),
-                "records": int(np.sum(finite)), "trainingOnly": False}
+        _general_validation(validation, data, boards, heldout, probability, baseline,
+                            general_predictor=general_predictor, general_predictions=general_predictions)
     else:
         validation["reason"] = "Insufficient observations for the constrained holdout."
     diagnostics["validation"] = validation
 
     fitted = _fit(p, c, y, player_count, chart_count, selected)
+    if _private_context is not None:
+        _private_context.update(pointFit={key: value.tolist() if isinstance(value, np.ndarray) else value
+                                         for key, value in fitted.items()},
+            heldout=heldout.tolist(), validationProbability=probability.tolist() if np.any(heldout) else [],
+            validationBaseline=baseline.tolist() if np.any(heldout) else [])
     diagnostics.update(converged=fitted["converged"], iterations=fitted["iterations"],
                        gradientMaximum=fitted["gradientMaximum"], objective=fitted["objective"],
                        convergenceMessage=fitted["message"])
