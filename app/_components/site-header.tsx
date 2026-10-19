@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 type SiteHeaderProps = {
-  active?: "recommendations" | "tier-list" | "skill-radar";
+  active?: "recommendations" | "tier-list" | "skill-radar" | "official-comparison";
 };
 
 export function SiteHeader({ active }: SiteHeaderProps) {
@@ -26,7 +26,16 @@ export function SiteHeader({ active }: SiteHeaderProps) {
           ) : (
             <Link href="/tier-list">Tier List</Link>
           )}
-          {active === "skill-radar" ? <span aria-current="page">Skill Radar</span> : <Link href="/skill-radar">Skill Radar</Link>}
+          {active === "skill-radar" ? (
+            <span aria-current="page">Skill Radar</span>
+          ) : (
+            <Link href="/skill-radar">Skill Radar</Link>
+          )}
+          {active === "official-comparison" ? (
+            <span aria-current="page">Player Comparison</span>
+          ) : (
+            <Link href="/official-leaderboard-comparison">Player Comparison</Link>
+          )}
         </nav>
       ) : null}
     </header>

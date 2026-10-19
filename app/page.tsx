@@ -44,8 +44,29 @@ export default function HomePage() {
             </ExplanatorySection>
           </div>
           <div className="home-feature">
-            <Link className="feature-card feature-radar" href="/skill-radar"><div><p>YOUR BPM PROFILE</p><h2>Skill Radar</h2></div><b aria-hidden="true">↗</b></Link>
-            <ExplanatorySection title="About Skill Radar"><p>Compare your Singles and Doubles across BPM ranges and find your next charts.</p></ExplanatorySection>
+            <Link className="feature-card feature-radar" href="/skill-radar">
+              <div>
+                <p>YOUR BPM PROFILE</p>
+                <h2>Skill Radar</h2>
+              </div>
+              <b aria-hidden="true">↗</b>
+            </Link>
+            <ExplanatorySection title="About Skill Radar">
+              <p>View your personal Singles and Doubles BPM profile and find your next charts.</p>
+            </ExplanatorySection>
+          </div>
+
+          <div className="home-feature">
+            <Link className="feature-card feature-comparison" href="/official-leaderboard-comparison">
+              <div>
+                <p>OFFICIAL LEADERBOARDS</p>
+                <h2>Player Comparison</h2>
+              </div>
+              <b aria-hidden="true">↗</b>
+            </Link>
+            <ExplanatorySection title="About Player Comparison">
+              <p>Compare two players' estimated BPM skills and official scores across every S20+ and D20+ chart.</p>
+            </ExplanatorySection>
           </div>
         </div>
 

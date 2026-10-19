@@ -2,6 +2,39 @@
 
 Pumbility Farmer is a PIU Phoenix difficulty analyzer and Vercel web UI with Scoring, Clearing, and Pumbility tier lists. Its scoring list combines normalized Phoenix 1 and Phoenix 2 score evidence against the current Phoenix 2 catalog. Phoenix 1 is a frozen, privacy-safe source captured on August 7, 2026; Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Singles and Doubles rankings are completely independent. Co-op has its own combined 2x-5x scoring analysis because those charts have no official difficulty rating. Published Singles and Doubles analysis starts at level 16, while player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 16.
 
+## Official leaderboard player comparison
+
+Open `/official-leaderboard-comparison` to compare two official players' BPM
+profiles and scores on every current S20+/D20+ chart. Both players remain side by
+side on phones. The chart-type and difficulty controls filter the score list;
+the radars always summarize all eligible 20+ records. Missing scores display
+`--`, including charts with no score for either player.
+
+Build comparison artifacts from the existing private official Scoring manifest
+and cached Phoenix 2 chart/BPM metadata, without fetching upstream data:
+
+```powershell
+npm run analyze:official-comparison
+$env:PIU_LOCAL_ANALYSIS = "1"
+npm run dev -- --hostname 127.0.0.1 --port 3000
+```
+
+The radar estimates Pumbility from each official score's Phoenix 2 grade and
+current official level, assuming **SG below 1,000,000 and PG at exactly
+1,000,000**. Each mode/BPM bucket uses its five highest estimates, padding sparse
+buckets with zeros. The exact contributing charts, scores, assumed plates, and
+Pumbility values are included in the profile so the selected BPM comparison can
+show how each player's estimate was calculated. Ties are ordered by song name
+then chart ID. Empty buckets remain unknown. Source dates and recorded
+coverage are visible; missing or bucket-crossing BPM excludes a chart only from
+the radar. The builder publishes an index last, after immutable per-player
+generation files. Rerun it when the official captures or BPM metadata change.
+
+Local artifacts live under `.local-data/piu-scores/official/comparison/current`.
+Hosted readers use the equivalent private Blob prefix
+`analysis/official-comparison/current`; generating local files does not publish
+them or deploy the feature.
+
 ## Analysis method
 
 ### Source-aware SSS+ tiers
