@@ -4,7 +4,19 @@ export type ModeKey = "singles" | "doubles" | "coop";
 export type RecommendationModeKey = "overall" | ModeKey;
 export type EvidenceStatus = "Published" | "Provisional" | "Insufficient" | "Unrated";
 export type TierMetricKey = "scoring" | "clearing" | "pumbility";
-export type ScoringGoal = "general" | "sss" | "sssplus";
+export type ScoringGoal = "general" | "ss" | "ssplus" | "sss" | "sssplus";
+export type TargetScore = 980000 | 985000 | 990000 | 995000;
+export interface ScoringGoalPolicy {
+  key: Exclude<ScoringGoal, "general">;
+  grade: "SS" | "SS+" | "SSS" | "SSS+";
+  score: TargetScore;
+  inclusive: true;
+  policyVersion: string;
+  modelMethod: string;
+  boundaryMethod: string;
+  rareMethod: string;
+  nearTargetScoreRange: [number, number];
+}
 /** Targets are optional so a historical generation cannot imply a new goal exists. */
 export type ScoringVariantMap<T> = { general: T } & Partial<Record<Exclude<ScoringGoal, "general">, T>>;
 export type ScoringMethod = "official-cross-level-v1" | "submitted-score-profile-v2" | "sss-target-rasch-v1" | "sss-boundary-score-gap-v1" | "sss-rare-success-upper-band-v1" | "target-attainment-rasch-v1" | "target-boundary-score-gap-v1" | "target-rare-success-upper-band-v1" | "target-conditional-pooled-prior-v1";
@@ -178,7 +190,7 @@ export interface ScoringVariant extends TierMetricResult {
   scoringUnratedReason?: string | null;
   scoringExtrapolated?: boolean;
   scoringProvisional?: boolean;
-  scoringTarget?: 990000 | 995000;
+  scoringTarget?: TargetScore;
   scoringTargetSuccesses?: number;
   scoringBelowTarget?: number;
   scoringSource?: "submitted" | "official";
@@ -461,7 +473,7 @@ export interface ChartResult {
   scoringSpreadPolicy?: SssPlusSpreadEvidence;
   scoringTailPolicy?: TargetTailEvidence;
   intervalUnavailableReason?: string;
-  scoringTarget?: 990000 | 995000;
+  scoringTarget?: TargetScore;
   scoringTargetSuccesses?: number;
   scoringBelowTarget?: number;
   scoringSource?: "submitted" | "official";
@@ -613,7 +625,14 @@ export interface AnalysisPayload {
   mix: MixInfo | CombinedMixInfo;
   summary: {
     scriptVersion: string;
-    method: Record<string, unknown> & { officialTiers?: OfficialTierMethod; officialCrossLevelScoring?: OfficialCrossLevelScoringMethod; crossLevelClearing?: CrossLevelClearingMethod; hybridTiers?: HybridTierMethod };
+    method: Record<string, unknown> & {
+      officialTiers?: OfficialTierMethod;
+      officialCrossLevelScoring?: OfficialCrossLevelScoringMethod;
+      crossLevelClearing?: CrossLevelClearingMethod;
+      hybridTiers?: HybridTierMethod;
+      scoringGoalPolicies?: { version: 1; goals: ScoringGoalPolicy[] };
+      availableScoringGoals?: ScoringGoal[];
+    };
     coverage: Record<string, number>;
     modes: Partial<Record<ModeKey, ModeSummary>>;
   };

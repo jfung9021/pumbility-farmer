@@ -48,7 +48,7 @@ def identity_key(identity):
 
 
 def index_path(kind: str, identity):
-    if kind not in {"general", "pipeline"}:
+    if kind not in {"general", "pipeline", "numeric-pipeline"}:
         raise ValueError("Unknown tier computation cache kind.")
     return PREFIX + kind + "/" + identity_key(identity) + ".json"
 

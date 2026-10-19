@@ -16,6 +16,7 @@ import { validateSpreadAnalysisPayload } from "./sssplus-spread-validation.ts";
 import { validateCombinedClearingPayload } from "./combined-clearing-validation.ts";
 import { validateSourceAwarePayload } from "./source-aware-validation.ts";
 import { validateSubmittedSssplusCalibrationPayload } from "./submitted-sssplus-calibration-validation.ts";
+import { validateScoringGoalsPayload } from "./scoring-goals-validation.ts";
 
 
 const SECRET_PATTERN = /(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}/i;
@@ -722,6 +723,14 @@ export function validateLocalAnalysisPayload(
     throw new LocalAnalysisValidationError("The local analysis payload must be an object.");
   }
   const payload = value as Partial<AnalysisPayload>;
+  if (expectedMix === "combined" && payload.schemaVersion === 58) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The scoring-goal aggregate contains private fields or a credential-shaped value.");
+      return validateScoringGoalsPayload(payload as AnalysisPayload, base => validateLocalAnalysisPayload(base, expectedMix));
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The scoring-goal aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
   if (expectedMix === "combined" && payload.schemaVersion === 57) {
     try {
       if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The submitted SSS+ aggregate contains private fields or a credential-shaped value.");

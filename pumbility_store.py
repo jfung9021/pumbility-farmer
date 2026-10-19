@@ -710,10 +710,11 @@ class PumbilityArtifactStore:
         return headers
 
     @staticmethod
-    def _put_json_row(cursor: Any, pathname: str, payload: Mapping[str, Any]) -> None:
+    def _put_json_row(cursor: Any, pathname: str, payload: Mapping[str, Any],
+                      *, metadata: tuple[str, int] | None = None) -> None:
         from psycopg.types.json import Jsonb
 
-        digest, byte_size = _json_metadata(payload, pathname=pathname)
+        digest, byte_size = metadata if metadata is not None else _json_metadata(payload, pathname=pathname)
         cursor.execute(
             """
             insert into pumbility.artifacts (
@@ -1665,6 +1666,57 @@ class PumbilityArtifactStore:
             for pathname, payload in payloads.items():
                 self._put_json_row(cursor, pathname, payload)
 
+    def put_json_batch(self, payloads: Mapping[str, Mapping[str, Any]], *,
+                       max_items: int = 8, max_bytes: int = 8 * 1024 * 1024) -> None:
+        """Write private artifacts in bounded transactions, before any commit marker.
+
+        Unlike put_json_bundle this is not atomic across batches. An object larger
+        than the byte budget is written alone, matching the existing single-write
+        contract. Every object retains PostgreSQL-normalized checksum metadata.
+        """
+        if max_items < 1 or max_bytes < 1:
+            raise ValueError("Artifact batch limits must be positive.")
+        from tier_diagnostics import event
+        started, cpu_started = time.perf_counter(), time.process_time()
+        pending: list[tuple[str, Mapping[str, Any], tuple[str, int]]] = []
+        pending_bytes = total_bytes = written = batches = 0
+
+        def flush() -> None:
+            nonlocal pending_bytes, written, batches
+            if not pending:
+                return
+            with _connect(self.database_url) as connection, connection.cursor() as cursor:
+                _assert_schema(cursor)
+                for pathname, payload, metadata in pending:
+                    self._put_json_row(cursor, pathname, payload, metadata=metadata)
+            written += len(pending)
+            batches += 1
+            pending.clear()
+            pending_bytes = 0
+
+        try:
+            for pathname, payload in payloads.items():
+                metadata = _json_metadata(payload, pathname=pathname)
+                size = metadata[1]
+                if pending and (len(pending) >= max_items or pending_bytes + size > max_bytes):
+                    flush()
+                pending.append((pathname, payload, metadata))
+                pending_bytes += size
+                total_bytes += size
+                if pending_bytes >= max_bytes or len(pending) >= max_items:
+                    flush()
+            flush()
+        except Exception as error:
+            event("artifact_batch_write", outcome="failed", exception_class=type(error).__name__,
+                  cache_writes=written, cache_shards=batches,
+                  duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                  cpu_ms=round((time.process_time() - cpu_started) * 1000, 3))
+            raise
+        event("artifact_batch_write", outcome="completed", cache_writes=written,
+              cache_shards=batches, artifact_bytes=total_bytes,
+              duration_ms=round((time.perf_counter() - started) * 1000, 3),
+              cpu_ms=round((time.process_time() - cpu_started) * 1000, 3))
+
     def tier_publication_revisions(self) -> dict[str, dict[str, Any]]:
         """Small revision tokens, including transactional relational source tokens."""
         with _connect(self.database_url) as connection, connection.cursor() as cursor:
@@ -1675,6 +1727,31 @@ class PumbilityArtifactStore:
                 if cursor.fetchone() is None:
                     bump_tier_source_revision(cursor, mix)
             return _tier_publication_revisions(cursor)
+
+    def complete_scoring_goal_backfill(self, *, job_id: str, lease_owner: str,
+                                       expected_revisions: Mapping[str, Any],
+                                       completed_job: Mapping[str, Any]) -> None:
+        """Complete a cache-only job under its source epoch and owner fence."""
+        from psycopg.types.json import Jsonb
+        from tier_publication_jobs import TierPublicationConflict
+        with _connect(self.database_url) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                _assert_schema(cursor)
+                cursor.execute(f"set local lock_timeout = '{PUBLICATION_LOCK_TIMEOUT_MILLISECONDS}ms'")
+                cursor.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (TIER_PUBLICATION_LOCK,))
+                cursor.execute("""select id from pumbility.jobs where external_key = %s
+                    and status = 'running' and lease_owner = %s
+                    and lease_expires_at >= clock_timestamp() and cancellation_requested_at is null for update""",
+                    (job_id, lease_owner))
+                if cursor.fetchone() is None or _tier_publication_revisions(cursor) != expected_revisions:
+                    raise TierPublicationConflict("The scoring-goal backfill source epoch or owner changed.")
+                cursor.execute("""update pumbility.jobs set status='completed', stage='cached', payload=%s,
+                    completed_at=clock_timestamp(), updated_at=clock_timestamp(), lease_owner=null, lease_expires_at=null
+                    where external_key=%s and lease_owner=%s and lease_expires_at >= clock_timestamp()
+                    and cancellation_requested_at is null returning id""", (Jsonb(dict(completed_job)), job_id, lease_owner))
+                if cursor.fetchone() is None:
+                    raise TierPublicationConflict("The scoring-goal backfill lease expired before completion.")
+                cursor.execute("delete from pumbility.job_heads where name='active:tier-publication' and job_id=(select id from pumbility.jobs where external_key=%s)", (job_id,))
 
     def promote_tier_publication(self, *, job_id: str, lease_owner: str,
                                  candidate_path: str, candidate_revision: Mapping[str, Any],
@@ -1775,6 +1852,20 @@ class PumbilityArtifactStore:
             cursor.execute("select sha256,byte_size,xmin::text from pumbility.artifacts where object_key=%s", (pathname,))
             row = cursor.fetchone()
         return None if row is None else {"sha256": str(row[0]), "byteSize": int(row[1]), "revision": str(row[2])}
+
+    def typed_snapshot_receipt(self, pathname: str) -> dict[str, Any] | None:
+        """Read a private snapshot's verified envelope and row token, not its scores."""
+        with _read_cursor(self.database_url) as cursor:
+            cursor.execute("""select sha256, byte_size, xmin::text,
+                payload_json ->> 'sha256', payload_json ->> 'schemaVersion',
+                payload_json ->> 'jobId', payload_json ->> 'mix'
+                from pumbility.artifacts where object_key = %s and payload_json is not null""", (pathname,))
+            row = cursor.fetchone()
+        return None if row is None else {
+            "artifactSha256": str(row[0]), "byteSize": int(row[1]), "revision": str(row[2]),
+            "snapshotSha256": str(row[3]), "schemaVersion": str(row[4]),
+            "jobId": str(row[5]), "mix": str(row[6]),
+        }
 
     def publish_generation(
         self,

@@ -13,12 +13,15 @@ class TierDiagnosticsTests(unittest.TestCase):
                            cache_hits=12, cache_misses=3, cache_bypassed=4,
                            cache_failures=1, cache_shards=2,
                            read_duration_ms=1.5, write_duration_ms=2.5,
+                           cpu_ms=3.5, goal="ss", source="official", mode="Double",
                            tls_category="eof", exception_class="SSLError",
                            url="private-url", headers="private-token",
                            chart_id="private-chart", payload="private-scores")
         self.assertEqual(record["cache_hits"], 12)
         self.assertEqual(record["tls_category"], "eof")
         self.assertEqual(record["read_duration_ms"], 1.5)
+        self.assertEqual(record["cpu_ms"], 3.5)
+        self.assertEqual(record["goal"], "ss")
         self.assertNotIn("private", "".join(logs.output))
         for key in ("url", "headers", "chart_id", "payload"):
             self.assertNotIn(key, record)
@@ -55,3 +58,4 @@ class TierDiagnosticsTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in emit.call_args_list],
                          ["tier_stage_started", "tier_publication_failed"])
         self.assertGreaterEqual(emit.call_args.kwargs["duration_ms"], 0)
+        self.assertGreaterEqual(emit.call_args.kwargs["cpu_ms"], 0)

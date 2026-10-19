@@ -216,7 +216,8 @@ def fit_target_model(boards: Mapping[str, Mapping[str, float]], *, score_target:
                      general_predictions: Mapping[str, Any] | None = None,
                      general_predictor: Callable[[dict, list[tuple[str, str]]], Any] | None = None,
                      source_boards: Mapping[str, Mapping[str, Mapping[str, float]]] | None = None,
-                     _private_context: dict[str, Any] | None = None) -> dict[str, Any]:
+                     _private_context: dict[str, Any] | None = None,
+                     _bootstrap_checkpoint=None) -> dict[str, Any]:
     """Fit an observed-best target model; returned diagnostics contain no player IDs.
 
     ``general_predictor`` receives training boards and held-out chart/player keys,
@@ -265,60 +266,82 @@ def fit_target_model(boards: Mapping[str, Mapping[str, float]], *, score_target:
     if not len(y):
         return result
 
-    heldout = _holdout(p, c, player_count, chart_count, seed)
-    train = ~heldout
-    candidates, validation_fits = [], {}
-    for penalty in grid:
-        fitted = _fit(p[train], c[train], y[train], player_count, chart_count, penalty)
-        validation_fits[penalty] = fitted
-        entry = {"regularization": penalty, "converged": fitted["converged"]}
+    resume = _bootstrap_checkpoint.load() if _bootstrap_checkpoint is not None else None
+    from canonical_json import canonical_json_sha256
+    parent = canonical_json_sha256({"target": score_target, "samples": bootstrap_samples, "seed": seed,
+        "grid": grid, "charts": data["charts"], "records": data["allRecords"],
+        "players": data["players"], "inputPlayers": data["inputPlayers"], "components": data["components"]})
+    if _bootstrap_checkpoint is not None and (general_predictor is not None or general_predictions is not None or source_boards):
+        raise ValueError("Bootstrap recovery is limited to the private binary main component.")
+    if resume is not None and resume.get("parent") != parent:
+        raise ValueError("The bootstrap checkpoint belongs to different inputs or policy.")
+    if resume is None:
+        heldout = _holdout(p, c, player_count, chart_count, seed)
+        train = ~heldout
+        candidates, validation_fits = [], {}
+        for penalty in grid:
+            fitted = _fit(p[train], c[train], y[train], player_count, chart_count, penalty)
+            validation_fits[penalty] = fitted
+            entry = {"regularization": penalty, "converged": fitted["converged"]}
+            if np.any(heldout):
+                probability = _sigmoid(fitted["ability"][p[heldout]] - fitted["effect"][c[heldout]])
+                entry.update(_losses(y[heldout], probability))
+            else:
+                entry.update(logLoss=None, brier=None)
+            candidates.append(entry)
+        valid_candidates = [entry for entry in candidates if entry["converged"] and entry["logLoss"] is not None]
+        selected = min(valid_candidates, key=lambda entry: (entry["logLoss"], entry["regularization"]))["regularization"] \
+            if valid_candidates else grid[len(grid) // 2]
+        policy["selectedRegularization"] = selected
+        validation: dict[str, Any] = {"records": int(np.sum(heldout)), "seed": seed,
+            "splitMethod": "observed-entry-holdout-20pct-player-min4-chart-min2-v1",
+            "abilityFitExcludesHeldOutEntries": True, "candidates": candidates,
+            "selectedRegularization": selected, "generalTargetBenchmark": None,
+            "generalTargetBenchmarkReason": "No training-only General predictor was supplied."}
         if np.any(heldout):
+            fitted = validation_fits[selected]
             probability = _sigmoid(fitted["ability"][p[heldout]] - fitted["effect"][c[heldout]])
-            entry.update(_losses(y[heldout], probability))
+            train_n = np.bincount(c[train], minlength=chart_count)
+            train_success = np.bincount(c[train], weights=y[train], minlength=chart_count)
+            baseline = (train_success[c[heldout]] + 1) / (train_n[c[heldout]] + 2)
+            validation.update(targetModel=_losses(y[heldout], probability),
+                              chartRateBaseline=_losses(y[heldout], baseline),
+                              calibrationBins=_calibration_bins(y[heldout], probability))
+            _general_validation(validation, data, boards, heldout, probability, baseline,
+                                general_predictor=general_predictor, general_predictions=general_predictions)
         else:
-            entry.update(logLoss=None, brier=None)
-        candidates.append(entry)
-    valid_candidates = [entry for entry in candidates if entry["converged"] and entry["logLoss"] is not None]
-    selected = min(valid_candidates, key=lambda entry: (entry["logLoss"], entry["regularization"]))["regularization"] \
-        if valid_candidates else grid[len(grid) // 2]
-    policy["selectedRegularization"] = selected
-    validation: dict[str, Any] = {"records": int(np.sum(heldout)), "seed": seed,
-        "splitMethod": "observed-entry-holdout-20pct-player-min4-chart-min2-v1",
-        "abilityFitExcludesHeldOutEntries": True, "candidates": candidates,
-        "selectedRegularization": selected, "generalTargetBenchmark": None,
-        "generalTargetBenchmarkReason": "No training-only General predictor was supplied."}
-    if np.any(heldout):
-        fitted = validation_fits[selected]
-        probability = _sigmoid(fitted["ability"][p[heldout]] - fitted["effect"][c[heldout]])
-        train_n = np.bincount(c[train], minlength=chart_count)
-        train_success = np.bincount(c[train], weights=y[train], minlength=chart_count)
-        baseline = (train_success[c[heldout]] + 1) / (train_n[c[heldout]] + 2)
-        validation.update(targetModel=_losses(y[heldout], probability),
-                          chartRateBaseline=_losses(y[heldout], baseline),
-                          calibrationBins=_calibration_bins(y[heldout], probability))
-        _general_validation(validation, data, boards, heldout, probability, baseline,
-                            general_predictor=general_predictor, general_predictions=general_predictions)
-    else:
-        validation["reason"] = "Insufficient observations for the constrained holdout."
-    diagnostics["validation"] = validation
+            validation["reason"] = "Insufficient observations for the constrained holdout."
+        diagnostics["validation"] = validation
 
-    fitted = _fit(p, c, y, player_count, chart_count, selected)
-    if _private_context is not None:
-        _private_context.update(pointFit={key: value.tolist() if isinstance(value, np.ndarray) else value
-                                         for key, value in fitted.items()},
-            heldout=heldout.tolist(), validationProbability=probability.tolist() if np.any(heldout) else [],
-            validationBaseline=baseline.tolist() if np.any(heldout) else [])
-    diagnostics.update(converged=fitted["converged"], iterations=fitted["iterations"],
-                       gradientMaximum=fitted["gradientMaximum"], objective=fitted["objective"],
-                       convergenceMessage=fitted["message"])
-    full_sensitivity = {}
-    for penalty in grid:
-        alternate = fitted if penalty == selected else _fit(p, c, y, player_count, chart_count, penalty,
-                                                            initial=fitted["parameters"])
-        full_sensitivity[str(penalty)] = alternate
-    diagnostics["regularizationSensitivity"] = [
-        {"regularization": float(penalty), "converged": alternative["converged"]}
-        for penalty, alternative in full_sensitivity.items()]
+        fitted = _fit(p, c, y, player_count, chart_count, selected)
+        if _private_context is not None:
+            _private_context.update(pointFit={key: value.tolist() if isinstance(value, np.ndarray) else value
+                                             for key, value in fitted.items()},
+                heldout=heldout.tolist(), validationProbability=probability.tolist() if np.any(heldout) else [],
+                validationBaseline=baseline.tolist() if np.any(heldout) else [])
+        diagnostics.update(converged=fitted["converged"], iterations=fitted["iterations"],
+                           gradientMaximum=fitted["gradientMaximum"], objective=fitted["objective"],
+                           convergenceMessage=fitted["message"])
+        full_sensitivity = {}
+        for penalty in grid:
+            alternate = fitted if penalty == selected else _fit(p, c, y, player_count, chart_count, penalty,
+                                                                initial=fitted["parameters"])
+            full_sensitivity[str(penalty)] = alternate
+        diagnostics["regularizationSensitivity"] = [
+            {"regularization": float(penalty), "converged": alternative["converged"]}
+            for penalty, alternative in full_sensitivity.items()]
+
+    else:
+        result = copy.deepcopy(resume["result"])
+        policy, diagnostics, charts = result["policy"], result["diagnostics"], result["charts"]
+        selected = policy["selectedRegularization"]
+        fitted = copy.deepcopy(resume["fitted"])
+        for key in ("parameters", "ability", "effect", "probability", "information"):
+            fitted[key] = np.asarray(fitted[key], dtype=float)
+        full_sensitivity = {penalty: {"converged": entry["converged"], "effect": np.asarray(entry["effect"], dtype=float)}
+                            for penalty, entry in resume["sensitivity"].items()}
+        if _private_context is not None:
+            _private_context.update(copy.deepcopy(resume["context"]))
 
     bootstrap_effects: list[list[float]] = [[] for _ in data["mainCharts"]]
     alignment_indices = [index for index, cid in enumerate(data["mainCharts"])
@@ -332,19 +355,42 @@ def fit_target_model(boards: Mapping[str, Mapping[str, float]], *, score_target:
     policy["bootstrapAlignmentReferenceCharts"] = [data["mainCharts"][index] for index in alignment_indices]
     rng = np.random.default_rng(seed + 1)
     bootstrap_converged = 0
-    for _ in range(bootstrap_samples):
+    completed = 0
+    if resume is not None:
+        completed = resume["completed"]
+        if (type(completed) is not int or not 0 <= completed <= bootstrap_samples
+                or resume["alignment"] != alignment_indices or len(resume["effects"]) != chart_count):
+            raise ValueError("The bootstrap checkpoint has incompatible progress or alignment.")
+        rng.bit_generator.state = resume["rngState"]
+        bootstrap_effects = copy.deepcopy(resume["effects"])
+        bootstrap_converged = resume["converged"]
+
+    def checkpoint(count):
+        if _bootstrap_checkpoint is not None:
+            _bootstrap_checkpoint.save({"parent": parent, "result": result,
+                "fitted": {key: value.tolist() if isinstance(value, np.ndarray) else value for key, value in fitted.items()},
+                "sensitivity": {penalty: {"converged": entry["converged"], "effect": entry["effect"].tolist()}
+                                for penalty, entry in full_sensitivity.items()},
+                "context": _private_context or {}, "alignment": alignment_indices,
+                "completed": count, "rngState": rng.bit_generator.state,
+                "effects": bootstrap_effects, "converged": bootstrap_converged})
+
+    if resume is None:
+        checkpoint(0)
+    for replicate in range(completed, bootstrap_samples):
         multiplicity = np.bincount(rng.integers(0, player_count, size=player_count), minlength=player_count)
         refit = _fit(p, c, y, player_count, chart_count, selected, multiplicity=multiplicity,
                      initial=fitted["parameters"])
         if refit["converged"]:
             observed = np.bincount(c, weights=multiplicity[p], minlength=chart_count) > 0
-            if not np.all(observed[alignment_indices]):
-                continue
-            bootstrap_converged += 1
-            location_difference = float(np.mean(refit["effect"][alignment_indices]
-                                                 - fitted["effect"][alignment_indices]))
-            for index in np.flatnonzero(observed):
-                bootstrap_effects[index].append(float(refit["effect"][index] - location_difference))
+            if np.all(observed[alignment_indices]):
+                bootstrap_converged += 1
+                location_difference = float(np.mean(refit["effect"][alignment_indices]
+                                                     - fitted["effect"][alignment_indices]))
+                for index in np.flatnonzero(observed):
+                    bootstrap_effects[index].append(float(refit["effect"][index] - location_difference))
+        if (replicate + 1) % 10 == 0 or replicate + 1 == bootstrap_samples:
+            checkpoint(replicate + 1)
     diagnostics["bootstrap"] = {"requested": bootstrap_samples, "completed": bootstrap_samples,
         "converged": bootstrap_converged, "failed": bootstrap_samples - bootstrap_converged,
         "method": INTERVAL_METHOD, "calibrationRefitted": False}

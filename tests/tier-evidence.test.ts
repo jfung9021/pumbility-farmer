@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { demoPayloads } from "../lib/demo-data.ts";
 import { compactTierPayload } from "../lib/tier-browser-payload.ts";
-import { projectScoringGoal } from "../lib/scoring-variants.ts";
+import { projectScoringGoal, scoringTargetForGoal } from "../lib/scoring-variants.ts";
 import { clearingMinimumScoreRecords, clearingRecordCount, hasLimitedTierData, scoringRecordCount, tierDataWarning, tierSupportLabel } from "../lib/tier-metrics.ts";
 import type { AnalysisPayload, ChartResult, ScoringVariant } from "../lib/types";
 
@@ -71,12 +71,12 @@ test("official General uses only players with usable comparisons and reports unk
 });
 
 test("selected target boundary warnings use all complete-board records for zero and all successes", () => {
-  for (const goal of ["sss", "sssplus"] as const) {
+  for (const goal of ["ss", "ssplus", "sss", "sssplus"] as const) {
     for (const successes of ["none", "all"] as const) {
       const row = chart();
       row.scoringVariants = { general: target(row, 10), [goal]: target(row, 9, true) };
       const variant = row.scoringVariants[goal]!;
-      variant.scoringTarget = goal === "sss" ? 990000 : 995000;
+      variant.scoringTarget = scoringTargetForGoal(goal).score;
       if (successes === "all") Object.assign(variant.scoringRefinement!.fullBoard, { successes: 9, belowTarget: 0 });
       let selected = projectScoringGoal(row, goal);
       assert.equal(scoringRecordCount(selected), 9);
@@ -109,10 +109,12 @@ test("ordinary target fits use contributors and composites check each selected c
 test("compact and detail payloads choose identical boundary support for each selected goal", () => {
   for (const count of [9, 10]) {
     const row = chart();
-    row.scoringVariants = { general: target(row, 10), sss: { ...target(row, count, true), scoringTarget: 990000 }, sssplus: target(row, count, true) };
+    row.scoringVariants = { general: target(row, 10), ss: { ...target(row, count, true), scoringTarget: 980000 },
+      ssplus: { ...target(row, count, true), scoringTarget: 985000 },
+      sss: { ...target(row, count, true), scoringTarget: 990000 }, sssplus: target(row, count, true) };
     const payload = { ...structuredClone(demoPayloads.phoenix2), singles: [row], doubles: [], coop: [] };
     const compact = compactTierPayload(payload);
-    for (const goal of ["sss", "sssplus"] as const) {
+    for (const goal of ["ss", "ssplus", "sss", "sssplus"] as const) {
       const full = projectScoringGoal(row, goal);
       const list = projectScoringGoal(compact.singles[0], goal);
       assert.equal(list.scoringRefinement, undefined);

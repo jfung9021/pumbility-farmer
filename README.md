@@ -39,10 +39,14 @@ them or deploy the feature.
 
 ## Analysis method
 
-### Source-aware SSS+ tiers
+### Source-aware scoring goals
 
-The current tier generation offers **SSS+** (995,000 points, selected by default)
-and **General** Scoring, with Pumbility averaging the selected final Scoring and
+The tier selector offers **General**, **SS** (980,000), **SS+** (985,000),
+**SSS** (990,000), and **SSS+** (995,000, selected by default). All target
+thresholds are inclusive. Existing SSS results are exposed without a new fit.
+SS and SS+ become available only after an independent backfill matches the
+publication's stored inputs; an unavailable selection explains that state rather
+than displaying another goal's rating. Pumbility averages the selected final Scoring and
 Clearing difficulties before rounding. SSS+ combines Phoenix 1 and Phoenix 2
 official best scores for 20+ charts; lower charts use submitted records. The target
 model, boundary/rare-success estimates, median calibration, smooth tail policy,
@@ -60,14 +64,36 @@ Hosted publication enables `PIU_SOURCE_AWARE_TIERS=1` alongside the existing
 hybrid, average, official-Scoring, submitted-Clearing, and midpoint flags. Daily
 refreshes use the same methodology. Private fits are addressed by observed-board,
 source-board, target, bootstrap, seed, and model-code identities; each missing
-cohort is checkpointed in a separate worker invocation. The protected tier-only
-rebuild (`POST /api/jonathan/refresh?mode=tiers`) resumes those caches without
-fetching scores or fitting recommendations. Repeat while its outcome is
-`tier-analysis-progress`. Protected `/api/jonathan/tier-fits` controls inspect
+cohort is checkpointed in a separate worker invocation. Completed bootstrap
+batches can resume only under the identical cohort, selected regularization,
+full-fit alignment, seed, and numerical recipe; the 200 refits are unchanged.
+The protected tier-only rebuild (`POST /api/jonathan/refresh?mode=tiers`)
+queues a durable publication job without fetching scores or fitting recommendations.
+Inspect `GET /api/jonathan/tier-publication?jobId=...` until the job completes.
+Protected `/api/jonathan/tier-fits` controls inspect
 input hashes and accept completed fits only when current source identities and
 the converged 200-bootstrap policy match.
 
-The public schema-56 presentation retains active ratings and explanations while
+To backfill SS/SS+, use authenticated
+`POST /api/jonathan/refresh?mode=scoring-goal-backfill`, then inspect the same
+tier-publication status endpoint. This job uses the existing queue, global lease,
+and immutable captured inputs. Completion reports `cached` and `promoted: false`:
+it saves both goals without changing live ranking pointers. Run one normal
+stored-input reanalysis (`mode=reanalyze`) after completion to publish the matching
+goals, recommendation index, and chart details atomically. Changed sources reject
+stale goal attachments. New cold goals are not added to the recurring eight-fit
+legacy loop. Each goal has its own source/mode calibration, refinement, centering,
+and bounded-tail policy; historical General, SSS, SSS+, and Clearing values remain
+unchanged on identical inputs.
+
+Numerical cache fingerprints separate solver/runtime dependencies and the selected
+target policy from publication/storage formatting. Compatible legacy artifacts
+are adopted only after their producer recipe and input identities are verified.
+Preparation is pinned before the first fit; later publication phases use verified
+small receipts instead of repeatedly downloading full snapshots. Private artifact
+writes use bounded batches, with publication markers written last.
+
+The public schema-57 presentation (schema 58 with matching extra goals) retains active ratings and explanations while
 omitting historical rollback copies. A full validated, compressed audit artifact,
 previous public baseline, and publication hashes remain private. The local builder
 continues to emit the complete reversible generation with
