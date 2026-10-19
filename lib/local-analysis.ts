@@ -517,7 +517,7 @@ function inverseClearingThreshold(threshold: number, curve: CrossLevelClearingCu
 
 export const CROSS_LEVEL_CLEARING_POLICY = {
   version: 1, source: "piuscores-submitted", minimumOfficialLevel: 16,
-  skillMethod: { version: 1, topClearCount: 30, minimumScoreRecords: 200, minimumUniqueClears: 30,
+  skillMethod: { version: 2, topClearCount: 30, minimumScoreRecords: 100, minimumUniqueClears: 30,
     difficultyBasis: "current-official-level", scope: "same-mode-current-catalog", recordDeduplication: "account-chart-across-mixes" },
   percentile: .10, percentileMethod: "linear", calibrationMethod: "median-anchored-piecewise-linear",
   calibrationVersion: 1, referenceMinimumClearers: 20, referenceMinimumCharts: 5,
@@ -554,7 +554,9 @@ function matchesClearingPolicy(value: unknown, expected: unknown): boolean {
 function hasValidCrossLevelClearing(payload: Partial<AnalysisPayload>, hybrid = false): boolean {
   const method = payload.summary?.method.crossLevelClearing;
   const tiers = payload.summary?.method.tierMetrics as { version?: number; clearing?: unknown } | undefined;
-  const policy = hybrid ? HYBRID_CLEARING_POLICY : CROSS_LEVEL_CLEARING_POLICY;
+  const currentPolicy = hybrid ? HYBRID_CLEARING_POLICY : CROSS_LEVEL_CLEARING_POLICY;
+  const legacy = method?.skillMethod?.version === 1 && method.skillMethod.minimumScoreRecords === 200;
+  const policy = legacy ? { ...currentPolicy, skillMethod: { ...currentPolicy.skillMethod, version: 1, minimumScoreRecords: 200 } } : currentPolicy;
   if (!method || !matchesClearingPolicy(method, policy)
     || tiers?.version !== (hybrid ? 12 : 11) || !matchesClearingPolicy(tiers.clearing, policy)
     || ![26, 41, 42].includes(method.baseScoringSchemaVersion)

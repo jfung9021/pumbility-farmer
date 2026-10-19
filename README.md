@@ -77,10 +77,16 @@ continues to emit the complete reversible generation with
 
 The local Clearing candidate combines submitted successful PIUScores records from
 both Phoenix versions, deduplicated by account and current chart ID. It requires
-200 valid distinct same-mode records, including history below the display floor.
+100 valid distinct same-mode clears, including history below the display floor.
 Clearing-tier skill averages the player's 30 hardest unique clears by current
 official level. Personal ratings and recommendation calculations keep their
 existing definitions.
+
+Tier cards and chart details show the limited-data warning when the displayed
+rating uses fewer than ten valid records. Clearing counts qualified clearers;
+Scoring counts the observations used by its selected model. Pumbility warns when
+either component has fewer than ten. Boundary Scoring counts all usable board
+records, including records below the target.
 
 Each chart uses the linearly interpolated tenth percentile of qualified clearers'
 skills. Comparable charts with at least 20 qualified clearers can set reference

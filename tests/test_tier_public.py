@@ -35,6 +35,30 @@ def source():
 
 
 class TierPublicTests(unittest.TestCase):
+    def test_compact_boundary_count_retains_used_evidence_without_full_boards(self):
+        full = source()
+        row = full["doubles"][0]
+        row["scoringMethod"] = "target-boundary-score-gap-v1"
+        row["scoringRefinement"] = {"fullBoard": {"records": 10, "privateScores": [999999]}}
+        row["nContributors"] = 0
+        row["scoringVariants"]["sss"].update(scoringMethod="sss-boundary-score-gap-v1")
+        row["scoringVariants"]["sssplus"].update(scoringMethod="target-boundary-score-gap-v1")
+        row["scoringVariants"]["sss"]["scoringRefinement"]["fullBoard"]["records"] = 9
+        row["scoringVariants"]["sssplus"]["scoringRefinement"]["fullBoard"]["records"] = 10
+        before = copy.deepcopy(full)
+        projected = compact_tier_payload(full)["doubles"][0]
+        self.assertEqual(projected["scoringBoundaryRecords"], 10)
+        self.assertEqual(projected["scoringVariants"]["sss"]["scoringBoundaryRecords"], 9)
+        self.assertEqual(projected["scoringVariants"]["sssplus"]["scoringBoundaryRecords"], 10)
+        self.assertNotIn("scoringRefinement", json.dumps(projected))
+        self.assertNotIn("privateScores", json.dumps(projected))
+        self.assertEqual(full, before)
+        row["scoringRefinement"]["fullBoard"]["records"] = 10.0
+        self.assertEqual(compact_tier_payload(full)["doubles"][0]["scoringBoundaryRecords"], 10)
+        for invalid in (None, True, -1, "10", 10.5):
+            row["scoringRefinement"]["fullBoard"]["records"] = invalid
+            self.assertNotIn("scoringBoundaryRecords", compact_tier_payload(full)["doubles"][0])
+
     def test_reused_details_use_the_computation_time_and_keep_current_client_generation(self):
         full = source()
         compact, shards = prepare_tier_publication(full, "computed-generation")

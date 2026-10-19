@@ -20,6 +20,16 @@ def _pick(value: Mapping[str, Any], keys: list[str]) -> dict:
 
 def _metric(value: Mapping[str, Any], kind: str) -> dict:
     result = _pick(value, FIELDS["metric"] + FIELDS[kind])
+    if kind in {"chart", "scoring"}:
+        result.pop("scoringBoundaryRecords", None)
+    if kind in {"chart", "scoring"} and value.get("scoringMethod") in {
+        "sss-boundary-score-gap-v1", "target-boundary-score-gap-v1",
+    }:
+        refinement = value.get("scoringRefinement")
+        board = refinement.get("fullBoard") if isinstance(refinement, Mapping) else None
+        records = board.get("records") if isinstance(board, Mapping) else None
+        if type(records) in (int, float) and 0 <= records <= 2**53 - 1 and int(records) == records:
+            result["scoringBoundaryRecords"] = int(records)
     if isinstance(value.get("scoringSpreadPolicy"), Mapping):
         result["scoringSpreadPolicy"] = _pick(value["scoringSpreadPolicy"], ["midpoint"])
     return result

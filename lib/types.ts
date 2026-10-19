@@ -167,6 +167,8 @@ export interface ScoringVariant extends TierMetricResult {
   scoringMethod?: ScoringMethod;
   scoringEstimateBranch?: SssEstimateBranch;
   scoringRefinement?: SssRefinementEvidence;
+  /** Complete-board records used by a boundary estimate in compact list rows. */
+  scoringBoundaryRecords?: number;
   scoringFirstPass?: ScoringVariant;
   scoringFolderCentering?: SssChartCentering;
   scoringMedianCalibration?: SssPlusMedianCalibration;
@@ -339,7 +341,7 @@ export interface CrossLevelClearingMethod {
   minimumCalibrationLevel?: 20;
   lowerLevelMethod?: { method: "folder-centered-q10"; difficultyDeltaScale: 0.70; referenceMinimumClearers: 20; referenceMinimumCharts: 5 };
   lowerReferenceSkills?: Record<"Single" | "Double", Record<string, { level: number; threshold: number; referenceCharts: number; chartIds: string[] }>>;
-  skillMethod: { version: 1; topClearCount: 30; minimumScoreRecords: 200; minimumUniqueClears: 30;
+  skillMethod: { version: 1 | 2; topClearCount: 30; minimumScoreRecords: 100 | 200; minimumUniqueClears: 30;
     difficultyBasis: "current-official-level"; scope: "same-mode-current-catalog"; recordDeduplication: "account-chart-across-mixes" };
   sourceDates: Record<string, string | null>;
   inputHashes: Record<string, string>;
@@ -451,6 +453,8 @@ export interface ChartResult {
   chartSourceExclusions?: ChartSourceExclusionEvidence;
   scoringEstimateBranch?: SssEstimateBranch;
   scoringRefinement?: SssRefinementEvidence;
+  /** Complete-board records used by a boundary estimate in compact list rows. */
+  scoringBoundaryRecords?: number;
   scoringFirstPass?: ScoringVariant;
   scoringFolderCentering?: SssChartCentering;
   scoringMedianCalibration?: SssPlusMedianCalibration;
