@@ -12,6 +12,7 @@ import {
   type OfficialComparisonPlayer,
 } from "../lib/official-comparison.ts";
 import {
+  readLocalOfficialComparisonIndex,
   readLocalOfficialComparisonPlayer,
   OfficialComparisonGenerationError,
   OfficialComparisonNotFoundError,
@@ -19,21 +20,22 @@ import {
 
 const playerKey = `op_${"a".repeat(64)}`;
 
-function fixture(): { index: OfficialComparisonIndex; player: OfficialComparisonPlayer } {
+function fixture(recordedScores = 200): { index: OfficialComparisonIndex; player: OfficialComparisonPlayer } {
+  const charts = Array.from({ length: recordedScores }, (_, i) => ({ chartId: `chart-${i + 1}`, songName: i ? `Other ${i}` : "Alpha", chartLabel: "S20", mode: "singles" as const, level: 20, bpmMin: i ? null : 150, bpmMax: i ? null : 150 }));
   return {
     index: {
       schemaVersion: 2, generation: "generation_a", generatedAtUtc: "2026-10-19T00:00:00Z",
       sourceDates: { Phoenix: "2026-09-06T00:00:00Z", Phoenix2: "2026-10-11T00:00:00Z" },
       method: { version: OFFICIAL_COMPARISON_METHOD, plate: "SG below perfect; PG at perfect" },
-      players: [{ playerKey, displayName: "PLAYER#0001" }],
-      charts: [{ chartId: "chart-1", songName: "Alpha", chartLabel: "S20", mode: "singles", level: 20, bpmMin: 150, bpmMax: 150 }],
+      players: [{ playerKey, displayName: "PLAYER#0001", recordedScoreCount: recordedScores }],
+      charts,
     },
     player: {
       schemaVersion: 2, generation: "generation_a", playerKey, displayName: "PLAYER#0001",
       buckets: (["singles", "doubles"] as const).flatMap(mode => Array.from({ length: 9 }, (_, bucketIndex) => ({
         mode, bucketIndex, pg: null, radarScore: null, recordedCount: 0, contributingCount: 0, contributors: [],
       }))),
-      scores: { "chart-1": 0 }, recordedScoreCount: 1, radarEligibleScoreCount: 0,
+      scores: Object.fromEntries(charts.map(chart => [chart.chartId, 0])), recordedScoreCount: recordedScores, radarEligibleScoreCount: 0,
     },
   };
 }
@@ -87,6 +89,31 @@ test("comparison contracts reject wrong scope, generation, duplicate buckets and
   assert.throws(() => validateOfficialComparisonPlayer({ ...player, scores: { missing: 995000 } }, index, playerKey), /score records/);
   assert.throws(() => validateOfficialComparisonPlayer({ ...player, buckets: player.buckets.map(bucket => ({ ...bucket, pg: 0, radarScore: 0 })) }, index, playerKey), /must be unknown/);
   assert.equal(isOfficialPlayerKey("../../private"), false);
+  assert.throws(() => validateOfficialComparisonIndex({ ...index, players: [{ ...index.players[0], recordedScoreCount: -1 }] }), /player roster/);
+  assert.throws(() => validateOfficialComparisonIndex({ ...index, players: [{ ...index.players[0], recordedScoreCount: undefined }] }), /player roster/);
+  assert.throws(() => validateOfficialComparisonPlayer(player, { ...index, players: [{ ...index.players[0], recordedScoreCount: 199 }] }, playerKey), /score records/);
+});
+
+test("local player lists include 200 and 201 chart scores but exclude 199", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "piu-comparison-eligibility-"));
+  const previousDirectory = process.env.PIU_LOCAL_OFFICIAL_COMPARISON_DIR;
+  try {
+    for (const count of [199, 200, 201]) {
+      const currentDirectory = path.join(directory, String(count));
+      process.env.PIU_LOCAL_OFFICIAL_COMPARISON_DIR = currentDirectory;
+      const { index } = fixture(count);
+      await mkdir(currentDirectory);
+      await writeFile(path.join(currentDirectory, "index.json"), JSON.stringify(index));
+      const filtered = await readLocalOfficialComparisonIndex();
+      assert.equal(filtered.players.length, count >= 200 ? 1 : 0);
+      if (count === 199) await assert.rejects(() => readLocalOfficialComparisonPlayer(playerKey), OfficialComparisonNotFoundError);
+    }
+  } finally {
+    if (previousDirectory === undefined) delete process.env.PIU_LOCAL_OFFICIAL_COMPARISON_DIR;
+    else process.env.PIU_LOCAL_OFFICIAL_COMPARISON_DIR = previousDirectory;
+    assert.ok(path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep));
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("local reader pins profile paths to the published generation and refuses stale requests", async () => {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { cachedFileReader } from "./local-file-cache.ts";
 import {
   isOfficialPlayerKey,
+  MINIMUM_OFFICIAL_SCORES,
   validateOfficialComparisonIndex,
   validateOfficialComparisonPlayer,
   type OfficialComparisonIndex,
@@ -31,7 +32,8 @@ const readIndex = cachedFileReader(async filePath => validateOfficialComparisonI
 
 export async function readLocalOfficialComparisonIndex(): Promise<OfficialComparisonIndex> {
   try {
-    return await readIndex(path.join(officialComparisonDirectory(), "index.json"));
+    const index = await readIndex(path.join(officialComparisonDirectory(), "index.json"));
+    return { ...index, players: index.players.filter(player => player.recordedScoreCount >= MINIMUM_OFFICIAL_SCORES) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new OfficialComparisonNotFoundError("Official comparison data is unavailable. Run npm run analyze:official-comparison.");

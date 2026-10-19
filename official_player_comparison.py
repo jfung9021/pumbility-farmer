@@ -27,6 +27,7 @@ MODES = {"Single": "singles", "Double": "doubles"}
 PLAYER_KEY = re.compile(r"op_[0-9a-f]{64}\Z")
 GENERATION = re.compile(r"[0-9a-f]{64}\Z")
 SCHEMA_VERSION = 2
+MINIMUM_OFFICIAL_SCORES = 200
 METHOD = {
     "version": "official-comparison-sg-perfect-pg-v2",
     "scope": "Current Singles and Doubles charts at official level 20 or above",
@@ -153,7 +154,8 @@ def build_official_comparison(manifest: Mapping[str, Any], *, chart_metadata: Se
                 for tag in tags[(mix, observation["playerId"])]:
                     names[key].add((0 if mix == "Phoenix2" else 1, tag))
     display_names = {key: min(names[key])[1] if names[key] else "Unnamed official player · " + key[3:11] for key in scores}
-    players = sorted(({"playerKey": key, "displayName": display_names[key]} for key in scores), key=lambda row: (row["displayName"].casefold(), row["playerKey"]))
+    players = sorted(({"playerKey": key, "displayName": display_names[key], "recordedScoreCount": len(player_scores)}
+                      for key, player_scores in scores.items()), key=lambda row: (row["displayName"].casefold(), row["playerKey"]))
     generation = hashlib.sha256(_encoded({"manifest": merged["manifestSha256"], "charts": charts, "method": METHOD})).hexdigest()
     now = generated_at or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -208,7 +210,11 @@ def read_comparison_index(store: Any, *, prefix: str | None = None) -> dict[str,
     payload = store.get_json(f"{prefix or comparison_blob_prefix()}/index.json")
     if not isinstance(payload, dict) or payload.get("schemaVersion") != SCHEMA_VERSION or not isinstance(payload.get("generation"), str) or not GENERATION.fullmatch(payload["generation"]):
         raise ComparisonUnavailableError("Official leaderboard comparison has not been generated yet.")
-    return payload
+    players = payload.get("players")
+    if not isinstance(players, list) or any(not isinstance(row, dict)
+            or type(row.get("recordedScoreCount")) is not int or row["recordedScoreCount"] < 0 for row in players):
+        raise ComparisonUnavailableError("Rebuild the official comparison player list with recorded score counts.")
+    return {**payload, "players": [row for row in players if row["recordedScoreCount"] >= MINIMUM_OFFICIAL_SCORES]}
 
 
 def read_comparison_profile(store: Any, player_key: str, generation: str | None = None, *, prefix: str | None = None) -> dict[str, Any]:

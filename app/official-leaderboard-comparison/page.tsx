@@ -7,6 +7,7 @@ import { ExplanatorySection } from "../_components/explanatory-section";
 import { readJsonResponse } from "../../lib/api-response";
 import {
   OFFICIAL_BPM_LABELS,
+  MINIMUM_OFFICIAL_SCORES,
   validateOfficialComparisonIndex,
   validateOfficialComparisonPlayer,
   type OfficialComparisonBucket,
@@ -82,8 +83,7 @@ function OfficialPlayerPicker({ side, players, playerKey, displayName, disabled,
   const [highlighted, setHighlighted] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const normalized = query.trim().toLocaleLowerCase();
-  const matches = useMemo(() => players.filter((player) => !normalized || player.displayName.toLocaleLowerCase().includes(normalized)), [players, normalized]);
-  const options = matches.slice(0, 100);
+  const options = useMemo(() => players.filter((player) => !normalized || player.displayName.toLocaleLowerCase().includes(normalized)), [players, normalized]);
   const activeIndex = Math.min(highlighted, Math.max(0, options.length - 1));
   const inputId = `official-player-${side}`;
   const listId = `${inputId}-options`;
@@ -146,8 +146,7 @@ function OfficialPlayerPicker({ side, players, playerKey, displayName, disabled,
               type="button"
             >{player.displayName}<span aria-hidden="true">{player.playerKey === playerKey ? "✓" : ""}</span></button>
           ))}
-          {!matches.length ? <p>No matching official players.</p> : null}
-          {matches.length > options.length ? <p>Showing {options.length} of {matches.length.toLocaleString("en-US")}. Type to narrow the list.</p> : null}
+          {!options.length ? <p>No matching official players.</p> : null}
         </div>
       ) : null}
     </div>
@@ -450,6 +449,7 @@ export default function OfficialLeaderboardComparisonPage() {
         </section>
 
         <ExplanatorySection className={styles.about} title="About this comparison">
+          <p>Players need at least {MINIMUM_OFFICIAL_SCORES} distinct official chart scores across Singles and Doubles to appear in the player lists. Scores on all charts in this comparison count, including charts without BPM metadata.</p>
           <p>Official Phoenix 1 and Phoenix 2 scores are matched by player and chart; the higher score is used. These are recorded leaderboard entries, so -- means no captured official score.</p>
           <p>Grades come from the score. Superb Game (SG) is assumed below 1,000,000; Perfect Game at exactly 1,000,000. Plates and Pumbility are estimates.</p>
           <p>Each BPM bucket uses its five highest estimated Pumbility values, padding unrecorded slots with zero. Estimated PG level expresses the equivalent Perfect Game reference performance; Doubles is aligned by one level to Singles. Both radars share the same 0–100 scale (PG10 to PG25).</p>

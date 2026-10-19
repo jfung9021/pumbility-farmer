@@ -6,6 +6,7 @@ export const OFFICIAL_BPM_LABELS = [
 
 export type OfficialComparisonMode = "singles" | "doubles";
 export const OFFICIAL_COMPARISON_METHOD = "official-comparison-sg-perfect-pg-v2";
+export const MINIMUM_OFFICIAL_SCORES = 200;
 
 export interface OfficialComparisonChart {
   chartId: string;
@@ -41,7 +42,7 @@ export interface OfficialComparisonIndex {
   generatedAtUtc: string;
   sourceDates: { Phoenix: string; Phoenix2: string };
   method: Record<string, unknown>;
-  players: { playerKey: string; displayName: string }[];
+  players: { playerKey: string; displayName: string; recordedScoreCount: number }[];
   charts: OfficialComparisonChart[];
 }
 
@@ -93,7 +94,7 @@ export function validateOfficialComparisonIndex(value: unknown): OfficialCompari
   const playerKeys = new Set<string>();
   for (const player of value.players) {
     if (!object(player) || !text(player.playerKey) || !isOfficialPlayerKey(player.playerKey)
-      || !text(player.displayName) || playerKeys.has(player.playerKey)) {
+      || !text(player.displayName) || !count(player.recordedScoreCount) || playerKeys.has(player.playerKey)) {
       invalid("The official comparison player roster is invalid.");
     }
     playerKeys.add(player.playerKey);
@@ -166,7 +167,9 @@ export function validateOfficialComparisonPlayer(
   }
   const scores = Object.entries(value.scores);
   if (scores.some(([id, score]) => !chartsById.has(id) || !count(score) || score > 1_000_000)
-    || scores.length !== value.recordedScoreCount || value.radarEligibleScoreCount > value.recordedScoreCount) {
+    || scores.length !== value.recordedScoreCount
+    || index.players.find(player => player.playerKey === playerKey)?.recordedScoreCount !== value.recordedScoreCount
+    || value.radarEligibleScoreCount > value.recordedScoreCount) {
     invalid("The official player score records are invalid.");
   }
   return value as unknown as OfficialComparisonPlayer;

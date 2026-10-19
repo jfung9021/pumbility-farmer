@@ -145,6 +145,8 @@ class OfficialPlayerComparisonTests(unittest.TestCase):
             profile = next(p for p in profiles.values() if p["displayName"] == "PLAYER#1234")
             self.assertEqual(profile["scores"], {a["id"]: 999000})
             self.assertEqual(profile["recordedScoreCount"], 1)
+            self.assertEqual(next(row for row in index["players"] if row["playerKey"] == profile["playerKey"])["recordedScoreCount"], 1,
+                             "The same chart on both Phoenix leaderboards must count only once")
             self.assertEqual(profile["schemaVersion"], 2)
             self.assertEqual(profile["radarEligibleScoreCount"], 1)
             self.assertNotIn(c["id"], profile["scores"])
@@ -184,7 +186,7 @@ class OfficialPlayerComparisonTests(unittest.TestCase):
 
     def test_reader_and_routes_missing_generation_invalid_player_and_success(self):
         key, generation = "op_" + "1" * 64, "2" * 64
-        index = {"schemaVersion": 2, "generation": generation, "players": [{"playerKey": key}]}
+        index = {"schemaVersion": 2, "generation": generation, "players": [{"playerKey": key, "recordedScoreCount": 200}]}
         profile = {"schemaVersion": 2, "generation": generation, "playerKey": key}
         profile_path = f"{DEFAULT_BLOB_PREFIX}/generations/{generation}/players/{key}.json"
         values = {f"{DEFAULT_BLOB_PREFIX}/index.json": index, profile_path: profile}
@@ -219,6 +221,27 @@ class OfficialPlayerComparisonTests(unittest.TestCase):
             self.assertEqual(get_official_comparison_players().status_code, 503)
         with self.assertRaises(ComparisonUnavailableError):
             read_comparison_index(store)
+
+    def test_player_roster_requires_at_least_200_combined_chart_scores(self):
+        generation = "2" * 64
+        keys = ["op_" + digit * 64 for digit in ("1", "2", "3")]
+        rows = [{"playerKey": key, "recordedScoreCount": count} for key, count in zip(keys, (199, 200, 201))]
+        index = {"schemaVersion": 2, "generation": generation, "players": rows}
+        store = MemoryStore({f"{DEFAULT_BLOB_PREFIX}/index.json": index})
+        self.assertEqual(read_comparison_index(store)["players"], rows[1:])
+        self.assertEqual(index["players"], rows, "Filtering must not mutate the stored roster")
+        with self.assertRaises(ComparisonPlayerNotFoundError):
+            read_comparison_profile(store, keys[0], generation)
+        with patch("api.official_comparison.PrivateBlobStore", return_value=store):
+            response = get_official_comparison_players()
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(json.loads(response.body)["players"], rows[1:])
+            self.assertEqual(get_official_comparison(keys[0], generation).status_code, 404)
+        for invalid in (None, True, -1, 200.5):
+            with self.subTest(recordedScoreCount=invalid):
+                index["players"] = [{"playerKey": keys[0], "recordedScoreCount": invalid}]
+                with self.assertRaises(ComparisonUnavailableError):
+                    read_comparison_index(store)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,8 @@ profiles and scores on every current S20+/D20+ chart. Both players remain side b
 side on phones. The chart-type and difficulty controls filter the score list;
 the radars always summarize all eligible 20+ records. Missing scores display
 `--`, including charts with no score for either player.
+Both player lists require at least 200 distinct recorded official chart scores,
+counting Singles and Doubles together across the comparison's 20+ scope.
 
 Build comparison artifacts from the existing private official Scoring manifest
 and cached Phoenix 2 chart/BPM metadata, without fetching upstream data:
