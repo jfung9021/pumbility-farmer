@@ -35,7 +35,13 @@ def get_tier_chart_details(
         if view.get("kind") == "list":
             prefix = view.get("detailsPrefix", "")
             shard = store.get_json(detail_shard_path(prefix, chart_id))
-            if shard is None or shard.get("schemaVersion") != 1 or shard.get("generatedAtUtc") != generated_at_utc:
+            publication = payload.get("summary", {}).get("method", {}).get("productionTierPublication", {})
+            # Reused immutable details retain their computation time. The client
+            # still requests, and receives, the current publication generation.
+            details_at = (publication.get("computedAtUtc")
+                          if publication.get("reusedComputation") is True else generated_at_utc)
+            if (not details_at or shard is None or shard.get("schemaVersion") != 1
+                    or shard.get("generatedAtUtc") != details_at):
                 raise RuntimeError("The current chart detail shard is unavailable.")
             chart = shard.get("charts", {}).get(chart_id)
             details = {"generatedAtUtc": generated_at_utc, "chart": chart} if chart else None

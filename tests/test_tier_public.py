@@ -35,6 +35,33 @@ def source():
 
 
 class TierPublicTests(unittest.TestCase):
+    def test_reused_details_use_the_computation_time_and_keep_current_client_generation(self):
+        full = source()
+        compact, shards = prepare_tier_publication(full, "computed-generation")
+        published_at = "2026-10-20T00:00:00Z"
+        compact["generatedAtUtc"] = published_at
+        publication = {"reusedComputation": True, "computedAtUtc": full["generatedAtUtc"]}
+        compact["summary"]["method"]["productionTierPublication"] = publication
+        values = {combined_tier_blob_path(): compact, **shards}
+
+        class Store:
+            def get_json(self, path):
+                return values.get(path)
+
+        with patch("api.tier_list.PrivateBlobStore", return_value=Store()):
+            client = TestClient(app)
+            response = client.get("/api/tier-list/chart", params={"chartId": "d18", "generatedAtUtc": published_at})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["generatedAtUtc"], published_at)
+            self.assertIn("scoringRefinement", response.json()["chart"]["scoringVariants"]["sssplus"])
+            self.assertEqual(client.get("/api/tier-list/chart", params={
+                "chartId": "d18", "generatedAtUtc": full["generatedAtUtc"]}).status_code, 409)
+            for changed in ({"reusedComputation": False}, {"computedAtUtc": "wrong"},
+                            {"computedAtUtc": None}):
+                compact["summary"]["method"]["productionTierPublication"] = {**publication, **changed}
+                self.assertEqual(client.get("/api/tier-list/chart", params={
+                    "chartId": "d18", "generatedAtUtc": published_at}).status_code, 503)
+
     def test_projection_preserves_numeric_identity_and_does_not_mutate_full_source(self):
         full = source(); before = copy.deepcopy(full)
         compact = compact_tier_payload(full)
