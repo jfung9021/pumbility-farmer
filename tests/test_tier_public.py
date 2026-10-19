@@ -35,6 +35,31 @@ def source():
 
 
 class TierPublicTests(unittest.TestCase):
+    def test_five_goal_budget_preserves_legacy_limit_and_bounds_compressed_output(self):
+        legacy = source()
+        expanded = copy.deepcopy(legacy)
+        expanded["schemaVersion"] = 58
+        for row in expanded["doubles"]:
+            for field in ("scoringVariants", "pumbilityVariants"):
+                for goal in ("ss", "ssplus"):
+                    row[field][goal] = copy.deepcopy(row[field]["sssplus"])
+        old = compact_tier_payload(legacy)
+        current = compact_tier_payload(expanded)
+        size = lambda value: len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+        self.assertGreater(size(current), size(old))
+        with patch("tier_public.MAX_LIST_BYTES", size(old)), \
+             patch("tier_public.MAX_EXPANDED_LIST_BYTES", size(current)):
+            validate_tier_publication(legacy, old)
+            validate_tier_publication(expanded, current)
+            for payload in (legacy, expanded):
+                oversized = copy.deepcopy(payload)
+                oversized["doubles"][0]["songName"] += "over budget"
+                with self.assertRaisesRegex(ValueError, "decoded publication size budget"):
+                    validate_tier_publication(oversized, compact_tier_payload(oversized))
+            with patch("tier_public.MAX_COMPRESSED_LIST_BYTES", 1):
+                with self.assertRaisesRegex(ValueError, "compressed publication size budget"):
+                    validate_tier_publication(expanded, current)
+
     def test_compact_boundary_count_retains_used_evidence_without_full_boards(self):
         full = source()
         row = full["doubles"][0]
