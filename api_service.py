@@ -10,6 +10,7 @@ from api.cron import router as cron_router
 from api.deploy import router as deploy_router
 from api.jonathan import router as jonathan_router
 from api.operator import router as operator_router
+from api.official_comparison import router as official_comparison_router
 from api.recommendations import router as recommendations_router
 from api.tier_list import router as tier_list_router
 from api.topology import router as topology_router
@@ -26,6 +27,7 @@ app.include_router(cron_router)
 app.include_router(deploy_router)
 app.include_router(jonathan_router)
 app.include_router(operator_router)
+app.include_router(official_comparison_router)
 app.include_router(recommendations_router)
 app.include_router(tier_list_router)
 app.include_router(topology_router)

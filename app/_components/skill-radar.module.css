@@ -1,0 +1,26 @@
+.radar { display: block; margin: 0 auto; max-width: 410px; overflow: visible; width: 100%; }
+.ring { fill: none; stroke: rgba(192, 208, 194, 0.16); stroke-width: 1; }
+.spoke { stroke: rgba(192, 208, 194, 0.13); stroke-width: 1; }
+.selectedAxis { stroke: rgba(200, 255, 46, 0.45); stroke-width: 1.2; }
+.axis { cursor: pointer; }
+.axisLabel { fill: #a3ada4; font-size: 13px; font-weight: 550; }
+.selectedLabel { fill: #d4f694; font-weight: 750; }
+.scaleLabel { fill: #5f6c61; font-size: 8px; }
+.trace { fill-opacity: 0.035; stroke-width: 2.1; stroke-linejoin: round; }
+.singles { color: #ff7474; }
+.doubles { color: #64e694; }
+.singles .trace { fill: currentColor; stroke: currentColor; }
+.doubles .trace { fill: currentColor; stroke: currentColor; stroke-dasharray: 5 4; }
+.singles .partialTrace, .doubles .partialTrace { fill: none; }
+.marker { fill: currentColor; stroke: #111711; stroke-width: 1; }
+.legend { align-items: center; color: #b4bdb4; display: flex; flex-wrap: wrap; font-size: 12px; gap: 8px 20px; justify-content: center; margin: 6px 0 18px; }
+.legend > span { align-items: center; display: inline-flex; gap: 6px; }
+.legend svg { height: 12px; width: 30px; }
+.legendScale { color: #7e8b80; font-size: 11px; }
+@media (max-width: 600px) {
+  .axisLabel { font-size: 22px; }
+  .scaleLabel { display: none; }
+  .legend { font-size: 11px; gap: 7px 14px; margin: 5px 0 16px; }
+  .legendScale { flex-basis: 100%; font-size: 11px; justify-content: center; }
+  .legend svg { width: 25px; }
+}

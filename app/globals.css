@@ -589,7 +589,7 @@ footer b { color: #929b93; }
 /* Recommendations */
 .recommendations-page { --recommendations-stack-gap: 16px; }
 .visually-hidden { clip: rect(0 0 0 0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
-.page-nav { align-items: center; display: flex; font-size: 10px; font-weight: 800; gap: 7px; letter-spacing: 0.08em; text-transform: uppercase; }
+.page-nav { align-items: center; display: flex; flex-wrap: wrap; font-size: 10px; font-weight: 800; gap: 7px; letter-spacing: 0.08em; text-transform: uppercase; }
 .page-nav a, .page-nav span { border-radius: 999px; color: #778079; padding: 8px 12px; text-decoration: none; }
 .page-nav a:hover { color: var(--ink); }
 .page-nav span { background: rgba(200, 255, 46, 0.1); border: 1px solid rgba(200, 255, 46, 0.22); color: var(--acid); }
