@@ -2902,6 +2902,112 @@ def _recommendation_source_identity(
     return source_hashes, snapshot_hashes, input_sha256
 
 
+def _combined_preparation_guard(blob_store: JsonBlobStore) -> dict[str, Any]:
+    """Small live-source tokens on the typed backend; exact reads on legacy stores."""
+    from recommendation_component_cache import computation_code_identity
+
+    flags = {name: os.getenv(name, "") for name in (
+        "PIU_TIER_MIDPOINT_COMPRESSION", "PIU_CROSS_LEVEL_CLEARING", "PIU_OFFICIAL_HIGH_LEVEL_TIERS",
+        "PIU_OFFICIAL_CROSS_LEVEL_SCORING", "PIU_HYBRID_TIERS", "PIU_LOCAL_HYBRID_TIERS",
+        "PIU_LOCAL_ANALYSIS", "PIU_PUMBILITY_AVERAGE", "PIU_SOURCE_AWARE_TIERS",
+    )}
+    reader = getattr(blob_store, "tier_publication_revisions", None)
+    if callable(reader):
+        revisions = reader()
+        sources = {key: value for key, value in revisions.items()
+                   if key == "analysis/private/source-revisions/phoenix1.json"
+                   or key.startswith("analysis/private/official/scoring/")}
+        # Legacy high-level official input is outside the scoring manifest prefix.
+        revision = getattr(blob_store, "artifact_revision", None)
+        if flags["PIU_OFFICIAL_HIGH_LEVEL_TIERS"] == "1" and callable(revision):
+            sources[official_tier_snapshot_path()] = revision(official_tier_snapshot_path())
+    else:
+        arguments = _official_tier_arguments(blob_store)
+        sources = {"phoenix1": _canonical_json_sha256(blob_store.get_json(phoenix1_snapshot_path())),
+                   "official": _canonical_json_sha256({key: value for key, value in arguments.items()
+                                                       if key != "source_aware_store"})}
+    return {"code": computation_code_identity(), "flags": flags, "sources": sources}
+
+
+def _combined_preparation_path(job_id: str, mix_spec: MixSpec) -> str:
+    return typed_checkpoint_combined_path(job_id, mix_spec).removesuffix(".json") + "-prepared.json"
+
+
+def _save_combined_preparation(blob_store, *, job_id, mix_spec, payload, snapshot_reference,
+                               model_charts, slopes, source_hashes, snapshot_hashes,
+                               input_sha256, source_guard):
+    revision = getattr(blob_store, "artifact_revision", None)
+    value = {"version": 1, "jobId": job_id, "mix": mix_spec.key,
+             "generatedAtUtc": payload["generatedAtUtc"], "sourceGuard": source_guard,
+             "snapshotReference": dict(snapshot_reference),
+             "snapshotRevision": revision(snapshot_reference["pathname"]) if callable(revision) else None,
+             "modelCharts": model_charts, "phoenix2Slopes": dict(slopes),
+             "sourceHashes": dict(source_hashes), "snapshotHashes": dict(snapshot_hashes),
+             "inputSha256": input_sha256}
+    path = _combined_preparation_path(job_id, mix_spec)
+    blob_store.put_json(path, value)
+    stored = blob_store.get_json(path)
+    if stored != value:
+        raise ValueError("The pinned combined preparation changed during persistence.")
+    # Bind PostgreSQL's normalized JSON representation, including -0.0 normalization.
+    return {"pathname": path, "sha256": _canonical_json_sha256(stored)}
+
+
+def _resume_combined_preparation(checkpoint, *, blob_store, job_store, job_id, mix_spec,
+                                 checkpoint_path, lease_heartbeat):
+    from production_tiers import resume_tier_generation
+
+    reference = checkpoint["combinedPreparation"]
+    progress = _validated_tier_progress(checkpoint["tierProgress"])
+    path = _combined_preparation_path(job_id, mix_spec)
+    if not isinstance(reference, Mapping) or reference.get("pathname") != path:
+        raise ValueError("The pinned combined preparation reference is invalid.")
+    prepared = blob_store.get_json(path)
+    if (not isinstance(prepared, Mapping) or prepared.get("version") != 1
+            or prepared.get("jobId") != job_id or prepared.get("mix") != mix_spec.key
+            or prepared.get("generatedAtUtc") != checkpoint["payload"].get("generatedAtUtc")
+            or reference.get("sha256") != _canonical_json_sha256(prepared)
+            or prepared.get("snapshotReference") != checkpoint.get("snapshot")
+            or prepared.get("sourceGuard") != _combined_preparation_guard(blob_store)):
+        raise ValueError("The pinned combined preparation inputs or code changed.")
+    revision = getattr(blob_store, "artifact_revision", None)
+    if callable(revision):
+        if (prepared.get("snapshotRevision") is None
+                or revision(prepared["snapshotReference"]["pathname"]) != prepared["snapshotRevision"]):
+            raise ValueError("The pinned combined snapshot revision changed.")
+    else:
+        _load_typed_checkpoint_snapshot(blob_store, checkpoint=checkpoint,
+                                        reference=prepared["snapshotReference"], mix_spec=mix_spec)
+
+    current = dict(checkpoint)
+    audited = False
+
+    def on_progress(value):
+        nonlocal current, audited
+        current = _reconcile_tier_progress(current, value)
+        blob_store.put_json(checkpoint_path, current)
+        if not audited:
+            current = _audit_checkpoint_resume(blob_store, checkpoint_path, current)
+            audited = True
+
+    _pulse_job_lease(lease_heartbeat)
+    tiers = resume_tier_generation(blob_store, progress["generation"],
+        generated_at_utc=prepared["generatedAtUtc"], on_progress=on_progress)
+    if not audited:
+        raise ValueError("The resumed tier generation did not report committed progress.")
+    combined = _write_typed_checkpoint_combined(blob_store, job_id=job_id, mix_spec=mix_spec,
+        generated_at_utc=prepared["generatedAtUtc"], combined_tier=tiers,
+        model_charts=prepared["modelCharts"], phoenix2_slopes=prepared["phoenix2Slopes"],
+        source_hashes=prepared["sourceHashes"], snapshot_hashes=prepared["snapshotHashes"],
+        input_sha256=prepared["inputSha256"])
+    blob_store.put_json(checkpoint_path, {**current, "phase": TYPED_CHECKPOINT_COMBINED_PHASE,
+                                        "combined": combined})
+    return _checkpoint_continuation(job_store=job_store, job_id=job_id,
+        continuation="model-prepare", stage="analyzing",
+        message="Combined recommendation inputs checkpointed; queued for model fitting.",
+        lease_heartbeat=lease_heartbeat)
+
+
 def _build_combined_analysis_checkpoint(
     *,
     blob_store: JsonBlobStore,
@@ -2914,8 +3020,11 @@ def _build_combined_analysis_checkpoint(
     eligible_player_count: int,
     lease_heartbeat: Any | None,
     on_tier_progress: Callable[[Mapping[str, Any] | None], None] | None = None,
+    on_prepared: Callable[[Mapping[str, Any]], None] | None = None,
+    snapshot_reference: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build and persist compact combined inputs without fitting the model."""
+    source_guard = _combined_preparation_guard(blob_store) if on_prepared is not None else None
     frozen_phoenix1 = blob_store.get_json(phoenix1_snapshot_path())
     if frozen_phoenix1 is None:
         if on_tier_progress is not None:
@@ -2947,6 +3056,15 @@ def _build_combined_analysis_checkpoint(
         )
     )
     tier_arguments = _official_tier_arguments(blob_store)
+    if on_prepared is not None and tier_arguments.get("source_aware_store") is not None:
+        if _combined_preparation_guard(blob_store) != source_guard:
+            raise ValueError("The combined preparation sources changed while being pinned.")
+        prepared = _save_combined_preparation(blob_store, job_id=job_id, mix_spec=mix_spec,
+            payload=payload, snapshot_reference=snapshot_reference,
+            model_charts=recommendation_model_chart_rows(combined_charts), slopes=combined_slopes,
+            source_hashes=source_hashes, snapshot_hashes=snapshot_hashes,
+            input_sha256=input_sha256, source_guard=source_guard)
+        on_prepared(prepared)
     if on_tier_progress is not None and tier_arguments.get("source_aware_store") is None:
         on_tier_progress(None)
     combined_tier = build_combined_tier_payload(
@@ -3063,6 +3181,7 @@ def _build_analysis_model_artifacts(
         generation_key=recommendation_generation,
         consume_phoenix1_snapshot=True,
         score_model_artifact=score_model_artifact,
+        component_store=blob_store,
     )
     output_sha256 = _canonical_json_sha256(
         {
@@ -3175,6 +3294,7 @@ def _build_analysis_model_mode_artifact(
         ),
         chart_type=chart_type,
         consume_snapshots=consume_snapshots,
+        component_store=blob_store,
     )
     reference = _write_typed_checkpoint_model_part(
         blob_store,
@@ -3286,6 +3406,21 @@ def _resume_typed_analysis_checkpoint(
         or (raw_model_parts is not None and not isinstance(raw_model_parts, Mapping))
     ):
         raise ValueError("The typed analysis checkpoint payload is invalid.")
+    config = AnalysisConfig(**dict(raw_config))
+    if resolve_mix(config.mix).key != mix_spec.key:
+        raise ValueError("The typed analysis checkpoint configuration is invalid.")
+    payload = dict(raw_payload)
+    if parse_utc(payload.get("generatedAtUtc")) is None:
+        raise ValueError("The typed analysis checkpoint timestamp is invalid.")
+    # Once the tier inputs are pinned, do not reconstruct every snapshot/cohort
+    # before each finish phase. Legacy checkpoints retain the full validation path.
+    if (checkpoint_phase == TYPED_CHECKPOINT_ANALYSIS_PHASE
+            and checkpoint.get("combinedPreparation") is not None
+            and checkpoint.get("tierProgress") is not None
+            and _validated_tier_progress(checkpoint["tierProgress"])["ordinal"] >= 9):
+        return _resume_combined_preparation(checkpoint, blob_store=blob_store,
+            job_store=job_store, job_id=job_id, mix_spec=mix_spec,
+            checkpoint_path=checkpoint_path, lease_heartbeat=lease_heartbeat)
     # Later publication phases embed the aggregate directly and no longer load
     # the combined-input shard, so they need the same compatibility boundary.
     if isinstance(raw_combined_tier, Mapping):
@@ -3296,12 +3431,6 @@ def _resume_typed_analysis_checkpoint(
         reference=raw_snapshot_reference,
         mix_spec=mix_spec,
     )
-    config = AnalysisConfig(**dict(raw_config))
-    if resolve_mix(config.mix).key != mix_spec.key:
-        raise ValueError("The typed analysis checkpoint configuration is invalid.")
-    payload = dict(raw_payload)
-    if parse_utc(payload.get("generatedAtUtc")) is None:
-        raise ValueError("The typed analysis checkpoint timestamp is invalid.")
     manifest = _typed_manifest(checkpoint)
     combined_inputs: dict[str, Any] | None = None
     if checkpoint_phase in {
@@ -3380,6 +3509,11 @@ def _resume_typed_analysis_checkpoint(
                 checkpoint = _audit_checkpoint_resume(blob_store, checkpoint_path, checkpoint)
                 progress_audited = True
 
+        def record_prepared(reference: Mapping[str, Any]) -> None:
+            nonlocal checkpoint
+            checkpoint = {**checkpoint, "combinedPreparation": dict(reference)}
+            blob_store.put_json(checkpoint_path, checkpoint)
+
         combined_reference = _build_combined_analysis_checkpoint(
             blob_store=blob_store,
             job_store=job_store,
@@ -3391,6 +3525,8 @@ def _resume_typed_analysis_checkpoint(
             eligible_player_count=eligible_player_count,
             lease_heartbeat=lease_heartbeat,
             on_tier_progress=record_tier_progress,
+            on_prepared=record_prepared,
+            snapshot_reference=raw_snapshot_reference,
         )
         if not progress_audited:
             record_tier_progress(None)
@@ -4020,6 +4156,7 @@ def _resume_typed_analysis_checkpoint(
             checkpoint_path,
             typed_checkpoint_snapshot_path(job_id, mix_spec),
             typed_checkpoint_combined_path(job_id, mix_spec),
+            _combined_preparation_path(job_id, mix_spec),
             typed_checkpoint_model_part_path(job_id, "singles", mix_spec),
             typed_checkpoint_model_part_path(job_id, "doubles", mix_spec),
             typed_checkpoint_model_part_path(job_id, "overall", mix_spec),

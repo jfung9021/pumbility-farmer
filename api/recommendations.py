@@ -166,6 +166,11 @@ def get_recommendation_players():
                 "modelGeneratedAtUtc": payload.get(
                     "modelGeneratedAtUtc", payload.get("generatedAtUtc")
                 ),
+                **{
+                    field: payload[field]
+                    for field in ("modelComputedAtUtc", "sourceCheckedAtUtc")
+                    if payload.get(field)
+                },
                 "refreshSupported": player_refresh_enabled(payload),
                 "method": payload.get("method", {}),
                 "players": players,

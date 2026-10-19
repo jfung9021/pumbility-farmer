@@ -44,13 +44,13 @@ export function globalRefreshMessage(status: RefreshStatus, surface: "tier" | "m
 
 /** Available global publication time is separate from the cached result's model time. */
 export function availableRecommendationModel(payload: PlayerRecommendationsResponse | null | undefined, index: RecommendationPlayersResponse | null | undefined): string | undefined {
-  return newestPublication(payload?.currentModelGeneratedAtUtc, index?.modelGeneratedAtUtc || index?.generatedAtUtc);
+  return newestPublication(payload?.currentSourceCheckedAtUtc, payload?.currentModelGeneratedAtUtc, index?.sourceCheckedAtUtc, index?.modelGeneratedAtUtc || index?.generatedAtUtc);
 }
 
 export function displayedRecommendationModel(payload: PlayerRecommendationsResponse | null | undefined, index: RecommendationPlayersResponse | null | undefined): string | undefined {
   return payload
-    ? payload.modelGeneratedAtUtc || (payload.legacySnapshot ? payload.generatedAtUtc : undefined)
-    : index?.modelGeneratedAtUtc || index?.generatedAtUtc;
+    ? payload.modelComputedAtUtc || payload.modelGeneratedAtUtc || (payload.legacySnapshot ? payload.generatedAtUtc : undefined)
+    : index?.modelComputedAtUtc || index?.modelGeneratedAtUtc || index?.generatedAtUtc;
 }
 
 /** Reload a catalog only once; a second publication conflict is surfaced to the user. */

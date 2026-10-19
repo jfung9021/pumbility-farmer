@@ -1,6 +1,7 @@
 type RefreshMetaProps = {
   delayedAfterMs?: number;
   generatedAtUtc?: string | null;
+  freshnessAtUtc?: string | null;
   label: string;
   loading?: boolean;
   loadingLabel: string;
@@ -19,12 +20,14 @@ export function refreshAge(value: string, nowMs: number): string {
 export function RefreshMeta({
   delayedAfterMs,
   generatedAtUtc,
+  freshnessAtUtc,
   label,
   loading = false,
   loadingLabel,
   nowMs,
 }: RefreshMetaProps) {
-  const generatedAtMs = generatedAtUtc ? new Date(generatedAtUtc).getTime() : Number.NaN;
+  const freshness = freshnessAtUtc || generatedAtUtc;
+  const generatedAtMs = freshness ? new Date(freshness).getTime() : Number.NaN;
   const delayed = Boolean(
     delayedAfterMs
     && nowMs

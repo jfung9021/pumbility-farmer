@@ -52,6 +52,7 @@ class HostedTierTests(unittest.TestCase):
              patch("official_scoring_sources.canonical_scoring_manifest_sha256", return_value="official"), \
              patch("scoring_percentile.build_production_tier_payload", return_value={"schemaVersion": 48}) as general, \
              patch("sss_scoring_model.fit_target_model", fitter), \
+             patch("target_fit_cache.load_or_fit_target", side_effect=lambda store, boards, **kw: fitter(boards, **kw)), \
              patch("production_tiers._finish_stage", side_effect=lambda stage, *a:
                    {"schemaVersion": {"centered-sss": 51, "sssplus": 52, "median": 53, "spread": 54,
                     "combined-clearing": 55, "source-aware": 56, "submitted-calibration": 57}[stage],

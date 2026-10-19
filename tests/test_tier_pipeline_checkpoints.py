@@ -13,6 +13,21 @@ from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
 
 
 class CheckpointTests(TestCase):
+    def test_numerical_library_change_invalidates_outer_fit_identity(self):
+        previous = tiers.model_code_identity()
+        with patch("importlib.metadata.version", return_value="changed-numerical-library"):
+            self.assertNotEqual(tiers.model_code_identity(), previous)
+
+    def test_backend_checkpoint_integrity_errors_keep_the_typed_failure_boundary(self):
+        from tier_pipeline_checkpoints import CheckpointValidationError
+        store = MemoryBlobStore()
+        reference = write_checkpoint(store, {"schemaVersion": 57}, stage="public", identity="same")
+        for message in (f"Pumbility binary artifact {reference['path']!r} is missing from Storage.",
+                        f"Pumbility binary artifact {reference['path']!r} failed checksum validation."):
+            with patch.object(store, "get_bytes", side_effect=ValueError(message)):
+                with self.assertRaises(CheckpointValidationError):
+                    read_checkpoint(store, reference)
+
     def test_gzip_uploads_use_the_private_buckets_allowed_binary_mime(self):
         import gzip
         store = MemoryBlobStore()
@@ -59,6 +74,25 @@ class CheckpointTests(TestCase):
             bad = {**ref, field: value}
             with self.assertRaises(ValueError):
                 read_checkpoint(store, bad)
+
+    def test_checkpoint_hashes_during_one_compression_and_one_decode_pass_and_reads_legacy_bytes(self):
+        import gzip
+        import hashlib
+        value = {"schemaVersion": 57, "values": [1, 1.0, "音楽"]}
+        store = MemoryBlobStore()
+        with patch("tier_pipeline_checkpoints.gzip.GzipFile", wraps=gzip.GzipFile) as streams:
+            reference = write_checkpoint(store, value, stage="submitted-calibration", identity="identity")
+            self.assertEqual(streams.call_count, 1)
+        with patch("tier_pipeline_checkpoints.gzip.GzipFile", wraps=gzip.GzipFile) as streams:
+            self.assertEqual(read_checkpoint(store, reference), value)
+            self.assertEqual(streams.call_count, 1)
+        legacy_json = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        legacy_bytes = gzip.compress(legacy_json, mtime=0)
+        blob_hash = hashlib.sha256(legacy_bytes).hexdigest()
+        legacy = {**reference, "path": "analysis/private/source-aware-tiers/checkpoints/" + blob_hash + ".json.gz",
+                  "blobSha256": blob_hash, "payloadSha256": hashlib.sha256(legacy_json).hexdigest()}
+        store.put_bytes(legacy["path"], legacy_bytes, content_type="application/octet-stream")
+        self.assertEqual(read_checkpoint(store, legacy), value)
 
 
 class PipelineResumeTests(TestCase):

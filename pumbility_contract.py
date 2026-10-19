@@ -192,23 +192,50 @@ def cached_player_is_fresh(
 ) -> bool:
     if not isinstance(payload, Mapping):
         return False
-    if int(payload.get("schemaVersion") or 0) != int(index.get("schemaVersion") or 0):
-        return False
-    if payload.get("modelGeneration") != index.get("generationKey"):
+    if not player_model_is_compatible(payload, index):
         return False
     synced = parse_utc(payload.get("playerSyncedAtUtc"))
     return bool(synced and (now or utc_now()) - synced < PLAYER_REFRESH_FRESHNESS)
+
+
+def player_model_is_compatible(
+    payload: Mapping[str, Any], index: Mapping[str, Any]
+) -> bool:
+    """Compare reusable model content and the player's pinned baseline inputs.
+
+    Publication IDs remain the compatibility boundary for legacy artifacts.
+    New artifacts can survive a no-change publication, but a changed player
+    baseline, removed player, or serving-model dependency must invalidate them.
+    """
+    if int(payload.get("schemaVersion") or 0) != int(index.get("schemaVersion") or 0):
+        return False
+    cached_identity = payload.get("numericalModelIdentity")
+    current_identity = index.get("numericalModelIdentity")
+    if cached_identity is not None or current_identity is not None:
+        player = payload.get("player")
+        player_key = player.get("playerKey") if isinstance(player, Mapping) else None
+        metadata = find_player_metadata(index, str(player_key or ""))
+        cached_inputs = payload.get("playerInputIdentity")
+        return bool(
+            isinstance(cached_identity, str) and cached_identity
+            and cached_identity == current_identity
+            and isinstance(cached_inputs, str) and cached_inputs
+            and metadata is not None
+            and cached_inputs == metadata.get("playerInputIdentity")
+        )
+    return payload.get("modelGeneration") == index.get("generationKey")
 
 
 def with_staleness(
     payload: Mapping[str, Any], index: Mapping[str, Any]
 ) -> dict[str, Any]:
     value = dict(payload)
-    value["stale"] = (
-        int(payload.get("schemaVersion") or 0) != int(index.get("schemaVersion") or 0)
-        or payload.get("modelGeneration") != index.get("generationKey")
-    )
+    value["stale"] = not player_model_is_compatible(payload, index)
     value["currentModelGeneratedAtUtc"] = index.get(
         "modelGeneratedAtUtc", index.get("generatedAtUtc")
     )
+    if index.get("modelComputedAtUtc"):
+        value["currentModelComputedAtUtc"] = index["modelComputedAtUtc"]
+    if index.get("sourceCheckedAtUtc"):
+        value["currentSourceCheckedAtUtc"] = index["sourceCheckedAtUtc"]
     return value

@@ -15,18 +15,41 @@ from typing import Any, Mapping
 PREFIX = "analysis/private/source-aware-tiers/checkpoints/"
 
 
+class CheckpointValidationError(ValueError):
+    """Checkpoint integrity/provenance differs; pinned jobs must fail closed."""
+
+
+class _HashingWriter(io.RawIOBase):
+    def __init__(self, writer, digest):
+        self.writer, self.digest = writer, digest
+
+    def writable(self):
+        return True
+
+    def write(self, value):
+        written = self.writer.write(value)
+        self.digest.update(value[:written])
+        return written
+
+
+class _HashingReader:
+    def __init__(self, reader, digest):
+        self.reader, self.digest = reader, digest
+
+    def read(self, size=-1):
+        value = self.reader.read(size)
+        self.digest.update(value)
+        return value
+
+
 def write_checkpoint(store, payload: Mapping[str, Any], *, stage: str,
                      identity: str, predecessor: str | None = None) -> dict:
+    content = hashlib.sha256()
     with tempfile.TemporaryFile() as staged:
         with gzip.GzipFile(filename="", fileobj=staged, mode="wb", mtime=0) as compressed:
-            with io.TextIOWrapper(compressed, encoding="utf-8") as writer:
+            with io.TextIOWrapper(_HashingWriter(compressed, content), encoding="utf-8") as writer:
                 json.dump(payload, writer, sort_keys=True, separators=(",", ":"),
                           ensure_ascii=False, allow_nan=False)
-        staged.seek(0)
-        content = hashlib.sha256()
-        with gzip.GzipFile(fileobj=staged, mode="rb") as reader:
-            for chunk in iter(lambda: reader.read(1024 * 1024), b""):
-                content.update(chunk)
         staged.seek(0)
         body = staged.read()
     blob_sha = hashlib.sha256(body).hexdigest()
@@ -42,26 +65,42 @@ def write_checkpoint(store, payload: Mapping[str, Any], *, stage: str,
             "validation": "transition-validated-v1"}
 
 
-def read_checkpoint(store, reference: Mapping[str, Any], *, stage: str | None = None,
-                    identity: str | None = None, predecessor: str | None = None) -> dict:
+def verified_checkpoint_bytes(store, reference: Mapping[str, Any], *, stage: str | None = None,
+                              identity: str | None = None, predecessor: str | None = None) -> bytes:
+    """Check an immutable validated checkpoint without decoding its audit tree."""
     if (reference.get("version") != 1
             or reference.get("validation") != "transition-validated-v1"
             or reference.get("path") != PREFIX + str(reference.get("blobSha256")) + ".json.gz"
             or (stage is not None and reference.get("stage") != stage)
             or (identity is not None and reference.get("identity") != identity)
             or (predecessor is not None and reference.get("predecessorSha256") != predecessor)):
-        raise ValueError("The tier checkpoint has incompatible stage provenance.")
-    body = store.get_bytes(reference["path"])
+        raise CheckpointValidationError("The tier checkpoint has incompatible stage provenance.")
+    try:
+        body = store.get_bytes(reference["path"])
+    except ValueError as error:
+        if str(error) not in {
+            f"Pumbility binary artifact {reference['path']!r} is missing from Storage.",
+            f"Pumbility binary artifact {reference['path']!r} failed checksum validation.",
+        }:
+            raise
+        raise CheckpointValidationError("The tier checkpoint bytes are missing or corrupt.") from error
     if body is None or hashlib.sha256(body).hexdigest() != reference["blobSha256"]:
-        raise ValueError("The tier checkpoint bytes are missing or corrupt.")
+        raise CheckpointValidationError("The tier checkpoint bytes are missing or corrupt.")
+    return body
+
+
+def read_checkpoint(store, reference: Mapping[str, Any], *, stage: str | None = None,
+                    identity: str | None = None, predecessor: str | None = None) -> dict:
+    body = verified_checkpoint_bytes(store, reference, stage=stage, identity=identity,
+                                     predecessor=predecessor)
     content = hashlib.sha256()
-    with gzip.GzipFile(fileobj=io.BytesIO(body), mode="rb") as reader:
-        for chunk in iter(lambda: reader.read(1024 * 1024), b""):
-            content.update(chunk)
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(body), mode="rb") as reader:
+            result = json.load(_HashingReader(reader, content))
+    except (json.JSONDecodeError, gzip.BadGzipFile, EOFError, UnicodeDecodeError) as error:
+        raise CheckpointValidationError("The tier checkpoint content is corrupt.") from error
     if content.hexdigest() != reference.get("payloadSha256"):
-        raise ValueError("The tier checkpoint content identity differs.")
-    with gzip.GzipFile(fileobj=io.BytesIO(body), mode="rb") as reader:
-        result = json.load(reader)
+        raise CheckpointValidationError("The tier checkpoint content identity differs.")
     if not isinstance(result, dict) or result.get("schemaVersion") != reference.get("schemaVersion"):
-        raise ValueError("The tier checkpoint schema differs.")
+        raise CheckpointValidationError("The tier checkpoint schema differs.")
     return result

@@ -341,6 +341,7 @@ def build_recommendation_model_artifacts(
     generated_at_utc: str,
     consume_phoenix1_snapshot: bool = False,
     score_model_artifact: tuple[ScoreResponseModel, Mapping[str, Any]] | None = None,
+    component_store: JsonStore | None = None,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -437,6 +438,17 @@ def build_recommendation_model_artifacts(
         "plateModel": plate_model_payload,
         "method": method,
     }
+    from recommendation_component_cache import (
+        player_input_identity, serving_computed_at, serving_identity,
+    )
+
+    score_model_bytes = score_model.to_npz_bytes()
+    numerical_identity = serving_identity(model, score_model_bytes)
+    computed_at = serving_computed_at(component_store, numerical_identity,
+        isoformat_utc(utc_now()) if component_store is not None else generated_at_utc)
+    provenance = {"numericalModelIdentity": numerical_identity,
+                  "modelComputedAtUtc": computed_at, "sourceCheckedAtUtc": generated_at_utc}
+    model.update(provenance)
 
     p1_counts = _mode_counts(phoenix1_scores, phoenix2_catalog)
     p2_counts = _mode_counts(phoenix2_scores, phoenix2_catalog)
@@ -545,6 +557,9 @@ def build_recommendation_model_artifacts(
                     "scores": p2_by_player.get(player_id, []),
                 }
             )
+            index_players[-1]["playerInputIdentity"] = player_input_identity(
+                p1_players[-1], p2_players[-1], index_players[-1],
+            )
         p1_shards.append(
             {
                 "schemaVersion": COMPACT_PHOENIX1_SHARD_SCHEMA_VERSION,
@@ -573,8 +588,9 @@ def build_recommendation_model_artifacts(
         "players": index_players,
         "inputShardCount": len(p1_shards),
         "inputShardSize": PLAYER_ARTIFACT_SHARD_SIZE,
+        **provenance,
     }
-    return index, model, score_model.to_npz_bytes(), p1_shards, p2_shards
+    return index, model, score_model_bytes, p1_shards, p2_shards
 
 
 def build_recommendation_score_mode_artifact(
@@ -584,6 +600,7 @@ def build_recommendation_score_mode_artifact(
     combined_charts: Sequence[Mapping[str, Any]],
     chart_type: str,
     consume_snapshots: bool = False,
+    component_store: JsonStore | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
     """Fit one mode in isolation for a fresh-process model continuation."""
     charts_for_players = _recommendation_chart_rows(combined_charts)
@@ -612,6 +629,18 @@ def build_recommendation_score_mode_artifact(
         _, phoenix1_scores = _prepare_phoenix1_rating_frames(
             phoenix1_snapshot, phoenix2_catalog
         )
+    from recommendation_component_cache import InvalidComponentCache, load_mode, mode_input_identity, save_mode
+
+    identity = None
+    if component_store is not None:
+        identity = mode_input_identity(phoenix1_scores, phoenix2_catalog, phoenix2_scores,
+                                       charts_for_players, chart_type)
+        try:
+            cached = load_mode(component_store, identity)
+        except InvalidComponentCache:
+            cached = None
+        if cached is not None:
+            return cached
     score_model, score_metadata = fit_score_response_model_mode_from_frames(
         phoenix1_scores,
         phoenix2_catalog,
@@ -619,7 +648,10 @@ def build_recommendation_score_mode_artifact(
         charts_for_players,
         chart_type,
     )
-    return score_model.to_npz_bytes(), score_metadata
+    score_bytes = score_model.to_npz_bytes()
+    if component_store is not None:
+        save_mode(component_store, identity, score_bytes, score_metadata)
+    return score_bytes, score_metadata
 
 
 def _raw_scores_by_player(
@@ -1003,6 +1035,10 @@ def player_recommendation_response(
         "modelGeneratedAtUtc": model_generated,
         "playerSyncedAtUtc": player_synced,
         "modelGeneration": model.get("generationKey"),
+        "numericalModelIdentity": model.get("numericalModelIdentity"),
+        "playerInputIdentity": metadata.get("playerInputIdentity"),
+        "modelComputedAtUtc": model.get("modelComputedAtUtc") or model_generated,
+        "sourceCheckedAtUtc": model.get("sourceCheckedAtUtc") or model_generated,
         "stale": False,
         "method": model.get("method", {}),
         "player": recommendation,

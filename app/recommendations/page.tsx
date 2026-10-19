@@ -1216,6 +1216,7 @@ export default function RecommendationsPage() {
           <RefreshMeta
             delayedAfterMs={MODEL_DELAY_THRESHOLD_MS}
             generatedAtUtc={modelGeneratedAt}
+            freshnessAtUtc={playerPayload?.stale ? modelGeneratedAt : availableModelGeneratedAt}
             label="Model updated"
             loading={loadingPlayers}
             loadingLabel="Loading recommendations..."

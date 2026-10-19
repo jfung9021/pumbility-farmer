@@ -846,6 +846,8 @@ export interface RecommendationPlayer {
 export interface RecommendationPlayersResponse {
   generatedAtUtc: string;
   modelGeneratedAtUtc?: string;
+  modelComputedAtUtc?: string;
+  sourceCheckedAtUtc?: string;
   refreshSupported?: boolean;
   method: Record<string, unknown>;
   players: RecommendationPlayerSummary[];
@@ -855,7 +857,11 @@ export interface PlayerRecommendationsResponse {
   generatedAtUtc: string;
   recommendationsGeneratedAtUtc?: string;
   modelGeneratedAtUtc?: string;
+  modelComputedAtUtc?: string;
   currentModelGeneratedAtUtc?: string;
+  currentModelComputedAtUtc?: string;
+  sourceCheckedAtUtc?: string;
+  currentSourceCheckedAtUtc?: string;
   playerSyncedAtUtc?: string;
   modelGeneration?: string;
   stale?: boolean;

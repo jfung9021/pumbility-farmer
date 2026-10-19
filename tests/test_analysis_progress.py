@@ -72,9 +72,12 @@ class AnalysisProgressTests(unittest.TestCase):
                 "analysis_runtime.build_recommendation_model_artifacts": {"side_effect": _recommendation_model_artifacts_fixture},
                 "analysis_runtime.build_recommendation_score_mode_artifact": {"side_effect": _recommendation_mode_artifact_fixture},
                 "production_tiers.load_context": {"return_value": context},
+                "production_tiers.pipeline_code_identity": {"return_value": "fixture-pipeline-code"},
+                "recommendation_component_cache.computation_code_identity": {"return_value": "fixture-recommendation-code"},
                 "official_scoring_sources.canonical_scoring_manifest_sha256": {"return_value": "official"},
                 "scoring_percentile.build_production_tier_payload": {"return_value": {"schemaVersion": 48}},
                 "sss_scoring_model.fit_target_model": {"new": fitter},
+                "target_fit_cache.load_or_fit_target": {"new": lambda store, boards, **kwargs: fitter(boards, **kwargs)},
                 "production_tiers._finish_stage": {"new": finish},
                 "production_tiers.public_tiers": {"return_value": public},
                 "production_tiers.validate_public_tiers": {},
@@ -206,6 +209,61 @@ class AnalysisProgressTests(unittest.TestCase):
         with patch.object(self.jobs, "save", side_effect=RuntimeError("database unavailable")):
             with self.assertRaisesRegex(RuntimeError, "database unavailable"):
                 self.resume()
+
+    def revision_backed_store(self):
+        from analysis_runtime import _canonical_json_sha256
+        self.source_revision = {"value": "original"}
+        self.blobs.tier_publication_revisions = lambda: {
+            "analysis/private/source-revisions/phoenix1.json": dict(self.source_revision)}
+        self.blobs.artifact_revision = lambda path: (
+            {"sha256": _canonical_json_sha256(self.blobs.values[path])}
+            if path in self.blobs.values else None)
+
+    def pin_finishing_inputs(self):
+        for _ in range(12):
+            result = self.resume()
+            self.assertEqual(result["status"], "running", result.get("error"))
+            checkpoint = self.blobs.get_json(self.path)
+            if checkpoint.get("tierProgress", {}).get("ordinal") == 9:
+                return checkpoint
+        self.fail("tier phase inputs were not pinned")
+
+    def test_global_finish_resume_avoids_snapshot_official_and_cohort_reconstruction(self):
+        self.revision_backed_store()
+        with self.hosted_pipeline() as (_, finish, _):
+            self.pin_finishing_inputs()
+            with (
+                patch("analysis_runtime._load_typed_checkpoint_snapshot", side_effect=AssertionError("snapshot hydrated")),
+                patch("analysis_runtime._build_combined_analysis_checkpoint", side_effect=AssertionError("combined rebuilt")),
+                patch("analysis_runtime._official_tier_arguments", side_effect=AssertionError("official hydrated")),
+                patch("production_tiers.load_context", side_effect=AssertionError("cohorts rebuilt")),
+            ):
+                result = self.resume()
+            self.assertEqual(result["status"], "running", result.get("error"))
+            self.assertEqual(self.blobs.get_json(self.path)["tierProgress"]["ordinal"], 10)
+            self.assertEqual(finish.call_count, 1)
+
+    def test_fast_resume_rejects_changed_source_snapshot_or_pinned_preparation(self):
+        for change in ("source", "snapshot", "preparation"):
+            with self.subTest(change=change):
+                if change != "source":
+                    self.setUp()
+                self.revision_backed_store()
+                with self.hosted_pipeline() as (_, finish, _):
+                    checkpoint = self.pin_finishing_inputs()
+                    if change == "source":
+                        self.source_revision["value"] = "changed"
+                    elif change == "snapshot":
+                        path = checkpoint["snapshot"]["pathname"]
+                        self.blobs.put_json(path, {**self.blobs.get_json(path), "unexpected": True})
+                    else:
+                        path = checkpoint["combinedPreparation"]["pathname"]
+                        self.blobs.put_json(path, {**self.blobs.get_json(path), "inputSha256": "changed"})
+                    with self.assertLogs("pumbility.publication", level="ERROR"):
+                        result = self.resume()
+                    self.assertEqual(result["status"], "failed")
+                    finish.assert_not_called()
+                    self.assertIsNone(self.blobs.get_json(LATEST_BLOB_PATH))
 
     def test_stale_payload_cannot_cancel_another_workers_running_lease(self):
         jobs = MemoryJobStore()

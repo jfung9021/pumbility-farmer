@@ -24,6 +24,30 @@ test("cached recommendations retain their actual model date while stale", () => 
   assert.equal(displayedRecommendationModel({ ...cache, stale: false, modelGeneratedAtUtc: index.modelGeneratedAtUtc }, index), index.modelGeneratedAtUtc);
 });
 
+test("reused models retain their computation date while a successful source check is fresh", () => {
+  const now = Date.parse("2026-10-20T06:30:00Z");
+  const index = {
+    generatedAtUtc: "2026-10-20T06:29:00Z",
+    modelGeneratedAtUtc: "2026-10-20T06:29:00Z",
+    sourceCheckedAtUtc: "2026-10-20T06:29:00Z",
+    modelComputedAtUtc: "2026-10-17T00:00:00Z",
+  } as RecommendationPlayersResponse;
+  const cached = {
+    modelGeneratedAtUtc: "2026-10-18T00:00:00Z",
+    modelComputedAtUtc: "2026-10-17T00:00:00Z",
+    currentSourceCheckedAtUtc: index.sourceCheckedAtUtc,
+    stale: false,
+  } as PlayerRecommendationsResponse;
+  assert.equal(displayedRecommendationModel(cached, index), "2026-10-17T00:00:00Z");
+  assert.equal(displayedRecommendationModel(null, index), "2026-10-17T00:00:00Z");
+  assert.equal(availableRecommendationModel(cached, index), index.sourceCheckedAtUtc);
+  const status: RefreshStatus = {
+    checkedAtUtc: new Date(now).toISOString(), tierGeneratedAtUtc: null,
+    modelGeneratedAtUtc: index.modelGeneratedAtUtc!, latestRefresh: null,
+  };
+  assert.equal(globalRefreshMessage(status, "model", now, availableRecommendationModel(cached, index)), null);
+});
+
 test("global failure and delayed suggestions stay visible independently of personal score freshness", () => {
   const now = Date.parse("2026-10-19T06:30:00Z");
   const status: RefreshStatus = {

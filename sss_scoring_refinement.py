@@ -100,14 +100,17 @@ def freeze_ranges(payload: Mapping[str, Any], *, goal: str = "sss") -> dict[str,
 
 
 def recover_point_fit(boards: Mapping[str, Mapping[str, float]], cached: Mapping[str, Any], *, score_target: int = SCORE_TARGET) -> dict[str, Any]:
-    """Replay exactly one point fit and prove that its chart effects match cache."""
+    """Recover an exact captured cold fit, or replay a legacy fit, then check it."""
+    from target_fit_cache import cached_point_fit
     data = _prepare(boards, score_target)
     if not len(data["y"]):
         return {"data": data, "fit": None, "diagnostics": {"converged": False, "reason": "no-main-component"}}
     penalty = cached.get("policy", {}).get("selectedRegularization")
     if not _finite(penalty) or penalty <= 0:
         raise ValueError("Frozen SSS fit has no valid selected regularization.")
-    fitted = _fit(data["p"], data["c"], data["y"], len(data["players"]), len(data["mainCharts"]), penalty)
+    fitted = cached_point_fit(data, cached)
+    if fitted is None:
+        fitted = _fit(data["p"], data["c"], data["y"], len(data["players"]), len(data["mainCharts"]), penalty)
     discrepancies = [abs(float(fitted["effect"][index]) - cached["charts"][cid]["effect"])
                      for index, cid in enumerate(data["mainCharts"])
                      if _finite(cached.get("charts", {}).get(cid, {}).get("effect"))]

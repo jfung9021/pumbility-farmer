@@ -164,11 +164,21 @@ def match_profiles(profiles: Sequence[Sequence[float]], curve: Mapping[str, Any]
 
 
 def profile_difficulty_interval(values: Sequence[float], chart_id: str,
-                                curve: Mapping[str, Any] | None) -> tuple[float | None, float | None]:
+                                curve: Mapping[str, Any] | None, *,
+                                cache_store=None) -> tuple[float | None, float | None]:
     """Bootstrap entire profiles jointly, projecting each onto the frozen curve."""
     if len(values) < MINIMUM_CI_PLAYERS or curve is None:
         return None, None
     ordered = np.sort(np.asarray(values, dtype=float))
+    if cache_store is not None:
+        from score_profile_cache import bootstrap_profiles
+        profiles = bootstrap_profiles(cache_store, ordered, chart_id,
+                                      samples=BOOTSTRAP_SAMPLES, percentiles=SCORE_PERCENTILES)
+        estimates = []
+        for offset in range(0, len(profiles), 100):
+            estimates.extend(match_profiles(profiles[offset:offset+100], curve)[0])
+        low, high = np.quantile(estimates, [.025, .975], method='linear')
+        return float(low), float(high)
     seed = int.from_bytes(hashlib.sha256(chart_id.encode()).digest()[:8], 'little')
     rng = np.random.default_rng(seed)
     estimates = []
@@ -341,7 +351,7 @@ def fit_profile_scales(
 def build_percentile_tier_payload(
     base_records: Sequence[Mapping[str, Any]], metadata: Mapping[str, Any],
     phoenix1: Mapping[str, Any], phoenix2: Mapping[str, Any],
-    *, generated_at_utc: str | None = None,
+    *, generated_at_utc: str | None = None, cache_store=None,
 ) -> dict[str, Any]:
     """Replace only S/D tier scoring; preserve the existing recommendation model."""
     records = copy.deepcopy([row for row in base_records
@@ -374,7 +384,7 @@ def build_percentile_tier_payload(
         if profile is not None and curve is not None:
             matched, errors = match_profiles([profile], curve)
             estimate, error = float(matched[0]), float(errors[0])
-        low, high = profile_difficulty_interval(values, cid, curve)
+        low, high = profile_difficulty_interval(values, cid, curve, cache_store=cache_store)
         for field in ('scoringPercentileScore', 'scoringFolderReferenceScore',
                       'scoringPercentileCi95Low', 'scoringPercentileCi95High'):
             row.pop(field, None)
@@ -517,6 +527,7 @@ def build_production_tier_payload(
     average_pumbility: bool = False,
     source_exclusions=None,
     source_aware_store=None,
+    cache_store=None,
 ) -> dict[str, Any]:
     """Publish the approved profile model without changing recommendation inputs."""
     if source_aware_store is not None:
@@ -534,6 +545,7 @@ def build_production_tier_payload(
         phoenix2 = source_exclusions.filter_snapshot(phoenix2, 'phoenix2')
     payload = build_percentile_tier_payload(
         base_records, metadata, phoenix1, phoenix2, generated_at_utc=generated_at_utc,
+        cache_store=cache_store,
     )
     payload['schemaVersion'] = COMBINED_TIER_SCHEMA_VERSION
     payload['summary']['scriptVersion'] = payload['summary']['scriptVersion'].replace(
