@@ -772,7 +772,7 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual((response.status_code, response.json()["outcome"]), (202, "existing"))
         enqueue.assert_not_called()
 
-    def test_stuck_player_refresh_becomes_retryable(self) -> None:
+    def test_status_poll_preserves_a_running_player_refresh(self) -> None:
         jobs = MemoryJobStore()
         job = {
             "id": "stuck-player-job",
@@ -791,8 +791,8 @@ class ApiRouteTests(unittest.TestCase):
             response = API_CLIENT.get(
                 "/api/recommendations/refresh?jobId=stuck-player-job"
             )
-        self.assertEqual(response.json()["status"], "failed")
-        self.assertEqual(response.json()["retryAllowedAtUtc"], isoformat_utc(NOW))
+        self.assertEqual(response.json()["status"], "running")
+        self.assertEqual(jobs.get(job["id"]), job)
 
     def test_protected_recommendation_rollback_repoints_the_stable_index(self) -> None:
         blobs = MemoryBlobStore()

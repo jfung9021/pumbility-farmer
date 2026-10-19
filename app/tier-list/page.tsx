@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { RefreshMeta } from "../_components/refresh-meta";
+import { GlobalRefreshNotice } from "../_components/global-refresh-notice";
 import { ChartVideoLink } from "../_components/chart-video-link";
 import { PlayerPicker } from "../_components/player-picker";
 import { BpmRangeFilter } from "../_components/bpm-range-filter";
@@ -10,6 +11,7 @@ import { ExplanatorySection } from "../_components/explanatory-section";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { loadTierChartDetails } from "../../lib/tier-chart-details";
+import { loadWithGenerationRecovery, MODEL_DELAY_THRESHOLD_MS } from "../../lib/refresh-reliability";
 import { demoPayload } from "../../lib/demo-data";
 import { resolvePumbilityPolicy, type PumbilityAggregation } from "../../lib/pumbility-policy";
 import { compressDemoPayload, hasMidpointCompression } from "../../lib/tier-postprocessing";
@@ -64,7 +66,7 @@ const TierScoresContext = createContext<{
 }>({ selected: false, loading: false, unavailable: false, scores: new Map() });
 const PumbilityPolicyContext = createContext<PumbilityAggregation | null>(null);
 const RatingCompressionContext = createContext(false);
-const TierDetailContext = createContext<{compact: boolean; generatedAtUtc: string; goal: ScoringGoal; select: (chart: ChartResult) => void}>({compact:false, generatedAtUtc:"", goal:"general", select:() => {}});
+const TierDetailContext = createContext<{compact: boolean; generatedAtUtc: string; goal: ScoringGoal; select: (chart: ChartResult) => void; reload: (chartId: string) => Promise<string>}>({compact:false, generatedAtUtc:"", goal:"general", select:() => {}, reload:async () => {throw new Error("Reload the tier list to continue.");}});
 
 function PersonalChartScore({ chartId }: { chartId: string }) {
   const { selected, loading, unavailable, scores } = useContext(TierScoresContext);
@@ -494,11 +496,20 @@ function LazyChartDetails({chart, metric}: {chart: ChartResult; metric: TierMetr
   const [loaded, setLoaded] = useState<ChartResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const recoveryUsed = useRef(false);
   useEffect(() => {
     if (!source.compact) return;
     let cancelled = false;
     setLoaded(null); setError(null);
-    loadTierChartDetails(chart.chartId, source.generatedAtUtc).then(response => {
+    loadWithGenerationRecovery(source.generatedAtUtc,
+      generation => loadTierChartDetails(chart.chartId, generation),
+      async () => {
+        if (cancelled) throw new DOMException("Cancelled", "AbortError");
+        if (recoveryUsed.current) throw new Error("The tier list changed again. Reload the page to view this chart.");
+        recoveryUsed.current = true;
+        return source.reload(chart.chartId);
+      },
+    ).then(({ value: response }) => {
       if (!cancelled) setLoaded(projectScoringGoal(response.chart, source.goal, metric));
     }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Chart details could not be loaded."); });
     return () => { cancelled = true; };
@@ -807,7 +818,7 @@ export default function TierListPage() {
       if (response.status === 404) {
         setPayload(null);
         setMessage("No stored combined analysis is available yet.");
-        return false;
+        return null;
       }
       const latest = await readJsonResponse<AnalysisPayload>(response);
       if (latest.mix?.key !== "combined") {
@@ -815,14 +826,27 @@ export default function TierListPage() {
       }
       setPayload(latest);
       setMessage(null);
-      return true;
+      return latest;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load the combined tier list.");
-      return false;
+      return null;
     } finally {
       if (showLoading) setLoading(false);
     }
   }, []);
+
+  const reloadSelectedChart = useCallback(async (chartId: string) => {
+    const latest = await loadLatest();
+    if (!latest) throw new Error("The latest tier list could not be loaded. Reload the page to try again.");
+    const chart = [...latest.singles, ...latest.doubles, ...(latest.coop ?? [])].find(row => row.chartId === chartId);
+    if (!chart) {
+      setSelectedChart(current => current?.chartId === chartId ? null : current);
+      setMessage("This chart is no longer in the latest tier list.");
+      throw new Error("This chart is no longer in the latest tier list.");
+    }
+    setSelectedChart(current => current?.chartId === chartId ? chart : current);
+    return latest.generatedAtUtc;
+  }, [loadLatest]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -933,19 +957,21 @@ export default function TierListPage() {
     <TierScoresContext.Provider value={scoreContext}>
     <PumbilityPolicyContext.Provider value={pumbilityPolicy?.aggregation ?? null}>
     <RatingCompressionContext.Provider value={hasMidpointCompression(payload) || localAveragePumbility}>
-    <TierDetailContext.Provider value={{compact:payload?.tierListView?.kind === "list", generatedAtUtc:payload?.generatedAtUtc ?? "", goal:scoringGoal, select:setSelectedChart}}>
+    <TierDetailContext.Provider value={{compact:payload?.tierListView?.kind === "list", generatedAtUtc:payload?.generatedAtUtc ?? "", goal:scoringGoal, select:setSelectedChart, reload:reloadSelectedChart}}>
     <main className="tier-list-page">
       <SiteHeader active="tier-list" />
 
       <section className="hero page-title-hero" id="top">
         <h1>{metricTitles[activeMetric]}</h1>
         <RefreshMeta
+          delayedAfterMs={MODEL_DELAY_THRESHOLD_MS}
           generatedAtUtc={payload?.generatedAtUtc}
           label="Tier list updated"
           loading={loading}
           loadingLabel="Loading tier list..."
           nowMs={nowMs}
         />
+        <GlobalRefreshNotice surface="tier" nowMs={nowMs} />
         {message ? <p className="tier-load-message" aria-live="polite">{message}</p> : null}
       </section>
 

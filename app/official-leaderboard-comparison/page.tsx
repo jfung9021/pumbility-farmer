@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { SiteHeader } from "../_components/site-header";
 import { SkillRadar, SkillRadarLegend } from "../_components/skill-radar";
 import { ExplanatorySection } from "../_components/explanatory-section";
 import { readJsonResponse } from "../../lib/api-response";
+import { loadWithGenerationRecovery } from "../../lib/refresh-reliability";
 import {
   OFFICIAL_BPM_LABELS,
   MINIMUM_OFFICIAL_SCORES,
@@ -38,8 +39,9 @@ type PlayerResult =
   | { status: "ready"; data: OfficialComparisonPlayer; error?: undefined }
   | { status: "error"; data?: undefined; error: string };
 
-function useOfficialPlayer(playerKey: string, index: OfficialComparisonIndex | null) {
+function useOfficialPlayer(playerKey: string, index: OfficialComparisonIndex | null, recoverIndex: (generation: string) => Promise<OfficialComparisonIndex>) {
   const [attempt, setAttempt] = useState(0);
+  const recoveredPlayer = useRef<string | null>(null);
   const generation = index?.generation;
   const requestId = JSON.stringify([playerKey, generation, attempt]);
   const [loaded, setLoaded] = useState<{ requestId: string; result: PlayerResult }>({ requestId: "", result: { status: "idle" } });
@@ -48,11 +50,17 @@ function useOfficialPlayer(playerKey: string, index: OfficialComparisonIndex | n
     if (!playerKey || !index || !generation) return;
     const controller = new AbortController();
     setLoaded({ requestId, result: { status: "loading" } });
-    const params = new URLSearchParams({ playerKey, generation });
-    fetch(`/api/official-comparison?${params}`, { signal: controller.signal, cache: "no-store" })
-      .then((response) => readJsonResponse<unknown>(response))
-      .then((data) => {
-        const profile = validateOfficialComparisonPlayer(data, index, playerKey);
+    loadWithGenerationRecovery(index, async catalog => {
+      if (!catalog.players.some(player => player.playerKey === playerKey)) throw new Error("This player is no longer in the latest official player list.");
+      const params = new URLSearchParams({ playerKey, generation: catalog.generation });
+      const data = await readJsonResponse<unknown>(await fetch(`/api/official-comparison?${params}`, { signal: controller.signal, cache: "no-store" }));
+      return validateOfficialComparisonPlayer(data, catalog, playerKey);
+    }, async () => {
+      if (recoveredPlayer.current === playerKey) throw new Error("The official data changed again. Reload the page to continue.");
+      recoveredPlayer.current = playerKey;
+      return recoverIndex(generation);
+    })
+      .then(({ value: profile }) => {
         if (!controller.signal.aborted) setLoaded({ requestId, result: { status: "ready", data: profile } });
       })
       .catch((error: unknown) => {
@@ -61,7 +69,7 @@ function useOfficialPlayer(playerKey: string, index: OfficialComparisonIndex | n
         }
       });
     return () => controller.abort();
-  }, [playerKey, index, generation, requestId]);
+  }, [playerKey, index, generation, requestId, recoverIndex]);
 
   const result: PlayerResult = !playerKey
     ? { status: "idle" }
@@ -268,6 +276,8 @@ export default function OfficialLeaderboardComparisonPage() {
   const [index, setIndex] = useState<OfficialComparisonIndex | null>(null);
   const [indexError, setIndexError] = useState("");
   const [indexAttempt, setIndexAttempt] = useState(0);
+  const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
+  const recoveryRequests = useRef(new Map<string, Promise<OfficialComparisonIndex>>());
   const [openSide, setOpenSide] = useState<Side | null>(null);
   const { bpm: bucketIndex, contributorMode, q: query } = view;
 
@@ -288,8 +298,32 @@ export default function OfficialLeaderboardComparisonPage() {
     return () => controller.abort();
   }, [indexAttempt]);
 
-  const left = useOfficialPlayer(view.left, index);
-  const right = useOfficialPlayer(view.right, index);
+  const recoverIndex = useCallback((generation: string) => {
+    const existing = recoveryRequests.current.get(generation);
+    if (existing) return existing;
+    const request = fetch("/api/official-comparison/players", { cache: "no-store" })
+      .then(response => readJsonResponse<unknown>(response))
+      .then(value => { const catalog = validateOfficialComparisonIndex(value); setIndex(catalog); return catalog; });
+    recoveryRequests.current.set(generation, request);
+    return request;
+  }, []);
+
+  useEffect(() => {
+    if (!index) return;
+    const next = { ...view };
+    for (const side of ["left", "right"] as const) {
+      if (next[side] && !index.players.some(player => player.playerKey === next[side])) next[side] = "";
+    }
+    if (next.left !== view.left || next.right !== view.right) {
+      setSelectionNotice("A selected player is no longer in the latest official player list. Choose another player.");
+      setView(next);
+      const params = comparisonSearchParams(next, new URLSearchParams(window.location.search));
+      window.history.replaceState(null, "", `${window.location.pathname}?${params}${window.location.hash}`);
+    }
+  }, [index, view]);
+
+  const left = useOfficialPlayer(view.left, index, recoverIndex);
+  const right = useOfficialPlayer(view.right, index, recoverIndex);
   const profiles = { left, right };
   const names = {
     left: left.data?.displayName || index?.players.find((player) => player.playerKey === view.left)?.displayName || (view.left ? "Unknown player" : "Player 1"),
@@ -332,6 +366,7 @@ export default function OfficialLeaderboardComparisonPage() {
         {indexError ? (
           <div className={styles.errorBanner} role="alert"><span>{indexError}</span><button type="button" onClick={() => setIndexAttempt((value) => value + 1)}>Reload official data</button></div>
         ) : !index ? <p className={styles.loading} role="status">Loading official player list…</p> : null}
+        {selectionNotice ? <p role="status">{selectionNotice}</p> : null}
 
         <section className={styles.comparison} aria-label="Side by side player skill comparison">
           <div className={styles.sectionTop}>

@@ -5,13 +5,15 @@ import { ChartVideoLink } from "../_components/chart-video-link";
 import { ExplanatorySection } from "../_components/explanatory-section";
 import { PlayerPicker } from "../_components/player-picker";
 import { RefreshMeta } from "../_components/refresh-meta";
+import { GlobalRefreshNotice } from "../_components/global-refresh-notice";
 import { ScoreSyncLink } from "../_components/score-sync-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
+import { MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh } from "../../lib/refresh-reliability";
 import { formatEstimatedDifficulty } from "../../lib/format-difficulty";
 import { formatTierScore } from "../../lib/tier-filters";
 import { RADAR_GROUPS, RADAR_MODES, radarAxisLabelLayout, radarPlayerFromUrl, radarPlayerUrl, radarPoint, validateSkillRadarResponse, type RadarBucket, type RadarMode, type RadarSuggestion, type SkillRadarResponse } from "../../lib/skill-radar";
-import type { PlayerRefreshJob, PlayerRefreshResponse, RecommendationPlayersResponse } from "../../lib/types";
+import type { PlayerRefreshResponse, RecommendationPlayersResponse } from "../../lib/types";
 import "./skill-radar.css";
 
 const summaryId = (key: string) => `radar-summary-${encodeURIComponent(key)}`;
@@ -179,18 +181,18 @@ export default function SkillRadarPage() {
     try {
       const started = await readJsonResponse<PlayerRefreshResponse>(await fetch(`/api/recommendations/refresh?${new URLSearchParams({playerKey, mode:"singles"})}`, {method:"POST", signal:controller.signal, cache:"no-store"}));
       if (started.outcome !== "fresh") {
-        let job = started.job;
-        for (let poll = 0; job.status !== "completed" && job.status !== "failed" && poll < 180; poll++) {
-          await new Promise<void>((resolve, reject) => {
-            const done = () => {window.clearTimeout(timer); reject(new DOMException("Cancelled", "AbortError"));};
-            const timer = window.setTimeout(() => {controller.signal.removeEventListener("abort", done); resolve();}, 1500);
-            controller.signal.addEventListener("abort", done, {once:true});
-          });
-          job = await readJsonResponse<PlayerRefreshJob>(await fetch(`/api/recommendations/refresh?${new URLSearchParams({jobId:job.id})}`, {signal:controller.signal, cache:"no-store"}));
+        const waited = await waitForPlayerRefresh({
+          initial: started.job,
+          signal: controller.signal,
+          onPending: () => setRefreshMessage("Your scores are still updating. Saved radar data remains available."),
+          readJob: async jobId => readJsonResponse(await fetch(`/api/recommendations/refresh?${new URLSearchParams({jobId})}`, {signal:controller.signal, cache:"no-store"})),
+        });
+        if (waited.outcome === "pending") {
+          setRefreshMessage("Your score update is still pending. Use Update scores later to check the result.");
+          return;
         }
-        if (job.status !== "completed") throw new Error(job.error || "Score update is still pending. Try again shortly.");
       }
-      if (!controller.signal.aborted) setAttempt(value => value + 1);
+      if (!controller.signal.aborted) {setRefreshMessage(null); setAttempt(value => value + 1);}
     } catch (error) {
       if (!controller.signal.aborted) setRefreshMessage(error instanceof Error ? error.message : "Scores could not be updated.");
     } finally {if (!controller.signal.aborted) setRefreshing(false);}
@@ -209,7 +211,7 @@ export default function SkillRadarPage() {
   return <main className="skill-radar-page">
     <SiteHeader active="skill-radar" />
     <div className="radar-page-content">
-      <header className="radar-page-heading"><h1>Skill Radar</h1><RefreshMeta generatedAtUtc={profile?.playerSyncedAtUtc ?? profile?.generatedAtUtc} label="Scores updated" loading={loading} loadingLabel="Loading Skill Radar..." nowMs={now} /></header>
+      <header className="radar-page-heading"><h1>Skill Radar</h1><div className="refresh-meta-group"><RefreshMeta generatedAtUtc={profile?.playerSyncedAtUtc} label="Scores updated" loading={loading} loadingLabel="Loading Skill Radar..." nowMs={now} /><RefreshMeta delayedAfterMs={MODEL_DELAY_THRESHOLD_MS} generatedAtUtc={profile?.tierGeneratedAtUtc} label="Suggestions updated" loadingLabel="Loading suggestions..." nowMs={now} /></div><GlobalRefreshNotice surface="tier" nowMs={now} /></header>
       <section className="player-picker radar-player-picker"><label htmlFor="radar-player-select">Phoenix 2 username</label><PlayerPicker disabled={playersLoading || !players?.players.length} id="radar-player-select" players={players?.players ?? []} selectedKey={playerKey} query={query} open={menuOpen} onOpenChange={setMenuOpen} onQueryChange={value => {selectPlayer("", value); setMenuOpen(true);}} onSelect={selectPlayer} /><ScoreSyncLink className="radar-score-sync">Sync scores</ScoreSyncLink>{playerKey && players?.refreshSupported && process.env.NEXT_PUBLIC_LOCAL_ANALYSIS !== "1" ? <button className="radar-refresh-button" disabled={refreshing || loading} onClick={() => void refreshScores()} type="button">{refreshing ? "Updating scores..." : "Update scores"}</button> : null}</section>
       {playersError ? <p className="radar-error" role="alert">{playersError}</p> : null}
       {refreshMessage ? <p className="radar-error" role="status">{refreshMessage}</p> : null}

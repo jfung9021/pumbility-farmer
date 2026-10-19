@@ -12,12 +12,14 @@ import {
 } from "react";
 
 import { RefreshMeta } from "../_components/refresh-meta";
+import { GlobalRefreshNotice } from "../_components/global-refresh-notice";
 import { PlayerPicker } from "../_components/player-picker";
 import { ChartVideoLink } from "../_components/chart-video-link";
 import { ExplanatorySection } from "../_components/explanatory-section";
 import { ScoreSyncLink } from "../_components/score-sync-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
+import { displayedRecommendationModel, MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh } from "../../lib/refresh-reliability";
 import { hasLimitedData } from "../../lib/chart-evidence";
 import {
   formatCoopEstimatedDifficulty,
@@ -39,7 +41,6 @@ import {
 import type {
   ModeKey,
   PlayerRecommendationsResponse,
-  PlayerRefreshJob,
   PlayerRefreshResponse,
   RecommendationChart,
   RecommendationModeKey,
@@ -64,7 +65,6 @@ const INITIAL_DIFFICULTY_FILTERS: Record<RecommendationModeKey, string> = {
   coop: ALL_DIFFICULTIES,
 };
 const DEFAULT_RECOMMENDATION_SCORE_TARGET = 30;
-const MODEL_DELAY_THRESHOLD_MS = 26 * 60 * 60 * 1000;
 type StandardModeKey = Exclude<ModeKey, "coop">;
 type CachedModePayload = {
   activeCacheKeys: Record<string, string>;
@@ -832,6 +832,7 @@ export default function RecommendationsPage() {
   const [loadingPlayer, setLoadingPlayer] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshWarning, setRefreshWarning] = useState<string | null>(null);
+  const [refreshPending, setRefreshPending] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(0);
   const playerPayloadCacheRef = useRef<PlayerModePayloadCache>({ playerKey: "", modes: {} });
   const refreshAttemptedPlayersRef = useRef(new Set<string>());
@@ -931,6 +932,7 @@ export default function RecommendationsPage() {
   }, []);
 
   useEffect(() => {
+    setRefreshPending(null);
     if (!selectedKey) {
       const emptyCache = { playerKey: "", modes: {} };
       playerPayloadCacheRef.current = emptyCache;
@@ -994,26 +996,6 @@ export default function RecommendationsPage() {
       return scopedPayload;
     };
 
-    const waitForJob = async (initial: PlayerRefreshJob) => {
-      let job = initial;
-      const deadline = Date.now() + 30_000;
-      while (!controller.signal.aborted && ["queued", "running"].includes(job.status)) {
-        if (Date.now() >= deadline) {
-          throw new Error("The refresh took longer than 30 seconds. Please retry.");
-        }
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
-        if (controller.signal.aborted) return;
-        const response = await fetch(
-          `/api/recommendations/refresh?jobId=${encodeURIComponent(job.id)}`,
-          { cache: "no-store", signal: controller.signal },
-        );
-        job = await readJsonResponse<PlayerRefreshJob>(response);
-      }
-      if (job.status === "failed") {
-        throw new Error(job.error || "Could not refresh this player's recommendations.");
-      }
-    };
-
     const refresh = async () => {
       if (playersPayload?.refreshSupported === false) return;
       if (refreshAttemptedPlayersRef.current.has(selectedKey)) return;
@@ -1040,9 +1022,22 @@ export default function RecommendationsPage() {
         setRefreshWarning(null);
         return;
       }
-      await waitForJob(started.job);
+      const waited = await waitForPlayerRefresh({
+        initial: started.job,
+        signal: controller.signal,
+        onPending: () => setRefreshPending("Your scores are still updating. Saved recommendations remain available."),
+        readJob: async jobId => readJsonResponse(await fetch(
+          `/api/recommendations/refresh?jobId=${encodeURIComponent(jobId)}`,
+          { cache: "no-store", signal: controller.signal },
+        )),
+      });
+      if (waited.outcome === "pending") {
+        setRefreshPending("Your score update is still pending. Reopen this player later to check the result.");
+        return;
+      }
       const refreshed = await loadCached(true);
       if (!refreshed) throw new Error("The refreshed recommendations are unavailable.");
+      setRefreshPending(null);
       setRefreshWarning(null);
     };
 
@@ -1058,6 +1053,7 @@ export default function RecommendationsPage() {
         const message = caught instanceof Error
           ? caught.message
           : "Could not refresh recommendations.";
+        setRefreshPending(null);
         if (cachedLoaded) {
           setRefreshWarning(`Showing cached recommendations because score refresh failed: ${message}`);
         } else {
@@ -1199,10 +1195,7 @@ export default function RecommendationsPage() {
     }));
   }, [activeMode, difficultyOptions, mode, playerPayload, selectedDifficulty]);
 
-  const modelGeneratedAt = playerPayload?.currentModelGeneratedAtUtc
-    || playerPayload?.modelGeneratedAtUtc
-    || playersPayload?.modelGeneratedAtUtc
-    || playersPayload?.generatedAtUtc;
+  const modelGeneratedAt = displayedRecommendationModel(playerPayload, playersPayload);
   const playerSyncedAt = playerPayload?.playerSyncedAtUtc
     || playerPayload?.generatedAtUtc;
 
@@ -1236,6 +1229,7 @@ export default function RecommendationsPage() {
             />
           ) : null}
         </div>
+        <GlobalRefreshNotice surface="model" nowMs={nowMs} />
       </section>
 
       <section className="recommendations-hero">
@@ -1274,6 +1268,8 @@ export default function RecommendationsPage() {
           <p>Recommendations show your Top 50 scores. Tier lists can also show your saved scores and plates for the selected mode. Your internal player ID and raw score history stay private.</p>
         </ExplanatorySection>
         {error ? <div className="recommendation-notice error-notice">{error}</div> : null}
+        {playerPayload?.stale ? <div className="recommendation-notice stale-notice" role="status">These saved recommendations use an older model. They will update after your player refresh completes.</div> : null}
+        {refreshPending ? <div className="recommendation-notice stale-notice" role="status">{refreshPending}</div> : null}
         {refreshWarning ? (
           <div className="recommendation-notice stale-notice" role="status">
             <span aria-hidden="true" className="recommendation-warning-icon">!</span>

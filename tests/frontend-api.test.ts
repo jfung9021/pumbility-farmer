@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { readJsonResponse } from "../lib/api-response.ts";
+import { displayedRecommendationModel, MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh } from "../lib/refresh-reliability.ts";
 import {
   hasLimitedData,
   LIMITED_DATA_CONTRIBUTOR_THRESHOLD,
@@ -72,7 +73,7 @@ import {
   applyPhoenix1Rerates,
   type Phoenix1ReratePayload,
 } from "../lib/phoenix1-rerates.ts";
-import type { AnalysisPayload, ChartResult, RecommendationChartEstimate, RecommendationModeResult } from "../lib/types.ts";
+import type { AnalysisPayload, ChartResult, PlayerRecommendationsResponse, RecommendationChartEstimate, RecommendationModeResult, RecommendationPlayersResponse } from "../lib/types.ts";
 import {
   LocalRecommendationsValidationError,
   recommendationPlayerList,
@@ -787,7 +788,22 @@ test("recommendation page renders cache before a deduplicated player refresh", a
   assert.match(page, /if \(cachedLoaded\) \{\s*setRefreshWarning/);
   assert.match(page, /className="recommendation-notice stale-notice" role="status"/);
   assert.match(page, /playersPayload\?\.refreshSupported === false/);
-  assert.match(page, /const deadline = Date\.now\(\) \+ 30_000/);
+  assert.match(page, /await waitForPlayerRefresh\(\{/);
+  assert.match(page, /onPending: \(\) => setRefreshPending/);
+  assert.match(page, /waited\.outcome === "pending"/);
+  assert.doesNotMatch(page, /The refresh took longer than 30 seconds/);
+  let elapsed = 0;
+  let pendingNotices = 0;
+  const completed = await waitForPlayerRefresh({
+    initial: { id: "slow-job", playerKey: "player", kind: "player-recommendation-refresh", status: "running", stage: "scores" },
+    signal: new AbortController().signal,
+    now: () => elapsed,
+    sleep: async ms => { elapsed += ms; },
+    onPending: () => { pendingNotices++; },
+    readJob: async () => ({ id: "slow-job", playerKey: "player", kind: "player-recommendation-refresh", status: elapsed >= 45_000 ? "completed" : "running", stage: "scores" }),
+  });
+  assert.equal(completed.outcome, "completed");
+  assert.equal(pendingNotices, 1);
   assert.doesNotMatch(page, /Legacy snapshot generated/);
   assert.doesNotMatch(page, /Unknown generation time/);
 });
@@ -1055,8 +1071,15 @@ test("recommendation refresh metadata distinguishes the model from player scores
     readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
   ]);
 
-  assert.match(page, /const MODEL_DELAY_THRESHOLD_MS = 26 \* 60 \* 60 \* 1000/);
-  assert.match(page, /currentModelGeneratedAtUtc[\s\S]*modelGeneratedAtUtc/);
+  assert.equal(MODEL_DELAY_THRESHOLD_MS, 26 * 60 * 60 * 1000);
+  assert.match(page, /const modelGeneratedAt = displayedRecommendationModel\(playerPayload, playersPayload\)/);
+  assert.match(page, /delayedAfterMs=\{MODEL_DELAY_THRESHOLD_MS\}/);
+  assert.match(page, /playerPayload\?\.stale[\s\S]*These saved recommendations use an older model/);
+  const index = { modelGeneratedAtUtc: "2026-10-17T05:50:30Z" } as RecommendationPlayersResponse;
+  const cached = { stale: true, modelGeneratedAtUtc: "2026-10-15T06:09:46Z", currentModelGeneratedAtUtc: index.modelGeneratedAtUtc } as PlayerRecommendationsResponse;
+  assert.equal(displayedRecommendationModel(cached, index), cached.modelGeneratedAtUtc);
+  assert.notEqual(displayedRecommendationModel(cached, index), cached.currentModelGeneratedAtUtc);
+  assert.equal(displayedRecommendationModel(null, index), index.modelGeneratedAtUtc);
   assert.match(page, /label="Model updated"/);
   assert.match(page, /label="Player scores synced"/);
   assert.match(page, /generatedAtUtc=\{playerSyncedAt\}/);
