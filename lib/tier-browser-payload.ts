@@ -9,6 +9,14 @@ function pick(row: Row, keys: readonly string[]): Row {
 }
 function metric(row: Row, kind: "chart" | "scoring" | "clearing" | "pumbility") {
   const result = pick(row, [...fields.metric, ...fields[kind]]);
+  if (kind === "chart" || kind === "scoring") {
+    delete result.scoringBoundaryRecords;
+    if (row.scoringMethod === "sss-boundary-score-gap-v1" || row.scoringMethod === "target-boundary-score-gap-v1") {
+      const refinement = row.scoringRefinement as { fullBoard?: { records?: unknown } } | undefined;
+      const count = refinement?.fullBoard?.records;
+      if (typeof count === "number" && Number.isSafeInteger(count) && count >= 0) result.scoringBoundaryRecords = count;
+    }
+  }
   if (row.scoringSpreadPolicy) result.scoringSpreadPolicy = pick(row.scoringSpreadPolicy as Row, ["midpoint"]);
   return result;
 }

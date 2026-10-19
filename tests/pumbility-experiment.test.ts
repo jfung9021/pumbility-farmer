@@ -67,7 +67,7 @@ test("recomputes folder ranks and rejects corrupted values, policies, ranks, or 
   }
 });
 
-test("hybrid submitted Clearing retains weak evidence even with plentiful clearers", () => {
+test("hybrid submitted Clearing retains provisional evidence separately from the record warning", () => {
   const row = structuredClone(fixture.singles[0]);
   row.scoringMethod = "submitted-score-profile-v2";
   row.nContributors = 50;
@@ -78,13 +78,14 @@ test("hybrid submitted Clearing retains weak evidence even with plentiful cleare
   Object.assign(row.tierMetrics!.pumbility, {scoringSupportCount: 50, clearingSupportCount: 50});
   assert.equal(hasQualifiedSubmittedClearing(c), true);
   assert.equal(hasLimitedTierData(row, "scoring"), false);
-  assert.equal(hasLimitedTierData(row, "clearing"), true);
-  assert.equal(hasLimitedTierData(row, "pumbility"), true);
+  assert.equal(hasLimitedTierData(row, "clearing"), false);
+  assert.equal(hasLimitedTierData(row, "pumbility"), false);
+  assert.equal(c.evidenceStatus, "Provisional");
   assert.match(tierSupportLabel(row, "clearing"), /50 rated/);
   row.scoringMethod = "official-cross-level-v1";
   Object.assign(row, {scoringPlayerCount: 50, scoringProvisional: false});
   c.method = "submitted-cross-level-clearing-v2";
-  assert.equal(hasLimitedTierData(row, "clearing"), true);
+  assert.equal(hasLimitedTierData(row, "clearing"), false);
   c.evidenceStatus = "Published";
   assert.equal(hasLimitedTierData(row, "pumbility"), false);
 });

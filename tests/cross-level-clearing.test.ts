@@ -43,14 +43,15 @@ function fixture(): AnalysisPayload {
   } as AnalysisPayload;
 }
 
-test("schema 43 validates top-30/200 Clearing independently of Scoring selection", () => {
+test("schema 43 validates top-30/100 Clearing independently of Scoring selection", () => {
   const p = fixture();
   assert.equal(resolvePumbilityPolicy(p)?.aggregation, "average");
   assert.equal(validateLocalAnalysisPayload(p, "combined").schemaVersion, 43);
   assert.equal(tierSupportLabel(p.singles[0], "clearing"), "20 rated clearers");
   assert.equal(hasLimitedTierData(p.singles[0], "clearing"), false);
   for (const change of [
-    (q: AnalysisPayload) => { q.summary.method.crossLevelClearing!.skillMethod.minimumScoreRecords = 199 as 200; },
+    (q: AnalysisPayload) => { q.summary.method.crossLevelClearing!.skillMethod.minimumScoreRecords = 99 as 100; },
+    (q: AnalysisPayload) => { delete (q.summary.method.crossLevelClearing as unknown as Record<string, unknown>).skillMethod; },
     (q: AnalysisPayload) => { q.singles[0].tierMetrics!.clearing.estimatedDifficulty = 16.6; },
     (q: AnalysisPayload) => { q.singles[0].tierMetrics!.clearing.defaultedAtCap = true; },
     (q: AnalysisPayload) => { q.singles[0].tierMetrics!.clearing.missingSkillCount = 0; },
@@ -58,6 +59,21 @@ test("schema 43 validates top-30/200 Clearing independently of Scoring selection
     (q: AnalysisPayload) => { q.singles[0].tierMetrics!.pumbility.estimatedDifficulty = 99; },
   ]) {
     const bad = structuredClone(p); change(bad);
+    assert.throws(() => validateLocalAnalysisPayload(bad, "combined"), /incompatible/);
+  }
+});
+
+test("legacy 200-record publications remain readable and mixed policy identities are rejected", () => {
+  const p = fixture();
+  const tiers = p.summary.method.tierMetrics as { clearing: { skillMethod: { version: number; minimumScoreRecords: number } } };
+  p.summary.method.crossLevelClearing!.skillMethod.version = 1;
+  p.summary.method.crossLevelClearing!.skillMethod.minimumScoreRecords = 200;
+  Object.assign(tiers.clearing.skillMethod, { version: 1, minimumScoreRecords: 200 });
+  assert.equal(validateLocalAnalysisPayload(p, "combined").schemaVersion, 43);
+  for (const [version, minimumScoreRecords] of [[1, 100], [2, 200], [2, 99]] as const) {
+    const bad = structuredClone(p);
+    Object.assign(bad.summary.method.crossLevelClearing!.skillMethod, { version, minimumScoreRecords });
+    Object.assign((bad.summary.method.tierMetrics as typeof tiers).clearing.skillMethod, { version, minimumScoreRecords });
     assert.throws(() => validateLocalAnalysisPayload(bad, "combined"), /incompatible/);
   }
 });

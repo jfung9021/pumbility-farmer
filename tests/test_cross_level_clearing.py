@@ -9,7 +9,7 @@ from unittest.mock import patch
 from cross_level_clearing import apply_cross_level_clearing, prepare_clearing_evidence
 from cross_level_clearing_calibration import clearing_difficulty, fit_clearing_curve
 from player_skill_ratings import clearing_tier_skill_for_levels
-from pumbility_contract import cross_level_clearing_method_identity
+from pumbility_contract import CLEARING_TIER_MINIMUM_SCORE_RECORDS, cross_level_clearing_method_identity
 
 
 def fixture():
@@ -38,12 +38,17 @@ def fixture():
 
 
 class ClearingSkillTests(unittest.TestCase):
-    def test_exact_200_gate_top30_and_legacy_default(self):
+    def test_exact_100_gate_top30_and_legacy_default(self):
         levels = {str(i): float(i) for i in range(1, 202)}
-        self.assertIsNone(clearing_tier_skill_for_levels(levels, record_count=199))
+        self.assertEqual(CLEARING_TIER_MINIMUM_SCORE_RECORDS, 100)
+        self.assertIsNone(clearing_tier_skill_for_levels(levels, record_count=99))
+        self.assertEqual(clearing_tier_skill_for_levels(levels, record_count=100), sum(range(172, 202)) / 30)
         self.assertEqual(clearing_tier_skill_for_levels(levels, record_count=200), sum(range(172, 202)) / 30)
-        self.assertIsNone(clearing_tier_skill_for_levels({str(i): 20 for i in range(29)}, record_count=200))
-        self.assertEqual(clearing_tier_skill_for_levels({str(i): 20 for i in range(30)}, record_count=200), 20)
+        self.assertIsNone(clearing_tier_skill_for_levels({str(i): 20 for i in range(29)}, record_count=100))
+        self.assertEqual(clearing_tier_skill_for_levels({str(i): 20 for i in range(30)}, record_count=100), 20)
+        method = cross_level_clearing_method_identity()["skillMethod"]
+        self.assertEqual(method["minimumScoreRecords"], CLEARING_TIER_MINIMUM_SCORE_RECORDS)
+        self.assertEqual(method["version"], 2)
         from player_skill_ratings import clearing_skill_method
         self.assertEqual(clearing_skill_method()["requiredClearCount"], 50)
 
@@ -55,7 +60,7 @@ class ClearingSkillTests(unittest.TestCase):
         self.assertEqual(data["diagnostics"]["Single"]["qualifiedPlayers"], 1)
         self.assertEqual(data["charts"]["0"]["ratedClearCount"], 1)
         self.assertEqual(data["charts"]["0"]["clearCount"], 1)
-        short = {"charts": charts, "scores": scores[:199] + [dict(scores[199], isBroken=True)]}
+        short = {"charts": charts, "scores": scores[:99] + [dict(scores[99], isBroken=True)]}
         data = prepare_clearing_evidence(short, short, charts)
         self.assertEqual(data["charts"]["0"]["ratedClearCount"], 0)
         self.assertEqual(data["charts"]["0"]["qualificationExclusions"], {"recordRequirement": 1})
@@ -63,6 +68,59 @@ class ClearingSkillTests(unittest.TestCase):
         data = prepare_clearing_evidence(wrong_mode, {"charts": [], "scores": []}, charts)
         self.assertEqual(data["diagnostics"]["phoenix1"]["sourceModeMismatch"], 200)
         self.assertEqual(data["charts"]["0"]["clearCount"], 0)
+
+    def test_full_history_boundary_dedup_modes_and_exclusions_share_the_100_gate(self):
+        from chart_source_exclusions import ExclusionPolicy
+
+        singles = [{"id": f"s{i}", "type": "Single", "level": 10 if i < 70 else 22,
+                    "noteCount": 100} for i in range(100)]
+        doubles = [{"id": f"d{i}", "type": "Double", "level": 18,
+                    "noteCount": 100} for i in range(100)]
+        excluded_id = "00000000-0000-0000-0000-000000000001"
+        extras = [{"id": cid, "type": "Single", "level": 25, "noteCount": 100}
+                  for cid in (excluded_id, "wrong-mode", "invalid-score")]
+        charts = singles + doubles + extras
+        # Old source levels must not replace the current official top-30 levels.
+        source_charts = [{**chart, "level": 30,
+                          "type": "Double" if chart["id"] == "wrong-mode" else chart["type"]}
+                         for chart in charts]
+
+        def cleared(cid, **fields):
+            return {"playerId": "p", "chartId": cid, "pumbility": 0,
+                    "isBroken": False, **fields}
+
+        first = {"charts": source_charts, "scores":
+                 [cleared(f"s{i}") for i in range(60)]
+                 + [cleared("s0")] * 5
+                 + [cleared(chart["id"]) for chart in doubles]
+                 + [cleared("s99", isBroken=True), cleared(excluded_id), cleared("wrong-mode"),
+                    {"playerId": "p", "chartId": "invalid-score"}]}
+        second = {"charts": source_charts, "scores":
+                  [cleared(f"s{i}") for i in range(40, 99)]
+                  + [cleared("s0"), cleared("s99", isBroken=True)]}
+        policy = ExclusionPolicy({"version": 1, "rules": [{"chartId": excluded_id,
+            "mode": "Single", "enabled": True, "scope": "tier-analysis-performance",
+            "reason": "test source exclusion", "label": "test", "source": "Phoenix"}]}, charts)
+
+        data = prepare_clearing_evidence(first, second, charts, exclusions=policy)
+        # Many duplicate records and 100 valid Doubles cannot qualify 99 Singles.
+        self.assertEqual(data["diagnostics"]["Single"], {"recordRequirement": 1, "observedPlayers": 1})
+        self.assertEqual(data["charts"]["s0"]["qualificationExclusions"], {"recordRequirement": 1})
+        self.assertEqual(data["charts"]["s0"]["ratedClearCount"], 0)
+        self.assertEqual(data["charts"]["s0"]["clearCount"], 1)
+        self.assertEqual(data["charts"]["s0"]["sourceCounts"], {"phoenix1": 1, "phoenix2": 1})
+        self.assertEqual(data["diagnostics"]["Double"]["qualifiedPlayers"], 1)
+        self.assertEqual(data["diagnostics"]["phoenix1"]["chartSourceExcluded"], 1)
+        self.assertEqual(data["diagnostics"]["phoenix1"]["sourceModeMismatch"], 1)
+        self.assertEqual(data["diagnostics"]["phoenix1"]["invalidOrBroken"], 2)
+
+        second["scores"].append(cleared("s99"))
+        qualified = prepare_clearing_evidence(first, second, charts, exclusions=policy)
+        self.assertEqual(qualified["diagnostics"]["Single"], {"qualifiedPlayers": 1, "observedPlayers": 1})
+        self.assertEqual(qualified["charts"]["s0"]["qualificationExclusions"], {})
+        self.assertEqual(qualified["charts"]["s0"]["ratedClearCount"], 1)
+        self.assertEqual(qualified["charts"]["s0"]["q10Skill"], 22)
+        self.assertEqual(qualified["charts"]["d0"]["q10Skill"], 18)
 
 
 class ClearingCurveTests(unittest.TestCase):
@@ -175,6 +233,11 @@ class ClearingRuntimeTests(unittest.TestCase):
             altered["summary"]["method"]["crossLevelClearing"]["skillMethod"]["minimumScoreRecords"] = 199
             with self.assertRaisesRegex(ValueError, "Clearing checkpoint"):
                 _validate_checkpoint_combined_tier(altered)
+            legacy = copy.deepcopy(candidate)
+            legacy["summary"]["method"]["crossLevelClearing"]["skillMethod"].update(
+                version=1, minimumScoreRecords=200)
+            with self.assertRaisesRegex(ValueError, "Clearing checkpoint"):
+                _validate_checkpoint_combined_tier(legacy)
             with self.assertRaisesRegex(ValueError, "incompatible schema"):
                 _validate_checkpoint_combined_tier(base)
         with patch.dict(os.environ, {**flags, "PIU_CROSS_LEVEL_CLEARING": "0"}):

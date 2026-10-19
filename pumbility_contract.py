@@ -18,6 +18,7 @@ from phoenix2_sync import parse_utc, utc_now
 SCRIPT_VERSION = "6.18.0-midpoint-compression"
 HYBRID_TIER_SCRIPT_VERSION = "6.19.0-hybrid-average"
 PHOENIX2_MINIMUM_ANALYSIS_SCORES = 50
+CLEARING_TIER_MINIMUM_SCORE_RECORDS = 100
 
 PLAYER_REFRESH_FRESHNESS = timedelta(seconds=60)
 RECOMMENDATION_SCHEMA_VERSION = 28
@@ -36,7 +37,8 @@ HYBRID_AVERAGE_TIER_SCHEMA_VERSION = 48
 def cross_level_clearing_method_identity() -> dict[str, Any]:
     return {
         "version": 1, "source": "piuscores-submitted", "minimumOfficialLevel": 16,
-        "skillMethod": {"version": 1, "topClearCount": 30, "minimumScoreRecords": 200,
+        "skillMethod": {"version": 2, "topClearCount": 30,
+                        "minimumScoreRecords": CLEARING_TIER_MINIMUM_SCORE_RECORDS,
                         "minimumUniqueClears": 30, "difficultyBasis": "current-official-level",
                         "scope": "same-mode-current-catalog", "recordDeduplication": "account-chart-across-mixes"},
         "percentile": .10, "percentileMethod": "linear",

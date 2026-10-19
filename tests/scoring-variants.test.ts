@@ -139,7 +139,7 @@ test("one projection supplies matching target values, ranks, intervals and compo
   assert.match(tierSupportLabel(projected, "pumbility"), /35 target-fit contributors \(15 at SSS, 20 below\)/);
   assert.equal(hasLimitedTierData(projected, "scoring"), false);
   projected.evidenceStatus = "Provisional";
-  assert.equal(hasLimitedTierData(projected, "scoring"), true);
+  assert.equal(hasLimitedTierData(projected, "scoring"), false);
 });
 
 test("missing SSS stays Unrated in both lists and cannot leak General values or ordering", () => {
@@ -197,8 +197,8 @@ test("boundary projection uses complete-board support and does not inherit a fit
   assert.equal(projected.difficultyCi95Low, null);
   assert.equal(selectedTierMetric(projected, "pumbility").evidenceStatus, "Provisional");
   assert.match(tierSupportLabel(projected, "scoring"), /300 available best scores.*300 at SSS.*boundary estimate/);
-  assert.equal(hasLimitedTierData(projected, "scoring"), true);
-  assert.equal(hasLimitedTierData(projected, "pumbility"), true);
+  assert.equal(hasLimitedTierData(projected, "scoring"), false);
+  assert.equal(hasLimitedTierData(projected, "pumbility"), false);
 });
 
 test("rare-success SSS projection preserves independent official Clearing provenance and support", () => {
@@ -219,9 +219,9 @@ test("rare-success SSS projection preserves independent official Clearing proven
   assert.equal(projected.officialEvidence, undefined);
   assert.match(tierSupportLabel(projected, "pumbility"), /102 target-fit contributors.*1 at SSS.*80 eligible official clearers from 140 observed/);
   assert.match(tierSupportLabel(projected, "clearing"), /^80 eligible official clearers from 140 observed$/);
-  assert.equal(hasLimitedTierData(projected, "scoring"), true);
+  assert.equal(hasLimitedTierData(projected, "scoring"), false);
   assert.equal(hasLimitedTierData(projected, "clearing"), false);
   projected.tierMetrics!.clearing.evidenceStatus = "Provisional";
-  assert.equal(hasLimitedTierData(projected, "clearing"), true);
-  assert.equal(hasLimitedTierData(row, "pumbility"), true);
+  assert.equal(hasLimitedTierData(projected, "clearing"), false);
+  assert.equal(hasLimitedTierData(row, "pumbility"), false);
 });

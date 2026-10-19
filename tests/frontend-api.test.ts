@@ -277,25 +277,26 @@ test("tier metrics distinguish absent data, unrated charts, and unsupported Co-o
   assert.equal(tierMetricAvailability([chart], "pumbility", "doubles"), "unavailable");
 });
 
-test("new tier evidence warnings use selected clearers and each composite support", () => {
+test("tier evidence warnings use selected clearers and the actual displayed component supports", () => {
   const chart: ChartResult = structuredClone(demoPayloads.phoenix2.singles[0]);
-  chart.nContributors = 20;
-  chart.tierMetrics!.clearing.selectedCount = 19;
+  chart.nContributors = 10;
+  chart.tierMetrics!.clearing.selectedCount = 9;
   chart.tierMetrics!.clearing.evidenceStatus = "Published";
   assert.equal(hasLimitedTierData(chart, "scoring"), false);
   assert.equal(hasLimitedTierData(chart, "clearing"), true);
-  assert.equal(tierSupportLabel(chart, "clearing"), "19 selected clearers");
-  chart.tierMetrics!.clearing.selectedCount = 20;
+  assert.equal(tierSupportLabel(chart, "clearing"), "9 selected clearers");
+  chart.tierMetrics!.clearing.selectedCount = 10;
   assert.equal(hasLimitedTierData(chart, "clearing"), false);
   const composite = chart.tierMetrics!.pumbility;
-  composite.scoringSupportCount = 19;
-  composite.clearingSupportCount = 20;
+  composite.scoringSupportCount = 500; // Stale aggregate fields cannot override displayed components.
+  composite.clearingSupportCount = 500;
+  chart.nContributors = 9;
   assert.equal(hasLimitedTierData(chart, "pumbility"), true);
-  composite.scoringSupportCount = 20;
-  composite.clearingSupportCount = 19;
+  chart.nContributors = 10;
+  chart.tierMetrics!.clearing.selectedCount = 9;
   assert.equal(hasLimitedTierData(chart, "pumbility"), true);
-  assert.equal(tierSupportLabel(chart, "pumbility"), "20 scoring contributors and 19 selected clearers");
-  composite.clearingSupportCount = 20;
+  assert.equal(tierSupportLabel(chart, "pumbility"), "10 scoring contributors and 9 selected clearers");
+  chart.tierMetrics!.clearing.selectedCount = 10;
   assert.equal(hasLimitedTierData(chart, "pumbility"), false);
 });
 
@@ -350,9 +351,10 @@ test("point-percentile evidence uses every rated clearer, not one quantile value
   assert.equal(tierSupportLabel(chart, "clearing"), "20 rated clearers");
   chart.tierMetrics!.pumbility.scoringSupportCount = 20;
   chart.tierMetrics!.pumbility.clearingSupportCount = 20;
+  chart.nContributors = 20;
   assert.equal(hasLimitedTierData(chart, "pumbility"), false);
   assert.equal(tierSupportLabel(chart, "pumbility"), "20 scoring contributors and 20 rated clearers");
-  chart.tierMetrics!.clearing.ratedClearCount = 19;
+  chart.tierMetrics!.clearing.ratedClearCount = 9;
   assert.equal(hasLimitedTierData(chart, "clearing"), true);
 });
 
@@ -380,10 +382,10 @@ test("official score-band and eligible clearer support use their own limited-dat
   assert.equal(hasLimitedTierData(chart, "scoring"), true);
   assert.equal(hasLimitedTierData(chart, "pumbility"), true);
   chart.scoringPlayerCount = 10;
-  clearing.ratedClearCount = 19;
+  clearing.ratedClearCount = 9;
   assert.equal(hasLimitedTierData(chart, "clearing"), true);
   assert.equal(hasLimitedTierData(chart, "pumbility"), true);
-  assert.equal(tierSupportLabel(chart, "pumbility"), "10 players with same-level comparisons and 19 eligible official clearers");
+  assert.equal(tierSupportLabel(chart, "pumbility"), "10 players with same-level comparisons and 9 eligible official clearers");
   clearing.estimatedDifficulty = null;
   assert.deepEqual(estimatedTierGroups([chart], "clearing", "singles"), []);
 });
@@ -1636,19 +1638,21 @@ test("Top 50 export benchmark is deterministic and network-independent", async (
   assert.doesNotMatch(benchmark, /\bfetch\(|https?:\/\//);
 });
 
-test("Tier List omits limited-data warnings; Recommendations uses the shared 20-player boundary", async () => {
+test("Tier List restores selected-metric warnings and Recommendations shares the 10-player boundary", async () => {
   const pages = await Promise.all([
     readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
   ]);
 
-  assert.equal(LIMITED_DATA_CONTRIBUTOR_THRESHOLD, 20);
-  assert.equal(hasLimitedData(19), true);
-  assert.equal(hasLimitedData(20), false);
+  assert.equal(LIMITED_DATA_CONTRIBUTOR_THRESHOLD, 10);
+  assert.equal(hasLimitedData(9), true);
+  assert.equal(hasLimitedData(10), false);
   for (const page of pages) {
     assert.doesNotMatch(page, /evidenceStatus\.toLowerCase\(\)/);
   }
-  assert.doesNotMatch(pages[0], /LimitedDataWarning|hasLimitedTierData|limited-data-warning|compact-warning/);
+  assert.match(pages[0], /LimitedDataWarning/);
+  assert.match(pages[0], /tierDataWarning\(chart, metric\)/);
+  assert.match(pages[0], /limited-data-warning/);
   assert.match(pages[1], /hasLimitedData\(chart\.nContributors\)/);
 });
 

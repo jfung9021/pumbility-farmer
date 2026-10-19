@@ -13,7 +13,8 @@ import numpy as np
 from cross_level_clearing_calibration import clearing_difficulty, fit_clearing_curve
 from phoenix2_sync import sanitize_score
 from player_skill_ratings import clearing_tier_skill_for_levels
-from pumbility_contract import (CROSS_LEVEL_CLEARING_SCHEMA_VERSION, HYBRID_TIER_SCHEMA_VERSION,
+from pumbility_contract import (CLEARING_TIER_MINIMUM_SCORE_RECORDS,
+                               CROSS_LEVEL_CLEARING_SCHEMA_VERSION, HYBRID_TIER_SCHEMA_VERSION,
                                cross_level_clearing_method_identity, hybrid_clearing_method_identity)
 from tier_difficulty import EVIDENCE_ORDER, _empty_metric, _set_estimate, pumbility_difficulty, refresh_pumbility_metrics
 
@@ -78,7 +79,8 @@ def prepare_clearing_evidence(phoenix1: Mapping[str, Any], phoenix2: Mapping[str
             if chart_type != mode:
                 continue
             skill = clearing_tier_skill_for_levels({cid: catalog[cid]["level"] for cid in ids}, record_count=len(ids))
-            qualifications[player, mode] = "recordRequirement" if len(ids) < 200 else "clearRequirement" if len(ids) < 30 else None
+            qualifications[player, mode] = ("recordRequirement" if len(ids) < CLEARING_TIER_MINIMUM_SCORE_RECORDS
+                                          else "clearRequirement" if len(ids) < 30 else None)
             if skill is not None:
                 skills[player, mode] = skill
                 counts["qualifiedPlayers"] += 1
