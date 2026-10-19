@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { ApiResponseError, readJsonResponse } from "../lib/api-response.ts";
 import { createTierChartDetailLoader } from "../lib/tier-chart-details.ts";
-import { displayedRecommendationModel, globalRefreshMessage, loadWithGenerationRecovery, MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh, type RefreshStatus } from "../lib/refresh-reliability.ts";
+import { availableRecommendationModel, displayedRecommendationModel, globalRefreshMessage, loadWithGenerationRecovery, MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh, type RefreshStatus } from "../lib/refresh-reliability.ts";
 import type { PlayerRecommendationsResponse, PlayerRefreshJob, RecommendationPlayersResponse } from "../lib/types.ts";
 
 test("HTTP errors retain the conflict status and server message", async () => {
@@ -35,6 +36,57 @@ test("global failure and delayed suggestions stay visible independently of perso
   assert.match(globalRefreshMessage({ ...status, latestRefresh: null }, "tier", now)!, /delayed/);
   assert.equal(globalRefreshMessage({ ...status, tierGeneratedAtUtc: new Date(now).toISOString() }, "tier", now), null);
   assert.equal(globalRefreshMessage({ ...status, tierGeneratedAtUtc: new Date(now - MODEL_DELAY_THRESHOLD_MS).toISOString(), latestRefresh: null }, "tier", now), null);
+});
+
+test("a newer loaded tier immediately supersedes an earlier failed status snapshot", () => {
+  const status: RefreshStatus = {
+    checkedAtUtc: "2026-10-19T06:30:00Z",
+    tierGeneratedAtUtc: "2026-10-16T02:11:43Z", modelGeneratedAtUtc: null,
+    latestRefresh: { status: "failed", stage: "analysis", updatedAtUtc: "2026-10-17T06:24:00Z", completedAtUtc: null, failureCode: "analysis-no-progress" },
+  };
+  const now = Date.parse("2026-10-19T06:30:00Z");
+  assert.match(globalRefreshMessage(status, "tier", now)!, /failed/);
+  // The list arrives after status. Its own age can still be delayed; the obsolete failure cannot survive.
+  assert.equal(globalRefreshMessage(status, "tier", now, "2026-10-18T02:11:43Z"), "The daily data refresh is delayed. Showing saved data.");
+  // Reconciliation also applies while the replacement status request is pending or unavailable.
+  assert.equal(globalRefreshMessage(status, "tier", now, "2026-10-19T06:29:00Z"), null);
+  assert.equal(globalRefreshMessage({ ...status, latestRefresh: null }, "tier", now, "2026-10-19T06:29:00Z"), null);
+  assert.equal(globalRefreshMessage({ ...status, latestRefresh: { ...status.latestRefresh!, updatedAtUtc: null } }, "tier", now, "2026-10-19T06:29:00Z"), null);
+  assert.match(globalRefreshMessage({ ...status, latestRefresh: { ...status.latestRefresh!, updatedAtUtc: "2026-10-19T06:30:00Z" } }, "tier", now, "2026-10-19T06:29:00Z")!, /failed/);
+});
+
+test("older loaded data cannot override a newer status publication", () => {
+  const now = Date.parse("2026-10-19T06:30:00Z");
+  const status: RefreshStatus = { checkedAtUtc: new Date(now).toISOString(), tierGeneratedAtUtc: new Date(now).toISOString(), modelGeneratedAtUtc: null, latestRefresh: null };
+  assert.equal(globalRefreshMessage(status, "tier", now, "2026-10-16T00:00:00Z"), null);
+  const oldRunning = { ...status, tierGeneratedAtUtc: "2026-10-16T00:00:00Z", latestRefresh: { status: "running" as const, stage: "analysis", updatedAtUtc: "2026-10-17T00:00:00Z", completedAtUtc: null, failureCode: null } };
+  assert.equal(globalRefreshMessage(oldRunning, "tier", now, "2026-10-18T00:00:00Z"), "The daily data refresh is delayed. Showing saved data.");
+});
+
+test("recommendation freshness uses the available model while the result keeps its cached model label", () => {
+  const cache = { modelGeneratedAtUtc: "2026-10-15T00:00:00Z", currentModelGeneratedAtUtc: "2026-10-17T00:00:00Z", stale: true } as PlayerRecommendationsResponse;
+  const index = { modelGeneratedAtUtc: "2026-10-18T00:00:00Z" } as RecommendationPlayersResponse;
+  assert.equal(displayedRecommendationModel(cache, index), "2026-10-15T00:00:00Z");
+  assert.equal(availableRecommendationModel(cache, index), "2026-10-18T00:00:00Z");
+  assert.equal(availableRecommendationModel({ ...cache, currentModelGeneratedAtUtc: "2026-10-19T00:00:00Z" }, index), "2026-10-19T00:00:00Z");
+  assert.equal(availableRecommendationModel({ ...cache, currentModelGeneratedAtUtc: undefined }, null), undefined);
+});
+
+test("all notices reconcile the loaded publication and refetch only when its identity changes", async () => {
+  const [notice, tier, recommendations, radar] = await Promise.all([
+    readFile(new URL("../app/_components/global-refresh-notice.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/tier-list/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/recommendations/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/skill-radar/page.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(notice, /\}, \[surface, publishedAtUtc\]\)/);
+  assert.match(notice, /globalRefreshMessage\(status, surface, nowMs, publishedAtUtc\)/);
+  assert.match(notice, /controller\.abort\(\), 10_000/);
+  assert.doesNotMatch(notice, /setInterval/);
+  assert.match(tier, /GlobalRefreshNotice[^>]*publishedAtUtc=\{payload\?\.generatedAtUtc\}/);
+  assert.match(radar, /GlobalRefreshNotice[^>]*publishedAtUtc=\{profile\?\.tierGeneratedAtUtc\}/);
+  assert.match(recommendations, /const availableModelGeneratedAt = availableRecommendationModel\(playerPayload, playersPayload\)/);
+  assert.match(recommendations, /GlobalRefreshNotice[^>]*publishedAtUtc=\{availableModelGeneratedAt\}/);
 });
 
 test("tier details recover one publication change using the new generation", async () => {

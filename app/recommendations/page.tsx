@@ -19,7 +19,7 @@ import { ExplanatorySection } from "../_components/explanatory-section";
 import { ScoreSyncLink } from "../_components/score-sync-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
-import { displayedRecommendationModel, MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh } from "../../lib/refresh-reliability";
+import { availableRecommendationModel, displayedRecommendationModel, MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh } from "../../lib/refresh-reliability";
 import { hasLimitedData } from "../../lib/chart-evidence";
 import {
   formatCoopEstimatedDifficulty,
@@ -1196,6 +1196,7 @@ export default function RecommendationsPage() {
   }, [activeMode, difficultyOptions, mode, playerPayload, selectedDifficulty]);
 
   const modelGeneratedAt = displayedRecommendationModel(playerPayload, playersPayload);
+  const availableModelGeneratedAt = availableRecommendationModel(playerPayload, playersPayload);
   const playerSyncedAt = playerPayload?.playerSyncedAtUtc
     || playerPayload?.generatedAtUtc;
 
@@ -1229,7 +1230,7 @@ export default function RecommendationsPage() {
             />
           ) : null}
         </div>
-        <GlobalRefreshNotice surface="model" nowMs={nowMs} />
+        <GlobalRefreshNotice surface="model" nowMs={nowMs} publishedAtUtc={availableModelGeneratedAt} />
       </section>
 
       <section className="recommendations-hero">

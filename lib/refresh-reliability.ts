@@ -16,20 +16,35 @@ export interface RefreshStatus {
   } | null;
 }
 
-export function globalRefreshMessage(status: RefreshStatus, surface: "tier" | "model", nowMs: number): string | null {
-  const generated = surface === "tier" ? status.tierGeneratedAtUtc : status.modelGeneratedAtUtc;
+function newestPublication(...values: (string | null | undefined)[]): string | undefined {
+  return values.filter((value): value is string => Boolean(value) && Number.isFinite(Date.parse(value!)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+}
+
+export function globalRefreshMessage(status: RefreshStatus, surface: "tier" | "model", nowMs: number, publishedAtUtc?: string | null): string | null {
+  const reportedGeneration = surface === "tier" ? status.tierGeneratedAtUtc : status.modelGeneratedAtUtc;
+  const generated = newestPublication(reportedGeneration, publishedAtUtc);
   const generatedMs = generated ? Date.parse(generated) : Number.NaN;
   const latest = status.latestRefresh;
   const latestMs = latest?.updatedAtUtc ? Date.parse(latest.updatedAtUtc) : Number.NaN;
-  if (latest?.status === "failed" && (!Number.isFinite(generatedMs) || !Number.isFinite(latestMs) || latestMs >= generatedMs)) {
+  const newerPublicationLoaded = Boolean(generated && generated !== newestPublication(reportedGeneration));
+  const latestRelevant = Number.isFinite(latestMs)
+    ? !Number.isFinite(generatedMs) || latestMs >= generatedMs
+    : !newerPublicationLoaded;
+  if (latest?.status === "failed" && latestRelevant) {
     return "The latest daily refresh failed. Showing saved data while the update is restored.";
   }
   if (Number.isFinite(generatedMs) && nowMs - generatedMs > MODEL_DELAY_THRESHOLD_MS) {
-    return latest?.status === "queued" || latest?.status === "running"
+    return latestRelevant && (latest?.status === "queued" || latest?.status === "running")
       ? "The daily refresh is delayed and is still updating. Showing saved data."
       : "The daily data refresh is delayed. Showing saved data.";
   }
   return null;
+}
+
+/** Available global publication time is separate from the cached result's model time. */
+export function availableRecommendationModel(payload: PlayerRecommendationsResponse | null | undefined, index: RecommendationPlayersResponse | null | undefined): string | undefined {
+  return newestPublication(payload?.currentModelGeneratedAtUtc, index?.modelGeneratedAtUtc || index?.generatedAtUtc);
 }
 
 export function displayedRecommendationModel(payload: PlayerRecommendationsResponse | null | undefined, index: RecommendationPlayersResponse | null | undefined): string | undefined {

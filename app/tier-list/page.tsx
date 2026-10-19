@@ -971,7 +971,7 @@ export default function TierListPage() {
           loadingLabel="Loading tier list..."
           nowMs={nowMs}
         />
-        <GlobalRefreshNotice surface="tier" nowMs={nowMs} />
+        <GlobalRefreshNotice surface="tier" nowMs={nowMs} publishedAtUtc={payload?.generatedAtUtc} />
         {message ? <p className="tier-load-message" aria-live="polite">{message}</p> : null}
       </section>
 
