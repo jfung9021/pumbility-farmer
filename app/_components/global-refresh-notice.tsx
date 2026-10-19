@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { readJsonResponse } from "../../lib/api-response";
 import { globalRefreshMessage, type RefreshStatus } from "../../lib/refresh-reliability";
 
-export function GlobalRefreshNotice({ surface, nowMs }: { surface: "tier" | "model"; nowMs: number }) {
+export function GlobalRefreshNotice({ surface, nowMs, publishedAtUtc }: { surface: "tier" | "model"; nowMs: number; publishedAtUtc?: string | null }) {
   const [status, setStatus] = useState<RefreshStatus | null>(null);
   useEffect(() => {
     const controller = new AbortController();
@@ -15,7 +15,7 @@ export function GlobalRefreshNotice({ surface, nowMs }: { surface: "tier" | "mod
       .catch(() => { /* Data and its age remain usable when status is unavailable. */ })
       .finally(() => window.clearTimeout(timeout));
     return () => { window.clearTimeout(timeout); controller.abort(); };
-  }, []);
-  const message = status && nowMs ? globalRefreshMessage(status, surface, nowMs) : null;
+  }, [surface, publishedAtUtc]);
+  const message = status && nowMs ? globalRefreshMessage(status, surface, nowMs, publishedAtUtc) : null;
   return message ? <p className="refresh-meta refresh-meta-delayed" role="status"><b>{message}</b></p> : null;
 }
