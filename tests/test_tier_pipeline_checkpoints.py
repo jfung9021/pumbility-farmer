@@ -43,15 +43,16 @@ class CheckpointTests(TestCase):
         self.assertEqual(result, tiers.digest(value))
 
     def test_general_cache_adoption_is_portable_across_checkout_line_endings(self):
-        with patch("pathlib.Path.read_bytes", return_value=b"same source\r\nnext line\r\n"):
+        with patch("pathlib.Path.read_bytes", return_value=b"VALUE = 1\r\nVALUE += 2\r\n"):
             windows = tiers.general_code_identity()
             windows_fit = tiers.model_code_identity()
-        with patch("pathlib.Path.read_bytes", return_value=b"same source\nnext line\n"):
+        with patch("pathlib.Path.read_bytes", return_value=b"VALUE = 1\nVALUE += 2\n"):
             linux = tiers.general_code_identity()
             linux_fit = tiers.model_code_identity()
         self.assertEqual(windows, linux)
-        # Existing hosted fit paths retain their historical byte-based identity.
-        self.assertNotEqual(windows_fit, linux_fit)
+        # New numeric recipes ignore source line endings; verified legacy
+        # byte identities remain available through explicit migration.
+        self.assertEqual(windows_fit, linux_fit)
 
     def test_content_addressed_roundtrip_preserves_number_representation_and_checks_bytes(self):
         store = MemoryBlobStore()
@@ -181,7 +182,7 @@ class PipelineResumeTests(TestCase):
             "sourcePolicy": "policy", "modelCode": tiers.model_code_identity(), "generationTimestamp": None}
         path = tiers.PREFIX+"generations/"+tiers.digest(legacy)+"/general.json"
         self.store.put_json(path, {"schemaVersion": 48, "values": [19.5, 20.5]})
-        with patch("production_tiers.general_code_identity", return_value=LEGACY_GENERAL_CODE_IDENTITY), \
+        with patch("production_tiers._legacy_general_code_identity", return_value=LEGACY_GENERAL_CODE_IDENTITY), \
              patch("production_tiers._finish_stage", side_effect=self.transition):
             with self.assertRaises(tiers.TierAnalysisPending): self.advance()
         self.general.assert_not_called()

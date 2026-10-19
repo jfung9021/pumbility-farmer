@@ -70,7 +70,7 @@ def cache_tier_fit(request: Request, payload: dict):
 @router.post("/api/jonathan/refresh")
 def refresh_from_jonathan(
     request: Request,
-    mode: Literal["incremental", "full", "reanalyze", "official", "official-status", "tiers"] = Query(default="incremental"),
+    mode: Literal["incremental", "full", "reanalyze", "official", "official-status", "tiers", "scoring-goal-backfill"] = Query(default="incremental"),
 ):
     password = os.getenv("JONATHAN_PASSWORD", "").strip()
     if not password:
@@ -89,6 +89,10 @@ def refresh_from_jonathan(
 
     full_sync = mode == "full"
     try:
+        if mode == "scoring-goal-backfill":
+            from tier_publication_jobs import request_scoring_goal_backfill
+            status, payload = request_scoring_goal_backfill(enqueue_tier_publication)
+            return _response(status, payload)
         if mode == "tiers":
             from tier_publication_jobs import request_tier_publication
             status, payload = request_tier_publication(enqueue_tier_publication)

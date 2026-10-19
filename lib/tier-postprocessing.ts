@@ -16,7 +16,7 @@ export function hasMidpointCompression(payload: AnalysisPayload | null | undefin
   const p = payload?.summary.method.ratingPostprocessing as {baseAnalysisSchemaVersion?: number} | undefined;
   const validBase = payload?.schemaVersion === POSTPROCESSED_SCHEMA
     ? [26, 41, 42, 43].includes(p?.baseAnalysisSchemaVersion ?? 0)
-    : [HYBRID_POSTPROCESSED_SCHEMA, 48, 49, 50, 51, 52, 53, 57].includes(payload?.schemaVersion ?? 0) && p?.baseAnalysisSchemaVersion === HYBRID_INITIAL_SCHEMA;
+    : [HYBRID_POSTPROCESSED_SCHEMA, 48, 49, 50, 51, 52, 53, 57, 58].includes(payload?.schemaVersion ?? 0) && p?.baseAnalysisSchemaVersion === HYBRID_INITIAL_SCHEMA;
   return validBase && !!p
     && samePolicy(p, compressionPolicy(p.baseAnalysisSchemaVersion!));
 }

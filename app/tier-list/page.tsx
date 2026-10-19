@@ -20,7 +20,7 @@ import {
   formatEstimatedDifficulty,
 } from "../../lib/format-difficulty";
 import { tierMetricFromSearchParams, tierModeFromSearchParams } from "../../lib/page-view-state";
-import { DEFAULT_SCORING_GOAL, hasScoringGoalVariants, isSssScoringChart, isTargetBoundaryChart, isTargetRareChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal } from "../../lib/scoring-variants";
+import { DEFAULT_SCORING_GOAL, SCORING_GOALS, hasScoringGoalVariants, isSssScoringChart, isTargetBoundaryChart, isTargetRareChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal } from "../../lib/scoring-variants";
 import { clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
 import {
   clearingPercentileRange,
@@ -728,7 +728,7 @@ export default function TierListPage() {
   const pumbilityPolicy = resolvePumbilityPolicy(payload);
   const maximumPumbility = pumbilityPolicy?.aggregation === "maximum";
   const localAveragePumbility = payload?.schemaVersion === 45 && pumbilityPolicy?.aggregation === "average";
-  const adjustedAveragePumbility = [45, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0) && pumbilityPolicy?.aggregation === "average";
+  const adjustedAveragePumbility = [45, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58].includes(payload?.schemaVersion ?? 0) && pumbilityPolicy?.aggregation === "average";
   const [activeMode, setActiveMode] = useState<ModeKey>("singles");
   const [activeMetric, setActiveMetric] = useState<TierMetricKey>("scoring");
   const [scoringGoal, setScoringGoal] = useState<ScoringGoal>(DEFAULT_SCORING_GOAL);
@@ -736,12 +736,14 @@ export default function TierListPage() {
   const showScoringGoal = activeMode !== "coop" && activeMetric !== "clearing";
   const sssAvailable = hasScoringGoalVariants(payload, scoringGoal);
   const showSssMethod = showScoringGoal && scoringGoal === target.goal && sssAvailable;
-  const refinedSss = [50, 51, 52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
-  const medianCalibrated = scoringGoal === "sssplus" && [53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
-  const spreadCalibrated = scoringGoal === "sssplus" && [54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
-  const centeredSss = [51, 52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
-  const tailPolicy = scoringGoal === "sssplus" && [52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
-  const submittedSssplusCalibrated = scoringGoal === "sssplus" && payload?.schemaVersion === 57;
+  const historicalGoal = scoringGoal === "sss" || scoringGoal === "sssplus";
+  const independentTarget = (scoringGoal === "ss" || scoringGoal === "ssplus") && payload?.schemaVersion === 58;
+  const refinedSss = independentTarget || historicalGoal && [50, 51, 52, 53, 54, 55, 56, 57, 58].includes(payload?.schemaVersion ?? 0);
+  const medianCalibrated = scoringGoal === "sssplus" && [53, 54, 55, 56, 57, 58].includes(payload?.schemaVersion ?? 0);
+  const spreadCalibrated = scoringGoal === "sssplus" && [54, 55, 56, 57, 58].includes(payload?.schemaVersion ?? 0);
+  const centeredSss = independentTarget || historicalGoal && [51, 52, 53, 54, 55, 56, 57, 58].includes(payload?.schemaVersion ?? 0);
+  const tailPolicy = independentTarget || scoringGoal === "sssplus" && [52, 53, 54, 55, 56, 57, 58].includes(payload?.schemaVersion ?? 0);
+  const submittedSssplusCalibrated = scoringGoal === "sssplus" && [57, 58].includes(payload?.schemaVersion ?? 0);
   const topThreeNoSss = tailPolicy || (payload?.summary.method.sssRefinement as { version?: number } | undefined)?.version === 2;
   const [groupingView, setGroupingView] = useState<GroupingView>("estimated");
   const [layoutView, setLayoutView] = useState<LayoutView>("compact");
@@ -1026,13 +1028,13 @@ export default function TierListPage() {
           ))}
         </div>
         {showScoringGoal ? <div className="scoring-goal-control"><span id="scoring-goal-label">Scoring goal</span><div className="view-switcher scoring-goal-switcher" role="group" aria-labelledby="scoring-goal-label">
-          {(["general", target.goal] as ScoringGoal[]).map(goal => <button
+          {SCORING_GOALS.map(goal => <button
             aria-pressed={scoringGoal === goal}
             className={scoringGoal === goal ? "active" : ""}
             key={goal}
             onClick={() => selectScoringGoal(goal)}
             type="button"
-          >{goal === "general" ? "General" : target.label}</button>)}
+          >{goal === "general" ? "General" : scoringTargetForGoal(goal).label}</button>)}
         </div></div> : null}
         <div className="recommendation-mode-tabs tier-mode-tabs" role="tablist" aria-label="Chart mode">
           {(["singles", "doubles", "coop"] as ModeKey[]).map((mode) => (

@@ -10,12 +10,14 @@ import hashlib
 import json
 import math
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 VERSION = "6.21.0-submitted-sssplus"
 PREVIOUS_VERSION = "6.20.0-source-aware-sssplus"
+GOAL_VERSION = "6.22.0-scoring-goals"
 PREFIX = "analysis/private/source-aware-tiers/"
 SEED = 20261018
 SAMPLES = 200
@@ -38,13 +40,8 @@ def digest(value: Any) -> str:
 
 
 def model_code_identity() -> str:
-    from importlib import metadata as packages
-    import sys
-    root = Path(__file__).resolve().parent
-    return digest({"sources": {name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-        for name in ("sss_scoring_model.py", "official_player_scoring.py", "scoring_targets.py", "target_fit_cache.py")},
-        "libraries": {name: packages.version(name) for name in ("numpy", "scipy", "pandas")},
-        "python": list(sys.version_info[:3])})
+    from numeric_recipe import target_kernel_recipe, benchmark_recipe
+    return digest({"target": target_kernel_recipe(), "benchmark": benchmark_recipe()})
 
 
 FINISH_STAGES = ("centered-sss", "sssplus", "median", "spread", "combined-clearing",
@@ -86,6 +83,11 @@ def stage_code_identity(stage):
 
 
 def general_code_identity():
+    from numeric_recipe import general_producer_recipe
+    return digest(general_producer_recipe())
+
+
+def _legacy_general_code_identity():
     root = Path(__file__).resolve().parent
     return digest({name: hashlib.sha256((root/name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
                    for name in GENERAL_FILES})
@@ -94,6 +96,24 @@ def general_code_identity():
 def pipeline_code_identity():
     return digest({"fits": model_code_identity(), **{
         name: stage_code_identity(name) for name in (*FINISH_STAGES, "archive", "public")}})
+
+
+@lru_cache(maxsize=1)
+def numerical_pipeline_recipe():
+    """Completed-result identity; active recovery still pins pipeline_code_identity."""
+    from numeric_recipe import general_producer_recipe, finish_producer_recipe, target_kernel_recipe, producer_dependencies
+    from scoring_targets import SSS, SSSPLUS
+    predecessor = digest(general_producer_recipe())
+    stages = {}
+    for stage in FINISH_STAGES:
+        predecessor = digest({"predecessor": predecessor, "producer": finish_producer_recipe(stage)})
+        stages[stage] = predecessor
+    return {"version": 1, "general": general_producer_recipe(), "stages": stages,
+            "targets": [SSS.public(), SSSPLUS.public()], "kernel": target_kernel_recipe(),
+            "preparation": digest(producer_dependencies({
+                "sss_scoring.py": {"prepare_target_observations"},
+                "production_tiers.py": {"_cohort_observations", "_general_target_predictions"}})),
+            "samples": SAMPLES, "seed": SEED}
 
 
 def load_context(first, second, manifest, records=None):
@@ -113,18 +133,54 @@ def load_context(first, second, manifest, records=None):
 
 def cohort(prepared, goal, source, mode):
     from sss_scoring import payload_sha256
+    boards, sources = _cohort_observations(prepared, source, mode)
+    identity = {"boards": payload_sha256(boards), "sourceBoards": payload_sha256(sources),
+        "target": _scoring_target(goal).score, "samples": SAMPLES, "seed": SEED}
+    return boards, sources, identity
+
+
+def _cohort_observations(prepared, source, mode):
     minimum = 20 if source == "official" else 16
     boards = {cid: board for cid, board in prepared[source]["boards"].items()
         if prepared["catalog"][cid]["type"] == mode and prepared["catalog"][cid]["level"] >= minimum}
     sources = {name: {cid: board for cid, board in entries.items() if cid in boards}
         for name, entries in prepared[source]["sourceBoards"].items()}
-    identity = {"boards": payload_sha256(boards), "sourceBoards": payload_sha256(sources),
-        "target": 995000 if goal == "sssplus" else 990000, "samples": SAMPLES, "seed": SEED}
-    return boards, sources, identity
+    return boards, sources
 
 
 def fit_path(identity):
     return PREFIX + "fits/" + digest({"inputs": identity, "code": model_code_identity()}) + ".json"
+
+
+def _scoring_target(goal):
+    from scoring_targets import get_scoring_target
+    return get_scoring_target(goal)
+
+
+def _cached_fit(store, boards, identity):
+    """Narrow-key lookup with one explicit, reviewed legacy producer migration."""
+    from numeric_recipe import legacy_outer_identity
+    path = fit_path(identity)
+    cached = store.get_json(path)
+    if cached is not None:
+        return cached
+    legacy = legacy_outer_identity()
+    if legacy is None:
+        return None
+    old_path = PREFIX + "fits/" + digest({"inputs": identity, "code": legacy}) + ".json"
+    old = store.get_json(old_path)
+    if old is None:
+        return None
+    if old.get("identity") != identity:
+        return None
+    validate_fit(old["fit"], identity)
+    if old["fit"].get("diagnostics", {}).get("validation", {}).get("seed") != identity["seed"]:
+        return None
+    from target_fit_cache import adopt_compatible_components
+    adopt_compatible_components(store, boards, old["fit"], score_target=identity["target"],
+                               bootstrap_samples=identity["samples"], seed=identity["seed"])
+    store.put_json(path, old)
+    return old
 
 
 def validate_fit(fit, identity):
@@ -141,23 +197,40 @@ def validate_fit(fit, identity):
         raise ValueError("The target fit does not implement the approved converged 200-bootstrap model.")
 
 
-def training_predictor(target):
+def training_predictor(target, store=None):
     def predict(boards, entries):
-        from collections import defaultdict
         from official_player_scoring import fit_cross_level_player_comparisons
-        fitted = fit_cross_level_player_comparisons(boards, bootstrap_samples=0)
-        effects = {cid: r["scoringChartCost"] for cid, r in fitted["charts"].items()
-            if r.get("scoringMainComponent") and r.get("scoringChartCost") is not None}
-        histories = defaultdict(list)
-        for cid, board in boards.items():
-            if cid in effects:
-                for player, score in board.items():
-                    histories[player].append(score + effects[cid])
-        abilities = {p: sum(values) / len(values) for p, values in histories.items() if len(values) >= 3}
-        return {(cid, p): 1 / (1 + math.exp(-max(-700, min(700,
-            (abilities[p] - effects[cid] - target) / 10000))))
-            for cid, p in entries if cid in effects and p in abilities}
+        from numeric_recipe import benchmark_recipe
+        from pumbility_store import PumbilityArtifactIntegrityError
+        identity = {"recipe": benchmark_recipe(), "boards": digest(boards)}
+        path = PREFIX + "training-general/" + digest(identity) + ".json"
+        try:
+            saved = store.get_json(path) if store is not None else None
+        except (PumbilityArtifactIntegrityError, json.JSONDecodeError):
+            saved = None
+        fitted = (saved["fit"] if isinstance(saved, dict) and saved.get("identity") == identity
+                  and saved.get("sha256") == digest(saved.get("fit")) else None)
+        if fitted is None:
+            fitted = fit_cross_level_player_comparisons(boards, bootstrap_samples=0)
+            if store is not None:
+                store.put_json(path, {"identity": identity, "fit": fitted, "sha256": digest(fitted)})
+        return _general_target_predictions(boards, entries, fitted, target)
     return predict
+
+
+def _general_target_predictions(boards, entries, fitted, target):
+    from collections import defaultdict
+    effects = {cid: r["scoringChartCost"] for cid, r in fitted["charts"].items()
+        if r.get("scoringMainComponent") and r.get("scoringChartCost") is not None}
+    histories = defaultdict(list)
+    for cid, board in boards.items():
+        if cid in effects:
+            for player, score in board.items():
+                histories[player].append(score + effects[cid])
+    abilities = {p: sum(values) / len(values) for p, values in histories.items() if len(values) >= 3}
+    return {(cid, p): 1 / (1 + math.exp(-max(-700, min(700,
+        (abilities[p] - effects[cid] - target) / 10000))))
+        for cid, p in entries if cid in effects and p in abilities}
 
 
 def _public_copy(value):
@@ -172,13 +245,16 @@ def public_tiers(full, *, private_path, input_identity, full_sha256=None, compon
                  computation_identity=None):
     """Retain all active values/explanations; rollback history is a private artifact."""
     from source_aware_tiers import validate_source_aware_tiers
-    if full.get("schemaVersion") == 57:
+    if full.get("schemaVersion") == 58:
+        from scoring_goal_tiers import validate_goal_tiers
+        validate_goal_tiers(full)
+    elif full.get("schemaVersion") == 57:
         from submitted_sssplus_calibration import validate_submitted_sssplus_calibration
         validate_source_aware_tiers(validate_submitted_sssplus_calibration(full))
     else:
         validate_source_aware_tiers(full)
     result = _public_copy(full)
-    version = VERSION if full.get("schemaVersion") == 57 else PREVIOUS_VERSION
+    version = GOAL_VERSION if full.get("schemaVersion") == 58 else VERSION if full.get("schemaVersion") == 57 else PREVIOUS_VERSION
     result["summary"]["scriptVersion"] = version
     publication = {"version": 1, "method": version, "fullArtifactPath": private_path,
         "fullArtifactSha256": full_sha256 or digest(full), "inputs": input_identity, "historyStorage": "private",
@@ -225,22 +301,38 @@ def write_private_audit(store, path, full):
 def validate_public_tiers(payload):
     from chart_source_exclusions import load_exclusions
     schema = payload.get("schemaVersion")
-    if schema not in (56, 57):
-        raise ValueError("The hosted source-aware tier schema must be 56 or 57.")
+    if schema not in (56, 57, 58):
+        raise ValueError("The hosted source-aware tier schema must be 56, 57 or 58.")
     method = payload["summary"]["method"]
     publication = method.get("productionTierPublication", {})
-    if (publication.get("version") != 1 or publication.get("method") != (VERSION if schema == 57 else PREVIOUS_VERSION)
+    expected_version = GOAL_VERSION if schema == 58 else VERSION if schema == 57 else PREVIOUS_VERSION
+    if (publication.get("version") != 1 or publication.get("method") != expected_version
             or publication.get("publicPayloadSha256") != public_digest(payload)):
         raise ValueError("The public source-aware tier artifact failed its publication identity.")
-    if schema == 57 and method.get("submittedSssplusCalibration", {}).get("localOnly") is not False:
+    if schema in (57, 58) and method.get("submittedSssplusCalibration", {}).get("localOnly") is not False:
         raise ValueError("The hosted submitted SSS+ calibration must declare production use.")
     rows = payload["singles"] + payload["doubles"]
     policy = load_exclusions([{**r, "id": r["chartId"]} for r in rows])
     if method["sourceAwareTiers"]["sourcePolicy"]["effectivePolicySha256"] != policy.semantic_hash():
         raise ValueError("The published tiers use a different source exclusion policy.")
+    goals = ("general", "sss", "sssplus")
+    if schema == 58:
+        from scoring_targets import SCORING_GOALS, BACKFILL_GOALS, scoring_goal_policies
+        goals = method.get("availableScoringGoals", [])
+        if (method.get("scoringGoalPolicies") != scoring_goal_policies()
+                or goals != [g for g in SCORING_GOALS if g in goals]
+                or not set(("general", "sss", "sssplus")) <= set(goals)
+                or not set(goals).intersection(BACKFILL_GOALS)):
+            raise ValueError("The public scoring-goal policies or availability differ.")
     for row in rows:
         clearing = row["tierMetrics"]["clearing"]["estimatedDifficulty"]
-        for goal in ("general", "sss", "sssplus"):
+        for goal in goals:
+            if schema == 58 and goal not in ("general", "sss", "sssplus"):
+                metric = row["scoringVariants"][goal]
+                target = _scoring_target(goal)
+                if (metric.get("scoringTarget") != target.score or metric.get("scoringSource") != ("official" if row["level"] >= 20 else "submitted")
+                        or metric.get("nContributors") != metric.get("scoringTargetSuccesses", -1) + metric.get("scoringBelowTarget", -1)):
+                    raise ValueError("The public scoring goal has incorrect target or support counts.")
             scoring = row["scoringVariants"][goal]["estimatedDifficulty"]
             actual = row["pumbilityVariants"][goal]["estimatedDifficulty"]
             expected = None if scoring is None or clearing is None else (scoring + clearing) / 2
@@ -344,6 +436,7 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
     state = store.get_json(state_path)
     if state is None:
         state = {"version": 1, "generation": generation, "identity": identity, "stages": [],
+                 "stageCodeIdentities": {stage: stage_code_identity(stage) for stage in FINISH_STAGES},
                  "createdAtUtc": generated_at_utc or datetime.now(timezone.utc).isoformat()}
     if state.get("identity") != identity or state.get("version") != 1:
         raise ValueError("The tier generation state has incompatible inputs or code.")
@@ -359,9 +452,19 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
         semantic_inputs["generalArguments"] = identity["generalArguments"]
     computation_identity = {**semantic_inputs, "pipelineCode": identity["pipelineCode"],
                             "targetSamples": SAMPLES, "targetSeed": SEED}
+    state["numericIdentity"] = {**{key: value for key, value in semantic_inputs.items() if key != "modelCode"},
+                                "numericalRecipe": numerical_pipeline_recipe()}
+    goal_inputs = {key: value for key, value in semantic_inputs.items() if key not in {"modelCode", "generalArguments"}}
+    goal_artifacts = matching_goal_artifacts(store, goal_inputs)
+    state["goalInputIdentity"] = goal_inputs
+    state["goalArtifacts"] = goal_artifacts
+    if goal_artifacts:
+        computation_identity["goalArtifacts"] = {goal: ref["payloadSha256"] for goal, ref in goal_artifacts.items()}
     state["computationIdentity"] = computation_identity
     if state.get("computationGeneration"):
         return _advance_finish(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
+    saved = None
+    pipeline_lookup_failed = False
     try:
         saved = read_index(store, "pipeline", computation_identity)
         original = (_optional_computation(store, saved.get("generation"), computation_identity)
@@ -371,6 +474,22 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
         # Optional cross-run reuse is an optimization. Never hide storage/network
         # failures or failures from a pinned in-progress computation.
         original = None
+        pipeline_lookup_failed = True
+    if original is None and saved is None and not pipeline_lookup_failed:
+        try:
+            numeric = read_index(store, "numeric-pipeline", state["numericIdentity"])
+            completed = (_completed_numeric_computation(store, numeric, state["numericIdentity"])
+                         if numeric is not None else None)
+        except (TierComputationCacheError, CheckpointValidationError, PumbilityArtifactIntegrityError,
+                json.JSONDecodeError):
+            completed = None
+        if completed is not None:
+            state.update(computationGeneration=completed["generation"], completedNumericReuse=True,
+                computationCreatedAtUtc=completed["createdAtUtc"], general=completed["general"],
+                stages=completed["stages"], phaseInputs=completed["phaseInputs"], fitsReady=True)
+            store.put_json(state_path, state)
+            return _advance_completed_numeric(store, state, verified_computation=completed,
+                                             on_stage_start=on_stage_start, on_progress=on_progress)
     if original is not None:
         if original.get("phaseInputs"):
             # Borrow the original immutable computation, including its timestamps
@@ -384,11 +503,21 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
         if key not in {"version", "generationTimestamp", "pipelineCode"}} | {
             "generalCode": general_code_identity(), "records": digest(records), "metadata": digest(metadata)})
     general_reference = state.get("general")
-    general_computation_identity = {**semantic_inputs, "generalCode": general_code_identity()}
+    general_computation_identity = {**{k: v for k, v in semantic_inputs.items() if k != "modelCode"},
+                                    "generalCode": general_code_identity()}
     general_cached = None
     if general_reference is None:
         try:
             general_cached = read_index(store, "general", general_computation_identity)
+            if general_cached is None:
+                from numeric_recipe import legacy_outer_identity
+                legacy_code = legacy_outer_identity()
+                if legacy_code is not None:
+                    old_identity = {**semantic_inputs, "modelCode": legacy_code, "generalCode": general_code_identity()}
+                    general_cached = read_index(store, "general", old_identity)
+                    if general_cached is not None:
+                        write_index(store, "general", general_computation_identity,
+                                    reference=general_cached["reference"], provenance=general_cached["provenance"])
             if general_cached is not None:
                 reference = general_cached.get("reference")
                 if (not isinstance(reference, dict) or reference.get("stage") != "general"
@@ -422,7 +551,7 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
         _report_progress(on_progress, generation, 0, "general")
         if on_stage_start: on_stage_start("general")
         general = None
-        if general_code_identity() == LEGACY_GENERAL_CODE_IDENTITY:
+        if _legacy_general_code_identity() == LEGACY_GENERAL_CODE_IDENTITY:
             # The old tier-only path used a None timestamp. Pinning a new job time
             # must not cause the exact same approved General fit to be rebuilt.
             legacy = {key: value for key, value in identity.items() if key != "pipelineCode"}
@@ -448,49 +577,79 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
         del general
     state["general"] = general_reference
     store.put_json(state_path, state)
-    fits = {goal: {source: {} for source in ("official", "submitted")} for goal in ("sss", "sssplus")}
-    identities, completed = [], 0
-    for goal in fits:
-        for source in fits[goal]:
+    if "preparedFitInputs" not in state:
+        state["phaseInputs"] = _pin_phase_inputs(store, generation, context)
+        state["preparedFitInputs"] = _pin_cohorts(store, generation, prepared, ("sss", "sssplus"))
+        state["fitReferences"] = []
+        store.put_json(state_path, state)
+    return _advance_prepared_fits(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
+
+
+def _pin_cohorts(store, generation, prepared, goals):
+    from tier_pipeline_checkpoints import write_checkpoint
+    result = []
+    for goal in goals:
+        for source in ("official", "submitted"):
             for mode, _ in MODES:
-                boards, sources, fit_identity = cohort(prepared, goal, source, mode)
-                path = fit_path(fit_identity)
-                cached_fit = store.get_json(path)
-                if cached_fit is None:
-                    _report_progress(on_progress, generation, completed, "target-fit")
-                    if on_stage_start: on_stage_start(f"target-fit-{goal}-{source}-{mode.lower()}")
-                    from target_fit_cache import load_or_fit_target
-                    fit = load_or_fit_target(store, boards, score_target=fit_identity["target"], bootstrap_samples=SAMPLES,
-                        seed=SEED, source_boards=sources,
-                        general_predictor=training_predictor(fit_identity["target"]) if source == "official" else None)
-                    if source == "official":
-                        fit["diagnostics"]["generalBenchmarkPolicy"] = {"method": "training-only-General-additive-score-cost",
-                            "logisticScoreScale": 10000, "scaleSelection": "fixed-before-holdout", "heldoutRecordsUsedInFit": False}
-                    else:
-                        fit["diagnostics"]["validation"]["generalTargetBenchmarkReason"] = "Submitted General uses score profiles rather than additive score costs; no equivalent training-only target predictor."
-                    validate_fit(fit, fit_identity)
-                    store.put_json(path, {"identity": fit_identity, "fit": fit})
-                    _report_progress(on_progress, generation, completed + 1, "target-fit")
-                    raise TierAnalysisPending(generation[:16] + "-fit-" + str(completed + 1), completed + 1,
-                        stage="target-fit", generation=generation)
-                if cached_fit["identity"] != fit_identity:
-                    raise ValueError("The private target fit has stale inputs.")
-                fit = cached_fit["fit"]
-                validate_fit(fit, fit_identity)
-                fits[goal][source][mode] = fit
-                identities.append({"goal": goal, "source": source, "mode": mode, "identity": fit_identity, "reusedOriginal": False})
-                completed += 1
-    if "phaseInputs" not in state:
-        _report_progress(on_progress, generation, 8, "prepared-inputs")
-        if on_stage_start: on_stage_start("prepared-inputs")
-        with phase("prepared-inputs", generation=generation):
-            state["phaseInputs"] = _pin_phase_inputs(store, generation, context)
-            state["fitReferences"] = [{**item, "path": fit_path(item["identity"]),
-                "fitSha256": digest(fits[item["goal"]][item["source"]][item["mode"]])} for item in identities]
-            store.put_json(state_path, state)
-            write_index(store, "pipeline", computation_identity, generation=generation)
+                boards, sources, identity = cohort(prepared, goal, source, mode)
+                reference = write_checkpoint(store, {"boards": boards, "sources": sources},
+                    stage="cohort-inputs", identity=digest({"generation": generation, "goal": goal,
+                        "source": source, "mode": mode, "identity": identity}))
+                result.append({"goal": goal, "source": source, "mode": mode, "identity": identity,
+                               "inputs": reference, "reusedOriginal": False})
+    return result
+
+
+def _advance_prepared_fits(store, state, *, on_stage_start=None, on_progress=None):
+    from tier_pipeline_checkpoints import read_checkpoint
+    from tier_computation_cache import write_index
+    from target_fit_cache import load_or_fit_target
+    generation = state["generation"]
+    state_path = PREFIX + "generations/" + generation + "/state.json"
+    references = state.setdefault("fitReferences", [])
+    for item in state["preparedFitInputs"][len(references):]:
+        identity, goal, source, mode = (item[k] for k in ("identity", "goal", "source", "mode"))
+        path = fit_path(identity)
+        cached = store.get_json(path)
+        payload = None
+        if cached is None:
+            ref = item["inputs"]
+            expected = digest({"generation": generation, "goal": goal, "source": source,
+                               "mode": mode, "identity": identity})
+            payload = read_checkpoint(store, ref, stage="cohort-inputs", identity=expected)
+            cached = _cached_fit(store, payload["boards"], identity)
+        computed = cached is None
+        if computed:
+            if on_stage_start: on_stage_start(f"target-fit-{goal}-{source}-{mode.lower()}")
+            fit = load_or_fit_target(store, payload["boards"], score_target=identity["target"],
+                bootstrap_samples=SAMPLES, seed=SEED, source_boards=payload["sources"],
+                general_predictor=training_predictor(identity["target"], store) if source == "official" else None)
+            if source == "official":
+                fit["diagnostics"]["generalBenchmarkPolicy"] = {"method": "training-only-General-additive-score-cost",
+                    "logisticScoreScale": 10000, "scaleSelection": "fixed-before-holdout", "heldoutRecordsUsedInFit": False}
+            else:
+                fit["diagnostics"]["validation"]["generalTargetBenchmarkReason"] = "Submitted General uses score profiles rather than additive score costs; no equivalent training-only target predictor."
+            cached = {"identity": identity, "fit": fit}
+            validate_fit(fit, identity)
+            store.put_json(path, cached)
+        if cached.get("identity") != identity:
+            raise ValueError("The captured target fit has stale inputs.")
+        validate_fit(cached["fit"], identity)
+        references.append({**{k: item[k] for k in ("goal", "source", "mode", "identity", "reusedOriginal")},
+                           "path": path, "fitSha256": digest(cached["fit"])})
+        store.put_json(state_path, state)
+        if computed:
+            if on_progress:
+                on_progress({"version": 1, "generation": generation, "ordinal": len(references),
+                             "stage": "target-fit", "preparedContext": True})
+            raise TierAnalysisPending(generation[:16] + "-fit-" + str(len(references)), len(references),
+                                      stage="target-fit", generation=generation)
+    if not state.get("fitsReady"):
+        state["fitsReady"] = True
+        store.put_json(state_path, state)
+        write_index(store, "pipeline", state["computationIdentity"], generation=generation)
         _report_progress(on_progress, generation, 9, "prepared-inputs")
-        raise TierAnalysisPending(generation[:16]+"-9", 8, stage="prepared-inputs",
+        raise TierAnalysisPending(generation[:16] + "-9", 8, stage="prepared-inputs",
                                   generation=generation, progress_ordinal=9)
     return _advance_finish(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
 
@@ -514,7 +673,7 @@ def _captured_computation(store, generation, expected_identity=None):
             or not isinstance(state.get("createdAtUtc"), str)
             or (expected_identity is not None and
                 (state.get("computationIdentity") != expected_identity
-                 or state.get("computationGeneration")))):
+                 or (state.get("computationGeneration") and not state.get("completedNumericReuse"))))):
         raise TierComputationCacheError("The captured tier computation has incompatible inputs or code.")
     if not state.get("computationGeneration"):
         _validate_stage_chain(state)
@@ -547,6 +706,8 @@ def resume_tier_generation(store, generation, *, generated_at_utc, on_progress=N
     if (state["createdAtUtc"] != generated_at_utc
             or not (state.get("phaseInputs") or state.get("computationGeneration"))):
         raise ValueError("The pinned tier generation has incompatible time or phase inputs.")
+    if state.get("preparedFitInputs") and not state.get("fitsReady"):
+        return _advance_prepared_fits(store, state, on_progress=on_progress, on_stage_start=on_stage_start)
     return _advance_finish(store, state, on_progress=on_progress, on_stage_start=on_stage_start)
 
 
@@ -556,7 +717,7 @@ def _optional_computation(store, generation, identity):
     original = _captured_computation(store, generation, identity)
     if not original.get("phaseInputs"):
         return None
-    reference = original["stages"][-1] if original["stages"] else original["general"]
+    reference = original.get("goalOverlay") or (original["stages"][-1] if original["stages"] else original["general"])
     verified_checkpoint_bytes(store, reference, stage=reference["stage"], identity=reference["identity"])
     if original.get("ready"):
         public = store.get_json(PREFIX + "generations/" + generation + "/public.json")
@@ -574,12 +735,101 @@ def _optional_computation(store, generation, identity):
     return original
 
 
+def _completed_numeric_computation(store, index, identity):
+    """Verify a completed producer without accepting its old active-worker code."""
+    from tier_computation_cache import TierComputationCacheError
+    from tier_pipeline_checkpoints import verified_checkpoint_bytes
+    generation = index.get("generation")
+    if not isinstance(generation, str) or len(generation) != 64 or any(c not in "0123456789abcdef" for c in generation):
+        raise TierComputationCacheError("The completed numerical generation is invalid.")
+    state = store.get_json(PREFIX + "generations/" + generation + "/state.json")
+    if (not isinstance(state, dict) or state.get("version") != 1 or state.get("generation") != generation
+            or digest(state.get("identity")) != generation or state.get("numericIdentity") != identity
+            or state.get("computationGeneration") or len(state.get("stages", [])) != len(FINISH_STAGES)
+            or not isinstance(state.get("stageCodeIdentities"), dict)
+            or not isinstance(state.get("createdAtUtc"), str) or not state.get("phaseInputs")):
+        raise TierComputationCacheError("The completed numerical producer is incompatible.")
+    predecessor = state.get("general")
+    if not isinstance(predecessor, dict) or predecessor.get("stage") != "general":
+        raise TierComputationCacheError("The numerical predecessor chain is missing General.")
+    for stage, reference in zip(FINISH_STAGES, state["stages"]):
+        code = state["stageCodeIdentities"].get(stage)
+        expected = digest({"generation": generation, "stage": stage, "code": code,
+            "predecessorSha256": predecessor["payloadSha256"], "createdAtUtc": state["createdAtUtc"]})
+        if (not isinstance(code, str) or reference.get("stage") != stage
+                or reference.get("schemaVersion") != STAGE_SCHEMAS[stage]
+                or reference.get("predecessorSha256") != predecessor["payloadSha256"]
+                or reference.get("identity") != expected):
+            raise TierComputationCacheError("The completed numerical predecessor chain differs.")
+        predecessor = reference
+    if index.get("reference") != predecessor:
+        raise TierComputationCacheError("The completed numerical index differs from its producer.")
+    verified_checkpoint_bytes(store, predecessor, stage=FINISH_STAGES[-1], identity=predecessor["identity"])
+    return state
+
+
+def _advance_completed_numeric(store, state, *, verified_computation=None,
+                              on_stage_start=None, on_progress=None):
+    """Project a verified completed raw57 under current goal/publication formats."""
+    from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
+    from tier_computation_cache import write_index
+    original = verified_computation or _completed_numeric_computation(store,
+        {"generation": state["computationGeneration"], "reference": state["stages"][-1]}, state["numericIdentity"])
+    reference = original["stages"][-1]
+    generation, state_path = state["generation"], PREFIX + "generations/" + state["generation"] + "/state.json"
+    if "archive" not in state:
+        if on_stage_start: on_stage_start("archive")
+        if state.get("goalArtifacts"):
+            from scoring_goal_tiers import apply_goal_artifacts
+            full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
+            artifacts = {goal: read_checkpoint(store, ref, stage="scoring-goal", identity=ref["identity"])
+                         for goal, ref in state["goalArtifacts"].items()}
+            full = apply_goal_artifacts(full, artifacts, expected_input_identity=state["goalInputIdentity"])
+            reference = write_checkpoint(store, full, stage="goal-overlays",
+                identity=digest({"generation": generation, "artifacts": state["goalArtifacts"]}),
+                predecessor=reference["payloadSha256"])
+            state["goalOverlay"] = reference
+        state["archive"] = reference
+        store.put_json(state_path, state)
+        ordinal = 9 + len(FINISH_STAGES) + 1
+        _report_progress(on_progress, generation, ordinal, "archive")
+        raise TierAnalysisPending(generation[:16] + "-" + str(ordinal), 8, stage="archive",
+                                  generation=generation, progress_ordinal=ordinal)
+    reference = state["archive"]
+    if on_stage_start: on_stage_start("public")
+    full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
+    public = public_tiers(full, private_path=reference["path"], input_identity=state["identity"],
+        full_sha256=reference["payloadSha256"], component_provenance=original.get("componentComputations"),
+        computation_identity=state["computationIdentity"])
+    public["generatedAtUtc"] = public["summary"]["generatedAtUtc"] = state["createdAtUtc"]
+    publication = public["summary"]["method"]["productionTierPublication"]
+    publication.update(computedAtUtc=original["createdAtUtc"], computedInputs=original["identity"],
+        computedGeneration=original["generation"], reusedComputation=True)
+    publication["publicPayloadSha256"] = public_digest(public)
+    from tier_public import prepare_tier_publication, validate_tier_publication
+    compact, details = prepare_tier_publication(public, generation)
+    validate_tier_publication(public, compact)
+    _write_detail_shards(store, details)
+    validate_public_tiers(compact)
+    public_path = PREFIX + "generations/" + generation + "/public.json"
+    store.put_json(public_path, compact)
+    state["ready"] = {"path": public_path, "payloadSha256": digest(compact),
+        "archivePath": reference["path"], "archiveSha256": reference["payloadSha256"]}
+    store.put_json(state_path, state)
+    write_index(store, "pipeline", state["computationIdentity"], generation=generation)
+    _report_progress(on_progress, generation, 9 + len(FINISH_STAGES) + 2, "public")
+    return compact
+
+
 def _advance_reused_computation(store, state, *, on_stage_start=None, on_progress=None,
                                verified_computation=None):
+    if state.get("completedNumericReuse"):
+        return _advance_completed_numeric(store, state, verified_computation=verified_computation,
+                                          on_stage_start=on_stage_start, on_progress=on_progress)
     from tier_pipeline_checkpoints import verified_checkpoint_bytes
     original = verified_computation or _captured_computation(
         store, state["computationGeneration"], state["computationIdentity"])
-    verified_reference = (original["stages"][-1]["blobSha256"]
+    verified_reference = ((original.get("goalOverlay") or original["stages"][-1])["blobSha256"]
                           if verified_computation and original["stages"] else None)
     if original["createdAtUtc"] != state.get("computationCreatedAtUtc"):
         raise ValueError("The reused tier computation time differs.")
@@ -600,15 +850,16 @@ def _advance_reused_computation(store, state, *, on_stage_start=None, on_progres
         raise ValueError("The reused tier publication differs from its computed generation.")
     # The transition-validated canonical content is unchanged if its compressed
     # bytes match. Verify those bytes without replaying or inflating the full tree.
-    reference = original["stages"][-1]
+    reference = original.get("goalOverlay") or original["stages"][-1]
     if reference["blobSha256"] != verified_reference:
-        verified_checkpoint_bytes(store, reference, stage="submitted-calibration", identity=reference["identity"])
+        verified_checkpoint_bytes(store, reference, stage=reference["stage"], identity=reference["identity"])
     compact = {**computed, "generatedAtUtc": state["createdAtUtc"],
                "summary": {**computed["summary"], "generatedAtUtc": state["createdAtUtc"],
                            "method": dict(computed["summary"]["method"])}}
     run_publication = {**publication, "inputs": state["identity"],
-        "computedAtUtc": computed["generatedAtUtc"], "computedInputs": original["identity"],
-        "computedGeneration": original["generation"],
+        "computedAtUtc": publication.get("computedAtUtc", computed["generatedAtUtc"]),
+        "computedInputs": publication.get("computedInputs", original["identity"]),
+        "computedGeneration": publication.get("computedGeneration", original["generation"]),
         "computationIdentity": digest(state["computationIdentity"]), "reusedComputation": True}
     compact["summary"]["method"]["productionTierPublication"] = run_publication
     run_publication["publicPayloadSha256"] = public_digest(compact)
@@ -625,6 +876,8 @@ def _advance_reused_computation(store, state, *, on_stage_start=None, on_progres
 def _advance_finish(store, state, *, on_stage_start=None, on_progress=None, verified_computation=None):
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
     from tier_diagnostics import event, phase
+    if state.get("preparedFitInputs") and not state.get("fitsReady"):
+        return _advance_prepared_fits(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
     generation, identity, created = state["generation"], state["identity"], state["createdAtUtc"]
     state_path = PREFIX+"generations/"+generation+"/state.json"
     public_path = PREFIX+"generations/"+generation+"/public.json"
@@ -672,6 +925,10 @@ def _advance_finish(store, state, *, on_stage_start=None, on_progress=None, veri
         state["stages"].append(checkpoint)
         state.pop("activeStage", None)
         store.put_json(state_path, state)
+        if len(state["stages"]) == len(FINISH_STAGES) and state.get("numericIdentity"):
+            from tier_computation_cache import write_index
+            write_index(store, "numeric-pipeline", state["numericIdentity"], generation=generation,
+                        reference=checkpoint)
         _report_progress(on_progress, generation, 9 + completed_stages + 1, stage)
         event("tier_checkpoint_saved", generation=generation, stage=stage,
               artifact_bytes=checkpoint["compressedBytes"], output_hash=checkpoint["payloadSha256"])
@@ -680,6 +937,17 @@ def _advance_finish(store, state, *, on_stage_start=None, on_progress=None, veri
                                   generation=generation, progress_ordinal=ordinal)
     if "archive" not in state:
         if on_stage_start: on_stage_start("archive")
+        if state.get("goalArtifacts"):
+            from scoring_goal_tiers import apply_goal_artifacts
+            if "goalOverlay" not in state:
+                full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
+                artifacts = {goal: read_checkpoint(store, ref, stage="scoring-goal", identity=ref["identity"])
+                             for goal, ref in state["goalArtifacts"].items()}
+                full = apply_goal_artifacts(full, artifacts, expected_input_identity=state["goalInputIdentity"])
+                state["goalOverlay"] = write_checkpoint(store, full, stage="goal-overlays",
+                    identity=digest({"generation": generation, "artifacts": state["goalArtifacts"]}),
+                    predecessor=reference["payloadSha256"])
+            reference = state["goalOverlay"]
         # The immutable, verified final-stage gzip already IS the complete audit.
         # Reuse its canonical content digest rather than serialize 400MB again.
         state["archive"] = reference
@@ -689,10 +957,11 @@ def _advance_finish(store, state, *, on_stage_start=None, on_progress=None, veri
         raise TierAnalysisPending(generation[:16]+"-"+str(ordinal), 8, stage="archive",
                                   generation=generation, progress_ordinal=ordinal)
     state["activeStage"] = "public"
+    reference = state.get("goalOverlay") or reference
     if on_stage_start: on_stage_start("public")
     store.put_json(state_path, state)
     with phase("public", generation=generation):
-        full = read_checkpoint(store, reference, stage="submitted-calibration", identity=reference["identity"])
+        full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
         public = public_tiers(full, private_path=reference["path"], input_identity=identity,
                               full_sha256=reference["payloadSha256"],
                               component_provenance=state.get("componentComputations"),
@@ -714,6 +983,10 @@ def _advance_finish(store, state, *, on_stage_start=None, on_progress=None, veri
 def _write_detail_shards(store, details):
     """Join bounded immutable writes before the public generation commit marker."""
     if not details:
+        return
+    batch = getattr(store, "put_json_batch", None)
+    if callable(batch):
+        batch(details)
         return
     from concurrent.futures import ThreadPoolExecutor, as_completed
     with ThreadPoolExecutor(max_workers=min(4, len(details)), thread_name_prefix="tier-details") as executor:
@@ -843,3 +1116,140 @@ def _ready_worker_result(state, candidate):
              "archiveSha256": publication["fullArtifactSha256"]}
     return {**ready, "state": {**state, **{key: ready[key] for key in
         ("generation", "stage", "progressOrdinal", "candidatePath", "candidateSha256", "archivePath", "archiveSha256")}}}
+
+
+def _goal_recipe(goal):
+    from numeric_recipe import benchmark_recipe, producer_dependencies, target_kernel_recipe
+    return {"target": _scoring_target(goal).public(), "kernel": target_kernel_recipe(),
+            "benchmark": benchmark_recipe(),
+            "calibration": digest(producer_dependencies({
+                "scoring_goal_tiers.py": {"build_goal_artifact"},
+                "sss_scoring.py": {"prepare_target_observations"},
+                "production_tiers.py": {"_cohort_observations", "_general_target_predictions"}}))}
+
+
+def _goal_index_path(inputs, goal):
+    return PREFIX + "goal-artifacts/" + digest({"inputs": inputs, "recipe": _goal_recipe(goal)}) + ".json"
+
+
+def matching_goal_artifacts(store, inputs):
+    """Optional results attach only to exactly matching source/policy inputs."""
+    from scoring_targets import BACKFILL_GOALS
+    from tier_pipeline_checkpoints import read_checkpoint, CheckpointValidationError
+    from pumbility_store import PumbilityArtifactIntegrityError
+    result = {}
+    for goal in BACKFILL_GOALS:
+        try:
+            index = store.get_json(_goal_index_path(inputs, goal))
+            if not isinstance(index, dict) or index.get("inputIdentity") != inputs or index.get("recipe") != _goal_recipe(goal):
+                continue
+            ref = index["reference"]
+            artifact = read_checkpoint(store, ref, stage="scoring-goal", identity=digest({"inputs": inputs, "recipe": _goal_recipe(goal)}))
+            if artifact.get("inputIdentity") == inputs and artifact.get("targetConfig") == _scoring_target(goal).public():
+                result[goal] = ref
+        except (KeyError, TypeError, CheckpointValidationError, PumbilityArtifactIntegrityError, json.JSONDecodeError):
+            continue
+    return result
+
+
+def advance_goal_backfill(store, *, pinned_inputs_reference, goal, on_progress=None, max_fit_workers=1):
+    """Compute at most one missing cohort; save artifacts without moving pointers."""
+    from scoring_targets import BACKFILL_GOALS
+    from scoring_goal_tiers import build_goal_artifact
+    from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
+    from tier_computation_cache import input_identity
+    from official_scoring_sources import canonical_scoring_manifest_sha256
+    from target_fit_cache import load_or_fit_target, hydrate_point_context
+    if goal not in BACKFILL_GOALS:
+        raise ValueError("Only independent SS/SS+ goal backfills are supported.")
+    if type(max_fit_workers) is not int or max_fit_workers not in (1, 2):
+        raise ValueError("Goal fitting permits one worker by default or two explicitly opted-in workers.")
+    recipe = _goal_recipe(goal)
+    task_identity = {"pinnedInputs": pinned_inputs_reference["payloadSha256"], "recipe": recipe}
+    task_path = PREFIX + "goal-jobs/" + digest(task_identity) + ".json"
+    state = store.get_json(task_path)
+    if state is None:
+        captured = read_checkpoint(store, pinned_inputs_reference, stage="pinned-inputs", identity=pinned_inputs_reference["identity"])
+        context = load_context(captured["first"], captured["second"], captured["manifest"], captured["records"])
+        first, second, catalog, policy, merged, prepared = context
+        inputs = input_identity(captured["first"], captured["second"], records=captured["records"],
+            metadata=captured["metadata"], catalog=catalog,
+            manifest_sha256=canonical_scoring_manifest_sha256(captured["manifest"]), policy=policy.public(), model_code=None)
+        inputs.pop("modelCode", None)
+        generation = digest(task_identity)
+        context_ref = write_checkpoint(store, {"first": first, "second": second, "catalog": catalog,
+            "policy": policy.public(), "policySemanticSha256": policy.semantic_hash(),
+            "merged": merged, "prepared": prepared},
+            stage="goal-context", identity=generation)
+        state = {"version": 1, "identity": task_identity, "inputIdentity": inputs,
+            "context": context_ref, "createdAtUtc": captured["generatedAtUtc"],
+            "cohorts": _pin_cohorts(store, generation, prepared, (goal,)), "fits": []}
+        store.put_json(task_path, state)
+    if state.get("identity") != task_identity or state.get("version") != 1:
+        raise ValueError("The pinned scoring-goal backfill changed code or inputs.")
+    inputs = state["inputIdentity"]
+    ready = matching_goal_artifacts(store, inputs).get(goal)
+    if ready is not None:
+        return {"done": True, "goal": goal, "inputIdentity": digest(inputs), "completedTargetFits": 4,
+            "artifactReference": {"path": ready["path"], "sha256": ready["payloadSha256"]}}
+    while len(state["fits"]) < len(state["cohorts"]):
+        tasks = state["cohorts"][len(state["fits"]):len(state["fits"])+max_fit_workers]
+        if max_fit_workers == 1:
+            completed = [_build_goal_fit(store, tasks[0], digest(task_identity))]
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="goal-fit") as executor:
+                completed = list(executor.map(lambda item: _build_goal_fit(store, item, digest(task_identity)), tasks))
+        # Only the coordinator mutates durable progress, in original cohort order.
+        for reference, computed in completed:
+            state["fits"].append(reference)
+        store.put_json(task_path, state)
+        if any(computed for _, computed in completed):
+            progress = {"done": False, "goal": goal, "inputIdentity": digest(inputs),
+                        "completedTargetFits": len(state["fits"]), "sequence": digest(task_identity)[:16] + "-" + str(len(state["fits"]))}
+            if on_progress: on_progress(progress)
+            return progress
+    captured = read_checkpoint(store, state["context"], stage="goal-context", identity=digest(task_identity))
+    context = (captured["first"], captured["second"], captured["catalog"],
+               SimpleNamespace(public=lambda: captured["policy"],
+                               semantic_hash=lambda: captured["policySemanticSha256"]),
+               captured["merged"], captured["prepared"])
+    fits = {"official": {}, "submitted": {}}
+    for item in state["fits"]:
+        cached = store.get_json(item["path"])
+        if cached is None or cached.get("identity") != item["identity"] or digest(cached.get("fit")) != item["fitSha256"]:
+            raise ValueError("A pinned scoring-goal fit changed during calibration.")
+        boards, _, _ = cohort(captured["prepared"], goal, item["source"], item["mode"])
+        hydrate_point_context(store, boards, cached["fit"], score_target=item["identity"]["target"])
+        fits[item["source"]][item["mode"]] = cached["fit"]
+    artifact = build_goal_artifact(context, fits, state["fits"], state["createdAtUtc"], goal=goal)
+    artifact["inputIdentity"] = inputs
+    reference = write_checkpoint(store, artifact, stage="scoring-goal", identity=digest({"inputs": inputs, "recipe": recipe}))
+    store.put_json(_goal_index_path(inputs, goal), {"version": 1, "recipe": recipe,
+                   "inputIdentity": inputs, "reference": reference})
+    return {"done": True, "goal": goal, "inputIdentity": digest(inputs), "completedTargetFits": 4,
+            "artifactReference": {"path": reference["path"], "sha256": reference["payloadSha256"]}}
+
+
+def _build_goal_fit(store, item, generation):
+    """A captured child writes immutable numeric outputs, never publication state."""
+    from tier_pipeline_checkpoints import read_checkpoint
+    from target_fit_cache import load_or_fit_target
+    identity = item["identity"]
+    expected = digest({"generation": generation, "goal": item["goal"], "source": item["source"],
+                       "mode": item["mode"], "identity": identity})
+    payload = read_checkpoint(store, item["inputs"], stage="cohort-inputs", identity=expected)
+    cached = _cached_fit(store, payload["boards"], identity)
+    computed = cached is None
+    if computed:
+        fit = load_or_fit_target(store, payload["boards"], score_target=identity["target"],
+            bootstrap_samples=SAMPLES, seed=SEED, source_boards=payload["sources"],
+            general_predictor=training_predictor(identity["target"], store) if item["source"] == "official" else None)
+        validate_fit(fit, identity)
+        cached = {"identity": identity, "fit": fit}
+        store.put_json(fit_path(identity), cached)
+    if cached.get("identity") != identity:
+        raise ValueError("The scoring-goal fit has stale input identity.")
+    validate_fit(cached["fit"], identity)
+    return ({**{k: item[k] for k in ("goal", "source", "mode", "identity", "reusedOriginal")},
+             "path": fit_path(identity), "fitSha256": digest(cached["fit"])}, computed)

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { DEFAULT_SCORING_GOAL, hasScoringGoalVariants, hasSssScoringVariants, HISTORICAL_SSS_UNAVAILABLE, isSssScoringChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUnavailableMessage, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal, scoringTargetForPayload } from "../lib/scoring-variants.ts";
+import { DEFAULT_SCORING_GOAL, SCORING_GOALS, SCORING_TARGET_POLICIES, hasScoringGoalVariants, hasSssScoringVariants, HISTORICAL_SSS_UNAVAILABLE, isSssScoringChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUnavailableMessage, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal, scoringTargetForPayload } from "../lib/scoring-variants.ts";
 import { estimatedTierGroups, hasLimitedTierData, selectedTierMetric, sortTierCharts, tierBandCharts, tierSupportLabel } from "../lib/tier-metrics.ts";
 import type { AnalysisPayload, ChartResult, ScoringVariant } from "../lib/types";
 
@@ -30,10 +30,10 @@ test("SSS+ default and explicit URL goals stay stable before and after every sup
   assert.equal(DEFAULT_SCORING_GOAL, "sssplus");
   const historical = { ...fixture, schemaVersion: 51 };
   const current = { ...fixture, schemaVersion: 52 };
-  for (const schemaVersion of [48, 49, 50, 51, 52, 53, 54, 55, 56, 57]) {
+  for (const schemaVersion of [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58]) {
     for (const [query, expected] of [
       ["", "sssplus"], ["mode=doubles&metric=pumbility", "sssplus"], ["scoring=bad", "sssplus"],
-      ["scoring=general", "general"], ["scoring=sss", "sss"], ["scoring=sssplus", "sssplus"],
+      ["scoring=general", "general"], ["scoring=ss", "ss"], ["scoring=ssplus", "ssplus"], ["scoring=sss", "sss"], ["scoring=sssplus", "sssplus"],
     ] as const) {
       const params = new URLSearchParams(query);
       assert.equal(scoringGoalFromSearchParams(params), expected);
@@ -59,6 +59,65 @@ test("SSS+ default and explicit URL goals stay stable before and after every sup
   assert.equal(scoringGoalFromSearchParams(general.searchParams), "general");
   assert.equal(hasSssScoringVariants({ ...fixture, schemaVersion: 57 }), true);
   assert.equal(scoringTargetForPayload({ ...fixture, schemaVersion: 57 }).goal, "sssplus");
+});
+
+test("five goals have stable display order, independent labels and inclusive target policies", () => {
+  assert.deepEqual(SCORING_GOALS, ["general", "ss", "ssplus", "sss", "sssplus"]);
+  assert.deepEqual(SCORING_TARGET_POLICIES.map(p => [p.key, p.score, p.inclusive]),
+    [["ss", 980000, true], ["ssplus", 985000, true], ["sss", 990000, true], ["sssplus", 995000, true]]);
+  assert.deepEqual(scoringTargetForGoal("ss"), { goal: "ss", label: "SS", score: 980000 });
+  assert.deepEqual(scoringTargetForGoal("ssplus"), { goal: "ssplus", label: "SS+", score: 985000 });
+  const base = new URL("http://localhost/tier-list?player=chosen&metric=pumbility#rankings-dashboard");
+  for (const goal of SCORING_GOALS) {
+    const url = scoringGoalUrl(base.href, goal);
+    assert.equal(scoringGoalFromSearchParams(url.searchParams), goal);
+    assert.equal(url.searchParams.get("player"), "chosen");
+    assert.equal(url.hash, base.hash);
+  }
+});
+
+test("SS and SS+ projection owns sorting, support, intervals and matching Pumbility", () => {
+  const first = variantChart(), second = variantChart();
+  second.chartId = "second";
+  for (const row of [first, second]) for (const goal of ["ss", "ssplus"] as const) {
+    row.scoringVariants![goal] = { ...structuredClone(row.scoringVariants!.sss!),
+      scoringTarget: scoringTargetForGoal(goal).score, scoringMethod: "target-attainment-rasch-v1",
+      estimatedDifficulty: row === first ? goal === "ss" ? 18.9 : 20.1 : goal === "ss" ? 20.1 : 18.9 };
+    row.pumbilityVariants![goal] = { ...structuredClone(row.pumbilityVariants!.sss!),
+      estimatedDifficulty: row.scoringVariants![goal]!.estimatedDifficulty };
+  }
+  const frozen = structuredClone([first, second]);
+  for (const goal of ["ss", "ssplus"] as const) {
+    const projected = [first, second].map(row => projectScoringGoal(row, goal, "pumbility"));
+    assert.deepEqual(sortTierCharts(projected, "scoring").map(row => row.chartId),
+      goal === "ss" ? [first.chartId, second.chartId] : [second.chartId, first.chartId]);
+    assert.equal(projected[0].tierMetrics!.pumbility.estimatedDifficulty, first.pumbilityVariants![goal]!.estimatedDifficulty);
+    assert.equal(projected[0].difficultyCi95Low, first.scoringVariants![goal]!.difficultyCi95Low);
+    assert.equal(projected[0].levelRank, first.scoringVariants![goal]!.levelRank);
+    assert.equal(scoringTargetForChart(projected[0]).label, scoringTargetForGoal(goal).label);
+    assert.ok(tierSupportLabel(projected[0], "scoring").includes(`at ${scoringTargetForGoal(goal).label},`));
+    assert.equal(projectScoringGoal(first, goal, "clearing"), first);
+    const coop = { ...first, type: "CoOp" as const };
+    assert.equal(projectScoringGoal(coop, goal), coop);
+  }
+  assert.deepEqual([first, second], frozen);
+});
+
+test("absent SS and SS+ remain selected and Unrated with explicit General available", () => {
+  const row = variantChart(), payload = { ...fixture, singles: [row], doubles: [] };
+  for (const goal of ["ss", "ssplus"] as const) {
+    assert.equal(hasScoringGoalVariants(payload, goal), false);
+    assert.equal(scoringGoalFromSearchParams(new URLSearchParams(`scoring=${goal}`), payload), goal);
+    const projected = projectScoringGoal(row, goal, "pumbility");
+    assert.equal(projected.estimatedDifficulty, null);
+    assert.equal(projected.evidenceStatus, "Unrated");
+    assert.equal(projected.tierMetrics!.pumbility.estimatedDifficulty, null);
+    assert.equal(projected.scoringTarget, scoringTargetForGoal(goal).score);
+    assert.ok(scoringGoalUnavailableMessage(goal).includes("General is available separately"));
+    row.scoringVariants![goal] = { ...projected, nContributors: 0 };
+    assert.equal(hasScoringGoalVariants(payload, goal), true);
+  }
+  assert.equal(hasScoringGoalVariants(payload, "general"), true);
 });
 
 test("selected target labels do not change to an older payload target", () => {

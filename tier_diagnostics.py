@@ -22,7 +22,9 @@ _FIELDS = frozenset({
     "attempt", "checkpoint", "cache_hit", "completed_fits", "stack",
     "tls_category", "cache_reads", "cache_writes", "cache_hits", "cache_misses",
     "cache_bypassed", "cache_failures", "cache_corruptions", "cache_shards", "read_duration_ms",
-    "write_duration_ms",
+    "write_duration_ms", "cpu_ms", "goal", "source", "mode", "main_fits",
+    "bootstrap_attempted", "bootstrap_completed", "source_fits", "point_replays",
+    "solver_iterations", "decoded_bytes", "serialized_bytes",
 })
 
 
@@ -67,13 +69,16 @@ def report_exception(error: BaseException, **fields: Any) -> dict[str, Any]:
 @contextmanager
 def phase(stage: str, **fields: Any) -> Iterator[None]:
     started = time.perf_counter()
+    cpu_started = time.process_time()
     event("tier_stage_started", stage=stage, **fields)
     try:
         yield
     except BaseException as error:
         report_exception(error, stage=stage,
-                         duration_ms=round((time.perf_counter()-started)*1000, 3), **fields)
+                         duration_ms=round((time.perf_counter()-started)*1000, 3),
+                         cpu_ms=round((time.process_time()-cpu_started)*1000, 3), **fields)
         raise
     else:
         event("tier_stage_completed", stage=stage,
-              duration_ms=round((time.perf_counter()-started)*1000, 3), **fields)
+              duration_ms=round((time.perf_counter()-started)*1000, 3),
+              cpu_ms=round((time.process_time()-cpu_started)*1000, 3), **fields)

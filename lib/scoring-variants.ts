@@ -1,15 +1,36 @@
-import type { AnalysisPayload, ChartResult, ScoringGoal, ScoringVariant, TierMetricKey } from "./types";
+import type { AnalysisPayload, ChartResult, ScoringGoal, ScoringGoalPolicy, ScoringVariant, TierMetricKey } from "./types";
 
 export const DEFAULT_SCORING_GOAL: ScoringGoal = "sssplus";
+export const SCORING_GOALS = ["general", "ss", "ssplus", "sss", "sssplus"] as const;
+export const SS_SCORE_TARGET = 980000;
+export const SSPLUS_SCORE_TARGET = 985000;
 export const SSS_SCORE_TARGET = 990000;
 export const SSSPLUS_SCORE_TARGET = 995000;
+const TARGETS = {
+  ss: { goal: "ss", label: "SS", score: SS_SCORE_TARGET },
+  ssplus: { goal: "ssplus", label: "SS+", score: SSPLUS_SCORE_TARGET },
+  sss: { goal: "sss", label: "SSS", score: SSS_SCORE_TARGET },
+  sssplus: { goal: "sssplus", label: "SSS+", score: SSSPLUS_SCORE_TARGET },
+} as const;
+export const SCORING_TARGET_POLICIES: readonly ScoringGoalPolicy[] = [
+  { key: "ss", grade: "SS", score: 980000, inclusive: true, policyVersion: "ss-target-policy-v1",
+    modelMethod: "target-attainment-rasch-v1", boundaryMethod: "target-boundary-score-gap-v1",
+    rareMethod: "target-rare-success-upper-band-v1", nearTargetScoreRange: [970000, 999999] },
+  { key: "ssplus", grade: "SS+", score: 985000, inclusive: true, policyVersion: "ssplus-target-policy-v1",
+    modelMethod: "target-attainment-rasch-v1", boundaryMethod: "target-boundary-score-gap-v1",
+    rareMethod: "target-rare-success-upper-band-v1", nearTargetScoreRange: [975000, 999999] },
+  { key: "sss", grade: "SSS", score: 990000, inclusive: true, policyVersion: "sss-historical-v1",
+    modelMethod: "sss-target-rasch-v1", boundaryMethod: "sss-boundary-score-gap-v1",
+    rareMethod: "sss-rare-success-upper-band-v1", nearTargetScoreRange: [980000, 999999] },
+  { key: "sssplus", grade: "SSS+", score: 995000, inclusive: true, policyVersion: "sssplus-target-policy-v1",
+    modelMethod: "target-attainment-rasch-v1", boundaryMethod: "target-boundary-score-gap-v1",
+    rareMethod: "target-rare-success-upper-band-v1", nearTargetScoreRange: [985000, 999999] },
+];
 export const HISTORICAL_SSS_UNAVAILABLE = "SSS is unavailable in this analysis generation. Its charts remain Unrated; General is available separately.";
 
 /** The selected goal owns its label, even while older analysis data is loading. */
 export function scoringTargetForGoal(goal: ScoringGoal) {
-  return goal === "sss"
-    ? { goal: "sss" as const, label: "SSS", score: SSS_SCORE_TARGET }
-    : { goal: "sssplus" as const, label: "SSS+", score: SSSPLUS_SCORE_TARGET };
+  return TARGETS[goal === "general" ? "sssplus" : goal];
 }
 
 export function scoringGoalUnavailableMessage(goal: Exclude<ScoringGoal, "general">): string {
@@ -21,25 +42,26 @@ export function scoringGoalUnavailableMessage(goal: Exclude<ScoringGoal, "genera
 export function hasScoringGoalVariants(payload: AnalysisPayload | null | undefined, goal: ScoringGoal): boolean {
   if (!payload) return false;
   if (goal === "general") return true;
+  if (payload.schemaVersion === 58 && payload.summary.method.availableScoringGoals) {
+    return payload.summary.method.availableScoringGoals.includes(goal);
+  }
   return payload.singles.some(chart => Boolean(chart.scoringVariants?.[goal]))
     || payload.doubles.some(chart => Boolean(chart.scoringVariants?.[goal]));
 }
 
 export function scoringTargetForPayload(payload: AnalysisPayload | null | undefined) {
-  return [52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0) || !payload
+  return [52, 53, 54, 55, 56, 57, 58].includes(payload?.schemaVersion ?? 0) || !payload
     ? { goal: "sssplus" as const, label: "SSS+", score: SSSPLUS_SCORE_TARGET }
     : { goal: "sss" as const, label: "SSS", score: SSS_SCORE_TARGET };
 }
 
 export function scoringTargetForChart(chart: ChartResult) {
-  return chart.scoringTarget === SSSPLUS_SCORE_TARGET
-    ? { goal: "sssplus" as const, label: "SSS+", score: SSSPLUS_SCORE_TARGET }
-    : { goal: "sss" as const, label: "SSS", score: SSS_SCORE_TARGET };
+  return Object.values(TARGETS).find(target => target.score === chart.scoringTarget) ?? TARGETS.sss;
 }
 
 export function scoringGoalFromSearchParams(params: URLSearchParams, _payload?: AnalysisPayload | null): ScoringGoal {
   const goal = params.get("scoring");
-  return goal === "general" || goal === "sss" || goal === "sssplus" ? goal : DEFAULT_SCORING_GOAL;
+  return SCORING_GOALS.find(candidate => candidate === goal) ?? DEFAULT_SCORING_GOAL;
 }
 
 /** Preserve player, filters represented by the URL, and unrelated navigation state. */
@@ -50,7 +72,7 @@ export function scoringGoalUrl(href: string, goal: ScoringGoal): URL {
 }
 
 export function hasSssScoringVariants(payload: AnalysisPayload | null | undefined): boolean {
-  return [49, 50, 51, 52, 53, 54, 55, 56, 57].includes(payload?.schemaVersion ?? 0);
+  return [49, 50, 51, 52, 53, 54, 55, 56, 57, 58].includes(payload?.schemaVersion ?? 0);
 }
 
 export function isSssScoringChart(chart: ChartResult): boolean {

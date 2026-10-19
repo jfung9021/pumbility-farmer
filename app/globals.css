@@ -386,9 +386,10 @@ main { min-height: 100vh; overflow: hidden; position: relative; }
 .view-switcher button.active { background: rgba(200, 255, 46, 0.12); color: var(--acid); }
 .metric-switcher { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 12px; }
 .metric-switcher button { font-size: 11px; font-weight: 750; letter-spacing: normal; line-height: normal; text-transform: capitalize; white-space: nowrap; }
-.scoring-goal-control { margin-bottom: 16px; max-width: 280px; }
+.scoring-goal-control { margin-bottom: 16px; max-width: 520px; }
 .scoring-goal-control > span { color: #a2aca3; display: block; font-size: 11px; margin-bottom: 6px; }
 .scoring-goal-switcher button { font-size: 11px; letter-spacing: normal; }
+.scoring-goal-switcher { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .tier-mode-tabs { margin-bottom: 16px; width: fit-content; }
 .tier-mode-tabs button:disabled { cursor: not-allowed; opacity: 0.4; }
 .metric-note { color: var(--muted); font-size: 11px; line-height: 1.6; margin: 12px 2px; }

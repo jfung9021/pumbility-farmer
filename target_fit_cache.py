@@ -26,11 +26,32 @@ _POINT_ARRAYS = ("parameters", "ability", "effect", "probability", "information"
 
 
 def _code_identity() -> str:
-    return canonical_json_sha256({
-        "model": hashlib.sha256(Path(model.__file__).read_bytes().replace(b"\r\n", b"\n")).hexdigest(),
-        "cache": hashlib.sha256(Path(__file__).read_bytes().replace(b"\r\n", b"\n")).hexdigest(),
-        "numpy": np.__version__, "scipy": scipy.__version__,
-    })
+    from numeric_recipe import target_kernel_recipe
+    return canonical_json_sha256(target_kernel_recipe())
+
+
+def adopt_compatible_components(store, boards, fit, *, score_target, bootstrap_samples, seed):
+    """Seed new component keys only after a verified f395 outer-fit lookup."""
+    from numeric_recipe import legacy_component_code
+    code = legacy_component_code()
+    if code is None:
+        return False
+    data = model._prepare(boards, score_target)
+    identity = _identity(data, score_target=score_target, bootstrap_samples=bootstrap_samples,
+                         seed=seed, regularization_grid=fit["policy"]["regularizationGrid"])
+    saved = _read(store, "main", {**identity, "code": code})
+    if saved is None or not _usable_main(saved, data, seed) or saved["fit"]["policy"] != fit["policy"]:
+        return False
+    # The legacy record is private, digest verified, and bound to the same
+    # ordered binary observations. Match every numerical chart field while
+    # excluding only the separately refreshed source-removal evidence.
+    for cid, chart in fit["charts"].items():
+        public = copy.deepcopy(chart)
+        public["sensitivity"].pop("sourceRemovalEffects", None)
+        if public != saved["fit"]["charts"][cid]:
+            return False
+    _write(store, "main", identity, saved)
+    return True
 
 
 def _binary_inputs(data: Mapping[str, Any]) -> dict:
@@ -89,6 +110,30 @@ def _read(store, kind, identity):
 def _write(store, kind, identity, payload):
     store.put_json(_path(kind, identity), {"version": VERSION, "identity": identity,
         "payload": payload, "payloadSha256": canonical_json_sha256(payload)})
+
+
+class _BootstrapCheckpoint:
+    """Optional batches are bound to the complete binary producer identity."""
+    def __init__(self, store, identity):
+        self.store, self.identity = store, identity
+        self.path = _path("bootstrap", identity)
+
+    def load(self):
+        from pumbility_store import PumbilityArtifactIntegrityError
+        try:
+            record = self.store.get_json(self.path)
+        except (PumbilityArtifactIntegrityError, json.JSONDecodeError):
+            return None
+        if (not isinstance(record, dict) or record.get("identity") != self.identity
+                or record.get("payloadSha256") != canonical_json_sha256(record.get("payload"))):
+            return None
+        payload = record["payload"]
+        required = {"parent", "result", "fitted", "sensitivity", "context", "alignment",
+                    "completed", "rngState", "effects", "converged"}
+        return payload if isinstance(payload, dict) and required <= payload.keys() else None
+
+    def save(self, payload):
+        _write(self.store, "bootstrap", self.identity, payload)
 
 
 def _point_key(data, penalty):
@@ -188,7 +233,8 @@ def load_or_fit_target(store, boards, *, score_target=990000,
         context = {}
         fit = model.fit_target_model(boards, score_target=score_target,
             bootstrap_samples=bootstrap_samples, seed=seed,
-            regularization_grid=regularization_grid, _private_context=context)
+            regularization_grid=regularization_grid, _private_context=context,
+            _bootstrap_checkpoint=_BootstrapCheckpoint(store, identity))
         saved = {"fit": fit, "context": context}
         _write(store, "main", identity, saved)
     fit, context = saved["fit"], saved["context"]

@@ -32,21 +32,32 @@ def _timestamp() -> str:
 def _public_status(job: Mapping[str, Any]) -> dict[str, Any]:
     fields = ("id", "jobType", "status", "stage", "createdAtUtc", "updatedAtUtc",
               "completedAtUtc", "generatedAtUtc", "progressOrdinal", "totalStages",
-              "completedTargetFits", "error", "exceptionClass", "attempt", "publication")
+              "completedTargetFits", "error", "exceptionClass", "attempt", "publication",
+              "operation", "goals", "backfill")
     return {key: job[key] for key in fields if key in job}
 
 
-def request_tier_publication(enqueue: Callable[[str], None], *, store=None, jobs=None) -> tuple[int, dict[str, Any]]:
+def request_tier_publication(enqueue: Callable[[str], None], *, store=None, jobs=None,
+                             operation: str = "tier-publication", goals: tuple[str, ...] = ()) -> tuple[int, dict[str, Any]]:
     from analysis_runtime import RuntimeJobStore
     from tier_release import require_tier_release_policy
     del store  # The trigger and status paths deliberately do not hydrate artifacts.
     require_tier_release_policy()
+    if operation not in {"tier-publication", "scoring-goal-backfill"}:
+        raise ValueError("Unknown tier operation.")
+    if operation == "scoring-goal-backfill":
+        if not goals or len(set(goals)) != len(goals) or any(goal not in {"ss", "ssplus"} for goal in goals):
+            raise ValueError("Backfill goals must be distinct SS or SS+ targets.")
+    elif goals:
+        raise ValueError("Tier publication does not accept backfill goals.")
     jobs = jobs if jobs is not None else RuntimeJobStore()
     stamp = _timestamp()
     job = {"id": "tier-publication-" + uuid.uuid4().hex, "jobType": "tier-publication",
            "status": "queued", "stage": "pin-inputs", "createdAtUtc": stamp,
            "updatedAtUtc": stamp, "generatedAtUtc": stamp, "progressOrdinal": 0,
            "completedTargetFits": 0, "totalStages": 19, "attempt": 0, "error": None}
+    if operation == "scoring-goal-backfill":
+        job.update(operation=operation, goals=list(goals), totalStages=1 + len(goals) * 5)
     current, created = jobs.request_tier_publication(job)
     if created:
         try:
@@ -56,6 +67,12 @@ def request_tier_publication(enqueue: Callable[[str], None], *, store=None, jobs
                                          "updatedAtUtc": _timestamp(), "completedAtUtc": _timestamp()})
             raise RuntimeError("The tier publication could not be queued.") from None
     return 202, {"outcome": "tier-publication-queued" if created else "tier-publication-active", **_public_status(current)}
+
+
+def request_scoring_goal_backfill(enqueue: Callable[[str], None], *, store=None, jobs=None,
+                                   goals: tuple[str, ...] = ("ss", "ssplus")) -> tuple[int, dict[str, Any]]:
+    return request_tier_publication(enqueue, store=store, jobs=jobs,
+                                    operation="scoring-goal-backfill", goals=goals)
 
 
 def get_tier_publication_status(job_id: str | None = None, *, jobs=None) -> dict[str, Any] | None:
@@ -78,6 +95,53 @@ def _pin_inputs(store, job):
     reference = pin_tier_publication_inputs(store, first=first, second=second, manifest=manifest,
         records=records, metadata=metadata, generated_at_utc=job["generatedAtUtc"])
     return {"inputs": reference, "generatedAtUtc": job["generatedAtUtc"]}, expected
+
+
+def _advance_goal_backfills(store, current):
+    """Cache independent goals for one immutable epoch; never promote pointers."""
+    from production_tiers import advance_goal_backfill
+    goals = current.get("goals")
+    if not isinstance(goals, list) or not goals or len(set(goals)) != len(goals) or any(goal not in {"ss", "ssplus"} for goal in goals):
+        raise ValueError("The pinned scoring-goal backfill is invalid.")
+    completed = current.setdefault("goalArtifacts", {})
+    goal = next((goal for goal in goals if goal not in completed), None)
+    if goal is None:
+        raise ValueError("The backfill has no pending goal.")
+    prior_fits = 4 * len(completed)
+
+    def progress(value):
+        if not isinstance(value, Mapping):
+            raise ValueError("The goal backfill progress is invalid.")
+        current["stage"] = "backfill-" + goal
+
+    result = advance_goal_backfill(store, pinned_inputs_reference=current["pipelineState"]["inputs"],
+                                   goal=goal, on_progress=progress)
+    if not isinstance(result, Mapping) or result.get("goal") != goal or not isinstance(result.get("done"), bool):
+        raise ValueError("The goal backfill worker returned an incompatible result.")
+    identity = result.get("inputIdentity")
+    if not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{64}", identity):
+        raise ValueError("The goal backfill input identity is invalid.")
+    if current.get("backfillInputIdentity") not in (None, identity):
+        raise TierPublicationConflict("The backfill goals use different pinned inputs.")
+    current["backfillInputIdentity"] = identity
+    count = result.get("completedTargetFits", 4 if result["done"] else 0)
+    if type(count) is not int or not 0 <= count <= 4 or (result["done"] and count != 4):
+        raise ValueError("The goal backfill fit count is invalid.")
+    if prior_fits + count < current["completedTargetFits"]:
+        raise ValueError("The goal backfill progress regressed.")
+    current["completedTargetFits"] = prior_fits + count
+    current["stage"] = "backfill-" + goal
+    if result["done"]:
+        reference = result.get("artifactReference")
+        if (not isinstance(reference, Mapping) or not isinstance(reference.get("path"), str)
+                or not re.fullmatch(r"[a-f0-9]{64}", str(reference.get("sha256") or ""))):
+            raise ValueError("The goal backfill did not produce a verified immutable artifact.")
+        completed[goal] = dict(reference)
+    current["progressOrdinal"] = max(current["progressOrdinal"],
+        1 + 5 * len(completed) if result["done"] else 1 + 5 * len(completed) + count)
+    done = len(completed) == len(goals)
+    return {"done": done, "backfill": {"inputIdentity": identity,
+            "goals": list(goals), "artifactReferences": dict(completed), "promoted": False}}
 
 
 def execute_tier_publication_job(job_id: str, *, store=None, jobs=None) -> dict[str, Any]:
@@ -110,21 +174,37 @@ def execute_tier_publication_job(job_id: str, *, store=None, jobs=None) -> dict[
         else:
             if store.tier_publication_revisions() != current["expectedRevisions"]:
                 raise TierPublicationConflict("The pinned publication sources changed.")
-            from production_tiers import advance_tier_publication
             def stage_started(stage):
                 current.update(stage=stage, updatedAtUtc=_timestamp())
                 jobs.save(current)
                 event("tier-phase-start", job_id=job_id, stage=stage, sequence=current["progressOrdinal"])
-            result = advance_tier_publication(store, current["pipelineState"], on_stage_start=stage_started)
-            current["pipelineState"] = result.get("state", current["pipelineState"])
-            current["stage"] = result.get("stage", current["stage"])
-            current["progressOrdinal"] = max(current["progressOrdinal"], 1 + int(result.get("progressOrdinal", 0)))
-            current["completedTargetFits"] = result.get("completedTargetFits", current["completedTargetFits"])
-            if "totalStages" in result:
-                current["totalStages"] = 1 + int(result["totalStages"])
+            if current.get("operation") == "scoring-goal-backfill":
+                stage_started("backfill")
+                result = _advance_goal_backfills(store, current)
+            else:
+                from production_tiers import advance_tier_publication
+                result = advance_tier_publication(store, current["pipelineState"], on_stage_start=stage_started)
+                current["pipelineState"] = result.get("state", current["pipelineState"])
+                current["stage"] = result.get("stage", current["stage"])
+                current["progressOrdinal"] = max(current["progressOrdinal"], 1 + int(result.get("progressOrdinal", 0)))
+                current["completedTargetFits"] = result.get("completedTargetFits", current["completedTargetFits"])
+                if "totalStages" in result:
+                    current["totalStages"] = 1 + int(result["totalStages"])
         _pulse_job_lease(heartbeat)
         current["updatedAtUtc"] = _timestamp()
         if result["done"]:
+            if current.get("operation") == "scoring-goal-backfill":
+                completed = {**current, "status": "completed", "stage": "cached", "error": None,
+                             "completedAtUtc": _timestamp(), "backfill": result["backfill"]}
+                # Source revisions and the active lease are checked in the same
+                # transaction that completes this cache-only job. No pointers move.
+                _stop_job_lease(heartbeat)
+                heartbeat = None
+                store.complete_scoring_goal_backfill(job_id=job_id, lease_owner=jobs.lease_owner,
+                    expected_revisions=current["expectedRevisions"], completed_job=completed)
+                event("scoring-goal-backfill-completed", job_id=job_id, stage="cached",
+                      duration_ms=round((perf_counter()-started)*1000,3))
+                return _public_status(completed)
             _stop_job_lease(heartbeat)
             heartbeat = None
             revision = store.artifact_revision(result["candidatePath"])

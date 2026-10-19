@@ -206,6 +206,34 @@ def publish_recommendation_model_artifacts(
     if not isinstance(sections, Mapping):
         raise ValueError("The recommendation artifact manifest is invalid.")
 
+    batch_writer = getattr(store, "put_json_batch", None)
+    if callable(batch_writer):
+        # The binary upload overlaps bounded JSONB groups. No index/visible
+        # pointer is written until every batch and the binary upload succeeds.
+        batch = {recommendation_model_path(generation): model}
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            binary = executor.submit(store.put_bytes, recommendation_score_model_path(generation),
+                                     score_model_bytes, content_type="application/x-npz")
+            for source, path_builder in (
+                (phoenix1_shards, recommendation_phoenix1_shard_path),
+                (phoenix2_shards, recommendation_phoenix2_shard_path),
+            ):
+                for shard in range(len(source)):
+                    batch[path_builder(generation, shard)] = source[shard]
+                    if isinstance(source, list):
+                        source[shard] = None  # type: ignore[list-item]
+                    if len(batch) >= 8:
+                        batch_writer(batch)
+                        batch.clear()
+            if batch:
+                batch_writer(batch)
+                batch.clear()
+            binary.result()
+        store.put_json(recommendation_index_path(generation), index)
+        if publish_index:
+            store.put_json(index_path, index)
+        return
+
     pending: set[Future[Any]] = set()
 
     def await_one() -> None:
@@ -1975,7 +2003,39 @@ def _write_typed_checkpoint_snapshot(
             "snapshot": value,
         },
     )
-    return {"pathname": pathname, "sha256": digest}
+    reference: dict[str, Any] = {"pathname": pathname, "sha256": digest}
+    receipt_reader = getattr(blob_store, "typed_snapshot_receipt", None)
+    if callable(receipt_reader):
+        receipt = receipt_reader(pathname)
+        if (not isinstance(receipt, Mapping) or receipt.get("snapshotSha256") != digest
+                or receipt.get("jobId") != job_id or receipt.get("mix") != mix_spec.key
+                or receipt.get("schemaVersion") != str(TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION)):
+            raise ValueError("The persisted snapshot revision is unavailable.")
+        reference["artifactReceipt"] = dict(receipt)
+    return reference
+
+
+def _verified_snapshot_reference(blob_store: JsonBlobStore, *, checkpoint: Mapping[str, Any],
+                                 reference: Mapping[str, Any], mix_spec: MixSpec) -> bool:
+    """Check a pinned JSONB row revision without loading its private score tree.
+
+    Legacy references/backends keep the full validation path. A present receipt
+    must match exactly; a changed or deleted row can never become a cache hit.
+    """
+    if reference.get("pathname") != typed_checkpoint_snapshot_path(str(checkpoint.get("jobId") or ""), mix_spec):
+        raise ValueError("The typed analysis checkpoint snapshot reference is invalid.")
+    expected = reference.get("artifactReceipt")
+    reader = getattr(blob_store, "typed_snapshot_receipt", None)
+    if expected is None or not callable(reader):
+        return False
+    if (not isinstance(expected, Mapping)
+            or not re.fullmatch(r"[a-f0-9]{64}", str(reference.get("sha256") or ""))
+            or expected.get("snapshotSha256") != reference.get("sha256")
+            or expected.get("jobId") != checkpoint.get("jobId") or expected.get("mix") != mix_spec.key
+            or expected.get("schemaVersion") != str(TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION)
+            or reader(str(reference["pathname"])) != expected):
+        raise ValueError("The pinned snapshot artifact revision changed.")
+    return True
 
 
 def _load_typed_checkpoint_snapshot(
@@ -3417,7 +3477,8 @@ def _resume_typed_analysis_checkpoint(
     if (checkpoint_phase == TYPED_CHECKPOINT_ANALYSIS_PHASE
             and checkpoint.get("combinedPreparation") is not None
             and checkpoint.get("tierProgress") is not None
-            and _validated_tier_progress(checkpoint["tierProgress"])["ordinal"] >= 9):
+            and (_validated_tier_progress(checkpoint["tierProgress"])["ordinal"] >= 9
+                 or checkpoint["tierProgress"].get("preparedContext") is True)):
         return _resume_combined_preparation(checkpoint, blob_store=blob_store,
             job_store=job_store, job_id=job_id, mix_spec=mix_spec,
             checkpoint_path=checkpoint_path, lease_heartbeat=lease_heartbeat)
@@ -3425,12 +3486,23 @@ def _resume_typed_analysis_checkpoint(
     # the combined-input shard, so they need the same compatibility boundary.
     if isinstance(raw_combined_tier, Mapping):
         _validate_checkpoint_combined_tier(raw_combined_tier, blob_store)
-    snapshot = _load_typed_checkpoint_snapshot(
-        blob_store,
-        checkpoint=checkpoint,
-        reference=raw_snapshot_reference,
-        mix_spec=mix_spec,
-    )
+    # These phases consume typed rows/model references, not score observations.
+    # The immutable JSONB row receipt still fences missing or changed snapshots.
+    snapshot_started, snapshot_cpu = time.perf_counter(), time.process_time()
+    reference_only = checkpoint_phase in {
+        TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE, TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+        TYPED_CHECKPOINT_DATABASE_MODEL_PHASE, TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE,
+    } and _verified_snapshot_reference(blob_store, checkpoint=checkpoint,
+                                      reference=raw_snapshot_reference, mix_spec=mix_spec)
+    snapshot = {} if reference_only else _load_typed_checkpoint_snapshot(
+        blob_store, checkpoint=checkpoint, reference=raw_snapshot_reference, mix_spec=mix_spec)
+    from tier_diagnostics import event
+    snapshot_fields = {"decoded_bytes": 0} if reference_only else {}
+    if not reference_only and isinstance(raw_snapshot_reference.get("artifactReceipt"), Mapping):
+        snapshot_fields["decoded_bytes"] = raw_snapshot_reference["artifactReceipt"]["byteSize"]
+    event("typed_snapshot_load", stage=checkpoint_phase, cache_hit=reference_only, cache_reads=1,
+          duration_ms=round((time.perf_counter() - snapshot_started) * 1000, 3),
+          cpu_ms=round((time.process_time() - snapshot_cpu) * 1000, 3), **snapshot_fields)
     manifest = _typed_manifest(checkpoint)
     combined_inputs: dict[str, Any] | None = None
     if checkpoint_phase in {
