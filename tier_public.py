@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import re
@@ -11,6 +12,10 @@ from typing import Any, Mapping
 FIELDS = json.loads((Path(__file__).parent / "config/tier-public-fields.json").read_text(encoding="utf-8"))
 MODES = ("singles", "doubles", "coop")
 MAX_LIST_BYTES = 12_000_000
+# Five target choices carry five variant pairs instead of the legacy three.
+# Keep the existing budget for old schemas and bound expanded network payloads.
+MAX_EXPANDED_LIST_BYTES = 20_000_000
+MAX_COMPRESSED_LIST_BYTES = 4_000_000
 DETAIL_PREFIX = "analysis/private/tier-details/"
 
 
@@ -126,5 +131,11 @@ def validate_tier_publication(full: Mapping[str, Any], compact: Mapping[str, Any
     expected = compact_tier_payload(full, details_prefix=compact.get("tierListView", {}).get("detailsPrefix"))
     if compact != expected:
         raise ValueError("The compact list differs from its validated tier source.")
-    if len(json.dumps(compact, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")) > MAX_LIST_BYTES:
-        raise ValueError("The expanded tier list exceeds the 12 MB publication budget.")
+    body = json.dumps(compact, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    expanded = compact.get("schemaVersion") == 58
+    limit = MAX_EXPANDED_LIST_BYTES if expanded else MAX_LIST_BYTES
+    if len(body) > limit:
+        raise ValueError("The tier list exceeds its decoded publication size budget.")
+    # Level one is conservative relative to the normal HTTP gzip compression.
+    if expanded and len(gzip.compress(body, compresslevel=1, mtime=0)) > MAX_COMPRESSED_LIST_BYTES:
+        raise ValueError("The expanded tier list exceeds its compressed publication size budget.")
