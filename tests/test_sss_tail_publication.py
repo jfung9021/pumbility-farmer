@@ -6,6 +6,7 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+import weakref
 
 from analysis_runtime import MemoryBlobStore
 import production_tiers as tiers
@@ -117,6 +118,50 @@ class SssTailPublicationTests(unittest.TestCase):
         persisted["tailOverlay"]["predecessorSha256"] = "0"*64
         with self.assertRaisesRegex(ValueError, "SSS tail overlay checkpoint chain"):
             tiers._publication_overlays(store, persisted, predecessor)
+
+    def test_goal_inputs_and_result_are_released_before_loading_the_tail_predecessor(self):
+        class TrackedPayload(dict):
+            pass
+
+        store = MemoryBlobStore()
+        predecessor = write_checkpoint(store, self.base, stage="submitted-calibration", identity="synthetic-base")
+        state = {"generation": tiers.digest({"synthetic": "sss-tail-memory"}), "stages": [predecessor],
+                 "goalInputIdentity": INPUTS, "goalArtifacts": {}}
+        for goal, artifact in self.artifacts.items():
+            state["goalArtifacts"][goal] = write_checkpoint(store, artifact, stage="scoring-goal", identity=goal)
+        goal_inputs, goal_results = [], []
+        tail_predecessor_loads = 0
+
+        def tracked_reader(*args, **kwargs):
+            nonlocal tail_predecessor_loads
+            if kwargs.get("stage") == "goal-overlays":
+                tail_predecessor_loads += 1
+                self.assertEqual(len(goal_results), 1)
+                self.assertTrue(all(reference() is None for reference in goal_results),
+                                "The prior full schema-58 tree is still retained during its reload.")
+                self.assertTrue(all(reference() is None for reference in goal_inputs),
+                                "Decoded SS/SS+ inputs are still retained during schema-58 reload.")
+            value = read_checkpoint(*args, **kwargs)
+            if kwargs.get("stage") == "scoring-goal":
+                value = TrackedPayload(value)
+                goal_inputs.append(weakref.ref(value))
+            return value
+
+        def tracked_attach(*args, **kwargs):
+            value = TrackedPayload(apply_goal_artifacts(*args, **kwargs))
+            goal_results.append(weakref.ref(value))
+            return value
+
+        # Plain wrappers avoid Mock.call_args retaining the payloads themselves.
+        with patch("tier_pipeline_checkpoints.read_checkpoint", new=tracked_reader), \
+             patch("scoring_goal_tiers.apply_goal_artifacts", new=tracked_attach):
+            reference = tiers._publication_overlays(store, state, predecessor)
+        self.assertEqual(tail_predecessor_loads, 1)
+        self.assertEqual(len(goal_inputs), 2)
+        self.assertTrue(all(reference() is None for reference in goal_inputs + goal_results))
+        full = read_checkpoint(store, reference, stage="sss-tail", identity=reference["identity"])
+        self.assertEqual(full, apply_sss_tail_tiers(self.expanded))
+        self.assertEqual(reference["predecessorSha256"], state["goalOverlay"]["payloadSha256"])
 
 
 if __name__ == "__main__":
