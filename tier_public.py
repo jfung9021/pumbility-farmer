@@ -64,6 +64,12 @@ def _metric(value: Mapping[str, Any], kind: str) -> dict:
             result["scoringBoundaryRecords"] = int(records)
     if isinstance(value.get("scoringSpreadPolicy"), Mapping):
         result["scoringSpreadPolicy"] = _pick(value["scoringSpreadPolicy"], ["midpoint"])
+    if isinstance(value.get("scoringLevel20Width"), Mapping):
+        # Sparse replay evidence contains only the prior points, current input
+        # points and a shared folder-policy reference; rollback metrics remain
+        # private rather than expanding every chart in the list.
+        result["scoringLevel20Width"] = _pick(value["scoringLevel20Width"],
+            ["version", "method", "group", "source", "original", "input", "final"])
     return result
 
 
@@ -164,7 +170,7 @@ def validate_tier_publication(full: Mapping[str, Any], compact: Mapping[str, Any
     if compact != expected:
         raise ValueError("The compact list differs from its validated tier source.")
     body = json.dumps(compact, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    expanded = compact.get("schemaVersion") in (58, 59)
+    expanded = compact.get("schemaVersion") in (58, 59, 60)
     limit = MAX_EXPANDED_LIST_BYTES if expanded else MAX_LIST_BYTES
     if len(body) > limit:
         raise ValueError("The tier list exceeds its decoded publication size budget.")

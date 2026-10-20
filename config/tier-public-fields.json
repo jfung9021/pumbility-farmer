@@ -4,5 +4,5 @@
   "scoring": ["nContributors", "scoringMethod", "scoringTarget", "scoringSource", "scoringTargetSuccesses", "scoringBelowTarget", "scoringBoundaryRecords", "scoringUnratedReason"],
   "clearing": ["method", "skillMetric", "clearCount", "ratedClearCount", "selectedCount", "missingSkillCount", "q0Skill", "q10Skill", "q20Skill", "q25Skill", "q30Skill", "q50Skill", "defaultedAtCap", "unratedReason"],
   "pumbility": ["aggregation", "scoringSupportCount", "clearingSupportCount"],
-  "method": ["sourceSelection", "scoring", "officialTiers", "officialCrossLevelScoring", "crossLevelClearing", "hybridTiers", "tierMetrics", "pumbilityExperiment", "ratingPostprocessing", "phoenix1ScoreOverrides", "sourceAwareTiers", "productionTierPublication", "scoringGoalPolicies", "availableScoringGoals", "sssTailPolicy"]
+  "method": ["sourceSelection", "scoring", "officialTiers", "officialCrossLevelScoring", "crossLevelClearing", "hybridTiers", "tierMetrics", "pumbilityExperiment", "ratingPostprocessing", "phoenix1ScoreOverrides", "sourceAwareTiers", "productionTierPublication", "scoringGoalPolicies", "availableScoringGoals", "sssTailPolicy", "level20ScoringWidth"]
 }

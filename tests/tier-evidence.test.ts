@@ -158,6 +158,6 @@ test("both tier layouts and the shared chart detail expose accessible count warn
   assert.match(page, /<LimitedDataWarning chart=\{chart\} metric=\{metric\} compact \/>/);
   assert.match(page, /<ChartDetails chart=\{loaded\} metric=\{metric\}[^>]*detailsLoaded/);
   assert.equal((page.match(/<CompactChartGrid[^>]*metric=\{/g) ?? []).length, 3);
-  assert.match(page, /same-mode \$\{minimumScoreRecords\}-record requirement/);
+  assert.match(page, /chartEvidenceLines\(chart, metric, \{ minimumScoreRecords, pumbilityAggregation \}\)/);
   assert.doesNotMatch(page, /200-record|200 valid records|200 distinct valid/);
 });

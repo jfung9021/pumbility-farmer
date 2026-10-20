@@ -87,6 +87,28 @@ class TierPublicTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "compressed publication size budget"):
                 validate_tier_publication(full, compact)
 
+    def test_schema60_preserves_sparse_width_replay_and_expanded_budgets(self):
+        full = source()
+        full["schemaVersion"] = 60
+        full["summary"]["method"]["level20ScoringWidth"] = {
+            "version": 1, "folders": {"Double:sss:20": {"basis": "folder", "knots": []}}}
+        metric = full["doubles"][0]["scoringVariants"]["sss"]
+        width = {"version": 1, "method": "level20-target-quantile-width-v1", "group": "Double:sss:20",
+            "source": "stored-pre-tail", "original": {"estimatedDifficulty": 18.12345678912345},
+            "input": {"estimatedDifficulty": 17.12345678912345},
+            "final": {"estimatedDifficulty": 18.12345678912345}}
+        metric["scoringLevel20Width"] = {**width, "unusedAudit": ["detail-only"]}
+        compact = compact_tier_payload(full)
+        self.assertEqual(compact["summary"]["method"]["level20ScoringWidth"],
+                         full["summary"]["method"]["level20ScoringWidth"])
+        self.assertEqual(compact["doubles"][0]["scoringVariants"]["sss"]["scoringLevel20Width"], width)
+        size = len(json.dumps(compact, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+        with patch("tier_public.MAX_LIST_BYTES", 1), patch("tier_public.MAX_EXPANDED_LIST_BYTES", size):
+            validate_tier_publication(full, compact)
+        with patch("tier_public.MAX_COMPRESSED_LIST_BYTES", 1):
+            with self.assertRaisesRegex(ValueError, "compressed publication size budget"):
+                validate_tier_publication(full, compact)
+
     def test_compact_boundary_count_retains_used_evidence_without_full_boards(self):
         full = source()
         row = full["doubles"][0]

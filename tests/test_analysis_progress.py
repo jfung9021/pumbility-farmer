@@ -81,6 +81,7 @@ class AnalysisProgressTests(unittest.TestCase):
                 "production_tiers._finish_stage": {"new": finish},
                 "production_tiers.public_tiers": {"return_value": public},
                 "sss_tail_tiers.apply_sss_tail_tiers": {"side_effect": lambda full: {**full, "schemaVersion": 59}},
+                "level20_scoring_width.apply_level20_scoring_width": {"side_effect": lambda full: {**full, "schemaVersion": 60}},
                 "production_tiers.validate_public_tiers": {},
                 "tier_public.prepare_tier_publication": {"return_value": (public, {})},
                 "tier_public.validate_tier_publication": {},
