@@ -807,6 +807,7 @@ def _validate_publication_overlay_chain(state):
 
 def _publication_overlays(store, state, reference):
     """Persist each additive overlay so retries never taper an output twice."""
+    import gc
     from scoring_goal_tiers import apply_goal_artifacts
     from sss_tail_tiers import apply_sss_tail_tiers
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
@@ -822,6 +823,10 @@ def _publication_overlays(store, state, reference):
                 identity=digest({"generation": state["generation"], "artifacts": state["goalArtifacts"]}),
                 predecessor=reference["payloadSha256"])
             store.put_json(state_path, state)
+            # The next read inflates the entire schema-58 checkpoint again.
+            # Drop this decoded tree and its SS/SS+ inputs before that allocation.
+            del full, artifacts
+            gc.collect()
         reference = state["goalOverlay"]
     if "tailOverlay" not in state:
         full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
