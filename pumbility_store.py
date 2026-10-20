@@ -2507,6 +2507,84 @@ class PumbilityJobStore:
                 raise RuntimeError("The failed Pumbility job could not be requeued.")
         return value
 
+    def fail_stale_active_job(self, job_id: str, *, stale_after_seconds: int) -> bool:
+        """Release only the matching stale analysis head without revoking a live lease."""
+        from psycopg.types.json import Jsonb
+
+        if not isinstance(job_id, str) or not job_id:
+            raise ValueError("A stale analysis recovery requires a job ID.")
+        if type(stale_after_seconds) is not int or stale_after_seconds <= 0:
+            raise ValueError("The stale analysis interval must be a positive integer.")
+        error = "The analysis worker stopped reporting progress."
+        progress = {"current": 0, "total": 0, "percent": 0,
+                    "message": "The stale analysis worker was released for a safe retry."}
+        with _connect(self.database_url) as connection, connection.cursor() as cursor:
+            _assert_schema(cursor)
+            # Lock the job before the head, consistently with worker transitions.
+            # NO KEY UPDATE also permits the head's foreign-key key-share check.
+            cursor.execute(
+                """
+                select id from pumbility.jobs
+                where external_key = %s and kind = 'analysis'
+                  and status in ('queued', 'running')
+                  and cancellation_requested_at is null
+                  and updated_at < clock_timestamp() - make_interval(secs => %s)
+                  and (lease_expires_at < clock_timestamp()
+                       or (lease_owner is null and lease_expires_at is null))
+                for no key update
+                """,
+                (job_id, stale_after_seconds),
+            )
+            candidate = cursor.fetchone()
+            if candidate is None:
+                return False
+            job_uuid = candidate[0]
+            cursor.execute(
+                """select job_id from pumbility.job_heads
+                where name = 'active:analysis' and job_id = %s for update""",
+                (job_uuid,),
+            )
+            if cursor.fetchone() is None:
+                return False
+            cursor.execute(
+                """
+                with recovery as (select clock_timestamp() as occurred_at)
+                update pumbility.jobs as job set
+                    status = 'failed', error = jsonb_build_object('message', %s::text),
+                    progress = %s, completed_at = recovery.occurred_at,
+                    updated_at = recovery.occurred_at, retry_at = recovery.occurred_at,
+                    lease_owner = null, lease_expires_at = null,
+                    payload = job.payload || jsonb_build_object(
+                        'status', 'failed', 'error', %s::text, 'progress', %s::jsonb,
+                        'completedAtUtc', recovery.occurred_at,
+                        'updatedAtUtc', recovery.occurred_at,
+                        'retryAllowedAtUtc', recovery.occurred_at)
+                from recovery
+                where job.id = %s and job.kind = 'analysis'
+                  and job.status in ('queued', 'running')
+                  and job.cancellation_requested_at is null
+                  and job.updated_at < recovery.occurred_at - make_interval(secs => %s)
+                  and (job.lease_expires_at < recovery.occurred_at
+                       or (job.lease_owner is null and job.lease_expires_at is null))
+                  and exists (select 1 from pumbility.job_heads
+                              where name = 'active:analysis' and job_id = job.id)
+                returning job.id
+                """,
+                (error, Jsonb(progress), error, Jsonb(progress), job_uuid, stale_after_seconds),
+            )
+            if cursor.fetchone() is None:
+                return False
+            cursor.execute(
+                """delete from pumbility.job_heads
+                where name = 'active:analysis' and job_id = %s returning job_id""",
+                (job_uuid,),
+            )
+            if cursor.fetchone() is None:
+                # The head is locked, so losing it indicates a broken invariant.
+                # Roll back the failed status rather than leaving a partial release.
+                raise RuntimeError("The stale analysis head could not be released atomically.")
+        return True
+
     def get(self, job_id: str) -> dict[str, Any] | None:
         with _read_cursor(self.database_url) as cursor:
             fetch_started = _read_phase_started()

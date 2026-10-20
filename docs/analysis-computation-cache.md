@@ -65,6 +65,13 @@ existing tier state directly. Source revisions and the pinned snapshot revision
 remain guards, avoiding a complete source/model reconstruction for each finishing
 invocation. Legacy checkpoints still follow their validated recovery path.
 
+An ordinary authenticated refresh can recover an orphaned analysis job. A stale
+payload triggers a database check; recovery requires the matching active job to
+be stale in the database and its worker lease to have expired. The failed status
+and matching active-head removal commit together. A live lease, renewed heartbeat,
+completed job, or replaced head prevents recovery. The existing operator password
+is sufficient; no cancellation credential or secret rotation is required.
+
 Checkpoint serialization hashes the encoded JSON while writing it. Checkpoint
 reads verify compressed bytes and hash the uncompressed stream while parsing;
 they do not inflate the same object twice. Existing gzip encoding remains

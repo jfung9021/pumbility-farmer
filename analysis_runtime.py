@@ -1016,6 +1016,7 @@ def request_refresh(
             "archiveUrl": mix_spec.archive_url,
         }
     effective_now = now or utc_now()
+    recovered_job_id = None
     active_id = jobs.active_job_id()
     active = jobs.get(active_id) if active_id else None
     if active and active.get("status") in {"queued", "running"}:
@@ -1024,31 +1025,43 @@ def request_refresh(
             last_heartbeat is None
             or effective_now - last_heartbeat > ACTIVE_JOB_STALE_AFTER
         ):
-            from pumbility_store import JobLeaseLostError
-
-            try:
-                update_job(
-                    jobs,
+            fail_stale = getattr(jobs, "fail_stale_active_job", None)
+            if callable(fail_stale):
+                # The database checks lease expiry and releases the matching
+                # active head in one transaction. Re-read after any concurrent
+                # heartbeat, completion, recovery, or head replacement.
+                recovered = fail_stale(
                     str(active["id"]),
-                    now=effective_now,
-                    status="failed",
-                    error="The analysis worker stopped reporting progress.",
-                    retryAllowedAtUtc=isoformat_utc(effective_now),
-                    progress={
-                        "current": 0,
-                        "total": 0,
-                        "percent": 0,
-                        "message": "The stale analysis worker was released for a safe retry.",
-                    },
+                    stale_after_seconds=int(ACTIVE_JOB_STALE_AFTER.total_seconds()),
                 )
-            except JobLeaseLostError:
-                # Payload age cannot revoke a worker's database lease. An
-                # expired lease is reclaimed by queue redelivery instead.
-                active = jobs.get(str(active["id"]))
+                if recovered:
+                    recovered_job_id = str(active["id"])
+                active_id = jobs.active_job_id()
+                active = jobs.get(active_id) if active_id else None
             else:
-                jobs.set_active_job_id(None)
-                active_id = None
-                active = None
+                from pumbility_store import JobLeaseLostError
+
+                try:
+                    update_job(
+                        jobs,
+                        str(active["id"]),
+                        now=effective_now,
+                        status="failed",
+                        error="The analysis worker stopped reporting progress.",
+                        retryAllowedAtUtc=isoformat_utc(effective_now),
+                        progress={
+                            "current": 0,
+                            "total": 0,
+                            "percent": 0,
+                            "message": "The stale analysis worker was released for a safe retry.",
+                        },
+                    )
+                except JobLeaseLostError:
+                    active = jobs.get(str(active["id"]))
+                else:
+                    jobs.set_active_job_id(None)
+                    active_id = None
+                    active = None
     if active and active.get("status") in {"queued", "running"}:
         active_mix = resolve_mix(active.get("mix")).key
         if active_mix == mix_spec.key:
@@ -1083,7 +1096,11 @@ def request_refresh(
     previous = deterministic_existing or (jobs.get(latest_job_id) if latest_job_id else None)
     if previous and previous.get("status") == "failed":
         retry_at = parse_utc(previous.get("retryAllowedAtUtc"))
-        if retry_at is not None and effective_now < retry_at:
+        if (
+            retry_at is not None
+            and effective_now < retry_at
+            and str(previous.get("id")) != recovered_job_id
+        ):
             return 202, {"outcome": "existing", "job": previous}
         previous_job_id = str(previous.get("id") or "").strip()
         checkpoint = (
