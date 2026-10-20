@@ -7,9 +7,12 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from analysis_runtime import MemoryBlobStore
 from api_service import app
+from canonical_json import canonical_json_sha256
+import production_tiers as tiers
 from pumbility_contract import combined_tier_blob_path
-from tier_public import compact_tier_payload, detail_shard_path, prepare_tier_publication, tier_chart_details, validate_tier_publication
+from tier_public import DETAIL_PREFIX, compact_tier_payload, detail_shard_path, prepare_tier_publication, tier_chart_details, tier_detail_generated_at, validate_tier_publication
 
 
 def source():
@@ -111,6 +114,7 @@ class TierPublicTests(unittest.TestCase):
     def test_reused_details_use_the_computation_time_and_keep_current_client_generation(self):
         full = source()
         compact, shards = prepare_tier_publication(full, "computed-generation")
+        compact["tierListView"].pop("detailsGeneratedAtUtc", None)  # Historical PR127 payload.
         published_at = "2026-10-20T00:00:00Z"
         compact["generatedAtUtc"] = published_at
         publication = {"reusedComputation": True, "computedAtUtc": full["generatedAtUtc"]}
@@ -134,6 +138,103 @@ class TierPublicTests(unittest.TestCase):
                 compact["summary"]["method"]["productionTierPublication"] = {**publication, **changed}
                 self.assertEqual(client.get("/api/tier-list/chart", params={
                     "chartId": "d18", "generatedAtUtc": published_at}).status_code, 503)
+
+    def test_fresh_five_goal_details_reuse_numeric_fit_but_have_current_publication_time(self):
+        full = source()
+        numeric_at, published_at = full["generatedAtUtc"], "2026-10-20T05:00:03.095205+00:00"
+        full["schemaVersion"] = 59
+        full["generatedAtUtc"] = published_at
+        for name in ("scoringVariants", "pumbilityVariants"):
+            for goal in ("ss", "ssplus"):
+                full["doubles"][0][name][goal] = copy.deepcopy(full["doubles"][0][name]["sssplus"])
+        inputs = {"generationTimestamp": published_at, "synthetic": "independent-goal-overlays"}
+        full["summary"]["method"]["productionTierPublication"] = {
+            "inputs": inputs, "computedAtUtc": numeric_at, "reusedComputation": True}
+        compact, shards = prepare_tier_publication(full, canonical_json_sha256(inputs))
+        self.assertEqual(compact["tierListView"]["detailsGeneratedAtUtc"], published_at)
+        # The production publication already exists without the new provenance.
+        compact["tierListView"].pop("detailsGeneratedAtUtc", None)
+        values = {combined_tier_blob_path(): compact, **shards}
+        class Store:
+            def get_json(self, path): return values.get(path)
+        with patch("api.tier_list.PrivateBlobStore", return_value=Store()):
+            client = TestClient(app)
+            response = client.get("/api/tier-list/chart", params={"chartId": "d18", "generatedAtUtc": published_at})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["generatedAtUtc"], published_at)
+            self.assertEqual(set(response.json()["chart"]["scoringVariants"]), {"general", "ss", "ssplus", "sss", "sssplus"})
+            self.assertEqual(tier_detail_generated_at(compact), published_at)
+            actual_path = detail_shard_path(compact["tierListView"]["detailsPrefix"], "d18")
+            for wrong in (numeric_at, "2026-10-21T00:00:00Z"):
+                values[actual_path]["generatedAtUtc"] = wrong
+                self.assertEqual(client.get("/api/tier-list/chart", params={
+                    "chartId": "d18", "generatedAtUtc": published_at}).status_code, 503)
+            values[actual_path]["generatedAtUtc"] = published_at
+            # A different valid prefix cannot claim the fresh publication date.
+            compact["tierListView"]["detailsPrefix"] = DETAIL_PREFIX + "0"*64 + "/"
+            values[detail_shard_path(compact["tierListView"]["detailsPrefix"], "d18")] = values[actual_path]
+            self.assertEqual(client.get("/api/tier-list/chart", params={
+                "chartId": "d18", "generatedAtUtc": published_at}).status_code, 503)
+
+    def test_later_warm_publications_pin_the_intermediate_detail_time(self):
+        full = source()
+        numeric_at, details_at = full["generatedAtUtc"], "2026-10-20T05:00:03.095205+00:00"
+        full["generatedAtUtc"] = details_at
+        inputs = {"generationTimestamp": details_at, "synthetic": "independent-goal-overlays"}
+        full["summary"]["method"]["productionTierPublication"] = {
+            "inputs": inputs, "computedAtUtc": numeric_at, "computedInputs": {"generationTimestamp": numeric_at},
+            "computedGeneration": "b"*64, "reusedComputation": True,
+            "fullArtifactPath": "analysis/private/synthetic-detail-audit.json.gz", "fullArtifactSha256": "c"*64}
+        computed, shards = prepare_tier_publication(full, canonical_json_sha256(inputs))
+        computed["tierListView"].pop("detailsGeneratedAtUtc")  # Already-published five-goal format.
+        publication = computed["summary"]["method"]["productionTierPublication"]
+        publication["publicPayloadSha256"] = tiers.public_digest(computed)
+        frozen_prefix = computed["tierListView"]["detailsPrefix"]
+        reference = {"blobSha256": "a"*64}
+        store = MemoryBlobStore()
+        for current_at in ("2026-10-20T06:00:00Z", "2026-10-20T07:00:00Z"):
+            previous = copy.deepcopy(computed)
+            original = {"generation": canonical_json_sha256(previous["summary"]["method"]["productionTierPublication"]["inputs"]),
+                "createdAtUtc": previous["generatedAtUtc"],
+                "identity": previous["summary"]["method"]["productionTierPublication"]["inputs"],
+                "stages": [reference], "tailOverlay": reference,
+                "ready": {"payloadSha256": canonical_json_sha256(previous)}}
+            current_inputs = {"generationTimestamp": current_at, "synthetic": "independent-goal-overlays"}
+            state = {"generation": canonical_json_sha256(current_inputs), "identity": current_inputs,
+                "createdAtUtc": current_at, "computationGeneration": original["generation"],
+                "computationCreatedAtUtc": original["createdAtUtc"], "computationIdentity": {"synthetic": "unchanged"}}
+            with patch.object(tiers, "_advance_finish", return_value=previous), \
+                 patch.object(tiers, "_captured_computation", return_value=original), \
+                 patch.object(tiers, "validate_public_tiers"):
+                computed = tiers._advance_reused_computation(store, state, verified_computation=original)
+            self.assertEqual(computed["tierListView"]["detailsPrefix"], frozen_prefix)
+            self.assertEqual(computed["tierListView"]["detailsGeneratedAtUtc"], details_at)
+            self.assertEqual(computed["generatedAtUtc"], current_at)
+            marker = computed["summary"]["method"]["productionTierPublication"]
+            self.assertEqual(marker["computedAtUtc"], numeric_at)
+            self.assertEqual(marker["publicPayloadSha256"], tiers.public_digest(computed))
+            if current_at.endswith("06:00:00Z"):
+                self.assertNotIn("detailsGeneratedAtUtc", previous["tierListView"])
+            values = {combined_tier_blob_path(): computed, **shards}
+            class Store:
+                def get_json(self, path): return values.get(path)
+            with patch("api.tier_list.PrivateBlobStore", return_value=Store()):
+                client = TestClient(app)
+                response = client.get("/api/tier-list/chart", params={"chartId": "d18", "generatedAtUtc": current_at})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["generatedAtUtc"], current_at)
+                self.assertEqual(client.get("/api/tier-list/chart", params={
+                    "chartId": "d18", "generatedAtUtc": details_at}).status_code, 409)
+                path = detail_shard_path(frozen_prefix, "d18")
+                for wrong in (numeric_at, current_at):
+                    values[path]["generatedAtUtc"] = wrong
+                    self.assertEqual(client.get("/api/tier-list/chart", params={
+                        "chartId": "d18", "generatedAtUtc": current_at}).status_code, 503)
+                values[path]["generatedAtUtc"] = details_at
+                computed["tierListView"]["detailsGeneratedAtUtc"] = None
+                self.assertEqual(client.get("/api/tier-list/chart", params={
+                    "chartId": "d18", "generatedAtUtc": current_at}).status_code, 503)
+                computed["tierListView"]["detailsGeneratedAtUtc"] = details_at
 
     def test_projection_preserves_numeric_identity_and_does_not_mutate_full_source(self):
         full = source(); before = copy.deepcopy(full)

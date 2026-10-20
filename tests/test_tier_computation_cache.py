@@ -147,7 +147,9 @@ class CrossRunTierCacheTests(TestCase):
         self.assertNotEqual(after["inputs"], before["inputs"])
         self.assertEqual(after["fullArtifactSha256"], before["fullArtifactSha256"])
         self.assertEqual(after["computationIdentity"], before["computationIdentity"])
-        self.assertEqual(current["tierListView"], old["tierListView"])
+        self.assertEqual(current["tierListView"], {**old["tierListView"],
+            "detailsGeneratedAtUtc": self.first_time})
+        self.assertNotIn("detailsGeneratedAtUtc", old["tierListView"])
         self.assertEqual(self.store.binary_values, binaries)
         self.assertEqual(progress[-1]["generation"], tiers.digest(after["inputs"]))
         self.assertEqual(progress[-1]["ordinal"], 18)

@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from analysis_runtime import PrivateBlobStore
 from pumbility_contract import combined_tier_blob_path
 from tier_scores import TIER_SCORE_MODES, TierScoresNotFoundError, read_tier_player_scores
-from tier_public import compact_tier_payload, detail_shard_path, tier_chart_details
+from tier_public import compact_tier_payload, detail_shard_path, tier_chart_details, tier_detail_generated_at
 
 
 router = APIRouter()
@@ -35,11 +35,9 @@ def get_tier_chart_details(
         if view.get("kind") == "list":
             prefix = view.get("detailsPrefix", "")
             shard = store.get_json(detail_shard_path(prefix, chart_id))
-            publication = payload.get("summary", {}).get("method", {}).get("productionTierPublication", {})
-            # Reused immutable details retain their computation time. The client
-            # still requests, and receives, the current publication generation.
-            details_at = (publication.get("computedAtUtc")
-                          if publication.get("reusedComputation") is True else generated_at_utc)
+            # Numeric fit time can precede newly assembled scoring-goal details.
+            # The client still requests/receives the current list generation.
+            details_at = tier_detail_generated_at(payload)
             if (not details_at or shard is None or shard.get("schemaVersion") != 1
                     or shard.get("generatedAtUtc") != details_at):
                 raise RuntimeError("The current chart detail shard is unavailable.")
