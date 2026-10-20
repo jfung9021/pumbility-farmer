@@ -480,15 +480,14 @@ test("Pumbility generation policy preserves production maximum and historical av
   }
 });
 
-test("tier labels share Pumbility dispatch and distinguish Scoring interval methods", async () => {
+test("tier labels share Pumbility dispatch and use plain evidence and interval copy", async () => {
   const page = await readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8");
   assert.match(page, /const pumbilityPolicy = resolvePumbilityPolicy\(payload\)/);
   assert.match(page, /PumbilityPolicyContext.Provider value=\{pumbilityPolicy\?\.aggregation/);
-  assert.match(page, /pumbilityAggregation === "maximum" \? "Maximum" : pumbilityAggregation === "average" \? "Average"/);
-  assert.match(page, /title=\{sssScoring \? `95% conditional player-bootstrap interval, refitting the target model with calibration/);
-  assert.match(page, /chart\.scoringTailPolicy \? ", tail map and exception decision"/);
-  assert.match(page, /: crossScoring \? "95% conditional player-bootstrap interval with fitted chart effects and median anchors held fixed/);
-  assert.match(page, /: profileScoring \? "95% bootstrap interval after calibration, with the mode reference curve, folder center, and selected folder scale held fixed/);
+  assert.match(page, /chartEvidenceLines\(chart, metric, \{ minimumScoreRecords, pumbilityAggregation \}\)/);
+  assert.match(page, /<small title=\{TIER_INTERVAL_TOOLTIP\}>/);
+  const details = page.slice(page.indexOf("function ChartDetails"), page.indexOf("function ChartCard"));
+  assert.doesNotMatch(details, /bootstrap|latent|asinh|frozen|exception decision/i);
 });
 
 test("Co-op methodology derives Master-title goals from tier difficulty", async () => {
@@ -1217,8 +1216,8 @@ test("tier list chart details provide local mode-specific what-if estimates", as
   assert.match(chartDetails, /metric === "scoring" && !profileScoring && !officialEvidence \? <WhatIfDifficulty chart=\{chart\} \/> : null/);
   assert.match(chartDetails, /metric === "scoring" && chart\.difficultyCi95Low/);
   assert.match(types, /scoringDifficultyScale\?: number \| null;/);
-  assert.match(chartDetails, /Applied folder scale: <b>\{chart\.scoringDifficultyScale\.toFixed\(2\)\}/);
-  assert.match(chartDetails, /selected folder scale held fixed; scale-selection uncertainty is excluded/);
+  assert.match(chartDetails, /chartEvidenceLines\(chart, metric/);
+  assert.match(chartDetails, /title=\{TIER_INTERVAL_TOOLTIP\}/);
   assert.match(page, /calibration === "folder-scaled-score-profile"/);
   assert.match(page, /Each mode and official level has its own spread scale/);
   assert.match(page, /soft penalty beyond ten, no minimum quota, and no hard cap/);
@@ -1651,7 +1650,7 @@ test("Tier List restores selected-metric warnings and Recommendations shares the
     assert.doesNotMatch(page, /evidenceStatus\.toLowerCase\(\)/);
   }
   assert.match(pages[0], /LimitedDataWarning/);
-  assert.match(pages[0], /tierDataWarning\(chart, metric\)/);
+  assert.match(pages[0], /plainTierDataWarning\(chart, metric\)/);
   assert.match(pages[0], /limited-data-warning/);
   assert.match(pages[1], /hasLimitedData\(chart\.nContributors\)/);
 });

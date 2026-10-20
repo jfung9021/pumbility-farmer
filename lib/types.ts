@@ -99,6 +99,23 @@ export interface TargetTailEvidence {
   finalFolderRange?: { lower: number; upper: number } | null;
 }
 
+export interface Level20WidthValues {
+  estimatedDifficulty: number | null;
+  difficultyCi95Low: number | null;
+  difficultyCi95High: number | null;
+}
+
+/** The final presentation scale is separate from the stored target fit. */
+export interface Level20ScoringWidthEvidence {
+  version: 1;
+  method: "level20-target-quantile-width-v1";
+  group: string;
+  source: "stored-pre-tail" | "stored-final-width-pre-tail" | "stored-pre-tail-published-tie-block" | "stored-final-width-pre-tail-published-tie-block";
+  original: Record<string, unknown> & Level20WidthValues;
+  input: Level20WidthValues;
+  final: Level20WidthValues;
+}
+
 export interface SssPlusMedianCalibration {
   version: 1 | 2 | 3;
   method: "sssplus-refined-median-calibration-v1" | "sssplus-refined-median-calibration-v2" | "sssplus-refined-median-calibration-v3";
@@ -164,6 +181,7 @@ export interface SubmittedSssplusChartCalibration {
 }
 
 export interface ScoringVariant extends TierMetricResult {
+  scoringLevel20Width?: Level20ScoringWidthEvidence;
   scoringSubmittedCalibration?: SubmittedSssplusChartCalibration;
   finalFolderWidth?: FinalFolderWidthEvidence;
   modeRank?: number | null;
@@ -461,6 +479,8 @@ export interface ChartResult {
   pumbilityVariants?: ScoringVariantMap<PumbilityTierMetric>;
   /** Client projection marker; absent on the immutable General compatibility rows. */
   scoringGoal?: ScoringGoal;
+  scoringLevel20Width?: Level20ScoringWidthEvidence;
+  level20WidthBaseline?: Record<string, Record<string, { changed: Record<string, unknown>; added: string[] }>>;
   scoringSubmittedCalibration?: SubmittedSssplusChartCalibration;
   finalFolderWidth?: FinalFolderWidthEvidence;
   chartSourceExclusions?: ChartSourceExclusionEvidence;

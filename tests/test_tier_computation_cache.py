@@ -90,6 +90,8 @@ class CrossRunTierCacheTests(TestCase):
         # the real reversible SSS transformation has dedicated publication tests.
         self.stack.enter_context(patch("sss_tail_tiers.apply_sss_tail_tiers",
                                       side_effect=lambda full: {**full, "schemaVersion": 59}))
+        self.stack.enter_context(patch("level20_scoring_width.apply_level20_scoring_width",
+                                      side_effect=lambda full: {**full, "schemaVersion": 60}))
         self.stack.enter_context(patch("production_tiers.public_tiers", side_effect=self.public))
         self.stack.enter_context(patch("tier_public.prepare_tier_publication", side_effect=lambda value, generation: (value, {})))
         self.stack.enter_context(patch("tier_public.validate_tier_publication"))
@@ -220,6 +222,39 @@ class CrossRunTierCacheTests(TestCase):
         provenance = current["componentComputations"]["general"]
         self.assertEqual(provenance["computedAtUtc"], self.first_time)
         self.assertEqual(provenance["inputs"]["generationTimestamp"], self.first_time)
+
+    def test_new_terminal_width_overlay_reuses_completed_numeric_chain_once(self):
+        # Simulate the preceding schema-59 publisher: all numerical stages and
+        # their independently versioned index are already complete.
+        def no_width(store, state, reference):
+            from tier_pipeline_checkpoints import write_checkpoint
+            from sss_tail_tiers import apply_sss_tail_tiers
+            full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
+            full = apply_sss_tail_tiers(full)
+            tail = write_checkpoint(store, full, stage="sss-tail",
+                identity=tiers._tail_overlay_identity(state, reference), predecessor=reference["payloadSha256"])
+            state["tailOverlay"] = tail
+            return tail
+
+        with patch("production_tiers._publication_overlays", side_effect=no_width):
+            self.complete(self.first_time)
+        with patch("production_tiers.pipeline_code_identity", return_value="pipeline-with-width"), \
+             patch("level20_scoring_width.apply_level20_scoring_width",
+                   side_effect=lambda full: {**full, "schemaVersion": 60}) as width:
+            current = self.complete(self.second_time)
+            self.assertEqual(width.call_count, 1)
+            self.assertEqual(self.transition.call_count, len(tiers.FINISH_STAGES))
+            self.general.assert_called_once()
+            self.fitter.assert_not_called()
+            publication = current["summary"]["method"]["productionTierPublication"]
+            state = self.store.get_json(tiers.PREFIX+"generations/"+tiers.digest(publication["inputs"])+"/state.json")
+            self.assertTrue(state["completedNumericReuse"])
+            self.assertEqual(state["archive"], state["widthOverlay"])
+            self.assertEqual(state["widthOverlay"]["predecessorSha256"], state["tailOverlay"]["payloadSha256"])
+            binaries = copy.deepcopy(self.store.binary_values)
+            self.advance(self.second_time)
+            self.assertEqual(width.call_count, 1)
+            self.assertEqual(self.store.binary_values, binaries)
 
     def test_corrupt_optional_computed_audit_is_rebuilt_and_never_published(self):
         old = self.complete(self.first_time)

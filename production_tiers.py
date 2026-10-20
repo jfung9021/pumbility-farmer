@@ -19,6 +19,7 @@ VERSION = "6.21.0-submitted-sssplus"
 PREVIOUS_VERSION = "6.20.0-source-aware-sssplus"
 GOAL_VERSION = "6.22.0-scoring-goals"
 TAIL_VERSION = "6.23.0-sss-bounded-tails"
+WIDTH_VERSION = "6.24.0-level20-target-width"
 PREFIX = "analysis/private/source-aware-tiers/"
 SEED = 20261018
 SAMPLES = 200
@@ -64,7 +65,8 @@ STAGE_FILES = {
     "source-aware": ("source_aware_tiers.py", "final_folder_width.py"),
     "submitted-calibration": ("submitted_sssplus_calibration.py",),
     "archive": ("tier_pipeline_checkpoints.py",),
-    "public": ("production_tiers.py", "tier_public.py", "config/tier-public-fields.json", "sss_tail_tiers.py"),
+    "public": ("production_tiers.py", "tier_public.py", "config/tier-public-fields.json", "sss_tail_tiers.py",
+               "level20_scoring_width.py"),
 }
 # General's numeric sources at the previously deployed, approved generation.
 # This permits a one-time legacy cache adoption without trusting unrelated old
@@ -258,7 +260,10 @@ def public_tiers(full, *, private_path, input_identity, full_sha256=None, compon
                  computation_identity=None):
     """Retain all active values/explanations; rollback history is a private artifact."""
     from source_aware_tiers import validate_source_aware_tiers
-    if full.get("schemaVersion") == 59:
+    if full.get("schemaVersion") == 60:
+        from level20_scoring_width import validate_level20_scoring_width
+        validate_level20_scoring_width(full)
+    elif full.get("schemaVersion") == 59:
         from sss_tail_tiers import validate_sss_tail_tiers
         validate_sss_tail_tiers(full)
     elif full.get("schemaVersion") == 58:
@@ -270,7 +275,8 @@ def public_tiers(full, *, private_path, input_identity, full_sha256=None, compon
     else:
         validate_source_aware_tiers(full)
     result = _public_copy(full)
-    version = (TAIL_VERSION if full.get("schemaVersion") == 59 else GOAL_VERSION
+    version = (WIDTH_VERSION if full.get("schemaVersion") == 60 else TAIL_VERSION
+               if full.get("schemaVersion") == 59 else GOAL_VERSION
                if full.get("schemaVersion") == 58 else VERSION if full.get("schemaVersion") == 57 else PREVIOUS_VERSION)
     result["summary"]["scriptVersion"] = version
     publication = {"version": 1, "method": version, "fullArtifactPath": private_path,
@@ -318,22 +324,23 @@ def write_private_audit(store, path, full):
 def validate_public_tiers(payload):
     from chart_source_exclusions import load_exclusions
     schema = payload.get("schemaVersion")
-    if schema not in (56, 57, 58, 59):
-        raise ValueError("The hosted source-aware tier schema must be 56, 57, 58 or 59.")
+    if schema not in (56, 57, 58, 59, 60):
+        raise ValueError("The hosted source-aware tier schema must be 56, 57, 58, 59 or 60.")
     method = payload["summary"]["method"]
     publication = method.get("productionTierPublication", {})
-    expected_version = TAIL_VERSION if schema == 59 else GOAL_VERSION if schema == 58 else VERSION if schema == 57 else PREVIOUS_VERSION
+    expected_version = (WIDTH_VERSION if schema == 60 else TAIL_VERSION if schema == 59
+                        else GOAL_VERSION if schema == 58 else VERSION if schema == 57 else PREVIOUS_VERSION)
     if (publication.get("version") != 1 or publication.get("method") != expected_version
             or publication.get("publicPayloadSha256") != public_digest(payload)):
         raise ValueError("The public source-aware tier artifact failed its publication identity.")
-    if schema in (57, 58, 59) and method.get("submittedSssplusCalibration", {}).get("localOnly") is not False:
+    if schema in (57, 58, 59, 60) and method.get("submittedSssplusCalibration", {}).get("localOnly") is not False:
         raise ValueError("The hosted submitted SSS+ calibration must declare production use.")
     rows = payload["singles"] + payload["doubles"]
     policy = load_exclusions([{**r, "id": r["chartId"]} for r in rows])
     if method["sourceAwareTiers"]["sourcePolicy"]["effectivePolicySha256"] != policy.semantic_hash():
         raise ValueError("The published tiers use a different source exclusion policy.")
     goals = ("general", "sss", "sssplus")
-    expanded = schema == 58 or schema == 59 and method.get("sssTailPolicy", {}).get("baseSchemaVersion") == 58
+    expanded = schema == 58 or schema in (59, 60) and method.get("sssTailPolicy", {}).get("baseSchemaVersion") == 58
     if expanded:
         from scoring_targets import SCORING_GOALS, BACKFILL_GOALS, scoring_goal_policies
         goals = method.get("availableScoringGoals", [])
@@ -358,7 +365,10 @@ def validate_public_tiers(payload):
                 raise ValueError("Public Pumbility must average its finite final components.")
         if row["estimatedDifficulty"] != row["scoringVariants"]["general"]["estimatedDifficulty"]:
             raise ValueError("General Scoring compatibility fields differ.")
-    if schema == 59:
+    if schema == 60:
+        from level20_scoring_width import validate_public_level20_scoring_width
+        validate_public_level20_scoring_width(payload)
+    if schema in (59, 60):
         _validate_public_sss_tail(payload)
 
 
@@ -380,11 +390,19 @@ def _validate_public_sss_tail(payload):
             or selected != sorted(set(selected)) or len(selected) > TAIL_PARAMETERS["exceptionLimit"]):
         raise ValueError("The public SSS tail policy differs.")
     rows = payload["singles"] + payload["doubles"]
+    def predecessor_metric(row):
+        metric = row["scoringVariants"]["sss"]
+        # Schema 60 preserves the exact schema-59 public points as compact
+        # evidence. Replay the older safeguard against those inputs, then let
+        # the independent width validator check the current final values.
+        width = metric.get("scoringLevel20Width")
+        return ({**metric, **width["original"]}
+                if payload.get("schemaVersion") == 60 and isinstance(width, Mapping) else metric)
     if not set(selected) <= {str(row["chartId"]) for row in rows}:
         raise ValueError("The public SSS tail selection contains an unknown chart.")
     pre, final, changed = [], [], 0
     for row in rows:
-        metric, level = row["scoringVariants"]["sss"], row["level"]
+        metric, level = predecessor_metric(row), row["level"]
         evidence = metric.get("scoringTailPolicy", {})
         exceptional = str(row["chartId"]) in selected
         for field, source in (("estimatedDifficulty", "preTailDifficulty"),
@@ -408,8 +426,8 @@ def _validate_public_sss_tail(payload):
         "finalAbsAbove1_5": sum(abs(d) > 1.5 for d in final),
         "finalAbsAtLeast2": sum(abs(d) >= 2 for d in final),
         "finalAbsAbove2_5": sum(abs(d) > 2.5 for d in final),
-        "displayedAbsAtLeast2": sum(abs(math.trunc(row["scoringVariants"]["sss"]["estimatedDifficulty"]*10+1e-9)/10-row["level"]-.5) >= 2
-            for row in rows if row["scoringVariants"]["sss"]["estimatedDifficulty"] is not None),
+        "displayedAbsAtLeast2": sum(abs(math.trunc(predecessor_metric(row)["estimatedDifficulty"]*10+1e-9)/10-row["level"]-.5) >= 2
+            for row in rows if predecessor_metric(row)["estimatedDifficulty"] is not None),
         "preTailMinDelta": min(pre, default=None), "preTailMaxDelta": max(pre, default=None),
         "finalMinDelta": min(final, default=None), "finalMaxDelta": max(final, default=None)}
     if tail.get("counts") != counts:
@@ -780,6 +798,18 @@ def _tail_overlay_identity(state, predecessor):
                    "predecessorSha256": predecessor["payloadSha256"]})
 
 
+def _width_overlay_identity(state, predecessor):
+    from numeric_recipe import source_recipe
+    return digest({"generation": state["generation"], "stage": "level20-width", "version": WIDTH_VERSION,
+                   "recipe": source_recipe("level20_scoring_width.py"),
+                   "predecessorSha256": predecessor["payloadSha256"]})
+
+
+def _latest_publication_reference(state):
+    return (state.get("widthOverlay") or state.get("tailOverlay") or state.get("goalOverlay")
+            or (state["stages"][-1] if state.get("stages") else state["general"]))
+
+
 def _validate_publication_overlay_chain(state):
     from tier_computation_cache import TierComputationCacheError
     if not state.get("stages"):
@@ -801,8 +831,16 @@ def _validate_publication_overlay_chain(state):
                 or saved.get("predecessorSha256") != reference["payloadSha256"]):
             raise TierComputationCacheError("The SSS tail overlay checkpoint chain differs.")
         reference = saved
+    if "widthOverlay" in state:
+        saved = state["widthOverlay"]
+        if (not state.get("tailOverlay") or not isinstance(saved, dict)
+                or saved.get("stage") != "level20-width" or saved.get("schemaVersion") != 60
+                or saved.get("identity") != _width_overlay_identity(state, reference)
+                or saved.get("predecessorSha256") != reference["payloadSha256"]):
+            raise TierComputationCacheError("The level-20 width overlay checkpoint chain differs.")
+        reference = saved
     if "archive" in state and (not state.get("tailOverlay") or state["archive"] != reference):
-        raise TierComputationCacheError("The tier archive does not reference its SSS tail overlay.")
+        raise TierComputationCacheError("The tier archive does not reference its final publication overlay.")
 
 
 def _publication_overlays(store, state, reference):
@@ -810,6 +848,7 @@ def _publication_overlays(store, state, reference):
     import gc
     from scoring_goal_tiers import apply_goal_artifacts
     from sss_tail_tiers import apply_sss_tail_tiers
+    from level20_scoring_width import apply_level20_scoring_width
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
     _validate_publication_overlay_chain(state)
     state_path = PREFIX + "generations/" + state["generation"] + "/state.json"
@@ -834,7 +873,18 @@ def _publication_overlays(store, state, reference):
         state["tailOverlay"] = write_checkpoint(store, full, stage="sss-tail",
             identity=_tail_overlay_identity(state, reference), predecessor=reference["payloadSha256"])
         store.put_json(state_path, state)
-    return state["tailOverlay"]
+        # Release the decoded schema-59 audit before inflating it for the next
+        # additive stage, just as for the optional scoring-goal layer above.
+        del full
+        gc.collect()
+    reference = state["tailOverlay"]
+    if "widthOverlay" not in state:
+        full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
+        full = apply_level20_scoring_width(full)
+        state["widthOverlay"] = write_checkpoint(store, full, stage="level20-width",
+            identity=_width_overlay_identity(state, reference), predecessor=reference["payloadSha256"])
+        store.put_json(state_path, state)
+    return state["widthOverlay"]
 
 
 def resume_tier_generation(store, generation, *, generated_at_utc, on_progress=None,
@@ -855,7 +905,7 @@ def _optional_computation(store, generation, identity):
     original = _captured_computation(store, generation, identity)
     if not original.get("phaseInputs"):
         return None
-    reference = original.get("tailOverlay") or original.get("goalOverlay") or (original["stages"][-1] if original["stages"] else original["general"])
+    reference = _latest_publication_reference(original)
     verified_checkpoint_bytes(store, reference, stage=reference["stage"], identity=reference["identity"])
     if original.get("ready"):
         public = store.get_json(PREFIX + "generations/" + generation + "/public.json")
@@ -957,7 +1007,7 @@ def _advance_reused_computation(store, state, *, on_stage_start=None, on_progres
     from tier_pipeline_checkpoints import verified_checkpoint_bytes
     original = verified_computation or _captured_computation(
         store, state["computationGeneration"], state["computationIdentity"])
-    verified_reference = ((original.get("tailOverlay") or original.get("goalOverlay") or original["stages"][-1])["blobSha256"]
+    verified_reference = (_latest_publication_reference(original)["blobSha256"]
                           if verified_computation and original["stages"] else None)
     if original["createdAtUtc"] != state.get("computationCreatedAtUtc"):
         raise ValueError("The reused tier computation time differs.")
@@ -978,7 +1028,7 @@ def _advance_reused_computation(store, state, *, on_stage_start=None, on_progres
         raise ValueError("The reused tier publication differs from its computed generation.")
     # The transition-validated canonical content is unchanged if its compressed
     # bytes match. Verify those bytes without replaying or inflating the full tree.
-    reference = original.get("tailOverlay") or original.get("goalOverlay") or original["stages"][-1]
+    reference = _latest_publication_reference(original)
     if reference["blobSha256"] != verified_reference:
         verified_checkpoint_bytes(store, reference, stage=reference["stage"], identity=reference["identity"])
     compact = {**computed, "generatedAtUtc": state["createdAtUtc"],

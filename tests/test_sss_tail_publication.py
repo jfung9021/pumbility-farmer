@@ -12,6 +12,7 @@ from analysis_runtime import MemoryBlobStore
 import production_tiers as tiers
 from scoring_goal_tiers import apply_goal_artifacts
 from sss_tail_tiers import apply_sss_tail_tiers, recover_sss_tail_tiers
+from level20_scoring_width import recover_level20_scoring_width
 from tests.test_scoring_goal_publication import production_fixture
 from tests.test_scoring_goal_tiers import INPUTS, artifact_fixture
 from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
@@ -112,9 +113,9 @@ class SssTailPublicationTests(unittest.TestCase):
             self.assertEqual(taper.call_count, 2)
             self.assertEqual(tiers._publication_overlays(store, persisted, predecessor), reference)
             self.assertEqual(taper.call_count, 2)
-        full = read_checkpoint(store, reference, stage="sss-tail", identity=reference["identity"])
-        self.assertEqual(full, apply_sss_tail_tiers(self.expanded))
-        self.assertEqual(reference["predecessorSha256"], persisted["goalOverlay"]["payloadSha256"])
+        full = read_checkpoint(store, reference, stage="level20-width", identity=reference["identity"])
+        self.assertEqual(recover_level20_scoring_width(full), apply_sss_tail_tiers(self.expanded))
+        self.assertEqual(reference["predecessorSha256"], persisted["tailOverlay"]["payloadSha256"])
         persisted["tailOverlay"]["predecessorSha256"] = "0"*64
         with self.assertRaisesRegex(ValueError, "SSS tail overlay checkpoint chain"):
             tiers._publication_overlays(store, persisted, predecessor)
@@ -159,9 +160,9 @@ class SssTailPublicationTests(unittest.TestCase):
         self.assertEqual(tail_predecessor_loads, 1)
         self.assertEqual(len(goal_inputs), 2)
         self.assertTrue(all(reference() is None for reference in goal_inputs + goal_results))
-        full = read_checkpoint(store, reference, stage="sss-tail", identity=reference["identity"])
-        self.assertEqual(full, apply_sss_tail_tiers(self.expanded))
-        self.assertEqual(reference["predecessorSha256"], state["goalOverlay"]["payloadSha256"])
+        full = read_checkpoint(store, reference, stage="level20-width", identity=reference["identity"])
+        self.assertEqual(recover_level20_scoring_width(full), apply_sss_tail_tiers(self.expanded))
+        self.assertEqual(reference["predecessorSha256"], state["tailOverlay"]["payloadSha256"])
 
 
 if __name__ == "__main__":
