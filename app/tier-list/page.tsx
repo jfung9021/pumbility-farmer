@@ -216,11 +216,9 @@ function ChartDetails({ chart, metric, headingId, detailsLoaded = false }: { cha
             <span><b>#{selected.levelRank}</b> of {selected.levelComparisonCharts} in {chart.difficulty}</span>
           ) : null}
         </div>
-        {listOnly ? <button type="button" onClick={() => detailSource.select(chart)}>Calculation and evidence</button> : <ExplanatorySection title="Calculation and evidence" className="chart-calculation-details">
-        <div className="chart-meta metric-details">
+        {listOnly ? <button type="button" onClick={() => detailSource.select(chart)}>Calculation and evidence</button> : <div className="chart-meta metric-details">
           {chartEvidenceLines(chart, metric, { minimumScoreRecords, pumbilityAggregation }).map((line) => <span key={line}>{line}</span>)}
-        </div>
-        </ExplanatorySection>}
+        </div>}
       </div>
       {isCoop ? null : (
         <div className={`delta ${delta !== null && delta < 0 ? "delta-easy" : "delta-hard"}`}>
