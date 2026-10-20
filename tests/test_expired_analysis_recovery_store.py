@@ -50,6 +50,8 @@ class ExpiredAnalysisRecoveryStoreTests(unittest.TestCase):
             self.assertIn("lease_expires_at is null", query)
         self.assertIn("name = 'active:analysis' and job_id = %s for update", head)
         self.assertIn("payload = job.payload || jsonb_build_object", update)
+        self.assertIn("safe_error = jsonb_build_object", update)
+        self.assertNotRegex(update, r"\berror\s*=")
         self.assertIn("retry_at = recovery.occurred_at", update)
         self.assertIn("completed_at = recovery.occurred_at", update)
         self.assertIn("lease_owner = null, lease_expires_at = null", update)
@@ -97,13 +99,41 @@ class ExpiredAnalysisRecoveryDatabaseTests(unittest.TestCase):
         with psycopg.connect(DATABASE_URL) as connection, connection.cursor() as cursor:
             cursor.execute("""create schema if not exists pumbility;
                 create table if not exists pumbility.schema_metadata(key text primary key, value text);
-                create table if not exists pumbility.jobs(
-                    id uuid primary key default gen_random_uuid(), external_key text unique,
-                    kind text, status text, stage text, payload jsonb, progress jsonb, error jsonb,
-                    lease_owner text, lease_expires_at timestamptz, cancellation_requested_at timestamptz,
-                    completed_at timestamptz, updated_at timestamptz, retry_at timestamptz);
-                create table if not exists pumbility.job_heads(
-                    name text primary key, job_id uuid references pumbility.jobs(id));""")
+                create table if not exists pumbility.mixes(mix_key text primary key);
+                drop table if exists pumbility.job_heads;
+                drop table if exists pumbility.jobs;
+                -- Jobs/head DDL mirrors the owner migration 20260813010000,
+                -- including all column names, defaults, checks and foreign keys.
+                create table pumbility.jobs (
+                    id uuid primary key default gen_random_uuid(),
+                    external_key text not null unique check (btrim(external_key) <> ''),
+                    kind text not null check (btrim(kind) <> ''),
+                    status text not null default 'queued'
+                        check (status in ('queued', 'running', 'completed', 'failed', 'cancelled')),
+                    stage text not null default 'queued' check (btrim(stage) <> ''),
+                    mix_key text references pumbility.mixes(mix_key) on update cascade on delete restrict,
+                    attempt integer not null default 0 check (attempt >= 0),
+                    payload jsonb not null default '{}'::jsonb check (jsonb_typeof(payload) = 'object'),
+                    progress jsonb not null default '{}'::jsonb check (jsonb_typeof(progress) = 'object'),
+                    lease_owner text,
+                    lease_expires_at timestamptz,
+                    heartbeat_at timestamptz,
+                    cancellation_requested_at timestamptz,
+                    retry_at timestamptz,
+                    safe_error jsonb check (safe_error is null or jsonb_typeof(safe_error) = 'object'),
+                    created_at timestamptz not null default statement_timestamp(),
+                    updated_at timestamptz not null default statement_timestamp(),
+                    started_at timestamptz,
+                    completed_at timestamptz,
+                    check ((lease_owner is null) = (lease_expires_at is null)),
+                    check (status <> 'running' or (lease_owner is not null and started_at is not null)),
+                    check (status not in ('completed', 'cancelled') or completed_at is not null)
+                );
+                create table pumbility.job_heads (
+                    name text primary key check (btrim(name) <> ''),
+                    job_id uuid not null references pumbility.jobs(id) on delete restrict,
+                    updated_at timestamptz not null default statement_timestamp()
+                );""")
             cursor.execute("insert into pumbility.schema_metadata values('migration_version',%s) "
                            "on conflict(key) do update set value=excluded.value", (EXPECTED_PUMBILITY_MIGRATION,))
 
@@ -121,17 +151,19 @@ class ExpiredAnalysisRecoveryDatabaseTests(unittest.TestCase):
         payload = {**copy.deepcopy(self.payload), "id": external_key, "status": status}
         with psycopg.connect(DATABASE_URL) as connection, connection.cursor() as cursor:
             cursor.execute("""insert into pumbility.jobs(external_key,kind,status,stage,payload,progress,
-                lease_owner,lease_expires_at,updated_at,cancellation_requested_at)
+                lease_owner,lease_expires_at,updated_at,cancellation_requested_at,started_at,completed_at)
                 values(%s,%s,%s,'analyzing',%s,%s,%s,
                     case when %s::integer is null then null else clock_timestamp()+make_interval(secs=>%s) end,
                     clock_timestamp()-make_interval(secs=>%s),
-                    case when %s then clock_timestamp() else null end) returning id""",
+                    case when %s then clock_timestamp() else null end,
+                    case when %s='running' then clock_timestamp()-interval '20 minutes' else null end,
+                    case when %s in ('completed','cancelled') then clock_timestamp() else null end) returning id""",
                 (external_key, kind, status, Jsonb(payload), Jsonb(payload["progress"]), owner,
-                 lease_seconds, lease_seconds, age_seconds, cancelled))
+                 lease_seconds, lease_seconds, age_seconds, cancelled, status, status))
             identifier = cursor.fetchone()[0]
             if active:
-                cursor.execute("insert into pumbility.job_heads values('active:analysis',%s)", (identifier,))
-            cursor.execute("insert into pumbility.job_heads values(%s,%s)", ("latest:"+external_key, identifier))
+                cursor.execute("insert into pumbility.job_heads(name,job_id) values('active:analysis',%s)", (identifier,))
+            cursor.execute("insert into pumbility.job_heads(name,job_id) values(%s,%s)", ("latest:"+external_key, identifier))
         return identifier
 
     def recover(self):
@@ -139,7 +171,7 @@ class ExpiredAnalysisRecoveryDatabaseTests(unittest.TestCase):
 
     def state(self, identifier):
         with psycopg.connect(DATABASE_URL) as connection, connection.cursor() as cursor:
-            cursor.execute("select status,payload,progress,error,lease_owner,lease_expires_at,"
+            cursor.execute("select status,payload,progress,safe_error,lease_owner,lease_expires_at,"
                            "updated_at,completed_at,retry_at from pumbility.jobs where id=%s", (identifier,))
             row = cursor.fetchone()
             cursor.execute("select name,job_id from pumbility.job_heads order by name")
@@ -166,7 +198,7 @@ class ExpiredAnalysisRecoveryDatabaseTests(unittest.TestCase):
 
     def test_database_lease_status_cancellation_kind_and_heartbeat_fences_are_authoritative(self):
         cases = ({"lease_seconds": 600}, {"status": "completed"}, {"status": "failed"},
-                 {"status": "cancelled"}, {"age_seconds": 0}, {"lease_seconds": None},
+                 {"status": "cancelled"}, {"age_seconds": 0},
                  {"cancelled": True}, {"kind": "player_recommendation"}, {"active": False})
         for settings in cases:
             with self.subTest(settings=settings):
@@ -177,7 +209,7 @@ class ExpiredAnalysisRecoveryDatabaseTests(unittest.TestCase):
                 self.assertEqual(self.state(identifier), before)
 
     def test_stale_unleased_jobs_can_release_but_recent_queued_jobs_cannot(self):
-        for status, age, expected in (("queued", 1200, True), ("running", 1200, True), ("queued", 0, False)):
+        for status, age, expected in (("queued", 1200, True), ("queued", 0, False)):
             with self.subTest(status=status, age=age):
                 self.setUp()
                 self.seed(status=status, owner=None, lease_seconds=None, age_seconds=age)
@@ -215,7 +247,8 @@ class ExpiredAnalysisRecoveryDatabaseTests(unittest.TestCase):
                             self.wait_until_locked(connection, backend_pids.get(timeout=5))
                             if winner == "complete":
                                 cursor.execute("update pumbility.jobs set status='completed',lease_owner=null,"
-                                               "lease_expires_at=null,updated_at=clock_timestamp() where id=%s", (identifier,))
+                                               "lease_expires_at=null,completed_at=clock_timestamp(),"
+                                               "updated_at=clock_timestamp() where id=%s", (identifier,))
                             else:
                                 cursor.execute("update pumbility.jobs set lease_owner=%s,"
                                                "lease_expires_at=clock_timestamp()+interval '600 seconds',"
