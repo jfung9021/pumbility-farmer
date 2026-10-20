@@ -55,6 +55,10 @@ export default function JonathanControls() {
   }, []);
 
   const jobIsActive = job?.status === "queued" || job?.status === "running";
+  const progressIndeterminate = jobIsActive && (
+    job?.progress.indeterminate
+    || (!job?.progress.phase && (job?.progress.percent ?? 0) >= 100)
+  );
   useEffect(() => {
     if (!job?.id || !jobIsActive) return;
     let cancelled = false;
@@ -183,9 +187,11 @@ export default function JonathanControls() {
         <section className={styles.status} aria-live="polite">
           <div className={styles.statusHeading}>
             <strong>{job.status === "queued" ? "Queued" : job.status}</strong>
-            <span>{Math.round(job.progress.percent)}%</span>
+            <span>{progressIndeterminate ? "Working" : (
+              `${job.progress.phase === "tier-analysis" ? "Tier analysis: " : ""}${Math.round(job.progress.percent)}%`
+            )}</span>
           </div>
-          <div
+          {!progressIndeterminate ? <div
             className={styles.progressTrack}
             role="progressbar"
             aria-valuemin={0}
@@ -193,7 +199,7 @@ export default function JonathanControls() {
             aria-valuenow={Math.round(job.progress.percent)}
           >
             <span style={{ width: `${Math.max(0, Math.min(100, job.progress.percent))}%` }} />
-          </div>
+          </div> : null}
           <p>{job.progress.message}</p>
           {job.error ? <p className={styles.error}>{job.error}</p> : null}
           {retryMilliseconds > 0 ? (

@@ -671,6 +671,8 @@ export interface AnalysisJobStatus {
     total: number;
     percent: number;
     message: string;
+    phase?: string;
+    indeterminate?: boolean;
   };
   createdAtUtc: string;
   updatedAtUtc: string;

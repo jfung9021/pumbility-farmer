@@ -2846,6 +2846,27 @@ class WorkerTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "running")
         self.assertEqual(result[ANALYSIS_CONTINUATION_FIELD], "model")
+        self.assertEqual(result["progress"]["percent"], 0)
+        self.assertTrue(result["progress"]["indeterminate"])
+        self.assertEqual(result["progress"]["phase"], "model")
+
+    def test_checkpoint_phase_progress_is_bounded_and_distinct_from_completion(self) -> None:
+        jobs = MemoryJobStore()
+        job = new_job("phase-progress", NOW)
+        jobs.save(job)
+        result = _checkpoint_continuation(job_store=jobs, job_id=job["id"],
+            continuation="combined", stage="analyzing", message="Three fits saved.",
+            lease_heartbeat=None, phase_progress={"current": 3, "total": 18})
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(result["progress"], {"current": 3, "total": 18, "percent": 16,
+            "phase": "tier-analysis", "indeterminate": False, "message": "Three fits saved."})
+        for progress in ({"current": -1, "total": 18}, {"current": 19, "total": 18},
+                         {"current": 0, "total": 0}, {"current": True, "total": 18}):
+            with self.subTest(progress=progress), self.assertRaises(ValueError):
+                _checkpoint_continuation(job_store=jobs, job_id=job["id"],
+                    continuation="combined", stage="analyzing", message="Invalid progress.",
+                    lease_heartbeat=None, phase_progress=progress)
+        self.assertEqual(jobs.get(job["id"])["progress"], result["progress"])
 
     def test_analysis_worker_queues_checkpoint_continuation_once(self) -> None:
         from worker.tasks import refresh_analysis

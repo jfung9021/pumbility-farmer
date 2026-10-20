@@ -80,6 +80,7 @@ class AnalysisProgressTests(unittest.TestCase):
                 "target_fit_cache.load_or_fit_target": {"new": lambda store, boards, **kwargs: fitter(boards, **kwargs)},
                 "production_tiers._finish_stage": {"new": finish},
                 "production_tiers.public_tiers": {"return_value": public},
+                "sss_tail_tiers.apply_sss_tail_tiers": {"side_effect": lambda full: {**full, "schemaVersion": 59}},
                 "production_tiers.validate_public_tiers": {},
                 "tier_public.prepare_tier_publication": {"return_value": (public, {})},
                 "tier_public.validate_tier_publication": {},
@@ -100,6 +101,12 @@ class AnalysisProgressTests(unittest.TestCase):
                 if checkpoint["phase"] == "analysis":
                     ordinals.append(checkpoint["tierProgress"]["ordinal"])
                     self.assertEqual(result["stage"], "analyzing")
+                    progress = result["progress"]
+                    self.assertEqual(progress["phase"], "tier-analysis")
+                    self.assertFalse(progress["indeterminate"])
+                    self.assertEqual(progress["current"], checkpoint["tierProgress"]["ordinal"])
+                    self.assertEqual(progress["total"], 18)
+                    self.assertLess(progress["percent"], 100)
             else:
                 self.fail("nested tier continuations never reached publication")
         self.assertEqual(ordinals, list(range(1, 18)))
