@@ -2550,7 +2550,7 @@ class PumbilityJobStore:
                 """
                 with recovery as (select clock_timestamp() as occurred_at)
                 update pumbility.jobs as job set
-                    status = 'failed', error = jsonb_build_object('message', %s::text),
+                    status = 'failed', safe_error = jsonb_build_object('message', %s::text),
                     progress = %s, completed_at = recovery.occurred_at,
                     updated_at = recovery.occurred_at, retry_at = recovery.occurred_at,
                     lease_owner = null, lease_expires_at = null,
