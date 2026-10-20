@@ -44,7 +44,8 @@ def _groups(payload: Mapping[str, Any], goal: str) -> dict[tuple[str, str, int],
     return groups
 
 
-def exception_evidence(row: Mapping[str, Any], *, goal: str, protected: bool) -> dict:
+def exception_evidence(row: Mapping[str, Any], *, goal: str, protected: bool,
+                       expected_model_method: str = "target-attainment-rasch-v1") -> dict:
     metric, midpoint = row["scoringVariants"][goal], row["level"] + .5
     value = metric["estimatedDifficulty"]
     delta = value - midpoint
@@ -54,7 +55,7 @@ def exception_evidence(row: Mapping[str, Any], *, goal: str, protected: bool) ->
         reasons.append("inside-two-point-boundary")
     if protected:
         reasons.append("protected-folder-median")
-    if metric.get("scoringMethod") != "target-attainment-rasch-v1" or metric.get("scoringEstimateBranch") not in (None, "mixed"):
+    if metric.get("scoringMethod") != expected_model_method or metric.get("scoringEstimateBranch") not in (None, "mixed"):
         reasons.append("not-ordinary-mixed-first-pass")
     if metric.get("nContributors", 0) < 20 or min(metric.get("scoringTargetSuccesses", 0), metric.get("scoringBelowTarget", 0)) < 5:
         reasons.append("insufficient-two-sided-player-support")
@@ -86,7 +87,8 @@ def exception_evidence(row: Mapping[str, Any], *, goal: str, protected: bool) ->
             "conservativeDistance": conservative, "protectedMedian": protected}
 
 
-def select_exceptions(payload: Mapping[str, Any], *, goal: str = "sssplus") -> tuple[set[str], dict[str, dict]]:
+def select_exceptions(payload: Mapping[str, Any], *, goal: str = "sssplus",
+                      expected_model_method: str = "target-attainment-rasch-v1") -> tuple[set[str], dict[str, dict]]:
     """Choose whole contiguous eligible outer blocks, with one shared ten-chart budget."""
     evidence, tails = {}, []
     for (_, _, level), rows in sorted(_groups(payload, goal).items()):
@@ -99,7 +101,8 @@ def select_exceptions(payload: Mapping[str, Any], *, goal: str = "sssplus") -> t
         for row in ordered:
             cid = str(row["chartId"])
             evidence[cid] = exception_evidence(row, goal=goal,
-                protected=row["scoringVariants"][goal]["estimatedDifficulty"] in protected_values)
+                protected=row["scoringVariants"][goal]["estimatedDifficulty"] in protected_values,
+                expected_model_method=expected_model_method)
         for side in (-1, 1):
             outer = [row for row in ordered if side * (row["scoringVariants"][goal]["estimatedDifficulty"] - level - .5) >= 2]
             outer.sort(key=lambda row: (-abs(row["scoringVariants"][goal]["estimatedDifficulty"] - level - .5), str(row["chartId"])))
@@ -146,8 +149,9 @@ def select_exceptions(payload: Mapping[str, Any], *, goal: str = "sssplus") -> t
     return selected, evidence
 
 
-def apply_tail_policy(payload: dict, *, goal: str = "sssplus") -> dict:
-    selected, evidence = select_exceptions(payload, goal=goal)
+def apply_tail_policy(payload: dict, *, goal: str = "sssplus",
+                      expected_model_method: str = "target-attainment-rasch-v1") -> dict:
+    selected, evidence = select_exceptions(payload, goal=goal, expected_model_method=expected_model_method)
     pre_values, final_values, changed = [], [], 0
     for _, key in MODES:
         for row in payload.get(key, []):

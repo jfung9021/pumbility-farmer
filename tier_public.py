@@ -44,6 +44,10 @@ def _chart(row: Mapping[str, Any]) -> dict:
     result = _metric(row, "chart")
     if isinstance(row.get("scoringVariants"), Mapping):
         result["scoringVariants"] = {goal: _pick(metric, ["estimatedDifficulty"]) if goal == "general" else _metric(metric, "scoring") for goal, metric in row["scoringVariants"].items() if isinstance(metric, Mapping)}
+        tail = row["scoringVariants"].get("sss", {}).get("scoringTailPolicy")
+        if isinstance(tail, Mapping):
+            result["scoringVariants"]["sss"]["scoringTailPolicy"] = _pick(tail,
+                ["preTailDifficulty", "preTailDifficultyCi95Low", "preTailDifficultyCi95High"])
     if isinstance(row.get("pumbilityVariants"), Mapping):
         result["pumbilityVariants"] = {goal: _pick(metric, ["estimatedDifficulty"]) if goal == "general" else _metric(metric, "pumbility") for goal, metric in row["pumbilityVariants"].items() if isinstance(metric, Mapping)}
     tiers = row.get("tierMetrics")
@@ -132,7 +136,7 @@ def validate_tier_publication(full: Mapping[str, Any], compact: Mapping[str, Any
     if compact != expected:
         raise ValueError("The compact list differs from its validated tier source.")
     body = json.dumps(compact, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    expanded = compact.get("schemaVersion") == 58
+    expanded = compact.get("schemaVersion") in (58, 59)
     limit = MAX_EXPANDED_LIST_BYTES if expanded else MAX_LIST_BYTES
     if len(body) > limit:
         raise ValueError("The tier list exceeds its decoded publication size budget.")

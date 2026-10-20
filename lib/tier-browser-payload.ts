@@ -1,5 +1,6 @@
 import type { AnalysisPayload } from "./types";
 import fields from "../config/tier-public-fields.json" with { type: "json" };
+import { validateSssTailPublicPayload } from "./sss-tail-validation.ts";
 
 const serialized = new WeakMap<AnalysisPayload, string>();
 
@@ -18,6 +19,8 @@ function metric(row: Row, kind: "chart" | "scoring" | "clearing" | "pumbility") 
     }
   }
   if (row.scoringSpreadPolicy) result.scoringSpreadPolicy = pick(row.scoringSpreadPolicy as Row, ["midpoint"]);
+  if (row.scoringTarget === 990000 && row.scoringTailPolicy) result.scoringTailPolicy = pick(row.scoringTailPolicy as Row,
+    ["preTailDifficulty", "preTailDifficultyCi95Low", "preTailDifficultyCi95High"]);
   return result;
 }
 function chart(row: Row): Row {
@@ -39,7 +42,7 @@ function chart(row: Row): Row {
 
 /** Project only display/filter/order fields after the full local validator passes. */
 export function compactTierPayload(payload: AnalysisPayload): AnalysisPayload {
-  if (payload.tierListView?.kind === "list") return payload;
+  if (payload.tierListView?.kind === "list") return payload.schemaVersion === 59 ? validateSssTailPublicPayload(payload) : payload;
   const source = payload as unknown as Row;
   const result = pick(source, ["schemaVersion", "generatedAtUtc", "mix", "relativeGroups", "effectBands"]);
   const summary = payload.summary;
@@ -49,7 +52,8 @@ export function compactTierPayload(payload: AnalysisPayload): AnalysisPayload {
   result.summary = {...pick(summary as unknown as Row, ["scriptVersion", "coverage", "modes"]), method};
   for (const mode of ["singles", "doubles", "coop"] as const) if (payload[mode]) result[mode] = payload[mode]!.map(row => chart(row as unknown as Row));
   result.tierListView = {version:1, kind:"list", detailsAvailable:true};
-  return result as unknown as AnalysisPayload;
+  const compact = result as unknown as AnalysisPayload;
+  return compact.schemaVersion === 59 ? validateSssTailPublicPayload(compact) : compact;
 }
 
 /** Chart evidence retains the existing contract; only private rollback copies go. */

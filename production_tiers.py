@@ -18,6 +18,7 @@ from typing import Any, Mapping
 VERSION = "6.21.0-submitted-sssplus"
 PREVIOUS_VERSION = "6.20.0-source-aware-sssplus"
 GOAL_VERSION = "6.22.0-scoring-goals"
+TAIL_VERSION = "6.23.0-sss-bounded-tails"
 PREFIX = "analysis/private/source-aware-tiers/"
 SEED = 20261018
 SAMPLES = 200
@@ -63,7 +64,7 @@ STAGE_FILES = {
     "source-aware": ("source_aware_tiers.py", "final_folder_width.py"),
     "submitted-calibration": ("submitted_sssplus_calibration.py",),
     "archive": ("tier_pipeline_checkpoints.py",),
-    "public": ("production_tiers.py", "tier_public.py", "config/tier-public-fields.json"),
+    "public": ("production_tiers.py", "tier_public.py", "config/tier-public-fields.json", "sss_tail_tiers.py"),
 }
 # General's numeric sources at the previously deployed, approved generation.
 # This permits a one-time legacy cache adoption without trusting unrelated old
@@ -245,7 +246,10 @@ def public_tiers(full, *, private_path, input_identity, full_sha256=None, compon
                  computation_identity=None):
     """Retain all active values/explanations; rollback history is a private artifact."""
     from source_aware_tiers import validate_source_aware_tiers
-    if full.get("schemaVersion") == 58:
+    if full.get("schemaVersion") == 59:
+        from sss_tail_tiers import validate_sss_tail_tiers
+        validate_sss_tail_tiers(full)
+    elif full.get("schemaVersion") == 58:
         from scoring_goal_tiers import validate_goal_tiers
         validate_goal_tiers(full)
     elif full.get("schemaVersion") == 57:
@@ -254,7 +258,8 @@ def public_tiers(full, *, private_path, input_identity, full_sha256=None, compon
     else:
         validate_source_aware_tiers(full)
     result = _public_copy(full)
-    version = GOAL_VERSION if full.get("schemaVersion") == 58 else VERSION if full.get("schemaVersion") == 57 else PREVIOUS_VERSION
+    version = (TAIL_VERSION if full.get("schemaVersion") == 59 else GOAL_VERSION
+               if full.get("schemaVersion") == 58 else VERSION if full.get("schemaVersion") == 57 else PREVIOUS_VERSION)
     result["summary"]["scriptVersion"] = version
     publication = {"version": 1, "method": version, "fullArtifactPath": private_path,
         "fullArtifactSha256": full_sha256 or digest(full), "inputs": input_identity, "historyStorage": "private",
@@ -301,22 +306,23 @@ def write_private_audit(store, path, full):
 def validate_public_tiers(payload):
     from chart_source_exclusions import load_exclusions
     schema = payload.get("schemaVersion")
-    if schema not in (56, 57, 58):
-        raise ValueError("The hosted source-aware tier schema must be 56, 57 or 58.")
+    if schema not in (56, 57, 58, 59):
+        raise ValueError("The hosted source-aware tier schema must be 56, 57, 58 or 59.")
     method = payload["summary"]["method"]
     publication = method.get("productionTierPublication", {})
-    expected_version = GOAL_VERSION if schema == 58 else VERSION if schema == 57 else PREVIOUS_VERSION
+    expected_version = TAIL_VERSION if schema == 59 else GOAL_VERSION if schema == 58 else VERSION if schema == 57 else PREVIOUS_VERSION
     if (publication.get("version") != 1 or publication.get("method") != expected_version
             or publication.get("publicPayloadSha256") != public_digest(payload)):
         raise ValueError("The public source-aware tier artifact failed its publication identity.")
-    if schema in (57, 58) and method.get("submittedSssplusCalibration", {}).get("localOnly") is not False:
+    if schema in (57, 58, 59) and method.get("submittedSssplusCalibration", {}).get("localOnly") is not False:
         raise ValueError("The hosted submitted SSS+ calibration must declare production use.")
     rows = payload["singles"] + payload["doubles"]
     policy = load_exclusions([{**r, "id": r["chartId"]} for r in rows])
     if method["sourceAwareTiers"]["sourcePolicy"]["effectivePolicySha256"] != policy.semantic_hash():
         raise ValueError("The published tiers use a different source exclusion policy.")
     goals = ("general", "sss", "sssplus")
-    if schema == 58:
+    expanded = schema == 58 or schema == 59 and method.get("sssTailPolicy", {}).get("baseSchemaVersion") == 58
+    if expanded:
         from scoring_targets import SCORING_GOALS, BACKFILL_GOALS, scoring_goal_policies
         goals = method.get("availableScoringGoals", [])
         if (method.get("scoringGoalPolicies") != scoring_goal_policies()
@@ -327,7 +333,7 @@ def validate_public_tiers(payload):
     for row in rows:
         clearing = row["tierMetrics"]["clearing"]["estimatedDifficulty"]
         for goal in goals:
-            if schema == 58 and goal not in ("general", "sss", "sssplus"):
+            if expanded and goal not in ("general", "sss", "sssplus"):
                 metric = row["scoringVariants"][goal]
                 target = _scoring_target(goal)
                 if (metric.get("scoringTarget") != target.score or metric.get("scoringSource") != ("official" if row["level"] >= 20 else "submitted")
@@ -340,6 +346,62 @@ def validate_public_tiers(payload):
                 raise ValueError("Public Pumbility must average its finite final components.")
         if row["estimatedDifficulty"] != row["scoringVariants"]["general"]["estimatedDifficulty"]:
             raise ValueError("General Scoring compatibility fields differ.")
+    if schema == 59:
+        _validate_public_sss_tail(payload)
+
+
+def _validate_public_sss_tail(payload):
+    """Replay bounded public points/intervals without exposing rollback trees."""
+    from sss_tail_tiers import METHOD
+    from target_tail_policy import TAIL_PARAMETERS, tail_value
+    policy = payload["summary"]["method"].get("sssTailPolicy", {})
+    tail = policy.get("tailPolicy", {})
+    selected = tail.get("selectedChartIds")
+    if (policy.get("version") != 1 or policy.get("method") != METHOD
+            or policy.get("baseSchemaVersion") not in (57, 58)
+            or not isinstance(policy.get("basePayloadSha256"), str)
+            or len(policy["basePayloadSha256"]) != 64
+            or any(c not in "0123456789abcdef" for c in policy["basePayloadSha256"])
+            or any(tail.get(key) != value for key, value in TAIL_PARAMETERS.items())
+            or tail.get("targetKey") != "sss" or not isinstance(selected, list)
+            or any(not isinstance(cid, str) for cid in selected)
+            or selected != sorted(set(selected)) or len(selected) > TAIL_PARAMETERS["exceptionLimit"]):
+        raise ValueError("The public SSS tail policy differs.")
+    rows = payload["singles"] + payload["doubles"]
+    if not set(selected) <= {str(row["chartId"]) for row in rows}:
+        raise ValueError("The public SSS tail selection contains an unknown chart.")
+    pre, final, changed = [], [], 0
+    for row in rows:
+        metric, level = row["scoringVariants"]["sss"], row["level"]
+        evidence = metric.get("scoringTailPolicy", {})
+        exceptional = str(row["chartId"]) in selected
+        for field, source in (("estimatedDifficulty", "preTailDifficulty"),
+                              ("difficultyCi95Low", "preTailDifficultyCi95Low"),
+                              ("difficultyCi95High", "preTailDifficultyCi95High")):
+            value = evidence.get(source)
+            if (source not in evidence or value is not None and
+                    (type(value) not in (int, float) or not math.isfinite(value))
+                    or metric.get(field) != tail_value(value, level, exceptional=exceptional)):
+                raise ValueError("The public SSS tail estimate or interval differs from its input.")
+        before, value = evidence["preTailDifficulty"], metric["estimatedDifficulty"]
+        if exceptional and (before is None or abs(before-level-.5) < 2):
+            raise ValueError("The public SSS exception is inside the ordinary boundary.")
+        if value is not None:
+            pre.append(before-level-.5)
+            final.append(value-level-.5)
+            changed += before != value
+    counts = {"ratedCharts": len(final), "changedCharts": changed,
+        "preTailAbsAbove1_5": sum(abs(d) > 1.5 for d in pre),
+        "preTailAbsAtLeast2": sum(abs(d) >= 2 for d in pre),
+        "finalAbsAbove1_5": sum(abs(d) > 1.5 for d in final),
+        "finalAbsAtLeast2": sum(abs(d) >= 2 for d in final),
+        "finalAbsAbove2_5": sum(abs(d) > 2.5 for d in final),
+        "displayedAbsAtLeast2": sum(abs(math.trunc(row["scoringVariants"]["sss"]["estimatedDifficulty"]*10+1e-9)/10-row["level"]-.5) >= 2
+            for row in rows if row["scoringVariants"]["sss"]["estimatedDifficulty"] is not None),
+        "preTailMinDelta": min(pre, default=None), "preTailMaxDelta": max(pre, default=None),
+        "finalMinDelta": min(final, default=None), "finalMaxDelta": max(final, default=None)}
+    if tail.get("counts") != counts:
+        raise ValueError("The public SSS tail population or counts differ.")
 
 
 def _finish_stage(stage, result, context, fits, identities, generated_at_utc):
@@ -678,6 +740,7 @@ def _captured_computation(store, generation, expected_identity=None):
         raise TierComputationCacheError("The captured tier computation has incompatible inputs or code.")
     if not state.get("computationGeneration"):
         _validate_stage_chain(state)
+    _validate_publication_overlay_chain(state)
     return state
 
 
@@ -700,6 +763,63 @@ def _validate_stage_chain(state):
         reference = saved
 
 
+def _tail_overlay_identity(state, predecessor):
+    return digest({"generation": state["generation"], "stage": "sss-tail", "version": TAIL_VERSION,
+                   "predecessorSha256": predecessor["payloadSha256"]})
+
+
+def _validate_publication_overlay_chain(state):
+    from tier_computation_cache import TierComputationCacheError
+    if not state.get("stages"):
+        return
+    reference = state["stages"][-1]
+    if "goalOverlay" in state:
+        saved = state["goalOverlay"]
+        expected = digest({"generation": state["generation"], "artifacts": state.get("goalArtifacts")})
+        if (not isinstance(saved, dict) or not state.get("goalArtifacts")
+                or saved.get("stage") != "goal-overlays" or saved.get("schemaVersion") != 58
+                or saved.get("identity") != expected
+                or saved.get("predecessorSha256") != reference["payloadSha256"]):
+            raise TierComputationCacheError("The scoring-goal overlay checkpoint chain differs.")
+        reference = saved
+    if "tailOverlay" in state:
+        saved = state["tailOverlay"]
+        if (not isinstance(saved, dict) or saved.get("stage") != "sss-tail" or saved.get("schemaVersion") != 59
+                or saved.get("identity") != _tail_overlay_identity(state, reference)
+                or saved.get("predecessorSha256") != reference["payloadSha256"]):
+            raise TierComputationCacheError("The SSS tail overlay checkpoint chain differs.")
+        reference = saved
+    if "archive" in state and (not state.get("tailOverlay") or state["archive"] != reference):
+        raise TierComputationCacheError("The tier archive does not reference its SSS tail overlay.")
+
+
+def _publication_overlays(store, state, reference):
+    """Persist each additive overlay so retries never taper an output twice."""
+    from scoring_goal_tiers import apply_goal_artifacts
+    from sss_tail_tiers import apply_sss_tail_tiers
+    from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
+    _validate_publication_overlay_chain(state)
+    state_path = PREFIX + "generations/" + state["generation"] + "/state.json"
+    if state.get("goalArtifacts"):
+        if "goalOverlay" not in state:
+            full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
+            artifacts = {goal: read_checkpoint(store, ref, stage="scoring-goal", identity=ref["identity"])
+                         for goal, ref in state["goalArtifacts"].items()}
+            full = apply_goal_artifacts(full, artifacts, expected_input_identity=state["goalInputIdentity"])
+            state["goalOverlay"] = write_checkpoint(store, full, stage="goal-overlays",
+                identity=digest({"generation": state["generation"], "artifacts": state["goalArtifacts"]}),
+                predecessor=reference["payloadSha256"])
+            store.put_json(state_path, state)
+        reference = state["goalOverlay"]
+    if "tailOverlay" not in state:
+        full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
+        full = apply_sss_tail_tiers(full)
+        state["tailOverlay"] = write_checkpoint(store, full, stage="sss-tail",
+            identity=_tail_overlay_identity(state, reference), predecessor=reference["payloadSha256"])
+        store.put_json(state_path, state)
+    return state["tailOverlay"]
+
+
 def resume_tier_generation(store, generation, *, generated_at_utc, on_progress=None,
                            on_stage_start=None):
     """Resume a pinned generation before reconstructing any raw source context."""
@@ -718,7 +838,7 @@ def _optional_computation(store, generation, identity):
     original = _captured_computation(store, generation, identity)
     if not original.get("phaseInputs"):
         return None
-    reference = original.get("goalOverlay") or (original["stages"][-1] if original["stages"] else original["general"])
+    reference = original.get("tailOverlay") or original.get("goalOverlay") or (original["stages"][-1] if original["stages"] else original["general"])
     verified_checkpoint_bytes(store, reference, stage=reference["stage"], identity=reference["identity"])
     if original.get("ready"):
         public = store.get_json(PREFIX + "generations/" + generation + "/public.json")
@@ -780,17 +900,7 @@ def _advance_completed_numeric(store, state, *, verified_computation=None,
     generation, state_path = state["generation"], PREFIX + "generations/" + state["generation"] + "/state.json"
     if "archive" not in state:
         if on_stage_start: on_stage_start("archive")
-        if state.get("goalArtifacts"):
-            from scoring_goal_tiers import apply_goal_artifacts
-            full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
-            artifacts = {goal: read_checkpoint(store, ref, stage="scoring-goal", identity=ref["identity"])
-                         for goal, ref in state["goalArtifacts"].items()}
-            full = apply_goal_artifacts(full, artifacts, expected_input_identity=state["goalInputIdentity"])
-            reference = write_checkpoint(store, full, stage="goal-overlays",
-                identity=digest({"generation": generation, "artifacts": state["goalArtifacts"]}),
-                predecessor=reference["payloadSha256"])
-            state["goalOverlay"] = reference
-        state["archive"] = reference
+        state["archive"] = _publication_overlays(store, state, reference)
         store.put_json(state_path, state)
         ordinal = 9 + len(FINISH_STAGES) + 1
         _report_progress(on_progress, generation, ordinal, "archive")
@@ -830,7 +940,7 @@ def _advance_reused_computation(store, state, *, on_stage_start=None, on_progres
     from tier_pipeline_checkpoints import verified_checkpoint_bytes
     original = verified_computation or _captured_computation(
         store, state["computationGeneration"], state["computationIdentity"])
-    verified_reference = ((original.get("goalOverlay") or original["stages"][-1])["blobSha256"]
+    verified_reference = ((original.get("tailOverlay") or original.get("goalOverlay") or original["stages"][-1])["blobSha256"]
                           if verified_computation and original["stages"] else None)
     if original["createdAtUtc"] != state.get("computationCreatedAtUtc"):
         raise ValueError("The reused tier computation time differs.")
@@ -851,7 +961,7 @@ def _advance_reused_computation(store, state, *, on_stage_start=None, on_progres
         raise ValueError("The reused tier publication differs from its computed generation.")
     # The transition-validated canonical content is unchanged if its compressed
     # bytes match. Verify those bytes without replaying or inflating the full tree.
-    reference = original.get("goalOverlay") or original["stages"][-1]
+    reference = original.get("tailOverlay") or original.get("goalOverlay") or original["stages"][-1]
     if reference["blobSha256"] != verified_reference:
         verified_checkpoint_bytes(store, reference, stage=reference["stage"], identity=reference["identity"])
     compact = {**computed, "generatedAtUtc": state["createdAtUtc"],
@@ -938,27 +1048,14 @@ def _advance_finish(store, state, *, on_stage_start=None, on_progress=None, veri
                                   generation=generation, progress_ordinal=ordinal)
     if "archive" not in state:
         if on_stage_start: on_stage_start("archive")
-        if state.get("goalArtifacts"):
-            from scoring_goal_tiers import apply_goal_artifacts
-            if "goalOverlay" not in state:
-                full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
-                artifacts = {goal: read_checkpoint(store, ref, stage="scoring-goal", identity=ref["identity"])
-                             for goal, ref in state["goalArtifacts"].items()}
-                full = apply_goal_artifacts(full, artifacts, expected_input_identity=state["goalInputIdentity"])
-                state["goalOverlay"] = write_checkpoint(store, full, stage="goal-overlays",
-                    identity=digest({"generation": generation, "artifacts": state["goalArtifacts"]}),
-                    predecessor=reference["payloadSha256"])
-            reference = state["goalOverlay"]
-        # The immutable, verified final-stage gzip already IS the complete audit.
-        # Reuse its canonical content digest rather than serialize 400MB again.
-        state["archive"] = reference
+        state["archive"] = _publication_overlays(store, state, reference)
         store.put_json(state_path, state)
         ordinal = 9 + len(FINISH_STAGES) + 1
         _report_progress(on_progress, generation, ordinal, "archive")
         raise TierAnalysisPending(generation[:16]+"-"+str(ordinal), 8, stage="archive",
                                   generation=generation, progress_ordinal=ordinal)
     state["activeStage"] = "public"
-    reference = state.get("goalOverlay") or reference
+    reference = state["archive"]
     if on_stage_start: on_stage_start("public")
     store.put_json(state_path, state)
     with phase("public", generation=generation):

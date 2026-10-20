@@ -86,6 +86,10 @@ class CrossRunTierCacheTests(TestCase):
             return_value={"schemaVersion": 48, "values": [20.5], "generatedAtUtc": self.first_time}))
         self.fitter = self.stack.enter_context(patch("sss_scoring_model.fit_target_model"))
         self.transition = self.stack.enter_context(patch("production_tiers._finish_stage", side_effect=self.finish))
+        # This harness verifies transport/cache reuse with synthetic numeric rows;
+        # the real reversible SSS transformation has dedicated publication tests.
+        self.stack.enter_context(patch("sss_tail_tiers.apply_sss_tail_tiers",
+                                      side_effect=lambda full: {**full, "schemaVersion": 59}))
         self.stack.enter_context(patch("production_tiers.public_tiers", side_effect=self.public))
         self.stack.enter_context(patch("tier_public.prepare_tier_publication", side_effect=lambda value, generation: (value, {})))
         self.stack.enter_context(patch("tier_public.validate_tier_publication"))

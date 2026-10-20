@@ -89,7 +89,8 @@ class GoalPublicationTests(unittest.TestCase):
             fitter = stack.enter_context(patch("sss_scoring_model.fit_target_model", side_effect=AssertionError("Unnecessary refit")))
             transition = stack.enter_context(patch("production_tiers._finish_stage", side_effect=finish))
             before = complete(first_time)
-            self.assertEqual(before["schemaVersion"], 57)
+            self.assertEqual(before["schemaVersion"], 59)
+            self.assertEqual(before["summary"]["method"]["sssTailPolicy"]["baseSchemaVersion"], 57)
             publication = before["summary"]["method"]["productionTierPublication"]
             state = store.get_json(tiers.PREFIX + "generations/" + tiers.digest(publication["inputs"]) + "/state.json")
             goal_inputs = state["goalInputIdentity"]
@@ -101,9 +102,10 @@ class GoalPublicationTests(unittest.TestCase):
                     identity=tiers.digest({"inputs": goal_inputs, "recipe": recipe}))
                 store.put_json(tiers._goal_index_path(goal_inputs, goal),
                     {"inputIdentity": goal_inputs, "recipe": recipe, "reference": ref})
-            self.assertEqual(before["schemaVersion"], 57)
+            self.assertEqual(before["schemaVersion"], 59)
             current = complete(second_time)
-            self.assertEqual(current["schemaVersion"], 58)
+            self.assertEqual(current["schemaVersion"], 59)
+            self.assertEqual(current["summary"]["method"]["sssTailPolicy"]["baseSchemaVersion"], 58)
             tiers.validate_public_tiers(current)
             self.assertEqual(general.call_count, 1)
             self.assertEqual(transition.call_count, len(tiers.FINISH_STAGES))
@@ -111,7 +113,7 @@ class GoalPublicationTests(unittest.TestCase):
             binaries = copy.deepcopy(store.binary_values)
             warm = complete(third_time)
             tiers.validate_public_tiers(warm)
-            self.assertEqual(warm["schemaVersion"], 58)
+            self.assertEqual(warm["schemaVersion"], 59)
             self.assertTrue(warm["summary"]["method"]["productionTierPublication"]["reusedComputation"])
             self.assertEqual(warm["summary"]["method"]["productionTierPublication"]["computedAtUtc"], first_time)
             self.assertEqual(warm["tierListView"], current["tierListView"])
