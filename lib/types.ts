@@ -451,6 +451,7 @@ export interface ChartResult {
   };
   combinedOfficialClearingBaseline?: { clearing: ClearingTierMetric; pumbility: PumbilityTierMetric; pumbilityVariants: ScoringVariantMap<PumbilityTierMetric> };
   sssCenteringBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric };
+  sssTailBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric };
   sssplusCenteringBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric };
   sssplusTailBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric };
   sssplusMedianBaseline?: { scoring: ScoringVariant; pumbility: PumbilityTierMetric; tailBaseline: { scoring: ScoringVariant; pumbility: PumbilityTierMetric } };
@@ -632,6 +633,11 @@ export interface AnalysisPayload {
       hybridTiers?: HybridTierMethod;
       scoringGoalPolicies?: { version: 1; goals: ScoringGoalPolicy[] };
       availableScoringGoals?: ScoringGoal[];
+      sssTailPolicy?: {
+        version: 1; method: "sss-target-bounded-tails-v1"; baseSchemaVersion: 57 | 58;
+        baseScriptVersion: string | null; basePayloadSha256: string;
+        tailPolicy: Record<string, unknown>;
+      };
     };
     coverage: Record<string, number>;
     modes: Partial<Record<ModeKey, ModeSummary>>;

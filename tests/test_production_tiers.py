@@ -58,6 +58,7 @@ class HostedTierTests(unittest.TestCase):
                     "combined-clearing": 55, "source-aware": 56, "submitted-calibration": 57}[stage],
                     "generatedAtUtc": timestamp, "summary": {"generatedAtUtc": timestamp}}) as finish, \
              patch("production_tiers.public_tiers", return_value=public) as project, \
+             patch("sss_tail_tiers.apply_sss_tail_tiers", side_effect=lambda full: {**full, "schemaVersion": 59}), \
              patch("production_tiers.validate_public_tiers"), \
              patch("tier_public.prepare_tier_publication", return_value=(public, {})), \
              patch("tier_public.validate_tier_publication"):

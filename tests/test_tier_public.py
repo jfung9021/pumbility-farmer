@@ -60,6 +60,30 @@ class TierPublicTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "compressed publication size budget"):
                     validate_tier_publication(expanded, current)
 
+    def test_bounded_sss_schema59_uses_expanded_budgets_and_keeps_only_replay_inputs(self):
+        full = source()
+        full["schemaVersion"] = 59
+        full["summary"]["method"]["sssTailPolicy"] = {"version": 1, "method": "sss-target-bounded-tails-v1",
+            "baseSchemaVersion": 57, "basePayloadSha256": "a"*64,
+            "tailPolicy": {"selectedChartIds": [], "counts": {"ratedCharts": 1}}}
+        full["doubles"][0]["scoringVariants"]["sss"]["scoringTailPolicy"] = {
+            "preTailDifficulty": 18.1, "preTailDifficultyCi95Low": 17.9,
+            "preTailDifficultyCi95High": 18.5, "rejectionReasons": ["detail-only"],
+            "finalFolderRange": {"lower": 17, "upper": 19}}
+        compact = compact_tier_payload(full)
+        self.assertEqual(compact["summary"]["method"]["sssTailPolicy"], full["summary"]["method"]["sssTailPolicy"])
+        evidence = compact["doubles"][0]["scoringVariants"]["sss"]["scoringTailPolicy"]
+        self.assertEqual(set(evidence), {"preTailDifficulty", "preTailDifficultyCi95Low", "preTailDifficultyCi95High"})
+        size = len(json.dumps(compact, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+        with patch("tier_public.MAX_LIST_BYTES", 1), patch("tier_public.MAX_EXPANDED_LIST_BYTES", size):
+            validate_tier_publication(full, compact)
+        with patch("tier_public.MAX_EXPANDED_LIST_BYTES", size-1):
+            with self.assertRaisesRegex(ValueError, "decoded publication size budget"):
+                validate_tier_publication(full, compact)
+        with patch("tier_public.MAX_COMPRESSED_LIST_BYTES", 1):
+            with self.assertRaisesRegex(ValueError, "compressed publication size budget"):
+                validate_tier_publication(full, compact)
+
     def test_compact_boundary_count_retains_used_evidence_without_full_boards(self):
         full = source()
         row = full["doubles"][0]
