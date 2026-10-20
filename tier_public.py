@@ -19,6 +19,33 @@ MAX_COMPRESSED_LIST_BYTES = 4_000_000
 DETAIL_PREFIX = "analysis/private/tier-details/"
 
 
+def tier_detail_generated_at(payload: Mapping[str, Any]) -> str | None:
+    """Resolve the immutable detail generation independently of numeric fits."""
+    view = payload.get("tierListView", {})
+    publication = payload.get("summary", {}).get("method", {}).get("productionTierPublication", {})
+    current = payload.get("generatedAtUtc")
+    if "detailsGeneratedAtUtc" in view:
+        declared = view["detailsGeneratedAtUtc"]
+        if (not isinstance(declared, str) or not declared
+                or declared != current and publication.get("reusedComputation") is not True):
+            return None
+        return declared
+    if publication.get("reusedComputation") is True:
+        # Existing fresh overlays can reuse old numerical work while writing
+        # new shards. Their immutable prefix is derived from this run's inputs.
+        inputs = publication.get("inputs")
+        if isinstance(inputs, Mapping):
+            from canonical_json import canonical_json_sha256
+            generation = canonical_json_sha256(inputs)
+            prefix = DETAIL_PREFIX + hashlib.sha256(generation.encode("utf-8")).hexdigest() + "/"
+            if view.get("detailsPrefix") == prefix:
+                return current if isinstance(current, str) and current else None
+        # PR127 publications reused both the computation and its old shards.
+        computed = publication.get("computedAtUtc")
+        return computed if isinstance(computed, str) and computed else None
+    return current if isinstance(current, str) and current else None
+
+
 def _pick(value: Mapping[str, Any], keys: list[str]) -> dict:
     return {key: value[key] for key in keys if key in value}
 
@@ -86,6 +113,7 @@ def compact_tier_payload(payload: Mapping[str, Any], *, details_prefix: str | No
         if not re.fullmatch(re.escape(DETAIL_PREFIX) + r"[a-f0-9]{64}/", details_prefix):
             raise ValueError("Invalid tier detail prefix.")
         result["tierListView"]["detailsPrefix"] = details_prefix
+        result["tierListView"]["detailsGeneratedAtUtc"] = payload.get("generatedAtUtc")
     if isinstance(method.get("productionTierPublication"), Mapping):
         from production_tiers import public_digest
         compact_method["productionTierPublication"] = dict(compact_method["productionTierPublication"])

@@ -620,7 +620,7 @@ export interface ModeSummary {
 
 export interface AnalysisPayload {
   /** Compact list rows keep calculation evidence in the on-demand chart route. */
-  tierListView?: { version: 1; kind: "list"; detailsAvailable: boolean; detailsPrefix?: string };
+  tierListView?: { version: 1; kind: "list"; detailsAvailable: boolean; detailsPrefix?: string; detailsGeneratedAtUtc?: string };
   schemaVersion?: number;
   generatedAtUtc: string;
   mix: MixInfo | CombinedMixInfo;

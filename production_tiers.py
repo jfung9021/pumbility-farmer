@@ -984,6 +984,12 @@ def _advance_reused_computation(store, state, *, on_stage_start=None, on_progres
     compact = {**computed, "generatedAtUtc": state["createdAtUtc"],
                "summary": {**computed["summary"], "generatedAtUtc": state["createdAtUtc"],
                            "method": dict(computed["summary"]["method"])}}
+    if computed.get("tierListView", {}).get("kind") == "list":
+        from tier_public import tier_detail_generated_at
+        details_at = tier_detail_generated_at(computed)
+        if details_at is None:
+            raise ValueError("The reused chart detail generation is unavailable.")
+        compact["tierListView"] = {**computed["tierListView"], "detailsGeneratedAtUtc": details_at}
     run_publication = {**publication, "inputs": state["identity"],
         "computedAtUtc": publication.get("computedAtUtc", computed["generatedAtUtc"]),
         "computedInputs": publication.get("computedInputs", original["identity"]),
