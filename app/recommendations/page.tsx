@@ -13,10 +13,12 @@ import {
 
 import { RefreshMeta } from "../_components/refresh-meta";
 import { GlobalRefreshNotice } from "../_components/global-refresh-notice";
-import { PlayerPicker } from "../_components/player-picker";
+import { usePlayerProfile } from "../_components/player-profile-provider";
+import { PlayerRequired } from "../_components/player-required";
+import { ResultGrade, ResultPlate, ResultScore } from "../_components/player-result";
+import resultStyles from "../_components/player-result.module.css";
 import { ChartVideoLink } from "../_components/chart-video-link";
 import { ExplanatorySection } from "../_components/explanatory-section";
-import { ScoreSyncLink } from "../_components/score-sync-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { availableRecommendationModel, displayedRecommendationModel, MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh } from "../../lib/refresh-reliability";
@@ -32,6 +34,7 @@ import {
 } from "../../lib/page-view-state";
 import { pumbilityProgress } from "../../lib/pumbility-progress";
 import { playerSkillDisplay } from "../../lib/player-skill-display";
+import { gradeForScore } from "../../lib/score-appearance";
 import { top50ExportDownloadFilename } from "../../lib/top50-export";
 import {
   ALL_DIFFICULTIES,
@@ -46,7 +49,6 @@ import type {
   RecommendationModeKey,
   RecommendationModeResult,
   RecommendationPlayerSummary,
-  RecommendationPlayersResponse,
   RecommendationScoreProgress,
   RecommendationTopScore,
 } from "../../lib/types";
@@ -442,7 +444,7 @@ function RecommendationCard({
         </div>
         {goal ? (
           <div className="recommendation-goal">
-            <b>{goal}</b>
+            <b>Goal: <ResultGrade grade={chart.projectedGrade} /> <ResultPlate plate={chart.projectedPlateCode} /></b>
           </div>
         ) : null}
       </div>
@@ -507,10 +509,10 @@ function TopScoreCard({
         </span>
         <span className="top-score-result">
           <span className="top-score-result-summary">
-            <b className="top-score-score">{scoreValue}</b>
+            <ResultScore className="top-score-score" formattedScore={scoreValue} grade={score.grade} score={score.score} />
             <span className="top-score-grade">
-              <b>{score.grade || "—"}</b>
-              <small>{score.plateCode || "—"}</small>
+              <ResultGrade grade={score.grade || gradeForScore(score.score)} />
+              <ResultPlate plate={score.plateCode || score.plate} />
             </span>
           </span>
           <strong>{rating === null ? "—" : pumbilityLabel(rating)}</strong>
@@ -658,15 +660,13 @@ function TopScoreDetailDialog({
           </div>
           <div className="top-score-dialog-result">
             <span><small>Rank</small><strong>#{rank}</strong></span>
-            <span><small>Score</small><strong>{topScoreValue(score)}</strong></span>
+            <span><small>Score</small><strong><ResultScore formattedScore={topScoreValue(score)} grade={score.grade} score={score.score} /></strong></span>
             <span>
               <small>{isCoop ? "Co-op Rating" : "Pumbility"}</small>
               <strong>{rating === null ? "Unavailable" : pumbilityLabel(rating)}</strong>
             </span>
-            <span><small>Grade</small><strong>{score.grade || "Unavailable"}</strong></span>
-            <span><small>Plate</small><strong>{score.plate
-              ? `${score.plate}${score.plateCode ? ` (${score.plateCode})` : ""}`
-              : score.plateCode || "Unavailable"}</strong></span>
+            <span><small>Grade</small><strong><ResultGrade grade={score.grade || gradeForScore(score.score)} /></strong></span>
+            <span><small>Plate</small><strong><ResultPlate full plate={score.plate || score.plateCode} /></strong></span>
           </div>
         </div>
       </div>
@@ -811,24 +811,23 @@ function TopScoresSection({
 }
 
 export default function RecommendationsPage() {
-  const [playersPayload, setPlayersPayload] = useState<RecommendationPlayersResponse | null>(null);
+  const { playerKey: selectedKey, player: profilePlayer, players: playersPayload, loading: loadingPlayers } = usePlayerProfile();
+  const activePlayerKeyRef = useRef(selectedKey);
+  activePlayerKeyRef.current = selectedKey;
   const [playerPayloadCache, setPlayerPayloadCache] = useState<PlayerModePayloadCache>({
     playerKey: "",
     modes: {},
   });
-  const [selectedKey, setSelectedKey] = useState("");
-  const [playerQuery, setPlayerQuery] = useState("");
-  const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
   const [activeMode, setActiveMode] = useState<RecommendationModeKey>("overall");
   const [recommendationView, setRecommendationView] = useState<RecommendationView>("recommendations");
   const [selectedTopScore, setSelectedTopScore] = useState<{
     score: RecommendationTopScore;
     rank: number;
+    playerKey: string;
   } | null>(null);
   const [difficultyFilters, setDifficultyFilters] = useState<
     Record<RecommendationModeKey, string>
   >({ ...INITIAL_DIFFICULTY_FILTERS });
-  const [loadingPlayers, setLoadingPlayers] = useState(true);
   const [loadingPlayer, setLoadingPlayer] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshWarning, setRefreshWarning] = useState<string | null>(null);
@@ -908,28 +907,10 @@ export default function RecommendationsPage() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    fetch("/api/recommendations/players")
-      .then((response) => readJsonResponse<RecommendationPlayersResponse>(response))
-      .then((payload) => {
-        if (cancelled) return;
-        setPlayersPayload(payload);
-        const params = new URLSearchParams(window.location.search);
-        const requested = params.get("player") || "";
-        const requestedPlayer = payload.players.find((player) => player.playerKey === requested);
-        if (requestedPlayer) {
-          setSelectedKey(requestedPlayer.playerKey);
-          setPlayerQuery(requestedPlayer.displayName);
-        }
-      })
-      .catch((caught) => {
-        if (!cancelled) setError(caught instanceof Error ? caught.message : "Could not load players.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingPlayers(false);
-      });
-    return () => { cancelled = true; };
-  }, []);
+    setSelectedTopScore(null);
+    setError(null);
+    setRefreshWarning(null);
+  }, [selectedKey]);
 
   useEffect(() => {
     setRefreshPending(null);
@@ -938,9 +919,12 @@ export default function RecommendationsPage() {
       playerPayloadCacheRef.current = emptyCache;
       setPlayerPayloadCache(emptyCache);
       setRefreshWarning(null);
+      setLoadingPlayer(false);
+      setError(null);
       return;
     }
     const controller = new AbortController();
+    const isCurrent = () => !controller.signal.aborted && activePlayerKeyRef.current === selectedKey;
     const requestedDifficulty = activeMode === "overall"
       && difficultyFilters.overall !== ALL_DIFFICULTIES
       ? difficultyFilters.overall
@@ -982,6 +966,8 @@ export default function RecommendationsPage() {
       );
       if (response.status === 404) return null;
       const payload = await readJsonResponse<PlayerRecommendationsResponse>(response);
+      if (!isCurrent()) return null;
+      if (payload.player.playerKey !== selectedKey) throw new Error("The recommendation response belongs to a different player.");
       const scopedPayload = cachePlayerPayload(
         selectedKey,
         activeMode,
@@ -997,7 +983,7 @@ export default function RecommendationsPage() {
     };
 
     const refresh = async () => {
-      if (playersPayload?.refreshSupported === false) return;
+      if (!isCurrent() || playersPayload?.refreshSupported === false) return;
       if (refreshAttemptedPlayersRef.current.has(selectedKey)) return;
       refreshAttemptedPlayersRef.current.add(selectedKey);
       refreshClaimed = true;
@@ -1008,7 +994,9 @@ export default function RecommendationsPage() {
         { method: "POST", cache: "no-store", signal: controller.signal },
       );
       const started = await readJsonResponse<PlayerRefreshResponse>(response);
+      if (!isCurrent()) return;
       if (started.outcome === "fresh") {
+        if (started.recommendation.player.playerKey !== selectedKey) throw new Error("The refreshed response belongs to a different player.");
         const scopedPayload = cachePlayerPayload(
           selectedKey,
           activeMode,
@@ -1035,7 +1023,9 @@ export default function RecommendationsPage() {
         setRefreshPending("Your score update is still pending. Reopen this player later to check the result.");
         return;
       }
+      if (!isCurrent()) return;
       const refreshed = await loadCached(true);
+      if (!isCurrent()) return;
       if (!refreshed) throw new Error("The refreshed recommendations are unavailable.");
       setRefreshPending(null);
       setRefreshWarning(null);
@@ -1046,7 +1036,7 @@ export default function RecommendationsPage() {
         await loadCached();
         await refresh();
       } catch (caught) {
-        if (caught instanceof DOMException && caught.name === "AbortError") {
+        if (!isCurrent() || (caught instanceof DOMException && caught.name === "AbortError")) {
           if (refreshClaimed) refreshAttemptedPlayersRef.current.delete(selectedKey);
           return;
         }
@@ -1060,7 +1050,7 @@ export default function RecommendationsPage() {
           setError(message);
         }
       } finally {
-        if (!controller.signal.aborted) {
+        if (isCurrent()) {
           setLoadingPlayer(false);
         }
       }
@@ -1074,22 +1064,6 @@ export default function RecommendationsPage() {
     selectedKey,
   ]);
 
-  const selectPlayer = (playerKey: string, inputValue = "") => {
-    track("recommendation_player_selected", { playerName: inputValue });
-    if (playerKey !== selectedKey) {
-      refreshAttemptedPlayersRef.current.delete(playerKey);
-      setDifficultyFilters({ ...INITIAL_DIFFICULTY_FILTERS });
-    }
-    setSelectedKey(playerKey);
-    setPlayerQuery(inputValue);
-    setPlayerMenuOpen(false);
-    setSelectedTopScore(null);
-    const url = new URL(window.location.href);
-    if (playerKey) url.searchParams.set("player", playerKey);
-    else url.searchParams.delete("player");
-    window.history.replaceState({}, "", url);
-  };
-
   const mode = playerPayload?.player.modes[activeMode] || null;
   const modeRating = activeMode === "coop"
     ? mode?.currentCoopRating ?? 0
@@ -1100,9 +1074,7 @@ export default function RecommendationsPage() {
         (modeKey) => !sourceModeEligibility[modeKey],
       )
     : [];
-  const selectedPlayer = playersPayload?.players.find(
-    (player) => player.playerKey === selectedKey,
-  );
+  const selectedPlayer = profilePlayer ?? undefined;
   const scoreReadiness: Record<StandardModeKey, RecommendationScoreProgress> = {
     singles: scoreProgressForMode(selectedPlayer, playerPayload, "singles"),
     doubles: scoreProgressForMode(selectedPlayer, playerPayload, "doubles"),
@@ -1153,18 +1125,6 @@ export default function RecommendationsPage() {
       document.getElementById(`recommendation-tab-${nextMode}`)?.focus();
     });
   };
-  const handlePlayerInput = (value: string) => {
-    setPlayerQuery(value);
-    setPlayerMenuOpen(true);
-    setSelectedTopScore(null);
-    if (!selectedKey) return;
-    setDifficultyFilters({ ...INITIAL_DIFFICULTY_FILTERS });
-    setSelectedKey("");
-    const url = new URL(window.location.href);
-    url.searchParams.delete("player");
-    window.history.replaceState({}, "", url);
-  };
-
   const difficultyOptions = useMemo(
     () => activeMode === "overall" && mode?.difficultyOptions
       ? mode.difficultyOptions
@@ -1235,20 +1195,8 @@ export default function RecommendationsPage() {
       </section>
 
       <section className="recommendations-hero">
-        <div className="player-picker">
-          <label htmlFor="player-select">Phoenix 2 username</label>
-          <span className="player-picker-view-label" id="recommendation-view-label">View</span>
-          <PlayerPicker
-            disabled={loadingPlayers || !playersPayload?.players.length}
-            id="player-select"
-            onOpenChange={setPlayerMenuOpen}
-            onQueryChange={handlePlayerInput}
-            onSelect={selectPlayer}
-            open={playerMenuOpen}
-            players={playersPayload?.players || []}
-            query={playerQuery}
-            selectedKey={selectedKey}
-          />
+        <div className={resultStyles.viewControl}>
+          <span className={resultStyles.viewLabel} id="recommendation-view-label">View</span>
           <button
             aria-checked={recommendationView === "top50"}
             aria-labelledby="recommendation-view-label"
@@ -1262,12 +1210,9 @@ export default function RecommendationsPage() {
             <span>Recommendations</span>
             <span>{activeMode === "coop" ? "Scores" : "Top 50"}</span>
           </button>
-          <div className="player-picker-meta">
-            <ScoreSyncLink className="player-score-sync-link" />
-          </div>
         </div>
         <ExplanatorySection title="About recommendations">
-          <p>Recommendations show your Top 50 scores. Tier lists can also show your saved scores and plates for the selected mode. Your internal player ID and raw score history stay private.</p>
+          <p>Recommendations show your Top 50 scores. Tier Lists can also show your saved scores and plates for the selected mode. Your internal player ID and raw score history stay private.</p>
         </ExplanatorySection>
         {error ? <div className="recommendation-notice error-notice">{error}</div> : null}
         {playerPayload?.stale ? <div className="recommendation-notice stale-notice" role="status">These saved recommendations use an older model. They will update after your player refresh completes.</div> : null}
@@ -1282,10 +1227,7 @@ export default function RecommendationsPage() {
 
       <section className="recommendations-workspace" aria-busy={loadingPlayer}>
         {!hasSelection ? (
-          <div className="recommendation-empty">
-            <span>PF</span>
-            <h2>Select a username</h2>
-          </div>
+          <PlayerRequired feature="recommendations" />
         ) : loadingPlayer && !playerPayload && !hasAnyPlayerPayload ? (
           <div className="recommendation-empty"><span className="spinner" /><h2>Calculating your route</h2></div>
         ) : hasAnyPlayerPayload ? (
@@ -1366,7 +1308,7 @@ export default function RecommendationsPage() {
               ) : recommendationView === "top50" ? (
                 <TopScoresSection
                   mode={activeMode}
-                  onSelect={(score, rank) => setSelectedTopScore({ score, rank })}
+                  onSelect={(score, rank) => setSelectedTopScore({ score, rank, playerKey: selectedKey })}
                   playerKey={selectedKey}
                   scores={mode?.topScores ?? []}
                 />
@@ -1426,7 +1368,7 @@ export default function RecommendationsPage() {
         ) : null}
       </section>
 
-      {selectedTopScore ? (
+      {selectedTopScore && selectedTopScore.playerKey === selectedKey ? (
         <TopScoreDetailDialog
           onClose={closeTopScoreDialog}
           rank={selectedTopScore.rank}

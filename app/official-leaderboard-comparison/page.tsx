@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { SiteHeader } from "../_components/site-header";
+import { PlayerChooserDialog } from "../_components/player-chooser-dialog";
 import { SkillRadar, SkillRadarLegend } from "../_components/skill-radar";
 import { ExplanatorySection } from "../_components/explanatory-section";
 import { readJsonResponse } from "../../lib/api-response";
 import { loadWithGenerationRecovery } from "../../lib/refresh-reliability";
+import { scoreColor } from "../../lib/score-appearance";
 import {
   OFFICIAL_BPM_LABELS,
   MINIMUM_OFFICIAL_SCORES,
@@ -33,7 +35,6 @@ import {
 import styles from "./comparison.module.css";
 
 type Side = "left" | "right";
-type PlayerOption = { playerKey: string; displayName: string };
 type PlayerResult =
   | { status: "idle" | "loading"; data?: undefined; error?: undefined }
   | { status: "ready"; data: OfficialComparisonPlayer; error?: undefined }
@@ -77,86 +78,21 @@ function useOfficialPlayer(playerKey: string, index: OfficialComparisonIndex | n
   return { ...result, retry: () => setAttempt((value) => value + 1) };
 }
 
-function OfficialPlayerPicker({ side, players, playerKey, displayName, disabled, open, onOpenChange, onSelect }: {
+function OfficialPlayerChoice({ side, playerKey, displayName, onChoose }: {
   side: Side;
-  players: PlayerOption[];
   playerKey: string;
   displayName: string;
-  disabled: boolean;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSelect: (key: string) => void;
+  onChoose: () => void;
 }) {
-  const [query, setQuery] = useState("");
-  const [highlighted, setHighlighted] = useState(0);
-  const listRef = useRef<HTMLDivElement>(null);
-  const normalized = query.trim().toLocaleLowerCase();
-  const options = useMemo(() => players.filter((player) => !normalized || player.displayName.toLocaleLowerCase().includes(normalized)), [players, normalized]);
-  const activeIndex = Math.min(highlighted, Math.max(0, options.length - 1));
-  const inputId = `official-player-${side}`;
-  const listId = `${inputId}-options`;
-
-  useEffect(() => {
-    if (open) listRef.current?.querySelector(`[data-highlighted="true"]`)?.scrollIntoView({ block: "nearest" });
-  }, [open, activeIndex]);
-
-  const startSearch = () => { setQuery(""); setHighlighted(0); onOpenChange(true); };
-  const select = (key: string) => { onSelect(key); onOpenChange(false); setQuery(""); };
-  const handleKey = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Escape") { onOpenChange(false); return; }
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!open) startSearch();
-      else setHighlighted(Math.max(0, Math.min(options.length - 1, activeIndex + (event.key === "ArrowDown" ? 1 : -1))));
-    } else if (event.key === "Enter" && open && options[activeIndex]) {
-      event.preventDefault();
-      select(options[activeIndex].playerKey);
-    }
-  };
-
   return (
-    <div className={styles.picker} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) onOpenChange(false); }}>
-      <label className={`${styles.playerLabel} ${styles.playerIdentity}`} data-side={side} htmlFor={inputId}>Player {side === "left" ? "1" : "2"}</label>
-      <div className={styles.inputWrap}>
-        <input
-          aria-activedescendant={open && options.length ? `${listId}-${activeIndex}` : undefined}
-          aria-autocomplete="list"
-          aria-controls={listId}
-          aria-expanded={open}
-          aria-haspopup="listbox"
-          autoComplete="off"
-          disabled={disabled}
-          id={inputId}
-          onChange={(event) => { setQuery(event.target.value); setHighlighted(0); onOpenChange(true); }}
-          onClick={() => { if (!open) startSearch(); }}
-          onFocus={startSearch}
-          onKeyDown={handleKey}
-          placeholder={open ? "Search players" : "Choose player"}
-          role="combobox"
-          title={displayName || "Choose an official leaderboard player"}
-          type="text"
-          value={open ? query : displayName}
-        />
-        <span className={styles.chevron} aria-hidden="true">⌄</span>
+    <div className={styles.picker}>
+      <span className={`${styles.playerLabel} ${styles.playerIdentity}`} data-side={side}>Player {side === "left" ? "1" : "2"}</span>
+      <div className={styles.playerChoice}>
+        <strong title={displayName}>{playerKey ? displayName : "Choose a player"}</strong>
+        <button aria-haspopup="dialog" aria-label={`${playerKey ? "Change" : "Choose"} Player ${side === "left" ? "1" : "2"}`} onClick={onChoose} type="button">
+          {playerKey ? "Change" : "Choose"}
+        </button>
       </div>
-      {open ? (
-        <div className={styles.options} id={listId} ref={listRef} role="listbox" aria-label={`Official players for Player ${side === "left" ? 1 : 2}`}>
-          {options.map((player, index) => (
-            <button
-              aria-selected={player.playerKey === playerKey}
-              data-highlighted={index === activeIndex}
-              id={`${listId}-${index}`}
-              key={player.playerKey}
-              onClick={() => select(player.playerKey)}
-              onMouseDown={(event) => event.preventDefault()}
-              role="option"
-              tabIndex={-1}
-              type="button"
-            >{player.displayName}<span aria-hidden="true">{player.playerKey === playerKey ? "✓" : ""}</span></button>
-          ))}
-          {!options.length ? <p>No matching official players.</p> : null}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -241,7 +177,7 @@ function ContributingCharts({ bucket, charts, name, side, status }: {
               return (
                 <li key={contributor.chartId}>
                   <div className={styles.contributorTitle}><span className={bucket?.mode === "singles" ? styles.singleBadge : styles.doubleBadge}>{chart?.chartLabel}</span><span>{chart?.songName ?? contributor.chartId}</span></div>
-                  <p><b><span className={styles.srOnly}>Score: </span>{formatComparisonScore(contributor.score)}</b></p>
+                  <p><b style={{ color: scoreColor(contributor.score) }}><span className={styles.srOnly}>Score: </span>{formatComparisonScore(contributor.score)}</b></p>
                   <small><span className={styles.srOnly}>Estimated Pumbility: </span>{(contributor.pumbilityCents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</small>
                 </li>
               );
@@ -258,7 +194,7 @@ function ScoreValue({ score, status, winner }: { score: number | null; status: P
   if (status === "loading") return <span className={styles.missing} aria-label="Loading player scores">…</span>;
   if (status === "error") return <span className={styles.scoreError}>Unavailable</span>;
   return (
-    <span className={score === null ? styles.missing : winner ? styles.winningScore : styles.score}>
+    <span className={score === null ? styles.missing : winner ? styles.winningScore : styles.score} style={score === null ? undefined : { color: scoreColor(score) }}>
       {winner ? <span className={styles.winnerMark} aria-label="Higher recorded score">▲</span> : null}
       {formatComparisonScore(score)}
     </span>
@@ -378,15 +314,11 @@ export default function OfficialLeaderboardComparisonPage() {
               const profile = profiles[side];
               return (
                 <div className={styles.playerPanel} key={side} aria-busy={profile.status === "loading"}>
-                  <OfficialPlayerPicker
+                  <OfficialPlayerChoice
                     side={side}
-                    players={index?.players ?? []}
                     playerKey={view[side]}
                     displayName={view[side] ? names[side] : ""}
-                    disabled={!index}
-                    open={openSide === side}
-                    onOpenChange={(open) => setOpenSide(open ? side : null)}
-                    onSelect={(key) => updateView({ [side]: key })}
+                    onChoose={() => setOpenSide(side)}
                   />
                   <SkillRadar buckets={profile.data?.buckets ?? null} label={names[side]} selectedBucket={bucketIndex} onBucketSelect={(bpm) => updateView({ bpm })} />
                   <div className={styles.profileStatus} aria-live="polite">
@@ -493,6 +425,19 @@ export default function OfficialLeaderboardComparisonPage() {
           <p className={styles.sourceDates}>Phoenix 1: <b>{sourceDate(index?.sourceDates.Phoenix)}</b> <span>·</span> Phoenix 2: <b>{sourceDate(index?.sourceDates.Phoenix2)}</b></p>
         </ExplanatorySection>
       </div>
+      <PlayerChooserDialog
+        open={openSide !== null}
+        title={`Choose official Player ${openSide === "right" ? "2" : "1"}`}
+        players={index?.players ?? []}
+        selectedKey={openSide ? view[openSide] : ""}
+        loading={!index && !indexError}
+        error={indexError || undefined}
+        onClose={() => setOpenSide(null)}
+        onSelect={(key) => {
+          if (openSide) updateView({ [openSide]: key });
+          setOpenSide(null);
+        }}
+      />
     </main>
   );
 }

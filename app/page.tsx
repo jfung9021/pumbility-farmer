@@ -1,9 +1,14 @@
+"use client";
+
 import Link from "next/link";
 import { ExplanatorySection } from "./_components/explanatory-section";
 import { ScoreSyncLink } from "./_components/score-sync-link";
 import { SiteHeader } from "./_components/site-header";
+import { usePlayerProfile } from "./_components/player-profile-provider";
+import styles from "./_components/player-shell.module.css";
 
 export default function HomePage() {
+  const { player, hydrated, loading, setupDismissed, openChooser, clearPlayer, profileHref } = usePlayerProfile();
   return (
     <main className="home-page">
       <div className="ambient ambient-one" />
@@ -11,9 +16,20 @@ export default function HomePage() {
       <SiteHeader />
 
       <section className="home-hero">
+        {hydrated && !loading && (player || !setupDismissed) ? <section className={styles.homeSetup} aria-label="Get started">
+          <div><h1>{player ? `Welcome back, ${player.displayName}` : "Find your next chart"}</h1>
+            <p>{player ? "Your player is ready across Recommendations, Tier Lists and Skill Radar. Manage your player in Menu." : "Save a player in this browser for recommendations, skill radar and personal scores."}</p>
+          </div>
+          <div className={styles.inlineActions}>
+            {player ? <Link className={styles.primaryButton} href={profileHref("/recommendations")}>Continue</Link> : <>
+              <button type="button" className={styles.primaryButton} onClick={openChooser}>Choose player</button>
+              <Link className={styles.secondaryButton} href="/tier-list" onClick={clearPlayer}>Browse without a player</Link>
+            </>}
+          </div>
+        </section> : null}
         <div className="feature-grid">
           <div className="home-feature">
-            <Link className="feature-card feature-recommendations" href="/recommendations">
+            <Link className="feature-card feature-recommendations" href={profileHref("/recommendations")}>
               <div>
                 <p>PERSONALIZED ROUTE</p>
                 <h2>Recommendations</h2>
@@ -22,21 +38,21 @@ export default function HomePage() {
             </Link>
             <ExplanatorySection title="About Recommendations">
               <p>
-                Select a username, see which version supplies your skill rating,
+                Choose your player from Menu, see which version supplies your skill rating,
                 and rank charts against your current Phoenix 2 history.
               </p>
             </ExplanatorySection>
           </div>
 
           <div className="home-feature">
-            <Link className="feature-card feature-tier" href="/tier-list">
+            <Link className="feature-card feature-tier" href={profileHref("/tier-list")}>
               <div>
                 <p>GLOBAL ANALYSIS</p>
-                <h2>Tier List</h2>
+                <h2>Tier Lists</h2>
               </div>
               <b aria-hidden="true">↗</b>
             </Link>
-            <ExplanatorySection title="About the Tier List">
+            <ExplanatorySection title="About Tier Lists">
               <p>
                 Compare Scoring, Clearing, and Pumbility difficulty estimates
                 in compact or detailed views, using Phoenix 1 and Phoenix 2 scores.
@@ -44,7 +60,7 @@ export default function HomePage() {
             </ExplanatorySection>
           </div>
           <div className="home-feature">
-            <Link className="feature-card feature-radar" href="/skill-radar">
+            <Link className="feature-card feature-radar" href={profileHref("/skill-radar")}>
               <div>
                 <p>YOUR BPM PROFILE</p>
                 <h2>Skill Radar</h2>

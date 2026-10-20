@@ -151,11 +151,14 @@ test("record requirement copy follows the published 100 or legacy 200 threshold"
   assert.equal(clearingMinimumScoreRecords(null), null);
 });
 
-test("both tier layouts and the shared chart detail expose accessible count warnings and metadata copy", () => {
+test("chart details retain evidence warnings while browsing tiles stay concise", () => {
   const page = readFileSync(new URL("../app/tier-list/page.tsx", import.meta.url), "utf8");
   assert.match(page, /aria-label=\{warning\} role="img" title=\{warning\}/);
   assert.match(page, /<LimitedDataWarning chart=\{chart\} metric=\{metric\} \/>/);
-  assert.match(page, /<LimitedDataWarning chart=\{chart\} metric=\{metric\} compact \/>/);
+  const tile = page.slice(page.indexOf("function CompactChartCard"), page.indexOf("function CompactChartGrid"));
+  const row = page.slice(page.indexOf("function ChartCard"), page.indexOf("function LazyChartDetails"));
+  assert.doesNotMatch(tile, /LimitedDataWarning/);
+  assert.doesNotMatch(row, /LimitedDataWarning/);
   assert.match(page, /<ChartDetails chart=\{loaded\} metric=\{metric\}[^>]*detailsLoaded/);
   assert.equal((page.match(/<CompactChartGrid[^>]*metric=\{/g) ?? []).length, 3);
   assert.match(page, /chartEvidenceLines\(chart, metric, \{ minimumScoreRecords, pumbilityAggregation \}\)/);

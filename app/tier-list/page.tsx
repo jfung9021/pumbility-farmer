@@ -5,7 +5,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { RefreshMeta } from "../_components/refresh-meta";
 import { GlobalRefreshNotice } from "../_components/global-refresh-notice";
 import { ChartVideoLink } from "../_components/chart-video-link";
-import { PlayerPicker } from "../_components/player-picker";
+import { usePlayerProfile } from "../_components/player-profile-provider";
+import { PlayerResult } from "../_components/player-result";
+import "./tier-list.css";
 import { BpmRangeFilter } from "../_components/bpm-range-filter";
 import { ExplanatorySection } from "../_components/explanatory-section";
 import { SiteHeader } from "../_components/site-header";
@@ -22,7 +24,7 @@ import {
 } from "../../lib/format-difficulty";
 import { tierMetricFromSearchParams, tierModeFromSearchParams } from "../../lib/page-view-state";
 import { DEFAULT_SCORING_GOAL, SCORING_GOALS, hasScoringGoalVariants, isSssScoringChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal } from "../../lib/scoring-variants";
-import { clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
+import { chartBpmRange, clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
 import {
   clearingPercentileRange,
   clearingSkillPercentile,
@@ -39,7 +41,6 @@ import type {
   AnalysisPayload,
   ChartResult,
   ModeKey,
-  RecommendationPlayersResponse,
   ScoringGoal,
   TierMetricKey,
   TierPlayerScore,
@@ -75,24 +76,24 @@ function PersonalChartScore({ chartId }: { chartId: string }) {
   const { selected, loading, unavailable, scores } = useContext(TierScoresContext);
   if (!selected) return null;
   const result = scores.get(chartId);
-  const description = result
-    ? `${result.score.toLocaleString()} points${result.plateCode ? `, ${result.plateCode}` : ""}`
-    : unavailable ? "Player score unavailable" : loading ? "Loading player score" : "No recorded score";
-  return (
-    <div aria-label={description} className="tier-player-score" title={description}>
-      <span>{result ? formatTierScore(result.score) : "—"}</span>
-      <span>{result?.plateCode || ""}</span>
-    </div>
-  );
+  if (!result) return <span className="tier-player-score tier-score-status" aria-label={unavailable ? "Player score unavailable" : loading ? "Loading player score" : "No recorded score"}>{unavailable ? "Unavailable" : loading ? "Loading…" : "—"}</span>;
+  return <PlayerResult className="tier-player-score" compact formattedScore={formatTierScore(result.score)} plate={result.plateCode} score={result.score} />;
+}
+
+const TierBrowseContext = createContext({ metric: "scoring" as TierMetricKey, showRating: false });
+function chartBpmLabel(chart: ChartResult) {
+  const bpm = chartBpmRange(chart);
+  if (!bpm) return "— BPM";
+  return `${bpm.min === bpm.max ? bpm.min : `${bpm.min}–${bpm.max}`} BPM`;
 }
 
 const groupTone = ["lime", "green", "mint", "slate", "orange", "rose", "red"];
 const metricLabels: Record<TierMetricKey, string> = { scoring: "Scoring", clearing: "Clearing", pumbility: "Pumbility" };
 const ClearingRecordMinimumContext = createContext<number | null>(null);
 const metricTitles: Record<TierMetricKey, string> = {
-  scoring: "Scoring Difficulty Tier List",
-  clearing: "Clearing Difficulty Tier List",
-  pumbility: "Pumbility Tier List",
+  scoring: "Tier Lists",
+  clearing: "Tier Lists",
+  pumbility: "Tier Lists",
 };
 
 function signed(value: number, digits = 2): string {
@@ -235,23 +236,18 @@ function ChartDetails({ chart, metric, headingId, detailsLoaded = false }: { cha
 }
 
 function ChartCard({ chart, metric }: { chart: ChartResult; metric: TierMetricKey }) {
-  return (
-    <article className={`chart-card${chart.type === "CoOp" ? " chart-card-coop" : ""}`}>
-      <div className="chart-art-rail">
-        <div className="chart-art jacket" data-chart-type={chart.type} aria-hidden="true">
-          {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
-        </div>
-        <PersonalChartScore chartId={chart.chartId} />
-        <ChartVideoLink
-          chartId={chart.chartId}
-          difficulty={chart.difficulty}
-          songName={chart.songName}
-          variant="tier"
-        />
-      </div>
-      <ChartDetails chart={chart} metric={metric} />
-    </article>
-  );
+  const details = useContext(TierDetailContext);
+  const { showRating } = useContext(TierBrowseContext);
+  return <article className="tier-browse-row">
+    <button className="tier-row-button" onClick={() => details.select(chart)} type="button" aria-label={`View details for ${chart.songName}, ${chart.difficulty}, ${chartBpmLabel(chart)}`}>
+      <span className="chart-art compact-jacket" data-chart-type={chart.type} aria-hidden="true">
+        {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
+        <span className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>{chartCountLabel(chart)}</span>
+      </span>
+      <span className="tier-row-copy"><span className="tier-song" title={chart.songName}>{chart.songName}</span><span className="tier-chart-bpm">{chartBpmLabel(chart)}</span>{showRating ? <span className="tier-chart-rating">{chartGrade(chart, metric)}</span> : null}</span>
+    </button>
+    <PersonalChartScore chartId={chart.chartId} />
+  </article>;
 }
 
 function LazyChartDetails({chart, metric}: {chart: ChartResult; metric: TierMetricKey}) {
@@ -282,27 +278,20 @@ function LazyChartDetails({chart, metric}: {chart: ChartResult; metric: TierMetr
   return <div className="chart-copy"><h3 id="chart-detail-dialog-title">{chart.songName}</h3><p role="status">{error || "Loading chart details..."}</p>{error ? <button type="button" onClick={() => setAttempt(value => value + 1)}>Retry</button> : null}</div>;
 }
 
-function CompactChartCard({ chart, metric, onSelect }: { chart: ChartResult; metric: TierMetricKey; onSelect: (chart: ChartResult) => void }) {
-  const warning = plainTierDataWarning(chart, metric);
-  return (
-    <article className="compact-chart-card">
-      <button
-        aria-label={`View details for ${chart.songName}, ${chart.difficulty}${warning ? `. ${warning}` : ""}`}
-        className="compact-chart-button"
-        onClick={() => onSelect(chart)}
-        type="button"
-      >
-        <span className="chart-art compact-jacket" data-chart-type={chart.type}>
-          {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
-          <LimitedDataWarning chart={chart} metric={metric} compact />
-          <span aria-hidden="true" className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>
-            {chartCountLabel(chart)}
-          </span>
-        </span>
-      </button>
-      <PersonalChartScore chartId={chart.chartId} />
-    </article>
-  );
+function CompactChartCard({ chart, onSelect }: { chart: ChartResult; metric?: TierMetricKey; onSelect: (chart: ChartResult) => void }) {
+  const { metric, showRating } = useContext(TierBrowseContext);
+  return <article className="compact-chart-card">
+    <button aria-label={`View details for ${chart.songName}, ${chart.difficulty}, ${chartBpmLabel(chart)}`} className="compact-chart-button" onClick={() => onSelect(chart)} title={chart.songName} type="button">
+      <span className="chart-art compact-jacket" data-chart-type={chart.type} aria-hidden="true">
+        {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
+        <span className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>{chartCountLabel(chart)}</span>
+      </span>
+      <span className="tier-song">{chart.songName}</span>
+      <span className="tier-chart-bpm">{chartBpmLabel(chart)}</span>
+      {showRating ? <span className="tier-chart-rating">{chartGrade(chart, metric)}</span> : null}
+    </button>
+    <PersonalChartScore chartId={chart.chartId} />
+  </article>;
 }
 
 function CompactChartGrid({ charts, metric, onSelect }: { charts: ChartResult[]; metric: TierMetricKey; onSelect: (chart: ChartResult) => void }) {
@@ -318,7 +307,6 @@ function CompactChartGrid({ charts, metric, onSelect }: { charts: ChartResult[];
 function TierDivider({ headingId, label }: { headingId: string; label: string }) {
   return (
     <header className="tier-divider">
-      <span aria-hidden="true" className="tier-divider-leading" />
       <h2 id={headingId}>{label}</h2>
       <span aria-hidden="true" className="tier-divider-trailing" />
     </header>
@@ -507,41 +495,15 @@ export default function TierListPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(0);
   const [selectedChart, setSelectedChart] = useState<ChartResult | null>(null);
-  const [playersPayload, setPlayersPayload] = useState<RecommendationPlayersResponse | null>(null);
-  const [selectedPlayerKey, setSelectedPlayerKey] = useState("");
-  const [playerQuery, setPlayerQuery] = useState("");
-  const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
-  const [loadingPlayers, setLoadingPlayers] = useState(true);
-  const [playersError, setPlayersError] = useState<string | null>(null);
+  const profile = usePlayerProfile();
+  const selectedPlayerKey = profile.playerKey;
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [displayOpen, setDisplayOpen] = useState(false);
   const [playerScores, setPlayerScores] = useState<TierPlayerScoresResponse | null>(null);
   const [loadingScores, setLoadingScores] = useState(false);
   const [scoresError, setScoresError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/recommendations/players", { signal: controller.signal, cache: "no-store" })
-      .then((response) => readJsonResponse<RecommendationPlayersResponse>(response))
-      .then((players) => { if (!controller.signal.aborted) setPlayersPayload(players); })
-      .catch((error) => {
-        if (!controller.signal.aborted) setPlayersError(error instanceof Error ? error.message : "Could not load usernames.");
-      })
-      .finally(() => { if (!controller.signal.aborted) setLoadingPlayers(false); });
-    return () => controller.abort();
-  }, []);
-
-  useEffect(() => {
-    if (!playersPayload) return;
-    const applyPlayerFromUrl = () => {
-      const requested = new URLSearchParams(window.location.search).get("player");
-      const player = playersPayload.players.find((candidate) => candidate.playerKey === requested);
-      setSelectedPlayerKey(player?.playerKey || "");
-      setPlayerQuery(player?.displayName || "");
-      setPlayerMenuOpen(false);
-    };
-    applyPlayerFromUrl();
-    window.addEventListener("popstate", applyPlayerFromUrl);
-    return () => window.removeEventListener("popstate", applyPlayerFromUrl);
-  }, [playersPayload]);
+  useEffect(() => { setSelectedChart(null); }, [selectedPlayerKey]);
 
   useEffect(() => {
     setPlayerScores(null);
@@ -571,15 +533,6 @@ export default function TierListPage() {
     unavailable: Boolean(scoresError),
     scores: new Map(activePlayerScores?.scores.map((score) => [score.chartId, score]) || []),
   }), [activePlayerScores, loadingScores, scoresError, selectedPlayerKey]);
-  const selectPlayer = (key: string, displayName = "") => {
-    setSelectedPlayerKey(key);
-    setPlayerQuery(displayName);
-    setPlayerMenuOpen(false);
-    const url = new URL(window.location.href);
-    if (key) url.searchParams.set("player", key);
-    else url.searchParams.delete("player");
-    window.history.replaceState({}, "", url);
-  };
 
   const loadLatest = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -724,6 +677,7 @@ export default function TierListPage() {
   }, []);
 
   return (
+    <TierBrowseContext.Provider value={{metric: activeMetric, showRating: groupingView === "tiers" && activeMode !== "coop"}}>
     <TierScoresContext.Provider value={scoreContext}>
     <PumbilityPolicyContext.Provider value={pumbilityPolicy?.aggregation ?? null}>
     <ClearingRecordMinimumContext.Provider value={minimumScoreRecords}>
@@ -737,7 +691,7 @@ export default function TierListPage() {
         <RefreshMeta
           delayedAfterMs={MODEL_DELAY_THRESHOLD_MS}
           generatedAtUtc={payload?.generatedAtUtc}
-          label="Tier list updated"
+          label="Tier lists updated"
           loading={loading}
           loadingLabel="Loading tier list..."
           nowMs={nowMs}
@@ -747,61 +701,12 @@ export default function TierListPage() {
       </section>
 
       <section className="dashboard" aria-busy={loading} id="rankings-dashboard">
-        <div className="player-picker tier-player-picker">
-          <label htmlFor="tier-player-select">Phoenix 2 username <span>(optional)</span></label>
-          <PlayerPicker
-            disabled={loadingPlayers || !playersPayload?.players.length}
-            id="tier-player-select"
-            onOpenChange={setPlayerMenuOpen}
-            onQueryChange={(query) => { selectPlayer("", query); setPlayerMenuOpen(true); }}
-            onSelect={selectPlayer}
-            open={playerMenuOpen}
-            players={playersPayload?.players || []}
-            query={playerQuery}
-            selectedKey={selectedPlayerKey}
-          />
-          {selectedPlayerKey ? <button className="tier-clear-player" onClick={() => selectPlayer("")} type="button">Clear selection</button> : null}
-          <div className="tier-player-status">
-            {selectedPlayerKey ? <RefreshMeta generatedAtUtc={activePlayerScores?.syncedAtUtc} label="Player scores synced" loading={loadingScores} loadingLabel="Loading player scores..." nowMs={nowMs} /> : null}
-            {selectedPlayerKey && activePlayerScores && !activePlayerScores.syncedAtUtc ? <p>Saved player scores · sync time unavailable</p> : null}
-            {playersError || scoresError ? <p role="status">{playersError || scoresError}</p> : null}
+        <div className="tier-primary-controls">
+          <div className="tier-mode-control" role="group" aria-label="Chart mode">
+            {(["singles", "doubles", "coop"] as ModeKey[]).map(mode => <button aria-pressed={activeMode === mode} className={activeMode === mode ? "active" : ""} disabled={mode === "coop" && activeMetric !== "scoring"} key={mode} onClick={() => selectMode(mode)} type="button">{mode === "coop" ? "Co-op" : mode === "singles" ? "Singles" : "Doubles"}</button>)}
           </div>
-        </div>
-        <div className="view-switcher metric-switcher" role="group" aria-label="Tier list metric">
-          {(["scoring", "clearing", "pumbility"] as TierMetricKey[]).map((metric) => (
-            <button
-              aria-pressed={activeMetric === metric}
-              className={activeMetric === metric ? "active" : ""}
-              key={metric}
-              onClick={() => selectMetric(metric)}
-              type="button"
-            >{metricLabels[metric]}</button>
-          ))}
-        </div>
-        {showScoringGoal ? <div className="scoring-goal-control"><span id="scoring-goal-label">Scoring goal</span><div className="view-switcher scoring-goal-switcher" role="group" aria-labelledby="scoring-goal-label">
-          {SCORING_GOALS.map(goal => <button
-            aria-pressed={scoringGoal === goal}
-            className={scoringGoal === goal ? "active" : ""}
-            key={goal}
-            onClick={() => selectScoringGoal(goal)}
-            type="button"
-          >{goal === "general" ? "General" : scoringTargetForGoal(goal).label}</button>)}
-        </div></div> : null}
-        <div className="recommendation-mode-tabs tier-mode-tabs" role="tablist" aria-label="Chart mode">
-          {(["singles", "doubles", "coop"] as ModeKey[]).map((mode) => (
-            <button
-              aria-selected={activeMode === mode}
-              className={activeMode === mode ? "active" : ""}
-              disabled={mode === "coop" && activeMetric !== "scoring"}
-              key={mode}
-              onClick={() => selectMode(mode)}
-              role="tab"
-              type="button"
-            >
-              <b>{mode === "singles" ? "S" : mode === "doubles" ? "D" : "C"}</b>
-              <span>{mode === "coop" ? "Co-op" : mode}</span>
-            </button>
-          ))}
+          <label>Metric<select aria-label="Tier list metric" value={activeMetric} onChange={event => selectMetric(event.target.value as TierMetricKey)}>{(["scoring", "clearing", "pumbility"] as TierMetricKey[]).map(metric => <option key={metric} value={metric}>{metricLabels[metric]}</option>)}</select></label>
+          {showScoringGoal ? <label>Goal<select aria-label="Scoring goal" value={scoringGoal} onChange={event => selectScoringGoal(event.target.value as ScoringGoal)}>{SCORING_GOALS.map(goal => <option key={goal} value={goal}>{goal === "general" ? "General" : scoringTargetForGoal(goal).label}</option>)}</select></label> : null}
         </div>
 
         {goalUnavailable ? <p className="metric-unavailable" role="status">{target.label} is unavailable in this analysis. <button type="button" onClick={() => selectScoringGoal("general")}>View General</button></p> : metricAvailability !== "available" ? (
@@ -834,47 +739,21 @@ export default function TierListPage() {
               ))}
             </select>
           </label>
-          <BpmRangeFilter bounds={bpmBounds} onChange={(bpm) => updateFilter({ bpm })} selected={selectedBpm} />
+          <button aria-expanded={filtersOpen} aria-controls="tier-more-filters" className="tier-toolbar-button" onClick={() => setFiltersOpen(value => !value)} type="button">Filters{selectedBpm ? " · 1" : ""}</button>
+          <button aria-expanded={displayOpen} aria-controls="tier-display-settings" className="tier-toolbar-button" onClick={() => setDisplayOpen(value => !value)} type="button">Display</button>
         </div>
-
-        <div className="results-controls">
-          <div className="results-switchers">
-            <div
-              aria-label="Difficulty grouping"
-              className={`view-switcher${activeMode === "coop" ? " single-option" : ""}`}
-              role="group"
-            >
-              <button
-                aria-pressed={activeMode === "coop" || groupingView === "estimated"}
-                className={activeMode === "coop" || groupingView === "estimated" ? "active" : ""}
-                onClick={() => setGroupingView("estimated")}
-                type="button"
-              ><span>Estimated<br />Difficulty</span></button>
-              {activeMode === "coop" ? null : (
-                <button
-                  aria-pressed={groupingView === "tiers"}
-                  className={groupingView === "tiers" ? "active" : ""}
-                  onClick={() => setGroupingView("tiers")}
-                  type="button"
-                >Tier Bands</button>
-              )}
-            </div>
-            <div aria-label="Chart layout" className="view-switcher" role="group">
-              <button
-                aria-pressed={layoutView === "compact"}
-                className={layoutView === "compact" ? "active" : ""}
-                onClick={() => setLayoutView("compact")}
-                type="button"
-              >Compact</button>
-              <button
-                aria-pressed={layoutView === "detailed"}
-                className={layoutView === "detailed" ? "active" : ""}
-                onClick={() => setLayoutView("detailed")}
-                type="button"
-              >Detailed</button>
-            </div>
-          </div>
+        <div className="tier-filter-disclosure" hidden={!filtersOpen} id="tier-more-filters"><BpmRangeFilter bounds={bpmBounds} onChange={(bpm) => updateFilter({ bpm })} selected={selectedBpm} /></div>
+        <div className="tier-display-disclosure" hidden={!displayOpen} id="tier-display-settings">
+          <label>Group by<select aria-label="Difficulty grouping" disabled={activeMode === "coop"} onChange={event => setGroupingView(event.target.value as GroupingView)} value={activeMode === "coop" ? "estimated" : groupingView}><option value="estimated">Difficulty</option><option value="tiers">Tier bands</option></select></label>
+          <label>Chart layout<select aria-label="Chart layout" onChange={event => setLayoutView(event.target.value as LayoutView)} value={layoutView}><option value="compact">Named grid</option><option value="detailed">Readable list</option></select></label>
         </div>
+        <div className="tier-results-context"><span aria-live="polite">{filteredCharts.length} charts · {activeMode === "coop" ? "Co-op" : activeMode === "singles" ? "Singles" : "Doubles"} · {metricLabels[activeMetric]}{showScoringGoal ? ` · ${scoringGoal === "general" ? "General" : target.label}` : ""}</span>{filter.query || filter.level !== "All" || selectedBpm ? <button onClick={() => updateFilter({...initialFilter})} type="button">Clear filters</button> : null}</div>
+        <div className="tier-active-filters" aria-label="Applied filters">
+          {filter.query ? <button aria-label="Remove search filter" onClick={() => updateFilter({query: ""})} type="button">Search: {filter.query} ×</button> : null}
+          {filter.level !== "All" ? <button aria-label="Remove level filter" onClick={() => updateFilter({level: "All"})} type="button">{filter.level === "20+" ? "Only 20+" : activeMode === "coop" ? `${filter.level} players` : `${activeMode === "singles" ? "S" : "D"}${filter.level}`} ×</button> : null}
+          {selectedBpm ? <button aria-label="Remove BPM filter" onClick={() => updateFilter({bpm: null})} type="button">{selectedBpm.min}–{selectedBpm.max} BPM ×</button> : null}
+        </div>
+        {selectedPlayerKey ? <div className="tier-score-freshness"><RefreshMeta generatedAtUtc={activePlayerScores?.syncedAtUtc} label="Player scores synced" loading={loadingScores} loadingLabel="Loading player scores..." nowMs={nowMs} />{scoresError ? <span role="status">{scoresError}</span> : null}</div> : null}
 
         {groupingView === "tiers" && activeMode !== "coop" ? (
           <ExplanatorySection title="About tier bands"><p>Within each band, charts are sorted by estimated difficulty − (official level + 0.5), from smallest difference to largest.</p></ExplanatorySection>
@@ -904,7 +783,7 @@ export default function TierListPage() {
                 />
               ))}
           {(groupingView === "estimated" || activeMode === "coop") && estimatedGroups.length === 0 ? (
-            <p className="empty-tier">No estimated charts match the current filters.</p>
+            <p className="empty-tier">No charts match the current filters.</p>
           ) : null}
           <section className={`tier unrated-section${layoutView === "compact" ? " tier-compact" : ""}`} aria-labelledby="unrated-charts">
             <TierDivider headingId="unrated-charts" label="Unrated" />
@@ -1016,5 +895,6 @@ export default function TierListPage() {
     </ClearingRecordMinimumContext.Provider>
     </PumbilityPolicyContext.Provider>
     </TierScoresContext.Provider>
+    </TierBrowseContext.Provider>
   );
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Analytics } from "@vercel/analytics/next";
+import { PlayerProfileProvider } from "./_components/player-profile-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -11,7 +12,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en">
       <body>
-        {children}
+        <PlayerProfileProvider>{children}</PlayerProfileProvider>
         <Analytics />
       </body>
     </html>
