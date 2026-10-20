@@ -34,13 +34,13 @@ class ExpiredAnalysisRecoveryTests(unittest.TestCase):
     def release_orphan(self, job_id, *, stale_after_seconds):
         self.assertEqual((job_id, stale_after_seconds), (self.old["id"], 300))
         self.jobs.save({**self.old, "status": "failed",
-                        "updatedAtUtc": isoformat_utc(NOW),
-                        "retryAllowedAtUtc": isoformat_utc(NOW),
+                        "updatedAtUtc": isoformat_utc(NOW + timedelta(milliseconds=1)),
+                        "retryAllowedAtUtc": isoformat_utc(NOW + timedelta(milliseconds=1)),
                         "error": "The analysis worker stopped reporting progress."})
         self.jobs.set_active_job_id(None)
         return True
 
-    def test_expired_job_is_released_and_stored_input_refresh_is_enqueued_once(self):
+    def test_later_database_recovery_time_starts_stored_input_refresh_once(self):
         recover = Mock(side_effect=self.release_orphan)
         self.jobs.fail_stale_active_job = recover
 
@@ -63,6 +63,22 @@ class ExpiredAnalysisRecoveryTests(unittest.TestCase):
         self.assertEqual((status, result["outcome"]), (202, "existing"))
         self.assertEqual(self.jobs.get(self.old["id"]), self.old)
         self.assertEqual(self.jobs.active_job_id(), self.old["id"])
+        self.assertEqual(self.enqueued, [])
+
+    def test_recovery_does_not_bypass_another_failed_jobs_retry_delay(self):
+        unrelated = {**new_job("another-failed-job", NOW), "status": "failed",
+                     "retryAllowedAtUtc": isoformat_utc(NOW + timedelta(minutes=5))}
+
+        def recover_with_other_latest(*args, **kwargs):
+            self.release_orphan(*args, **kwargs)
+            self.jobs.save(unrelated)
+            self.jobs.set_latest_job_id(unrelated["id"])
+            return True
+
+        self.jobs.fail_stale_active_job = Mock(side_effect=recover_with_other_latest)
+        status, result = self.request()
+        self.assertEqual((status, result["outcome"]), (202, "existing"))
+        self.assertEqual(result["job"], unrelated)
         self.assertEqual(self.enqueued, [])
 
     def test_head_replaced_during_recovery_is_reloaded_and_preserved(self):

@@ -1016,6 +1016,7 @@ def request_refresh(
             "archiveUrl": mix_spec.archive_url,
         }
     effective_now = now or utc_now()
+    recovered_job_id = None
     active_id = jobs.active_job_id()
     active = jobs.get(active_id) if active_id else None
     if active and active.get("status") in {"queued", "running"}:
@@ -1029,10 +1030,12 @@ def request_refresh(
                 # The database checks lease expiry and releases the matching
                 # active head in one transaction. Re-read after any concurrent
                 # heartbeat, completion, recovery, or head replacement.
-                fail_stale(
+                recovered = fail_stale(
                     str(active["id"]),
                     stale_after_seconds=int(ACTIVE_JOB_STALE_AFTER.total_seconds()),
                 )
+                if recovered:
+                    recovered_job_id = str(active["id"])
                 active_id = jobs.active_job_id()
                 active = jobs.get(active_id) if active_id else None
             else:
@@ -1093,7 +1096,11 @@ def request_refresh(
     previous = deterministic_existing or (jobs.get(latest_job_id) if latest_job_id else None)
     if previous and previous.get("status") == "failed":
         retry_at = parse_utc(previous.get("retryAllowedAtUtc"))
-        if retry_at is not None and effective_now < retry_at:
+        if (
+            retry_at is not None
+            and effective_now < retry_at
+            and str(previous.get("id")) != recovered_job_id
+        ):
             return 202, {"outcome": "existing", "job": previous}
         previous_job_id = str(previous.get("id") or "").strip()
         checkpoint = (
