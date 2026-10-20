@@ -20,6 +20,7 @@ import {
 } from "../../../lib/top50-export";
 import { renderTop50Poster } from "../../../lib/top50-poster-render";
 import { pumbilityProgress } from "../../../lib/pumbility-progress";
+import { gradeColor, gradeForScore, plateColor } from "../../../lib/score-appearance";
 import type {
   PlayerRecommendationsResponse,
   RecommendationModeResult,
@@ -43,7 +44,7 @@ const JACKET_CACHE_TTL_MS = 10 * 60_000;
 const POSTER_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const POSTER_CACHE_MAX_ENTRIES = 4;
 const POSTER_CACHE_TTL_MS = 5 * 60_000;
-const POSTER_LAYOUT_VERSION = "top50-poster-resvg-2x-v4";
+const POSTER_LAYOUT_VERSION = "top50-poster-resvg-2x-v5-score-colors";
 const POSTER_CARD_WIDTH = 212;
 const POSTER_CARD_ART_HEIGHT = 108;
 const POSTER_RESULT_FONT_SIZE = 18;
@@ -455,6 +456,9 @@ function PosterCard({ rank, score }: { rank: number; score: PosterScore | null }
     );
   }
   const scoreValue = (score.score as number).toLocaleString("en-US");
+  const grade = score.grade || gradeForScore(score.score);
+  const plate = score.plateCode || score.plate;
+  const resultColor = gradeColor(grade);
   const pumbility = typeof score.pumbility === "number"
     ? score.pumbility.toFixed(2)
     : "—";
@@ -571,13 +575,13 @@ function PosterCard({ rank, score }: { rank: number; score: PosterScore | null }
         }}
       >
         <div style={{ alignItems: "baseline", display: "flex", flex: "0 1 auto", gap: POSTER_RESULT_GAP, minWidth: 0 }}>
-          <div style={{ color: "#d3dad4", display: "flex", flex: "0 0 auto", fontSize: POSTER_RESULT_FONT_SIZE, fontVariantNumeric: "tabular-nums", fontWeight: 700, lineHeight: 1, whiteSpace: "nowrap" }}>
+          <div style={{ color: resultColor, display: "flex", flex: "0 0 auto", fontSize: POSTER_RESULT_FONT_SIZE, fontVariantNumeric: "tabular-nums", fontWeight: 700, lineHeight: 1, whiteSpace: "nowrap" }}>
             {scoreValue}
           </div>
-          <div style={{ color: "#d3dad4", display: "flex", flex: "0 0 auto", fontSize: POSTER_RESULT_FONT_SIZE, fontWeight: 700, lineHeight: 1, whiteSpace: "nowrap" }}>
+          <div style={{ color: resultColor, display: "flex", flex: "0 0 auto", fontSize: POSTER_RESULT_FONT_SIZE, fontWeight: 700, lineHeight: 1, whiteSpace: "nowrap" }}>
             {score.grade || "—"}
           </div>
-          <div style={{ color: "#7e887f", display: "flex", flex: "0 0 auto", fontSize: POSTER_PLATE_FONT_SIZE, lineHeight: 1, whiteSpace: "nowrap" }}>
+          <div style={{ color: plateColor(plate), display: "flex", flex: "0 0 auto", fontSize: POSTER_PLATE_FONT_SIZE, lineHeight: 1, whiteSpace: "nowrap" }}>
             {score.plateCode || "—"}
           </div>
         </div>

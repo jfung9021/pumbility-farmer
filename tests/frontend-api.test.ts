@@ -106,11 +106,12 @@ test("mobile styles only hide decorative and desktop-only score fields", async (
   const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
   const mobileStyles = css.slice(css.indexOf("@media (max-width: 820px)"));
   const hiddenSelectors = [...mobileStyles.matchAll(/([^{}]+)\{[^{}]*display:\s*none/g)]
-    .map((match) => match[1].trim());
+    .map((match) => match[1].replace(/\/\*[\s\S]*?\*\//g, "").trim());
 
   assert.deepEqual(hiddenSelectors, [
     ".top-score-score",
     ".feature-card > b",
+    ".ambient",
   ]);
 });
 
@@ -147,7 +148,7 @@ test("recommendations explain the per-view score disclosure boundary", async () 
   assert.doesNotMatch(page, /<footer>/);
   assert.doesNotMatch(page, /How the merge works/);
   assert.match(page, /Recommendations show your Top 50 scores/);
-  assert.match(page, /Tier lists can also show your saved scores and plates/);
+  assert.match(page, /Tier Lists can also show your saved scores and plates/);
   assert.match(page, /internal player ID and raw score history stay private/);
   assert.match(page, /Skill title progress/);
 });
@@ -519,23 +520,13 @@ test("Co-op methodology derives Master-title goals from tier difficulty", async 
   assert.match(readme, /hardest chart can retain a 24\.9 internal\s+rating/);
 });
 
-test("recommendation player clicks are tracked by display name", async () => {
-  const page = await readFile(
-    path.join(process.cwd(), "app", "recommendations", "page.tsx"),
-    "utf8",
-  );
-
-  assert.match(page, /import \{ track \} from "@vercel\/analytics";/);
-  assert.match(
-    page,
-    /track\("recommendation_player_selected", \{ playerName: inputValue \}\)/,
-  );
-  assert.match(
-    page,
-    /onSelect=\{selectPlayer\}/,
-  );
-  const picker = await readFile(path.join(process.cwd(), "app", "_components", "player-picker.tsx"), "utf8");
-  assert.match(picker, /onSelect\(player\.playerKey, player\.displayName\)/);
+test("shared player choices retain display-name analytics without page pickers", async () => {
+  const provider = await readFile(path.join(process.cwd(), "app", "_components", "player-profile-provider.tsx"), "utf8");
+  const page = await readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8");
+  assert.match(provider, /track\("recommendation_player_selected", \{ playerName: selected.displayName \}\)/);
+  assert.match(provider, /onSelect=\{choosePlayer\}/);
+  assert.match(page, /usePlayerProfile\(\)/);
+  assert.doesNotMatch(page, /<PlayerPicker|onSelect=\{selectPlayer\}/);
 });
 
 test("Pumbility progress uses every Phoenix 2 title and rank boundary", () => {
@@ -717,7 +708,7 @@ test("chart video links are accessible external links on every requested surface
   );
   assert.match(
     tierList,
-    /className="chart-art-rail"[\s\S]*<ChartVideoLink[\s\S]*chartId=\{chart\.chartId\}[\s\S]*variant="tier"/,
+    /className="tier-row-button"[\s\S]*details\.select\(chart\)/,
   );
   assert.match(
     tierList,
@@ -822,7 +813,7 @@ test("recommendation page lazy-loads and generation-caches one mode at a time", 
   assert.match(page, /payload\.recommendationsGeneratedAtUtc/);
   assert.match(page, /return currentEntry/);
   assert.match(page, /modes: \{ \[mode\]: modePayload \}/);
-  assert.match(page, /refreshAttemptedPlayersRef\.current\.delete\(playerKey\)/);
+  assert.match(page, /refreshAttemptedPlayersRef\.current\.delete\(selectedKey\)/);
   assert.match(page, /loadingPlayer && !playerPayload && !hasAnyPlayerPayload/);
   assert.match(route, /mode must be one of overall, singles, doubles, or coop/);
   assert.match(route, /difficulty is only valid with mode=overall/);
@@ -1109,78 +1100,40 @@ test("Singles and Doubles estimates keep tenths while Co-op stays whole-numbered
   assert.match(pages[1], /isCoop[\s\S]*formatCoopEstimatedDifficulty\(chart\.estimatedDifficulty\)[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
 });
 
-test("tier list uses compact segmented controls for grouping and layout", async () => {
-  const [page, css] = await Promise.all([
-    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
-    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
-  ]);
-
-  assert.match(page, /type GroupingView = "tiers" \| "estimated"/);
+test("Tier Lists discloses filters and display while preserving metric and grouping semantics", async () => {
+  const page = await readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8");
   assert.match(page, /useState<GroupingView>\("estimated"\)/);
-  assert.match(page, /Scoring Difficulty Tier List/);
-  assert.match(page, /Clearing Difficulty Tier List/);
-  assert.match(page, /Pumbility Tier List/);
   assert.match(page, /aria-label="Tier list metric"/);
+  assert.match(page, /aria-label="Scoring goal"/);
   assert.match(page, /disabled=\{mode === "coop" && activeMetric !== "scoring"\}/);
-  assert.doesNotMatch(page, /Combined scoring tier list|Scoring-based Tier List/);
-  assert.match(page, /<span>Estimated<br \/>Difficulty<\/span>/);
-  assert.match(page, /Tier Bands/);
-  assert.match(page, /aria-label="Difficulty grouping"[\s\S]*className=\{`view-switcher\$\{activeMode === "coop" \? " single-option" : ""\}`\}[\s\S]*role="group"/);
-  assert.match(page, /aria-label="Chart layout" className="view-switcher" role="group"/);
-  assert.match(page, /aria-pressed=\{activeMode === "coop" \|\| groupingView === "estimated"\}/);
-  assert.match(css, /\.results-switchers \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
-  assert.match(css, /\.view-switcher button \{[^}]*font-size: clamp\(6px, 2vw, 8px\);/);
-  assert.match(css, /\.view-switcher button \{[^}]*line-height: 1\.15;[^}]*min-height: 42px;[^}]*white-space: normal;/);
-  assert.match(css, /max-width: calc\(100vw - 24px\)/);
+  assert.match(page, /hidden=\{!filtersOpen\}/);
+  assert.match(page, /hidden=\{!displayOpen\}/);
+  assert.match(page, /aria-label="Difficulty grouping"/);
+  assert.match(page, /aria-label="Chart layout"/);
   assert.match(page, /estimatedTierGroups\(filteredCharts, activeMetric, activeMode\)/);
   assert.match(page, /tierBandCharts\(filteredCharts, activeMetric, group.rank\)/);
-  assert.doesNotMatch(page, /Grouped by truncated one-decimal estimate|easier to score|harder to score/);
-  assert.doesNotMatch(page, /showUnrated|Include unrated|unrated-toggle/);
-  assert.match(page, /className="search-field"[\s\S]*?className="level-field"/);
-  assert.match(page, /<span>Search songs or step artists<\/span>/);
-  assert.match(page, /placeholder="Sorceress Elise"/);
-  assert.match(page, /headingId="unrated-charts" label="Unrated"/);
-  assert.match(css, /\.filter-bar \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(120px, 1fr\);/);
-  assert.match(css, /\.tier-list-page \{ --tier-list-gap: 16px; \}/);
-  assert.match(css, /\.results-controls \{[^}]*padding: var\(--tier-list-gap\) 2px;/);
-  assert.match(css, /\.tiers \{[^}]*gap: 24px;/);
-  assert.match(css, /\.page-title-hero h1 \{[^}]*font-size: clamp\(14px, 4\.8vw, 20px\);[^}]*white-space: nowrap;/);
+  assert.match(page, /Clear filters/);
+  assert.match(page, /aria-label="Applied filters"/);
+  assert.doesNotMatch(page, /Estimated<br|<PlayerPicker|tier-player-select/);
 });
 
-test("tier list compact layout uses art-only buttons and a details dialog", async () => {
-  const [page, css] = await Promise.all([
-    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
-    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
-  ]);
-
-  assert.match(page, /type LayoutView = "detailed" \| "compact"/);
+test("Tier Lists named tiles preserve compact details access and four mobile columns", async () => {
+  const page = await readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8");
+  const css = await readFile(path.join(process.cwd(), "app", "tier-list", "tier-list.css"), "utf8");
+  const tile = page.slice(page.indexOf("function CompactChartCard"), page.indexOf("function CompactChartGrid"));
   assert.match(page, /useState<LayoutView>\("compact"\)/);
-  assert.match(page, />Compact<\/button>/);
-  assert.match(page, />Detailed<\/button>/);
-  assert.match(page, /className="compact-chart-card"/);
-  assert.match(page, /className="compact-chart-button"/);
-  assert.doesNotMatch(page, /function CompactChartCard[\s\S]*?<h3>\{chart\.songName\}<\/h3>/);
+  assert.match(page, /Named grid/);
+  assert.match(page, /Readable list/);
+  assert.match(tile, /\{chart.songName\}/);
+  assert.match(tile, /chartBpmLabel\(chart\)/);
   assert.match(page, /role="dialog"/);
   assert.match(page, /aria-modal="true"/);
-  assert.match(page, /chart-difficulty-badge/);
   assert.match(page, /compact=\{layoutView === "compact"\}/);
-  assert.match(page, /<TierDivider[\s\S]*headingId=\{sectionId\}[\s\S]*label=\{label\}/);
-  assert.doesNotMatch(page, /<TierDivider[^>]*(?:count|detail)=/);
-  const tierDivider = page.slice(page.indexOf("function TierDivider"), page.indexOf("function ChartDetailDialog"));
-  assert.doesNotMatch(tierDivider, /tier-divider-detail|tier-count|\{count\}|\{detail\}/);
-  assert.doesNotMatch(css, /\.tier, \.unrated-section \{[^}]*background:/);
-  assert.doesNotMatch(css, /\.tier, \.unrated-section \{[^}]*border:/);
-  assert.doesNotMatch(css, /\.unrated-section header/);
-  assert.match(css, /\.tier-divider-leading \{[^}]*flex: 0 0 24px;/);
-  assert.match(css, /\.tier-divider-trailing \{[^}]*flex: 1 1 auto;/);
-  assert.match(css, /\.tier-divider h2 \{[^}]*font-size: 14px;[^}]*font-weight: 800;[^}]*letter-spacing: 0\.03em;[^}]*text-transform: uppercase;/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.tier-divider h2 \{ font-size: 14px;/);
-  assert.match(css, /\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(84px, 96px\)\);/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\);/);
-  assert.match(css, /@media \(max-width: 389px\)[\s\S]*\.compact-chart-grid \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
-  assert.doesNotMatch(css, /\.compact-chart-card \{[^}]*background:/);
-  assert.doesNotMatch(css, /\.compact-chart-card \{[^}]*border:/);
-  assert.match(css, /\.compact-jacket \{[^}]*aspect-ratio: 1;/);
+  const divider = page.slice(page.indexOf("function TierDivider"), page.indexOf("function ChartDetailDialog"));
+  assert.doesNotMatch(divider, /tier-divider-leading|tier-count|\{count\}/);
+  assert.match(css, /repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(css, /-webkit-line-clamp: 2/);
+  assert.doesNotMatch(css, /min-height:\s*2\.8em/);
 });
 
 test("tier list chart details provide local mode-specific what-if estimates", async () => {
@@ -1231,24 +1184,17 @@ test("tier list chart details provide local mode-specific what-if estimates", as
   assert.match(css, /\.chart-dialog-body \.what-if-control \{[^}]*bottom: 0;[^}]*right: 0;/);
 });
 
-test("chart art uses mode-colored borders in every rendering layout", async () => {
-  const [tierList, recommendations, css] = await Promise.all([
-    readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
-    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
-    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
-  ]);
-
-  assert.match(tierList, /className="chart-art jacket" data-chart-type=\{chart\.type\}/);
-  assert.match(tierList, /className="chart-art compact-jacket" data-chart-type=\{chart\.type\}/);
-  assert.match(recommendations, /className="chart-art recommendation-jacket" data-chart-type=\{chart\.type\}/);
-  assert.match(recommendations, /chart-difficulty-badge chart-difficulty-\$\{chart\.type\.toLowerCase\(\)\}[\s\S]*\{chart\.level\}/);
-  assert.match(css, /--chart-single-border: #ff4a4a;/);
-  assert.match(css, /--chart-double-border: #39d96a;/);
-  assert.match(css, /--chart-coop-border: #f3ce55;/);
-  assert.match(css, /\.chart-art\[data-chart-type="Single"\] \{ border: 1px solid var\(--chart-single-border\); \}/);
-  assert.match(css, /\.chart-art\[data-chart-type="Double"\] \{ border: 1px solid var\(--chart-double-border\); \}/);
-  assert.match(css, /\.chart-art\[data-chart-type="CoOp"\] \{ border: 1px solid var\(--chart-coop-border\); \}/);
-  assert.match(css, /\.recommendation-jacket \.chart-difficulty-coop \{ background: #d5a91b; color: #171207; \}/);
+test("plain chart artwork retains numeric mode-colored badges", async () => {
+  const tierList = await readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8");
+  const recommendations = await readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8");
+  const css = await readFile(path.join(process.cwd(), "app", "globals.css"), "utf8");
+  assert.match(tierList, /chart-difficulty-badge chart-difficulty-/);
+  assert.match(tierList, /chartCountLabel\(chart\)/);
+  assert.match(recommendations, /chart-difficulty-badge chart-difficulty-/);
+  assert.match(css, /chart-difficulty-double[^}]*background: #176b3a/);
+  assert.match(css, /chart-difficulty-coop[^}]*background: #d5a91b/);
+  assert.match(css, /\.chart-art\[data-chart-type\] \{ border: 0;/);
+  assert.match(css, /img \{ box-shadow: none; filter: none; transform: none; transition: none;/);
 });
 
 test("recommendation cards show a compact grade and plate goal", async () => {
@@ -1259,7 +1205,7 @@ test("recommendation cards show a compact grade and plate goal", async () => {
 
   assert.match(page, /`Goal: \$\{chart\.projectedGrade\} \$\{chart\.projectedPlateCode\}`/);
   assert.match(page, /className="recommendation-goal"/);
-  assert.match(page, /<b>\{goal\}<\/b>/);
+  assert.match(page, /Goal: <ResultGrade grade=\{chart.projectedGrade\} \/> <ResultPlate plate=\{chart.projectedPlateCode\} \/>/);
   assert.doesNotMatch(page, /GRADE_GOAL_SCORES|PLATE_CRITERIA|misses|goal\.criterion|goal\.summary/);
   assert.match(css, /\.recommendation-value \{[^}]*border-left: 1px solid var\(--line\);[^}]*padding-left: 18px;/);
   assert.doesNotMatch(css, /\.recommendation-goal \{[^}]*border-top/);
@@ -1316,27 +1262,16 @@ test("mobile recommendation cards keep gain on the right and show estimated diff
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendation-mode-tabs button \{[^}]*gap: 4px;[^}]*min-width: 0;[^}]*padding: 8px 3px;/);
 });
 
-test("recommendation player picker shares a 2-to-1 row with the view switch", async () => {
-  const [page, css] = await Promise.all([
-    readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
-    readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
-  ]);
-
-  assert.match(page, /<ScoreSyncLink className="player-score-sync-link" \/>/);
-  assert.doesNotMatch(page, /playersPayload\.players\.length\.toLocaleString\(\).*usernames/);
-  assert.doesNotMatch(page, /Only usernames shared with this community tool are listed/);
-  assert.match(css, /\.player-picker-meta \.player-score-sync-link \{[^}]*background: transparent;[^}]*color: #7d867e;[^}]*text-decoration: underline;/);
-  assert.match(css, /\.recommendations-page \{ --recommendations-stack-gap: 16px; \}/);
-  assert.match(css, /\.recommendations-hero \{[^}]*padding: 0 24px var\(--recommendations-stack-gap\);/);
-  assert.match(css, /\.recommendation-mode-row \{[^}]*margin-bottom: var\(--recommendations-stack-gap\);/);
-  assert.match(css, /\.top-recommendations \{[^}]*margin-top: var\(--recommendations-stack-gap\);/);
+test("Recommendations retains its view switch and uses shared player management", async () => {
+  const page = await readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8");
+  const header = await readFile(path.join(process.cwd(), "app", "_components", "site-header.tsx"), "utf8");
+  assert.doesNotMatch(page, /<PlayerPicker|id="player-select"/);
+  assert.match(page, /<PlayerRequired feature="recommendations"/);
   assert.match(page, /role="switch"/);
   assert.match(page, /aria-checked=\{recommendationView === "top50"\}/);
-  assert.match(page, /<span>Recommendations<\/span>[\s\S]*<span>\{activeMode === "coop" \? "Scores" : "Top 50"\}<\/span>/);
-  assert.match(css, /\.player-picker \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(0, 1fr\);[^}]*width: 100%;/);
-  assert.match(css, /\.player-picker-meta \{[^}]*grid-column: 1 \/ -1;/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendations-page \{ --recommendations-stack-gap: 14px; \}/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendations-hero \{[^}]*padding: 0 12px var\(--recommendations-stack-gap\);/);
+  assert.match(page, /<span>Recommendations<\/span>[\s\S]*Top 50/);
+  assert.match(header, /openChooser/);
+  assert.match(header, /href=\{SCORE_SYNC_URL\}/);
 });
 
 test("Top 50 cards expose PIU result data and open an accessible detail dialog", async () => {
@@ -1351,12 +1286,12 @@ test("Top 50 cards expose PIU result data and open an accessible detail dialog",
   assert.match(page, /className="top-score-copy"/);
   assert.match(page, /function topScoreValue\(score: RecommendationTopScore\)/);
   assert.match(page, /score\.score === undefined \? "—"/);
-  assert.match(page, /\{score\.grade \|\| "—"\}/);
-  assert.match(page, /\{score\.plateCode \|\| "—"\}/);
+  assert.match(page, /<ResultGrade grade=\{score.grade \|\| gradeForScore\(score.score\)\}/);
+  assert.match(page, /<ResultPlate plate=\{score.plateCode \|\| score.plate\}/);
   assert.doesNotMatch(page, /className="top-score-copy-score"/);
-  assert.match(page, /className="top-score-score">\{scoreValue\}<\/b>/);
+  assert.match(page, /<ResultScore className="top-score-score" formattedScore=\{scoreValue\}/);
   assert.match(page, /className="top-score-grade">/);
-  assert.match(page, /<small>Score<\/small><strong>\{topScoreValue\(score\)\}<\/strong>/);
+  assert.match(page, /<small>Score<\/small><strong><ResultScore formattedScore=\{topScoreValue\(score\)\}/);
   assert.match(page, /function topScoreRating\(score: RecommendationTopScore\)/);
   assert.match(page, /pumbilityLabel\(rating\)/);
   assert.match(page, /className="chart-dialog top-score-dialog"/);

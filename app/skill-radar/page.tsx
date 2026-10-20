@@ -3,17 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChartVideoLink } from "../_components/chart-video-link";
 import { ExplanatorySection } from "../_components/explanatory-section";
-import { PlayerPicker } from "../_components/player-picker";
+import { usePlayerProfile } from "../_components/player-profile-provider";
+import { PlayerRequired } from "../_components/player-required";
+import { PlayerResult } from "../_components/player-result";
 import { RefreshMeta } from "../_components/refresh-meta";
 import { GlobalRefreshNotice } from "../_components/global-refresh-notice";
-import { ScoreSyncLink } from "../_components/score-sync-link";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh } from "../../lib/refresh-reliability";
 import { formatEstimatedDifficulty } from "../../lib/format-difficulty";
 import { formatTierScore } from "../../lib/tier-filters";
-import { RADAR_GROUPS, RADAR_MODES, radarAxisLabelLayout, radarPlayerFromUrl, radarPlayerUrl, radarPoint, validateSkillRadarResponse, type RadarBucket, type RadarMode, type RadarSuggestion, type SkillRadarResponse } from "../../lib/skill-radar";
-import type { PlayerRefreshResponse, RecommendationPlayersResponse } from "../../lib/types";
+import { RADAR_GROUPS, RADAR_MODES, radarAxisLabelLayout, radarPoint, validateSkillRadarResponse, type RadarBucket, type RadarMode, type RadarSuggestion, type SkillRadarResponse } from "../../lib/skill-radar";
+import type { PlayerRefreshResponse } from "../../lib/types";
 import "./skill-radar.css";
 
 const summaryId = (key: string) => `radar-summary-${encodeURIComponent(key)}`;
@@ -88,7 +89,7 @@ function ContributionDialog({bucket, onClose}: {bucket: RadarBucket; onClose: ()
       <ol className="radar-contributors">{bucket.contributingCharts.map((chart, index) => {
         return <li className="radar-contribution" key={chart.chartId}>
           <span className="radar-contribution-rank">{index + 1}</span>
-          <div className="radar-contribution-jacket chart-art" data-chart-type={chart.type} aria-hidden="true">{chart.imageUrl ? <img alt="" src={chart.imageUrl} /> : <span>{chart.difficulty}</span>}</div><div className="radar-contribution-copy"><strong>{chart.songName}</strong><span><b>{chart.difficulty}</b> · {chart.score === null ? "No recorded score" : chart.score.toLocaleString()}{chart.plate ? ` ${chart.plate}` : ""}</span></div><b className="radar-contribution-pumbility">{chart.pumbility.toFixed(2)}</b>
+          <div className="radar-contribution-jacket chart-art" data-chart-type={chart.type} aria-hidden="true">{chart.imageUrl ? <img alt="" src={chart.imageUrl} /> : <span>{chart.difficulty}</span>}</div><div className="radar-contribution-copy"><strong>{chart.songName}</strong><span><b>{chart.difficulty}</b> · <PlayerResult compact plate={chart.plate} score={chart.score} /></span></div><b className="radar-contribution-pumbility">{chart.pumbility.toFixed(2)}</b>
         </li>;
       })}</ol>
       <p className="radar-contributor-total"><span>Average Pumbility</span><strong>{bucket.selectedCharts ? (total / bucket.selectedCharts).toFixed(2) : "—"}</strong></p>
@@ -103,7 +104,7 @@ function SuggestionRow({chart}: {chart: RadarSuggestion}) {
   return <li className="radar-chart-row">
     <div className="radar-jacket chart-art" data-chart-type={chart.type} aria-hidden="true">{chart.imageUrl ? <img alt="" loading="lazy" src={chart.imageUrl} /> : <span>{chart.difficulty}</span>}</div>
     <div className="radar-chart-copy"><strong>{chart.songName}</strong><span><b>{chart.difficulty}</b> official · {prefix}{formatEstimatedDifficulty(chart.estimatedDifficulty)} calculated</span><details className="radar-song-details"><summary>Chart details</summary><span>{bpm} BPM</span></details></div>
-    <div className="radar-personal-score" aria-label={chart.personalScore === null ? "No recorded score" : `${chart.personalScore.toLocaleString()} points${chart.personalPlate ? `, ${chart.personalPlate}` : ""}`} title={chart.personalScore?.toLocaleString()}><b>{chart.personalScore === null ? "—" : formatTierScore(chart.personalScore)}</b><span>{chart.personalPlate ?? ""}</span></div>
+    <PlayerResult className="radar-personal-score" compact formattedScore={chart.personalScore === null ? undefined : formatTierScore(chart.personalScore)} plate={chart.personalPlate} score={chart.personalScore} />
     <ChartVideoLink chartId={chart.chartId} difficulty={chart.difficulty} songName={chart.songName} variant="recommendation" />
   </li>;
 }
@@ -125,17 +126,15 @@ function BucketSummary({bucket, expanded, onSelect}: {bucket: RadarBucket; expan
 }
 
 export default function SkillRadarPage() {
-  const [players, setPlayers] = useState<RecommendationPlayersResponse | null>(null);
-  const [playerKey, setPlayerKey] = useState("");
-  const [query, setQuery] = useState("");
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [profile, setProfile] = useState<SkillRadarResponse | null>(null);
+  const { playerKey, players } = usePlayerProfile();
+  const activePlayerKeyRef = useRef(playerKey);
+  activePlayerKeyRef.current = playerKey;
+  const [profilePayload, setProfile] = useState<SkillRadarResponse | null>(null);
+  const profile = profilePayload?.player.playerKey === playerKey ? profilePayload : null;
   const [selected, setSelected] = useState("");
   const [inspected, setInspected] = useState("");
   const [loading, setLoading] = useState(false);
-  const [playersLoading, setPlayersLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [playersError, setPlayersError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [now, setNow] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -143,43 +142,29 @@ export default function SkillRadarPage() {
   const refreshController = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    const apply = () => { const key = radarPlayerFromUrl(window.location.search); setPlayerKey(key); if (!key) setQuery(""); };
-    apply(); window.addEventListener("popstate", apply);
-    return () => window.removeEventListener("popstate", apply);
-  }, []);
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/skill-radar/players", {signal:controller.signal, cache:"no-store"})
-      .then(response => readJsonResponse<RecommendationPlayersResponse>(response)).then(setPlayers)
-      .catch(error => {if (!controller.signal.aborted) setPlayersError(error instanceof Error ? error.message : "Players could not be loaded.");})
-      .finally(() => {if (!controller.signal.aborted) setPlayersLoading(false);});
-    return () => controller.abort();
-  }, []);
-  useEffect(() => {
     setInspected("");
     if (!playerKey) {setProfile(null); setError(null); setLoading(false); return;}
     const controller = new AbortController();
-    setLoading(true); setError(null); setProfile(null);
+    const isCurrent = () => !controller.signal.aborted && activePlayerKeyRef.current === playerKey;
+    setSelected(""); setLoading(true); setError(null); setProfile(null);
     fetch(`/api/skill-radar?${new URLSearchParams({playerKey})}`, {signal:controller.signal, cache:"no-store"})
       .then(response => readJsonResponse<unknown>(response)).then(value => validateSkillRadarResponse(value, playerKey))
-      .then(value => {if (!controller.signal.aborted) {setProfile(value); setSelected(value.groups.weaknesses[0] ?? value.buckets[0]?.key ?? "");}})
-      .catch(error => {if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "Skill Radar could not be loaded.");})
-      .finally(() => {if (!controller.signal.aborted) setLoading(false);});
+      .then(value => {if (isCurrent()) {setProfile(value); setSelected(value.groups.weaknesses[0] ?? value.buckets[0]?.key ?? "");}})
+      .catch(error => {if (isCurrent()) setError(error instanceof Error ? error.message : "Skill Radar could not be loaded.");})
+      .finally(() => {if (isCurrent()) setLoading(false);});
     return () => controller.abort();
   }, [attempt, playerKey]);
-  useEffect(() => {
-    const player = players?.players.find(player => player.playerKey === playerKey);
-    if (playerKey) setQuery(player?.displayName ?? profile?.player.displayName ?? "");
-  }, [playerKey, players, profile]);
   useEffect(() => {setNow(Date.now()); const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => window.clearInterval(timer);}, []);
   useEffect(() => {setRefreshing(false); setRefreshMessage(null); return () => refreshController.current?.abort();}, [playerKey]);
 
   const refreshScores = async () => {
     if (!playerKey || refreshing) return;
     const controller = new AbortController(); refreshController.current = controller;
+    const isCurrent = () => !controller.signal.aborted && activePlayerKeyRef.current === playerKey;
     setRefreshing(true); setRefreshMessage(null);
     try {
       const started = await readJsonResponse<PlayerRefreshResponse>(await fetch(`/api/recommendations/refresh?${new URLSearchParams({playerKey, mode:"singles"})}`, {method:"POST", signal:controller.signal, cache:"no-store"}));
+      if (!isCurrent()) return;
       if (started.outcome !== "fresh") {
         const waited = await waitForPlayerRefresh({
           initial: started.job,
@@ -191,18 +176,14 @@ export default function SkillRadarPage() {
           setRefreshMessage("Your score update is still pending. Use Update scores later to check the result.");
           return;
         }
+        if (!isCurrent()) return;
       }
-      if (!controller.signal.aborted) {setRefreshMessage(null); setAttempt(value => value + 1);}
+      if (isCurrent()) {setRefreshMessage(null); setAttempt(value => value + 1);}
     } catch (error) {
-      if (!controller.signal.aborted) setRefreshMessage(error instanceof Error ? error.message : "Scores could not be updated.");
-    } finally {if (!controller.signal.aborted) setRefreshing(false);}
+      if (isCurrent()) setRefreshMessage(error instanceof Error ? error.message : "Scores could not be updated.");
+    } finally {if (isCurrent()) setRefreshing(false);}
   };
 
-  const selectPlayer = useCallback((key: string, displayName = "") => {
-    setPlayerKey(key); setQuery(displayName); setProfile(null); setSelected("");
-    const url = radarPlayerUrl(window.location.href, key);
-    if (url.href !== window.location.href) window.history.pushState({}, "", url);
-  }, []);
   const buckets = useMemo(() => new Map(profile?.buckets.map(bucket => [bucket.key, bucket]) ?? []), [profile]);
   const selectBucket = (key: string) => setSelected(current => current === key ? "" : key);
   const closeContributions = useCallback(() => setInspected(""), []);
@@ -212,11 +193,10 @@ export default function SkillRadarPage() {
     <SiteHeader active="skill-radar" />
     <div className="radar-page-content">
       <header className="radar-page-heading"><h1>Skill Radar</h1><div className="refresh-meta-group"><RefreshMeta generatedAtUtc={profile?.playerSyncedAtUtc} label="Scores updated" loading={loading} loadingLabel="Loading Skill Radar..." nowMs={now} /><RefreshMeta delayedAfterMs={MODEL_DELAY_THRESHOLD_MS} generatedAtUtc={profile?.tierGeneratedAtUtc} label="Suggestions updated" loadingLabel="Loading suggestions..." nowMs={now} /></div><GlobalRefreshNotice surface="tier" nowMs={now} publishedAtUtc={profile?.tierGeneratedAtUtc} /></header>
-      <section className="player-picker radar-player-picker"><label htmlFor="radar-player-select">Phoenix 2 username</label><PlayerPicker disabled={playersLoading || !players?.players.length} id="radar-player-select" players={players?.players ?? []} selectedKey={playerKey} query={query} open={menuOpen} onOpenChange={setMenuOpen} onQueryChange={value => {selectPlayer("", value); setMenuOpen(true);}} onSelect={selectPlayer} /><ScoreSyncLink className="radar-score-sync">Sync scores</ScoreSyncLink>{playerKey && players?.refreshSupported && process.env.NEXT_PUBLIC_LOCAL_ANALYSIS !== "1" ? <button className="radar-refresh-button" disabled={refreshing || loading} onClick={() => void refreshScores()} type="button">{refreshing ? "Updating scores..." : "Update scores"}</button> : null}</section>
-      {playersError ? <p className="radar-error" role="alert">{playersError}</p> : null}
+      {playerKey && players?.refreshSupported && process.env.NEXT_PUBLIC_LOCAL_ANALYSIS !== "1" ? <button className="radar-refresh-button" disabled={refreshing || loading} onClick={() => void refreshScores()} type="button">{refreshing ? "Updating scores..." : "Update scores"}</button> : null}
       {refreshMessage ? <p className="radar-error" role="status">{refreshMessage}</p> : null}
       <div aria-busy={loading} className="radar-profile">
-        {error ? <div className="radar-empty radar-error" role="alert"><p>{error}</p><button type="button" onClick={() => setAttempt(value => value + 1)}>Retry</button></div> : loading ? <p className="radar-empty" role="status">Loading Skill Radar...</p> : !profile ? <p className="radar-empty">Select a player.</p> : <div className="radar-workspace">
+        {!playerKey ? <PlayerRequired feature="skill radar" /> : error ? <div className="radar-empty radar-error" role="alert"><p>{error}</p><button type="button" onClick={() => setAttempt(value => value + 1)}>Retry</button></div> : loading ? <p className="radar-empty" role="status">Loading Skill Radar...</p> : !profile ? <p className="radar-empty" role="status">Preparing Skill Radar...</p> : <div className="radar-workspace">
           <div className="radar-plot-panel"><h2>{profile.player.displayName}</h2><RadarPlot profile={profile} selected={selected} onInspect={setInspected} onSelect={key => {setSelected(key); document.getElementById(summaryId(key))?.focus();}} /></div>
           <div className="radar-groups">{RADAR_GROUPS.map(group => <section aria-labelledby={`radar-group-${group.key}`} className="radar-group" key={group.key}><h2 id={`radar-group-${group.key}`}>{group.label}</h2>{profile.groups[group.key].length ? profile.groups[group.key].map(key => {const bucket = buckets.get(key)!; return <BucketSummary bucket={bucket} expanded={selected === key} key={key} onSelect={() => selectBucket(key)} />;}) : <p className="radar-group-empty">No established strengths yet.</p>}</section>)}</div>
         </div>}
