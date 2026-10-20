@@ -57,6 +57,8 @@ def write_checkpoint(store, payload: Mapping[str, Any], *, stage: str,
     # An identical content-addressed write is idempotent. No mutable artifact
     # path is used for checkpoint payloads, including concurrent retries.
     # The private bucket accepts opaque binary artifacts, including gzip files.
+    from tier_diagnostics import event
+    event("tier_checkpoint_upload", stage=stage, artifact_bytes=len(body))
     store.put_bytes(path, body, content_type="application/octet-stream")
     return {"version": 1, "stage": stage, "identity": identity,
             "predecessorSha256": predecessor, "path": path,
