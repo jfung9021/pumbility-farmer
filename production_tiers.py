@@ -1190,9 +1190,12 @@ def advance_goal_backfill(store, *, pinned_inputs_reference, goal, on_progress=N
         inputs = goal_input_identity(captured["first"], captured["second"], catalog=catalog,
             manifest_sha256=canonical_scoring_manifest_sha256(captured["manifest"]), policy=policy.public())
         generation = digest(task_identity)
-        context_ref = write_checkpoint(store, {"first": first, "second": second, "catalog": catalog,
+        # Raw captures are already pinned. Retain their exact filtered hashes,
+        # not duplicate snapshot/provenance trees beside prepared observations.
+        context_ref = write_checkpoint(store, {"catalog": catalog,
             "policy": policy.public(), "policySemanticSha256": policy.semantic_hash(),
-            "merged": merged, "prepared": prepared},
+            "sourceHashes": {"phoenix1": digest(first), "phoenix2": digest(second)},
+            "merged": {"manifestSha256": merged.get("manifestSha256")}, "prepared": prepared},
             stage="goal-context", identity=generation)
         state = {"version": 1, "identity": task_identity, "inputIdentity": inputs,
             "context": context_ref, "createdAtUtc": captured["generatedAtUtc"],
@@ -1223,7 +1226,7 @@ def advance_goal_backfill(store, *, pinned_inputs_reference, goal, on_progress=N
             if on_progress: on_progress(progress)
             return progress
     captured = read_checkpoint(store, state["context"], stage="goal-context", identity=digest(task_identity))
-    context = (captured["first"], captured["second"], captured["catalog"],
+    context = (None, None, captured["catalog"],
                SimpleNamespace(public=lambda: captured["policy"],
                                semantic_hash=lambda: captured["policySemanticSha256"]),
                captured["merged"], captured["prepared"])
@@ -1235,7 +1238,8 @@ def advance_goal_backfill(store, *, pinned_inputs_reference, goal, on_progress=N
         boards, _, _ = cohort(captured["prepared"], goal, item["source"], item["mode"])
         hydrate_point_context(store, boards, cached["fit"], score_target=item["identity"]["target"])
         fits[item["source"]][item["mode"]] = cached["fit"]
-    artifact = build_goal_artifact(context, fits, state["fits"], state["createdAtUtc"], goal=goal)
+    artifact = build_goal_artifact(context, fits, state["fits"], state["createdAtUtc"], goal=goal,
+                                   source_hashes=captured["sourceHashes"])
     artifact["inputIdentity"] = inputs
     reference = write_checkpoint(store, artifact, stage="scoring-goal", identity=digest({"inputs": inputs, "recipe": recipe}))
     store.put_json(_goal_index_path(inputs, goal), {"version": 1, "recipe": recipe,

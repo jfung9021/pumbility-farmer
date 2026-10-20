@@ -153,7 +153,7 @@ class GoalOverlayTests(unittest.TestCase):
 
 
 class GoalBuilderTests(unittest.TestCase):
-    def build(self, target, *, empty_double=False):
+    def build(self, target, *, empty_double=False, compact_context=False):
         _, prepared, fits = fixture()
         for source in ("official", "submitted"):
             prepared[source]["boards"] = {}
@@ -183,9 +183,17 @@ class GoalBuilderTests(unittest.TestCase):
             return {"data": data, "fit": point, "diagnostics": {"converged": point is not None}}
 
         with patch("sss_scoring_refinement.recover_point_fit", side_effect=point_context):
-            result = build_goal_artifact(context, fits, references(target.key), "2026-10-20T00:00:00Z", goal=target.key)
+            arguments = {}
+            if compact_context:
+                arguments["source_hashes"] = {"phoenix1": digest(context[0]), "phoenix2": digest(context[1])}
+                context = (None, None, *context[2:])
+            result = build_goal_artifact(context, fits, references(target.key), "2026-10-20T00:00:00Z",
+                                         goal=target.key, **arguments)
         self.assertEqual((digest(prepared), digest(fits)), frozen)
         return result
+
+    def test_compact_context_preserves_the_entire_goal_artifact(self):
+        self.assertEqual(self.build(SS), self.build(SS, compact_context=True))
 
     def test_targets_get_independent_calibration_and_honest_metadata(self):
         for target in (SS, SSPLUS):

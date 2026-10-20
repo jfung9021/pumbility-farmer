@@ -84,7 +84,8 @@ def _empty_rows(catalog: Mapping[str, Any]) -> dict:
     return result
 
 
-def build_goal_artifact(context, fits, fit_identities, generated_at_utc, *, goal: str) -> dict:
+def build_goal_artifact(context, fits, fit_identities, generated_at_utc, *, goal: str,
+                        source_hashes: Mapping[str, str] | None = None) -> dict:
     """Build one target from four independent fits; never modify a legacy metric."""
     from production_tiers import SAMPLES, SEED, validate_fit
     from sss_folder_centering import centering_folders, shift_scoring
@@ -94,6 +95,10 @@ def build_goal_artifact(context, fits, fit_identities, generated_at_utc, *, goal
     _need(goal in BACKFILL_GOALS, "Only independently backfilled targets use this builder.")
     target = get_scoring_target(goal)
     first, second, _, policy, merged, prepared = context
+    hashes = ({"phoenix1": digest(first), "phoenix2": digest(second)}
+              if source_hashes is None else dict(source_hashes))
+    _need(set(hashes) == {"phoenix1", "phoenix2"} and all(_hash(value) for value in hashes.values()),
+          "The captured scoring-goal source hashes are invalid.")
     result = _empty_rows(prepared["catalog"])
     calibrations, diagnostics = {}, {}
     expected_cohorts = {(source, mode) for source in ("official", "submitted") for mode, _ in MODES}
@@ -158,7 +163,7 @@ def build_goal_artifact(context, fits, fit_identities, generated_at_utc, *, goal
                        "single-midpoint-compression", "target-tail-policy", "component-mean-and-ranks"]}
     return {"schemaVersion": 1, "goal": goal, "targetConfig": target.public(),
         "generatedAtUtc": generated_at_utc,
-        "sourceHashes": {"phoenix1": digest(first), "phoenix2": digest(second),
+        "sourceHashes": {**hashes,
                          "manifest": merged.get("manifestSha256"), "sourcePolicy": policy.semantic_hash()},
         "method": method,
         "charts": {row["chartId"]: row["scoringVariants"][goal] for _, key in MODES for row in result[key]}}
