@@ -1024,31 +1024,41 @@ def request_refresh(
             last_heartbeat is None
             or effective_now - last_heartbeat > ACTIVE_JOB_STALE_AFTER
         ):
-            from pumbility_store import JobLeaseLostError
-
-            try:
-                update_job(
-                    jobs,
+            fail_stale = getattr(jobs, "fail_stale_active_job", None)
+            if callable(fail_stale):
+                # The database checks lease expiry and releases the matching
+                # active head in one transaction. Re-read after any concurrent
+                # heartbeat, completion, recovery, or head replacement.
+                fail_stale(
                     str(active["id"]),
-                    now=effective_now,
-                    status="failed",
-                    error="The analysis worker stopped reporting progress.",
-                    retryAllowedAtUtc=isoformat_utc(effective_now),
-                    progress={
-                        "current": 0,
-                        "total": 0,
-                        "percent": 0,
-                        "message": "The stale analysis worker was released for a safe retry.",
-                    },
+                    stale_after_seconds=int(ACTIVE_JOB_STALE_AFTER.total_seconds()),
                 )
-            except JobLeaseLostError:
-                # Payload age cannot revoke a worker's database lease. An
-                # expired lease is reclaimed by queue redelivery instead.
-                active = jobs.get(str(active["id"]))
+                active_id = jobs.active_job_id()
+                active = jobs.get(active_id) if active_id else None
             else:
-                jobs.set_active_job_id(None)
-                active_id = None
-                active = None
+                from pumbility_store import JobLeaseLostError
+
+                try:
+                    update_job(
+                        jobs,
+                        str(active["id"]),
+                        now=effective_now,
+                        status="failed",
+                        error="The analysis worker stopped reporting progress.",
+                        retryAllowedAtUtc=isoformat_utc(effective_now),
+                        progress={
+                            "current": 0,
+                            "total": 0,
+                            "percent": 0,
+                            "message": "The stale analysis worker was released for a safe retry.",
+                        },
+                    )
+                except JobLeaseLostError:
+                    active = jobs.get(str(active["id"]))
+                else:
+                    jobs.set_active_job_id(None)
+                    active_id = None
+                    active = None
     if active and active.get("status") in {"queued", "running"}:
         active_mix = resolve_mix(active.get("mix")).key
         if active_mix == mix_spec.key:
