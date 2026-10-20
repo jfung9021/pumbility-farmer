@@ -12,11 +12,42 @@ from canonical_json import canonical_json_sha256 as digest
 
 ROOT = Path(__file__).resolve().parent
 F395_SOURCES = {
+    "sss_scoring_model.py": "b68fbc620320fb88fb8bd61645697b7cead54b117a7337dade67ed926c0b4d78",
+    "official_player_scoring.py": "aa60e73de2a947d0e9bd835202097b1cafb0ba76a4387ac1315eaefde7327fad",
+    "scoring_targets.py": "2a5f48fc54d3fbeb09309a0356082f9b9382fdf5748e1b1bca0116aac2f0ce72",
+    "target_fit_cache.py": "a46481986deec5c6df93376ea8b8df021830e45aef8b1471db1e704102e9ba29",
+}
+# The original outer producer hashed raw bytes. Retain the previously recorded
+# Windows checkout as a separate, explicit candidate; its cache module was LF.
+F395_WINDOWS_SOURCES = {
     "sss_scoring_model.py": "004b6941a1ee40378c50f8bf6475342edc1987e1e4709da10aa0c31b1c273ded",
     "official_player_scoring.py": "3943aa8c73ed6500bb2d9221ab3844ad742a44e2a06497686661d83bf875d2d4",
     "scoring_targets.py": "38b91f443d35693e9ff32334c89dcc6509d3ad4500e3dd8f5c2305c4568db673",
     "target_fit_cache.py": "a46481986deec5c6df93376ea8b8df021830e45aef8b1471db1e704102e9ba29",
 }
+# These complete-module ASTs have identical canonical JSON bytes and digests.
+# Preserve the original reachable producer symbols only for this reviewed pair;
+# an unknown transport implementation must keep its own recipe dependencies.
+CANONICAL_HASH_RECIPES = frozenset({
+    "ebaf13f50e8bfe9db8d13766eca5257eaa24bbce5297267e85d511ada17570f9",
+    "1d201995ec4575fda0f322ea64345e3022dc2331d0492863f431bd642f2c143e",
+})
+CANONICAL_HASH_ORIGINAL_SOURCE = rb'''from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any
+
+
+def canonical_json_sha256(value: Any, *, trailing_newline: bool = False) -> str:
+    hasher = hashlib.sha256()
+    encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    for chunk in encoder.iterencode(value):
+        hasher.update(chunk.encode("utf-8"))
+    if trailing_newline:
+        hasher.update(b"\n")
+    return hasher.hexdigest()
+'''
 
 
 def source_recipe(filename, symbols=None):
@@ -40,6 +71,10 @@ def _ast_recipe(source, symbols=None):
                     item.body = item.body[1:]
         selected.append(ast.dump(node, include_attributes=False))
     return digest(selected)
+
+
+def compatible_canonical_source(source):
+    return CANONICAL_HASH_ORIGINAL_SOURCE if _ast_recipe(source) in CANONICAL_HASH_RECIPES else None
 
 
 def numerical_runtime(*libraries):
@@ -67,11 +102,18 @@ def producer_dependencies(roots, *, stage=None):
     """
     ignored = {("production_tiers", "build_hosted_tiers"), ("tier_diagnostics", "event"),
                ("tier_diagnostics", "phase")}
-    parsed, selected, imports_used = {}, {}, {}
+    parsed, selected, imports_used, unapproved_modules = {}, {}, {}, {}
 
     def module_tree(filename):
         if filename not in parsed:
-            tree = ast.parse((ROOT / filename).read_bytes())
+            source = (ROOT / filename).read_bytes()
+            if filename == "canonical_json.py":
+                reviewed = compatible_canonical_source(source)
+                if reviewed is None:
+                    unapproved_modules[filename] = _ast_recipe(source)
+                else:
+                    source = reviewed
+            tree = ast.parse(source)
             definitions, imports = {}, {}
             for node in tree.body:
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -147,7 +189,9 @@ def producer_dependencies(roots, *, stage=None):
                     raise ValueError(f"Dynamic local numerical module dependency: {module}")
                 queue.extend((local, attr) for attr in attributes)
     return {filename: {"symbols": dict(sorted(symbols.items())),
-                       "imports": sorted(imports_used.get(filename, ()))}
+                       "imports": sorted(imports_used.get(filename, ())),
+                       **({"unapprovedModule": unapproved_modules[filename]}
+                          if filename in unapproved_modules else {})}
             for filename, symbols in sorted(selected.items())}
 
 
@@ -166,11 +210,19 @@ def finish_producer_recipe(stage):
 
 
 def legacy_outer_identity():
+    """The original Git/Linux outer producer, retained for singular callers."""
+    candidates = legacy_outer_identities()
+    return candidates[0] if candidates else None
+
+
+def legacy_outer_identities():
     """Only the reviewed f395 numerical producer can adopt its old byte keys."""
     if (compatible_target_source() != F395_TARGET_RECIPE
             or source_recipe("official_player_scoring.py") != F395_BENCHMARK_RECIPE):
-        return None
-    return digest({"sources": F395_SOURCES, **numerical_runtime("numpy", "scipy", "pandas")})
+        return ()
+    runtime = numerical_runtime("numpy", "scipy", "pandas")
+    return tuple(digest({"sources": sources, **runtime})
+                 for sources in (F395_SOURCES, F395_WINDOWS_SOURCES))
 
 
 def compatible_target_source():
@@ -183,6 +235,7 @@ def compatible_target_source():
 def legacy_component_code():
     if legacy_outer_identity() is None:
         return None
+    # Unlike the outer fit key, the original component producer normalized LF.
     return digest({"model": F395_SOURCES["sss_scoring_model.py"],
         "cache": F395_SOURCES["target_fit_cache.py"],
         "numpy": metadata.version("numpy"), "scipy": metadata.version("scipy")})

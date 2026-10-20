@@ -107,6 +107,13 @@ class GoalPublicationTests(unittest.TestCase):
             self.assertEqual(current["schemaVersion"], 59)
             self.assertEqual(current["summary"]["method"]["sssTailPolicy"]["baseSchemaVersion"], 58)
             tiers.validate_public_tiers(current)
+            for key in ("singles", "doubles"):
+                for previous, attached in zip(before[key], current[key], strict=True):
+                    self.assertEqual(previous["chartId"], attached["chartId"])
+                    for field in ("scoringVariants", "pumbilityVariants"):
+                        for goal in ("general", "sss", "sssplus"):
+                            self.assertEqual(previous[field][goal], attached[field][goal])
+                    self.assertEqual(previous["tierMetrics"], attached["tierMetrics"])
             self.assertEqual(general.call_count, 1)
             self.assertEqual(transition.call_count, len(tiers.FINISH_STAGES))
             fitter.assert_not_called()

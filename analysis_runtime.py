@@ -3380,18 +3380,29 @@ def _checkpoint_continuation(
     message: str,
     lease_heartbeat: Any | None,
     sequence: str | None = None,
+    phase_progress: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    progress = {
+        "current": 0,
+        "total": 0,
+        "percent": 0,
+        "phase": continuation,
+        "indeterminate": True,
+        "message": message,
+    }
+    if phase_progress is not None:
+        current_count, total = phase_progress["current"], phase_progress["total"]
+        if (type(current_count) is not int or type(total) is not int
+                or total <= 0 or not 0 <= current_count <= total):
+            raise ValueError("The continuation phase progress is invalid.")
+        progress.update(current=current_count, total=total,
+            percent=int(100 * current_count / total), phase="tier-analysis", indeterminate=False)
     current = update_job(
         job_store,
         job_id,
         status="running",
         stage=stage,
-        progress={
-            "current": 1,
-            "total": 1,
-            "percent": 100,
-            "message": message,
-        },
+        progress=progress,
     )
     _stop_job_lease(lease_heartbeat)
     handoff = getattr(job_store, "handoff_continuation", None)
@@ -4645,8 +4656,11 @@ def execute_analysis_job(
         return completed
     except TierAnalysisPending as exc:
         return _checkpoint_continuation(job_store=job_store, job_id=job_id,
-            continuation="combined", sequence=exc.sequence, stage="analyzing", message=str(exc),
-            lease_heartbeat=lease_heartbeat)
+            continuation="combined", sequence=exc.sequence, stage="analyzing",
+            message=(f"Tier analysis: {exc.completed} of 8 scoring fits saved. {exc}"
+                     if exc.stage == "target-fit" else str(exc)),
+            lease_heartbeat=lease_heartbeat,
+            phase_progress={"current": exc.progress_ordinal, "total": exc.total_stages})
     except Exception as exc:
         _analysis_terminal_event(job_id, job_store, blob_store, checkpoint_path, exc)
         if isinstance(exc, (

@@ -101,3 +101,28 @@ Heavy tier/recommendation fanout, resumable batches inside a single 200-bootstra
 fit, and incremental Clearing evidence are not enabled by this change. Their
 memory/coordinator or numerical contracts require separate bounded work. Current
 same-input fit reuse does not carry bootstrap replicates into a changed cohort.
+
+## Cache compatibility and progress repairs
+
+Independent SS/SS+ goal lookup normalizes integral values in the catalog's
+level, note-count and BPM identity fields. This keeps nullable pandas metadata
+such as `1000.0` compatible with the snapshot's `1000` without changing any
+observations, fractional BPM values or source snapshot identities. Goal artifacts
+still require matching input, producer and checkpoint identities. A changed goal
+recipe requires artifact reassembly; it does not require unchanged target fits
+to be recomputed. Lookup diagnostics report fixed reasons without private data.
+
+The reviewed f395 migration distinguishes raw Git/Linux and known Windows outer
+producer keys from LF-normalized component keys. Tests reconstruct the original
+producer independently and prohibit numerical fitting during successful adoption.
+Current producer keys remain the first lookup path.
+
+Canonical JSON hashing now batches bounded encoder blocks while preserving the
+original bytes, including floats, Unicode and the optional trailing newline.
+Only the explicitly reviewed complete serializer ASTs share the original producer
+recipe. Unapproved source changes invalidate the recipe normally. This prevents
+a serialization-only improvement from invalidating unchanged numerical caches.
+
+Checkpoint progress identifies tier-analysis checkpoint counts separately from
+overall completion. Phases without a measured denominator display as working;
+the operator page does not present their handoffs as a completed refresh.

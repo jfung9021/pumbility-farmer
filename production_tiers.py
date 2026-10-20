@@ -160,28 +160,40 @@ def _scoring_target(goal):
 
 def _cached_fit(store, boards, identity):
     """Narrow-key lookup with one explicit, reviewed legacy producer migration."""
-    from numeric_recipe import legacy_outer_identity
+    from numeric_recipe import legacy_outer_identities
+    from tier_diagnostics import event
     path = fit_path(identity)
     cached = store.get_json(path)
     if cached is not None:
         return cached
-    legacy = legacy_outer_identity()
-    if legacy is None:
+    candidates = legacy_outer_identities()
+    if not candidates:
+        event("target_fit_cache_migration", stage="legacy-outer", cache_hit=False,
+              outcome="producer-incompatible")
         return None
-    old_path = PREFIX + "fits/" + digest({"inputs": identity, "code": legacy}) + ".json"
-    old = store.get_json(old_path)
-    if old is None:
-        return None
-    if old.get("identity") != identity:
-        return None
-    validate_fit(old["fit"], identity)
-    if old["fit"].get("diagnostics", {}).get("validation", {}).get("seed") != identity["seed"]:
-        return None
-    from target_fit_cache import adopt_compatible_components
-    adopt_compatible_components(store, boards, old["fit"], score_target=identity["target"],
-                               bootstrap_samples=identity["samples"], seed=identity["seed"])
-    store.put_json(path, old)
-    return old
+    outcome = "not-found"
+    for legacy in candidates:
+        old_path = PREFIX + "fits/" + digest({"inputs": identity, "code": legacy}) + ".json"
+        old = store.get_json(old_path)
+        if old is None:
+            continue
+        if old.get("identity") != identity:
+            outcome = "input-mismatch"
+            continue
+        validate_fit(old["fit"], identity)
+        if old["fit"].get("diagnostics", {}).get("validation", {}).get("seed") != identity["seed"]:
+            outcome = "seed-mismatch"
+            continue
+        from target_fit_cache import adopt_compatible_components
+        component = adopt_compatible_components(store, boards, old["fit"], score_target=identity["target"],
+                                               bootstrap_samples=identity["samples"], seed=identity["seed"])
+        store.put_json(path, old)
+        event("target_fit_cache_migration", stage="legacy-outer", cache_hit=True, outcome="adopted")
+        event("target_fit_cache_migration", stage="legacy-component", cache_hit=component,
+              outcome="adopted" if component else "not-adopted")
+        return old
+    event("target_fit_cache_migration", stage="legacy-outer", cache_hit=False, outcome=outcome)
+    return None
 
 
 def validate_fit(fit, identity):
@@ -1222,11 +1234,18 @@ def goal_input_identity(first, second, *, catalog, manifest_sha256, policy):
     Operator backfills reconstruct stripped chart records, whereas global jobs
     carry General/recommendation estimates. Both feed the same current catalog;
     those unrelated record/metadata fields are not inputs to target analysis.
+    Pandas promotes nullable numeric columns to floats in the normal path.
+    Normalize only equivalent integral catalog numbers for lookup, without
+    changing the observations or any source snapshot/provenance hash.
     """
     from tier_computation_cache import snapshot_identity
+    numeric_fields = {"level", "noteCount", "bpmMin", "bpmMax"}
+    catalog_identity = [{key: (int(value) if key in numeric_fields
+        and isinstance(value, float) and value.is_integer() else value)
+        for key, value in row.items()} for row in catalog]
     return {"version": 1, "method": "independent-scoring-goal-inputs-v1",
             "phoenix1": snapshot_identity(first), "phoenix2": snapshot_identity(second),
-            "catalog": digest(catalog), "officialManifest": manifest_sha256,
+            "catalog": digest(catalog_identity), "officialManifest": manifest_sha256,
             "sourcePolicy": digest(policy)}
 
 
@@ -1250,18 +1269,33 @@ def matching_goal_artifacts(store, inputs):
     from scoring_targets import BACKFILL_GOALS
     from tier_pipeline_checkpoints import read_checkpoint, CheckpointValidationError
     from pumbility_store import PumbilityArtifactIntegrityError
+    from tier_diagnostics import event
     result = {}
     for goal in BACKFILL_GOALS:
+        outcome = "invalid-checkpoint"
         try:
             index = store.get_json(_goal_index_path(inputs, goal))
-            if not isinstance(index, dict) or index.get("inputIdentity") != inputs or index.get("recipe") != _goal_recipe(goal):
-                continue
-            ref = index["reference"]
-            artifact = read_checkpoint(store, ref, stage="scoring-goal", identity=digest({"inputs": inputs, "recipe": _goal_recipe(goal)}))
-            if artifact.get("inputIdentity") == inputs and artifact.get("targetConfig") == _scoring_target(goal).public():
-                result[goal] = ref
+            if index is None:
+                outcome = "absent-index"
+            elif isinstance(index, dict):
+                recipe = _goal_recipe(goal)
+                if index.get("inputIdentity") != inputs:
+                    outcome = "identity-mismatch"
+                elif index.get("recipe") != recipe:
+                    outcome = "recipe-mismatch"
+                else:
+                    ref = index["reference"]
+                    if not isinstance(ref, dict):
+                        raise TypeError("Invalid scoring-goal checkpoint reference.")
+                    artifact = read_checkpoint(store, ref, stage="scoring-goal", identity=digest({"inputs": inputs, "recipe": recipe}))
+                    if artifact.get("inputIdentity") != inputs:
+                        outcome = "identity-mismatch"
+                    elif artifact.get("targetConfig") == _scoring_target(goal).public():
+                        result[goal] = ref
+                        outcome = "hit"
         except (KeyError, TypeError, CheckpointValidationError, PumbilityArtifactIntegrityError, json.JSONDecodeError):
-            continue
+            pass
+        event("scoring_goal_artifact_lookup", stage="scoring-goal", goal=goal, outcome=outcome)
     return result
 
 
