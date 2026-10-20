@@ -103,8 +103,12 @@ class TierPublicTests(unittest.TestCase):
                          full["summary"]["method"]["level20ScoringWidth"])
         self.assertEqual(compact["doubles"][0]["scoringVariants"]["sss"]["scoringLevel20Width"], width)
         size = len(json.dumps(compact, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
-        with patch("tier_public.MAX_LIST_BYTES", 1), patch("tier_public.MAX_EXPANDED_LIST_BYTES", size):
+        with patch("tier_public.MAX_LIST_BYTES", 1), patch("tier_public.MAX_EXPANDED_LIST_BYTES", 1), \
+             patch("tier_public.MAX_WIDTH_LIST_BYTES", size):
             validate_tier_publication(full, compact)
+        with patch("tier_public.MAX_WIDTH_LIST_BYTES", size-1):
+            with self.assertRaisesRegex(ValueError, "decoded publication size budget"):
+                validate_tier_publication(full, compact)
         with patch("tier_public.MAX_COMPRESSED_LIST_BYTES", 1):
             with self.assertRaisesRegex(ValueError, "compressed publication size budget"):
                 validate_tier_publication(full, compact)
