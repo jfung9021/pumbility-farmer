@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChartVideoLink } from "../_components/chart-video-link";
-import { ExplanatorySection } from "../_components/explanatory-section";
+import aboutStyles from "../about/about.module.css";
 import { usePlayerProfile } from "../_components/player-profile-provider";
 import { PlayerRequired } from "../_components/player-required";
 import { PlayerResult } from "../_components/player-result";
@@ -202,7 +203,7 @@ export default function SkillRadarPage() {
         </div>}
       </div>
       {inspectedBucket ? <ContributionDialog bucket={inspectedBucket} onClose={closeContributions} /> : null}
-      <footer><ExplanatorySection title="About Skill Radar"><p>Each BPM range averages up to five highest Phoenix 2 chart Pumbility values. Missing charts are excluded; ranges with fewer than five have an asterisk. Empty ranges show zero. UG shows the equivalent level for 995,000+ (SSS+) with an Ultimate Game plate. Actual scores, plates and earned Pumbility stay intact.</p><p>S10/D11 maps to 0. Singles and Doubles have independent 100-point ceilings for each BPM range; 220+ BPM keeps S25/D26. Strengths and weaknesses use normalized ratings before clipping. Hiding a line changes only the drawing.</p><p>Suggestions start at your equivalent level +1.5, rounded down to an official folder, starting at level 16. Show five charts, filling from higher folders as needed, then sort by SSS+ Pumbility difficulty. Played charts remain eligible. Songs spanning multiple BPM ranges are excluded.</p></ExplanatorySection></footer>
+      <footer><Link className={aboutStyles.contextLink} href="/about#skill-radar">How Skill Radar works ↗</Link></footer>
     </div>
   </main>;
 }

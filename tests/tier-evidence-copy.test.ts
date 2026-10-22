@@ -137,5 +137,6 @@ test("the shared chart panel renders only concise copy and keeps lazy detail loa
   assert.doesNotMatch(detail, /latent|bootstrap|asinh|frozen|offset|exception|coefficient|percentile/i);
   assert.match(TIER_INTERVAL_TOOLTIP, /does not include every source of uncertainty/);
   assert.match(page, /const level20Width = Boolean\(payload\?\.summary.method.level20ScoringWidth\)/);
-  assert.match(page, /showSssMethod && level20Width \? <p[^>]*>S20 and D20 ratings aim to keep most charts near their official level/);
+  const about = readFileSync(new URL("../app/about/page.tsx", import.meta.url), "utf8");
+  assert.match(about, /S20 and D20 ratings aim to keep most charts near their official level/);
 });

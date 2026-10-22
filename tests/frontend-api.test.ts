@@ -115,24 +115,25 @@ test("mobile styles only hide decorative and desktop-only score fields", async (
   ]);
 });
 
-test("homepage leads with feature cards and explains the external score sync", async () => {
-  const [page, syncLink, css] = await Promise.all([
+test("homepage leads with feature cards and links to the About score-sync guide", async () => {
+  const [page, syncLink, css, about] = await Promise.all([
     readFile(path.join(process.cwd(), "app", "page.tsx"), "utf8"),
     readFile(
       path.join(process.cwd(), "app", "_components", "score-sync-link.tsx"),
       "utf8",
     ),
     readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "about", "page.tsx"), "utf8"),
   ]);
 
   assert.doesNotMatch(page, /feature-index|Phoenix scoring tools|home-status/);
   assert.doesNotMatch(page, /Use your Phoenix history|home-intro/);
   assert.match(css, /\.home-hero \{[^}]*margin: 0 auto;[^}]*padding: 18px 24px 110px;/);
   assert.match(css, /\.feature-grid \{[^}]*gap: 18px;[^}]*margin-top: 0;/);
-  assert.match(page, /Sync your scores before you start/);
-  assert.match(page, /Log in to PIU Scores/);
-  assert.match(page, /make your account public so your scores can pass through the API/);
-  assert.match(page, /<ScoreSyncLink>/);
+  assert.match(page, /href="\/about#score-sync"/);
+  assert.match(about, /Log in to PIU Scores/);
+  assert.match(about, /make your account public so your scores can pass through the API/);
+  assert.match(about, /<ScoreSyncLink>/);
   assert.match(syncLink, /https:\/\/piuscores\.arroweclip\.se\/UploadPhoenixScores/);
   assert.match(syncLink, /Upload scores in the external PIUScores Tool/);
   assert.match(syncLink, /rel="noopener noreferrer"/);
@@ -144,12 +145,14 @@ test("recommendations explain the per-view score disclosure boundary", async () 
     path.join(process.cwd(), "app", "recommendations", "page.tsx"),
     "utf8",
   );
+  const about = await readFile(path.join(process.cwd(), "app", "about", "page.tsx"), "utf8");
 
   assert.doesNotMatch(page, /<footer>/);
   assert.doesNotMatch(page, /How the merge works/);
-  assert.match(page, /Recommendations show your Top 50 scores/);
-  assert.match(page, /Tier Lists can also show your saved scores and plates/);
-  assert.match(page, /internal player ID and raw score history stay private/);
+  assert.match(page, /href="\/about#recommendations"/);
+  assert.match(about, /Recommendations also show your Top 50 scores/);
+  assert.match(about, /Tier Lists can show your saved scores and plates/);
+  assert.match(about, /internal player IDs and complete raw score histories stay private/);
   assert.match(page, /Skill title progress/);
 });
 
@@ -492,25 +495,26 @@ test("tier labels share Pumbility dispatch and use plain evidence and interval c
 });
 
 test("Co-op methodology derives Master-title goals from tier difficulty", async () => {
-  const [tierList, recommendations, readme] = await Promise.all([
+  const [tierList, recommendations, readme, about] = await Promise.all([
     readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "README.md"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "about", "page.tsx"), "utf8"),
   ]);
 
-  for (const content of [tierList, readme]) {
+  for (const content of [about, readme]) {
     assert.match(content, /player[- ]strength/);
     assert.match(content, /Phoenix source/);
     assert.match(content, /robust/);
     assert.match(content, /using\s+all observations/);
     assert.match(content, /(?:not trimmed|without trimming)/);
-    assert.match(content, /median(?: measured)? chart/);
+    assert.match(content, /median(?: measured)?(?: chart)?/);
     assert.match(content, /normal distribution/);
   }
   assert.doesNotMatch(recommendations, /<footer>/);
   assert.doesNotMatch(recommendations, /How the merge works/);
-  assert.match(tierList, /recommendation letter-grade goals are assigned from these whole-number difficulties/);
-  assert.match(tierList, /easiest chart at continuous difficulty 10, the median chart at 16, and the hardest chart at 24\.9/);
+  assert.match(about, /recommendation letter-grade goals use these whole-number difficulties/);
+  assert.match(about, /easiest chart at continuous difficulty 10, the median at 16, and the hardest at 24\.9/);
   assert.match(tierList, /const continuous = chart\.difficultyModelContinuous/);
   assert.match(tierList, /: estimate\)\.toFixed\(1\)/);
   assert.match(readme, /clears the 16,000\s+Co-op Rating `\[CO-OP\] Master` threshold with extra leeway/);
@@ -1137,11 +1141,12 @@ test("Tier Lists named tiles preserve compact details access and four mobile col
 });
 
 test("tier list chart details provide local mode-specific what-if estimates", async () => {
-  const [page, types, css, demo] = await Promise.all([
+  const [page, types, css, demo, about] = await Promise.all([
     readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8"),
     readFile(path.join(process.cwd(), "lib", "types.ts"), "utf8"),
     readFile(path.join(process.cwd(), "app", "globals.css"), "utf8"),
     readFile(path.join(process.cwd(), "lib", "demo-data.ts"), "utf8"),
+    readFile(path.join(process.cwd(), "app", "about", "page.tsx"), "utf8"),
   ]);
   const whatIfComponent = page.slice(
     page.indexOf("function WhatIfDifficulty"),
@@ -1172,8 +1177,8 @@ test("tier list chart details provide local mode-specific what-if estimates", as
   assert.match(chartDetails, /chartEvidenceLines\(chart, metric/);
   assert.match(chartDetails, /title=\{TIER_INTERVAL_TOOLTIP\}/);
   assert.match(page, /calibration === "folder-scaled-score-profile"/);
-  assert.match(page, /Each mode and official level has its own spread scale/);
-  assert.match(page, /soft penalty beyond ten, no minimum quota, and no hard cap/);
+  assert.match(about, /Each mode and official level has its own spread scale/);
+  assert.match(about, /soft penalty beyond ten, no minimum quota, and no hard cap/);
   assert.doesNotMatch(page, /at most three two-grade moves|profileScoringMethod\?\.difficultyDeltaScale/);
 
   assert.match(css, /\.chart-card \{[^}]*grid-template-columns: 58px minmax\(0, 1fr\) 104px;[^}]*min-height: 86px;[^}]*padding: 13px 18px;/);

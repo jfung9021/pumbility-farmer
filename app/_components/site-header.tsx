@@ -6,13 +6,14 @@ import { SCORE_SYNC_URL } from "./score-sync-link";
 import { usePlayerProfile } from "./player-profile-provider";
 import styles from "./player-shell.module.css";
 
-type SiteHeaderProps = { active?: "recommendations" | "tier-list" | "skill-radar" | "official-comparison" };
+type SiteHeaderProps = { active?: "recommendations" | "tier-list" | "skill-radar" | "official-comparison" | "about" };
 const destinations = [
   { label: "Home", href: "/", active: undefined },
   { label: "Recommendations", href: "/recommendations", active: "recommendations" },
   { label: "Tier Lists", href: "/tier-list", active: "tier-list" },
   { label: "Skill Radar", href: "/skill-radar", active: "skill-radar" },
   { label: "Player Comparison", href: "/official-leaderboard-comparison", active: "official-comparison" },
+  { label: "About", href: "/about", active: "about" },
 ];
 
 export function SiteHeader({ active }: SiteHeaderProps) {

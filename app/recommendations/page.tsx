@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { track } from "@vercel/analytics";
 import {
   useCallback,
@@ -18,7 +19,7 @@ import { PlayerRequired } from "../_components/player-required";
 import { ResultGrade, ResultPlate, ResultScore } from "../_components/player-result";
 import resultStyles from "../_components/player-result.module.css";
 import { ChartVideoLink } from "../_components/chart-video-link";
-import { ExplanatorySection } from "../_components/explanatory-section";
+import aboutStyles from "../about/about.module.css";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
 import { availableRecommendationModel, displayedRecommendationModel, MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh } from "../../lib/refresh-reliability";
@@ -144,10 +145,7 @@ function SkillStats({
           <strong>{skills.clearing.value}</strong>
         </article>
       </section>
-      <ExplanatorySection title="About skill ratings">
-        <p><strong>Scoring skill.</strong> {skills.scoring.description}</p>
-        <p><strong>Clearing skill.</strong> {skills.clearing.description}</p>
-      </ExplanatorySection>
+      <Link className={aboutStyles.contextLink} href="/about#skill-ratings">How skill ratings work ↗</Link>
     </>
   );
 }
@@ -1211,9 +1209,7 @@ export default function RecommendationsPage() {
             <span>{activeMode === "coop" ? "Scores" : "Top 50"}</span>
           </button>
         </div>
-        <ExplanatorySection title="About recommendations">
-          <p>Recommendations show your Top 50 scores. Tier Lists can also show your saved scores and plates for the selected mode. Your internal player ID and raw score history stay private.</p>
-        </ExplanatorySection>
+        <Link className={aboutStyles.contextLink} href="/about#recommendations">About recommendations ↗</Link>
         {error ? <div className="recommendation-notice error-notice">{error}</div> : null}
         {playerPayload?.stale ? <div className="recommendation-notice stale-notice" role="status">These saved recommendations use an older model. They will update after your player refresh completes.</div> : null}
         {refreshPending ? <div className="recommendation-notice stale-notice" role="status">{refreshPending}</div> : null}

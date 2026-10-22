@@ -20,6 +20,9 @@
 .tier-list-page .tier-active-filters:not(:empty) { margin-bottom: 18px; }
 .tier-list-page .tier-active-filters button { background: var(--selected); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-size: 12px; min-height: 36px; padding: 7px 10px; }
 .tier-list-page .tier-score-freshness { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+.tier-list-page .tier-about-link { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.tier-list-page .tier-about-link a { color: var(--acid); text-underline-offset: 3px; }
+.tier-list-page .tier-about-link a:focus-visible { outline: 2px solid var(--acid); outline-offset: 3px; }
 .tier-list-page .tiers { gap: 26px; }
 .tier-list-page .tier-divider { border-bottom: 1px solid var(--line); min-height: 0; padding-bottom: 9px; }
 .tier-list-page .tier-divider h2 { color: var(--ink); font-size: 15px; font-weight: 600; letter-spacing: -.02em; line-height: 1.4; text-transform: none; }
@@ -29,6 +32,8 @@
 .tier-list-page .compact-chart-button { border-radius: 8px; text-align: left; }
 .tier-list-page .compact-jacket { border: 0; border-radius: 8px; }
 .tier-list-page .tier-song { color: var(--ink); display: block; font-size: 14px; font-weight: 500; line-height: 1.4; margin-top: 8px; overflow-wrap: anywhere; }
+.tier-list-page .compact-chart-button .tier-art-title { background: linear-gradient(180deg, rgba(0, 0, 0, .82), rgba(0, 0, 0, .48) 65%, transparent); inset: 0 0 auto; padding: 7px 6px 18px; position: absolute; z-index: 1; }
+.tier-list-page .compact-chart-button .tier-song { color: #fff; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-weight: 600; margin-top: 0; overflow: hidden; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); }
 .tier-list-page .tier-chart-bpm, .tier-list-page .tier-chart-rating { color: var(--muted); display: block; font-size: 12px; font-variant-numeric: tabular-nums; line-height: 1.4; margin-top: 3px; }
 .tier-list-page .tier-player-score { font-size: 12px; font-weight: 400; justify-content: flex-start; line-height: 1.4; margin-top: 4px; white-space: normal; }
 .tier-list-page .tier-score-status { color: var(--muted); }
@@ -50,7 +55,8 @@
   .tier-list-page .filter-bar .search-field { grid-column: 1 / -1; }
   .tier-list-page .tier-toolbar-button { min-height: 44px; padding: 8px 11px; }
   .tier-list-page .compact-chart-grid { gap: 14px 8px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .tier-list-page .compact-chart-button .tier-song { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 12px; line-height: 1.4; margin-top: 6px; }
+  .tier-list-page .compact-chart-button .tier-art-title { padding: 5px 4px 14px; }
+  .tier-list-page .compact-chart-button .tier-song { font-size: 12px; }
   .tier-list-page .compact-chart-button .tier-chart-bpm, .tier-list-page .compact-chart-button .tier-chart-rating { font-size: 11px; margin-top: 2px; }
   .tier-list-page .compact-chart-card .tier-player-score { font-size: 11px; gap: 3px; }
   .tier-list-page .compact-jacket .chart-difficulty-badge { bottom: 3px; height: 21px; right: 3px; width: 24px; border-radius: 6px; font-size: 11px; }
