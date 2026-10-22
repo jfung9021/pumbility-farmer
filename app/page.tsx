@@ -1,11 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { ExplanatorySection } from "./_components/explanatory-section";
-import { ScoreSyncLink } from "./_components/score-sync-link";
 import { SiteHeader } from "./_components/site-header";
 import { usePlayerProfile } from "./_components/player-profile-provider";
 import styles from "./_components/player-shell.module.css";
+import aboutStyles from "./about/about.module.css";
 
 export default function HomePage() {
   const { player, hydrated, loading, setupDismissed, openChooser, clearPlayer, profileHref } = usePlayerProfile();
@@ -36,12 +35,7 @@ export default function HomePage() {
               </div>
               <b aria-hidden="true">↗</b>
             </Link>
-            <ExplanatorySection title="About Recommendations">
-              <p>
-                Choose your player from Menu, see which version supplies your skill rating,
-                and rank charts against your current Phoenix 2 history.
-              </p>
-            </ExplanatorySection>
+            <Link className={aboutStyles.contextLink} href="/about#recommendations">About Recommendations ↗</Link>
           </div>
 
           <div className="home-feature">
@@ -52,12 +46,7 @@ export default function HomePage() {
               </div>
               <b aria-hidden="true">↗</b>
             </Link>
-            <ExplanatorySection title="About Tier Lists">
-              <p>
-                Compare Scoring, Clearing, and Pumbility difficulty estimates
-                in compact or detailed views, using Phoenix 1 and Phoenix 2 scores.
-              </p>
-            </ExplanatorySection>
+            <Link className={aboutStyles.contextLink} href="/about#tier-lists">About Tier Lists ↗</Link>
           </div>
           <div className="home-feature">
             <Link className="feature-card feature-radar" href={profileHref("/skill-radar")}>
@@ -67,9 +56,7 @@ export default function HomePage() {
               </div>
               <b aria-hidden="true">↗</b>
             </Link>
-            <ExplanatorySection title="About Skill Radar">
-              <p>View your personal Singles and Doubles BPM profile and find your next charts.</p>
-            </ExplanatorySection>
+            <Link className={aboutStyles.contextLink} href="/about#skill-radar">About Skill Radar ↗</Link>
           </div>
 
           <div className="home-feature">
@@ -80,29 +67,15 @@ export default function HomePage() {
               </div>
               <b aria-hidden="true">↗</b>
             </Link>
-            <ExplanatorySection title="About Player Comparison">
-              <p>Compare two players' estimated BPM skills and official scores across every S20+ and D20+ chart.</p>
-            </ExplanatorySection>
+            <Link className={aboutStyles.contextLink} href="/about#player-comparison">About Player Comparison ↗</Link>
           </div>
         </div>
 
-        <ExplanatorySection className="home-how-to" title="Sync your scores before you start">
-          <div className="home-how-to-copy">
-            <ol>
-              <li>Log in to PIU Scores and make your account public so your scores can pass through the API.</li>
-              <li>Open the Phoenix score upload page and sync your latest scores.</li>
-              <li>Return here to view recommendations based on the updated history.</li>
-            </ol>
-            <ScoreSyncLink>Open PIU Scores upload</ScoreSyncLink>
-          </div>
-        </ExplanatorySection>
+        <p className="home-how-to"><Link className={aboutStyles.contextLink} href="/about#score-sync">How to sync your scores ↗</Link></p>
       </section>
 
       <footer className="home-footer">
-        <ExplanatorySection title="About the data">
-          <p>Built from consented score data. Top 50 display scores are public; player IDs and complete score histories stay private.</p>
-          <p>Phoenix 2 is authoritative for every recommendation chart and overlapping score.</p>
-        </ExplanatorySection>
+        <Link className={aboutStyles.contextLink} href="/about#data">Data sources and privacy ↗</Link>
       </footer>
     </main>
   );

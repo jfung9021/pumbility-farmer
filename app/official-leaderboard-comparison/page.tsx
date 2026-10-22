@@ -1,10 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { SiteHeader } from "../_components/site-header";
 import { PlayerChooserDialog } from "../_components/player-chooser-dialog";
 import { SkillRadar, SkillRadarLegend } from "../_components/skill-radar";
-import { ExplanatorySection } from "../_components/explanatory-section";
+import aboutStyles from "../about/about.module.css";
 import { readJsonResponse } from "../../lib/api-response";
 import { loadWithGenerationRecovery } from "../../lib/refresh-reliability";
 import { scoreColor } from "../../lib/score-appearance";
@@ -415,15 +416,10 @@ export default function OfficialLeaderboardComparisonPage() {
           </div>
         </section>
 
-        <ExplanatorySection className={styles.about} title="About this comparison">
-          <p>Players need at least {MINIMUM_OFFICIAL_SCORES} distinct official chart scores across Singles and Doubles to appear in the player lists. Scores on all charts in this comparison count, including charts without BPM metadata.</p>
-          <p>Official Phoenix 1 and Phoenix 2 scores are matched by player and chart; the higher score is used. These are recorded leaderboard entries, so -- means no captured official score.</p>
-          <p>Grades come from the score. Superb Game (SG) is assumed below 1,000,000; Perfect Game at exactly 1,000,000. Plates and Pumbility are estimates.</p>
-          <p>Each BPM bucket uses its five highest estimated Pumbility values, padding unrecorded slots with zero. Estimated PG level expresses the equivalent Perfect Game reference performance; Doubles is aligned by one level to Singles. Both radars share the same 0–100 scale (PG10 to PG25).</p>
-          <p>The BPM comparison uses the full aligned PG estimates before radar clipping or display rounding. Higher estimates can be based on different chart coverage; fewer than five contributing charts is marked Limited. A tie means identical estimated PG.</p>
-          <p>A chart contributes to the radar only when its complete BPM range fits one bucket. All charts remain in the score list, including charts without BPM metadata or captured boards. The contributing-chart toggle and folder filters are independent. Folder filters affect only the score list. Missing scores never count as losses.</p>
+        <section className={styles.about} aria-label="Comparison information">
+          <Link className={aboutStyles.contextLink} href="/about#player-comparison">How Player Comparison works ↗</Link>
           <p className={styles.sourceDates}>Phoenix 1: <b>{sourceDate(index?.sourceDates.Phoenix)}</b> <span>·</span> Phoenix 2: <b>{sourceDate(index?.sourceDates.Phoenix2)}</b></p>
-        </ExplanatorySection>
+        </section>
       </div>
       <PlayerChooserDialog
         open={openSide !== null}
