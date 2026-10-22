@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from math import ceil
 from datetime import timedelta
 from typing import Any
 
@@ -150,8 +151,26 @@ def refresh_one_player(*args: Any, **kwargs: Any) -> Any:
 
 @app.task(queue=QUEUE_NAME, name="worker.tasks.refresh_analysis")
 def refresh_analysis(job_id: str) -> dict[str, Any]:
-    cold_claim = _begin_topology_worker_invocation(QUEUE_NAME)
-    result = execute_analysis_job(job_id, yield_after_typed_checkpoint=True)
+    from analysis_budget import invocation_budget
+    from celery.exceptions import Retry
+    from pumbility_store import JobLeaseHeldError
+
+    try:
+        with invocation_budget():
+            cold_claim = _begin_topology_worker_invocation(QUEUE_NAME)
+            result = execute_analysis_job(job_id, yield_after_typed_checkpoint=True,
+                                          acknowledge_terminal=True)
+    except JobLeaseHeldError as conflict:
+        if (conflict.blocking_job_id != job_id or conflict.blocking_status != "running"
+                or conflict.retry_after_seconds is None):
+            raise
+        delay = max(1, ceil(conflict.retry_after_seconds) + 2)
+        print(json.dumps({"event": "analysis_lease_deferred", "jobId": job_id,
+                          "retryAfterSeconds": delay}, separators=(",", ":"), sort_keys=True))
+        # The pinned Vercel adapter retains this receipt on Retry. Task.retry()
+        # publishes a replacement message and would reset the retention boundary.
+        raise Retry("The analysis lease is still active; retain this recovery delivery.",
+                    when=delay) from conflict
     continuation = result.pop(ANALYSIS_CONTINUATION_FIELD, None)
     sequence = result.pop(ANALYSIS_CONTINUATION_SEQUENCE_FIELD, None)
     if continuation in {

@@ -63,6 +63,14 @@ class HostedTierTests(unittest.TestCase):
              patch("production_tiers.validate_public_tiers"), \
              patch("tier_public.prepare_tier_publication", return_value=(public, {})), \
              patch("tier_public.validate_tier_publication"):
+            for ordinal in range(1, 13):
+                progress = []
+                with self.assertRaises(TierAnalysisPending) as pending:
+                    build_hosted_tiers([], {}, {}, {}, store=store, arguments=args,
+                        generated_at_utc=timestamp, on_progress=progress.append)
+                self.assertEqual(progress[-1]["preparationOrdinal"], ordinal)
+                self.assertTrue(pending.exception.sequence.endswith("-prepare-" + str(ordinal)))
+                self.assertEqual(fitter.call_count, 0)
             for count in range(1, 9):
                 with self.assertRaises(TierAnalysisPending) as pending:
                     build_hosted_tiers([], {}, {}, {}, store=store, arguments=args, generated_at_utc=timestamp)

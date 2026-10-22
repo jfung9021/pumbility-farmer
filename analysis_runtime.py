@@ -2474,6 +2474,9 @@ def _database_cursor_token(checkpoint: Mapping[str, Any]) -> str:
         progress = _validated_tier_progress(progress)
         if progress["ordinal"] > 0:
             return f"{phase}:{progress['generation']}:{progress['ordinal']}"
+        preparation = progress.get("preparationOrdinal", 0)
+        if preparation > 0:
+            return f"{phase}:{progress['generation']}:prepare:{preparation}"
     return phase
 
 
@@ -2487,6 +2490,12 @@ def _validated_tier_progress(progress: Any) -> dict[str, Any]:
         or type(progress.get("ordinal")) is not int
         or not 0 <= progress["ordinal"] <= 9 + len(FINISH_STAGES) + 2
         or progress.get("stage") not in {"general", "target-fit", "prepared-inputs", "archive", "public", *FINISH_STAGES}
+        or ("preparationOrdinal" in progress and (
+            type(progress["preparationOrdinal"]) is not int
+            or not 1 <= progress["preparationOrdinal"] <= 12
+            or progress["ordinal"] != 0
+            or progress["stage"] != "general"
+        ))
     ):
         raise ValueError("The typed tier progress checkpoint is invalid.")
     return dict(progress)
@@ -2504,6 +2513,9 @@ def _reconcile_tier_progress(
             raise ValueError("The typed tier progress belongs to a different generation.")
         if current["ordinal"] < previous["ordinal"]:
             raise ValueError("The committed typed tier progress regressed.")
+        if (current["ordinal"] == previous["ordinal"] == 0
+                and current.get("preparationOrdinal", 0) < previous.get("preparationOrdinal", 0)):
+            raise ValueError("The committed typed tier preparation regressed.")
     return {**checkpoint, "tierProgress": current}
 
 
@@ -4317,6 +4329,7 @@ def execute_analysis_job(
     client: Any | None = None,
     now: Callable[[], datetime] = utc_now,
     yield_after_typed_checkpoint: bool = False,
+    acknowledge_terminal: bool = False,
 ) -> dict[str, Any]:
     """Run one idempotent, checkpointed refresh in a queue worker."""
     from piu_misgrade_analyzer import AnalysisConfig, ApiError
@@ -4327,7 +4340,8 @@ def execute_analysis_job(
     existing = job_store.get(job_id)
     if existing is None:
         raise RuntimeError("The queued analysis job status was not found.")
-    if existing.get("status") == "completed" or existing.get("cancelRequested"):
+    if (existing.get("status") == "completed" or existing.get("cancelRequested")
+            or (acknowledge_terminal and existing.get("status") in {"failed", "cancelled"})):
         return existing
     mix_spec = resolve_mix(existing.get("mix"))
     if mix_spec.archived:
@@ -4378,12 +4392,21 @@ def execute_analysis_job(
                 ),
             },
         )
-    except JobLeaseHeldError:
+    except JobLeaseHeldError as conflict:
         current = job_store.get(job_id)
-        if current is not None and current.get("status") == "running":
-            # At-least-once delivery may overlap the worker already holding this
-            # job's lease. A duplicate delivery is an acknowledged no-op.
+        if current is not None and current.get("status") in {"completed", "failed", "cancelled"}:
             return current
+        if conflict.blocking_job_id and conflict.blocking_job_id != job_id:
+            # The atomic claim can observe an active-job race after the head read.
+            # Preserve the same policy as the earlier active-job check.
+            failed = update_job(job_store, job_id, status="failed",
+                error="Another analysis refresh is already active.",
+                retryAllowedAtUtc=isoformat_utc(now() + FAILED_RETRY_DELAY))
+            if job_store.active_job_id() == job_id:
+                job_store.set_active_job_id(conflict.blocking_job_id)
+            return failed
+        # A timed-out worker's last heartbeat can outlive its queue visibility.
+        # Keep the delivery retryable even though the database lease is still live.
         raise
     staging_path = f"{staging_prefix(mix_spec)}{job_id}.json"
     checkpoint_path = typed_checkpoint_path(job_id, mix_spec)

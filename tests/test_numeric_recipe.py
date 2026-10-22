@@ -271,6 +271,11 @@ class PreparedGoalTests(unittest.TestCase):
              patch("official_scoring_sources.canonical_scoring_manifest_sha256", return_value="official"), \
              patch("scoring_percentile.build_production_tier_payload", return_value={"schemaVersion": 48}), \
              patch("sss_scoring_model.fit_target_model", side_effect=fitted) as fit:
+            for ordinal in range(1, 13):
+                with self.assertRaises(tiers.TierAnalysisPending):
+                    tiers.build_hosted_tiers([], {}, {}, {}, on_progress=progress.append, **kwargs)
+                self.assertEqual(progress[-1]["preparationOrdinal"], ordinal)
+                fit.assert_not_called()
             with self.assertRaises(tiers.TierAnalysisPending) as pending:
                 tiers.build_hosted_tiers([], {}, {}, {}, on_progress=progress.append, **kwargs)
             self.assertTrue(progress[-1]["preparedContext"])

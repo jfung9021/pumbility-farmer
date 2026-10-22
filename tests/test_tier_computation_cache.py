@@ -126,7 +126,7 @@ class CrossRunTierCacheTests(TestCase):
             arguments=self.arguments, generated_at_utc=created, on_progress=progress)
 
     def complete(self, created, first=None):
-        for _ in range(12):
+        for _ in range(24):
             try:
                 return self.advance(created, first)
             except tiers.TierAnalysisPending:
@@ -161,7 +161,7 @@ class CrossRunTierCacheTests(TestCase):
         tiers.validate_public_tiers(current)
 
     def test_partial_chain_is_reused_across_runs_with_current_progress_and_pinned_old_time(self):
-        for _ in range(2):
+        for _ in range(14):
             with self.assertRaises(tiers.TierAnalysisPending):
                 self.advance(self.first_time)
         with self.assertRaises(tiers.TierAnalysisPending) as pending:
@@ -216,7 +216,7 @@ class CrossRunTierCacheTests(TestCase):
         with patch("production_tiers.pipeline_code_identity", return_value="pipeline-two"):
             with self.assertRaises(tiers.TierAnalysisPending) as pending:
                 self.advance(self.second_time)
-        self.assertEqual(pending.exception.stage, "prepared-inputs")
+        self.assertEqual(pending.exception.stage, "preparation-general")
         self.general.assert_called_once()
         current = self.store.get_json(tiers.PREFIX + "generations/" + pending.exception.generation + "/state.json")
         provenance = current["componentComputations"]["general"]
@@ -262,7 +262,7 @@ class CrossRunTierCacheTests(TestCase):
         self.store.binary_values[publication["fullArtifactPath"]] += b"corruption"
         with self.assertRaises(tiers.TierAnalysisPending) as pending:
             self.advance(self.second_time)
-        self.assertEqual(pending.exception.stage, "prepared-inputs")
+        self.assertEqual(pending.exception.stage, "preparation-general")
         current = self.complete(self.second_time)
         rebuilt = current["summary"]["method"]["productionTierPublication"]
         self.assertNotEqual(rebuilt["fullArtifactPath"], publication["fullArtifactPath"])
@@ -276,7 +276,7 @@ class CrossRunTierCacheTests(TestCase):
         self.store.values.pop(path)
         with self.assertRaises(tiers.TierAnalysisPending) as pending:
             self.advance(self.second_time)
-        self.assertEqual(pending.exception.stage, "prepared-inputs")
+        self.assertEqual(pending.exception.stage, "preparation-general")
         with patch.object(self.store, "get_json", side_effect=OSError("storage unavailable")):
             with self.assertRaisesRegex(OSError, "storage unavailable"):
                 self.advance(self.second_time)
@@ -288,7 +288,7 @@ class CrossRunTierCacheTests(TestCase):
         self.store.values[path]["summary"]["method"]["productionTierPublication"]["fullArtifactSha256"] = "wrong"
         with self.assertRaises(tiers.TierAnalysisPending) as pending:
             self.advance(self.second_time)
-        self.assertEqual(pending.exception.stage, "prepared-inputs")
+        self.assertEqual(pending.exception.stage, "preparation-general")
         current_state = self.store.get_json(tiers.PREFIX + "generations/" + pending.exception.generation + "/state.json")
         self.assertNotIn("computationGeneration", current_state)
 
@@ -298,7 +298,7 @@ class CrossRunTierCacheTests(TestCase):
         self.store.values[path]["version"] = "unsupported"
         with self.assertRaises(tiers.TierAnalysisPending) as pending:
             self.advance(self.second_time)
-        self.assertEqual(pending.exception.stage, "prepared-inputs")
+        self.assertEqual(pending.exception.stage, "preparation-general")
         state = self.store.get_json(tiers.PREFIX + "generations/" + pending.exception.generation + "/state.json")
         self.assertNotIn("computationGeneration", state)
 
@@ -310,11 +310,11 @@ class CrossRunTierCacheTests(TestCase):
         with patch("production_tiers.pipeline_code_identity", return_value="pipeline-two"):
             with self.assertRaises(tiers.TierAnalysisPending) as pending:
                 self.advance(self.second_time)
-        self.assertEqual(pending.exception.stage, "prepared-inputs")
+        self.assertEqual(pending.exception.stage, "preparation-general")
         self.assertEqual(self.general.call_count, 2)
 
     def test_failed_detail_write_never_commits_publication_and_retry_is_idempotent(self):
-        for _ in range(9):
+        for _ in range(21):
             with self.assertRaises(tiers.TierAnalysisPending) as pending:
                 self.advance(self.first_time)
         generation = pending.exception.generation
@@ -340,7 +340,7 @@ class CrossRunTierCacheTests(TestCase):
         tiers.validate_public_tiers(current)
 
     def test_resume_rejects_changed_code_time_or_stage_chain(self):
-        for _ in range(2):
+        for _ in range(14):
             with self.assertRaises(tiers.TierAnalysisPending) as pending:
                 self.advance(self.first_time)
         generation = pending.exception.generation

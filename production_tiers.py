@@ -595,7 +595,12 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
     general_identity = digest({key: value for key, value in identity.items()
         if key not in {"version", "generationTimestamp", "pipelineCode"}} | {
             "generalCode": general_code_identity(), "records": digest(records), "metadata": digest(metadata)})
-    general_reference = state.get("general")
+    general_reference = state.get("general") or _preparation_receipt(
+        store, generation, "general", stage="general", identity=general_identity)
+    if general_reference is not None and "general" not in state:
+        state.setdefault("componentComputations", {})["general"] = {
+            "computedAtUtc": created, "checkpointSha256": general_reference["payloadSha256"],
+            "recoveredPreparation": True}
     general_computation_identity = {**{k: v for k, v in semantic_inputs.items() if k != "modelCode"},
                                     "generalCode": general_code_identity()}
     general_cached = None
@@ -654,6 +659,7 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
                 if general is not None:
                     break
         if general is None:
+            _check_preparation_budget("general")
             with phase("general", generation=generation):
                 general = build_production_tier_payload(records, metadata, p1, p2,
                     generated_at_utc=created, source_exclusions=policy, cache_store=store, **arguments)
@@ -661,7 +667,10 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
                           "inputs": identity}
         else:
             provenance = {"computedAtUtc": general.get("generatedAtUtc"), "legacy": True}
-        general_reference = write_checkpoint(store, general, stage="general", identity=general_identity)
+        general_reference = write_checkpoint(store, general, stage="general", identity=general_identity,
+            recovery_path=_preparation_receipt_path(generation, "general"))
+        from tier_pipeline_checkpoints import verified_checkpoint_bytes
+        verified_checkpoint_bytes(store, general_reference, stage="general", identity=general_identity)
         store.put_json(PREFIX + "general/" + general_identity + ".json", general_reference)
         provenance["checkpointSha256"] = general_reference["payloadSha256"]
         state.setdefault("componentComputations", {})["general"] = provenance
@@ -669,12 +678,145 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
                     reference=general_reference, provenance=provenance)
         del general
     state["general"] = general_reference
+    state["preparationGeneralIdentity"] = general_identity
     store.put_json(state_path, state)
-    if "preparedFitInputs" not in state:
-        state["phaseInputs"] = _pin_phase_inputs(store, generation, context)
-        state["preparedFitInputs"] = _pin_cohorts(store, generation, prepared, ("sss", "sssplus"))
-        state["fitReferences"] = []
+    if not state.get("preparationVersion") and not state.get("phaseInputs"):
+        state["preparationVersion"] = 1
         store.put_json(state_path, state)
+        _preparation_pending(store, state, on_progress, "general")
+    return _advance_preparation(store, state, context=context,
+        on_stage_start=on_stage_start, on_progress=on_progress)
+
+
+PHASE_INPUT_NAMES = ("model", "official", "provenance")
+PREPARATION_COHORTS = tuple((goal, source, mode) for goal in ("sss", "sssplus")
+                          for source in ("official", "submitted") for mode, _ in MODES)
+
+
+def _check_preparation_budget(unit):
+    from analysis_budget import work_budget_available
+    if not work_budget_available():
+        raise RuntimeError("The analysis invocation exhausted its work budget before tier preparation " + unit + ".")
+
+
+def _preparation_receipt_path(generation, unit):
+    return PREFIX + "generations/" + generation + "/preparation/" + unit + ".json"
+
+
+def _preparation_receipt(store, generation, unit, *, stage, identity):
+    from tier_pipeline_checkpoints import verified_checkpoint_bytes, CheckpointValidationError
+    reference = store.get_json(_preparation_receipt_path(generation, unit))
+    if reference is None:
+        return None
+    try:
+        verified_checkpoint_bytes(store, reference, stage=stage, identity=identity)
+    except CheckpointValidationError:
+        # An interrupted upload may leave only its candidate receipt. It is not
+        # progress and can be retried; transport/storage failures still surface.
+        return None
+    return reference
+
+
+def _preparation_ordinal(state):
+    phases = state.get("phaseInputs", {})
+    cohorts = state.get("preparedFitInputs", [])
+    if not isinstance(phases, dict) or set(phases) - set(PHASE_INPUT_NAMES):
+        raise ValueError("The tier preparation phase inputs are invalid.")
+    general = state.get("general")
+    if (not isinstance(general, dict) or general.get("stage") != "general"
+            or (state.get("preparationGeneralIdentity") is not None
+                and general.get("identity") != state["preparationGeneralIdentity"])):
+        raise ValueError("The tier preparation General provenance differs.")
+    for name, reference in phases.items():
+        if (not isinstance(reference, dict) or reference.get("stage") != "phase-inputs-" + name
+                or reference.get("identity") != digest({"generation": state["generation"], "kind": name})):
+            raise ValueError("The tier preparation phase provenance differs.")
+    if not isinstance(cohorts, list) or len(cohorts) > len(PREPARATION_COHORTS):
+        raise ValueError("The tier preparation cohorts are invalid.")
+    for item, expected in zip(cohorts, PREPARATION_COHORTS):
+        if not isinstance(item, dict) or tuple(item.get(k) for k in ("goal", "source", "mode")) != expected:
+            raise ValueError("The tier preparation cohort order differs.")
+        reference = item.get("inputs", {})
+        identity = digest({"generation": state["generation"], "goal": item["goal"],
+            "source": item["source"], "mode": item["mode"], "identity": item["identity"]})
+        if (not isinstance(reference, dict) or reference.get("stage") != "cohort-inputs"
+                or reference.get("identity") != identity):
+            raise ValueError("The tier preparation cohort provenance differs.")
+    if cohorts and len(phases) != len(PHASE_INPUT_NAMES):
+        raise ValueError("Tier cohorts require all captured phase inputs.")
+    return int("general" in state) + len(phases) + len(cohorts)
+
+
+def _preparation_progress(state, callback):
+    if callback is not None:
+        callback({"version": 1, "generation": state["generation"], "ordinal": 0,
+            "stage": "general", "preparationOrdinal": _preparation_ordinal(state),
+            "preparedContext": len(state.get("phaseInputs", {})) == len(PHASE_INPUT_NAMES)})
+
+
+def _preparation_pending(store, state, callback, unit):
+    from tier_diagnostics import event
+    ordinal = _preparation_ordinal(state)
+    _preparation_progress(state, callback)
+    event("tier_preparation_committed", generation=state["generation"], stage=unit,
+          preparation_ordinal=ordinal)
+    raise TierAnalysisPending(state["generation"][:16] + "-prepare-" + str(ordinal), 0,
+        stage="preparation-" + unit, generation=state["generation"], progress_ordinal=0)
+
+
+def _advance_preparation(store, state, *, context=None, on_stage_start=None, on_progress=None):
+    """Commit one input unit, then hand off before starting any next unit or fit."""
+    from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint, verified_checkpoint_bytes
+    from tier_diagnostics import event
+    generation = state["generation"]
+    state_path = PREFIX + "generations/" + generation + "/state.json"
+    _preparation_ordinal(state)
+    if state.get("preparationVersion") and not state.get("fitReferences") and not state.get("fitsReady"):
+        _preparation_progress(state, on_progress)
+    phases = state.setdefault("phaseInputs", {})
+    for name in PHASE_INPUT_NAMES:
+        if name in phases:
+            continue
+        if context is None:
+            raise ValueError("The tier preparation requires its uncaptured source context.")
+        unit, stage = "phase-" + name, "phase-inputs-" + name
+        identity = digest({"generation": generation, "kind": name})
+        reference = _preparation_receipt(store, generation, unit, stage=stage, identity=identity)
+        if reference is None:
+            _check_preparation_budget(unit)
+            if on_stage_start: on_stage_start(unit)
+            event("tier_preparation_started", generation=generation, stage=unit)
+            reference = write_checkpoint(store, _phase_input_payload(context, name),
+                stage=stage, identity=identity, recovery_path=_preparation_receipt_path(generation, unit))
+            verified_checkpoint_bytes(store, reference, stage=stage, identity=identity)
+        phases[name] = reference
+        state["preparationVersion"] = 1
+        store.put_json(state_path, state)
+        _preparation_pending(store, state, on_progress, unit)
+    cohorts = state.setdefault("preparedFitInputs", [])
+    if len(cohorts) < len(PREPARATION_COHORTS):
+        _check_preparation_budget("cohort-" + str(len(cohorts) + 1))
+        prepared = (context[-1] if context is not None else read_checkpoint(store, phases["model"],
+            stage="phase-inputs-model", identity=digest({"generation": generation, "kind": "model"}))["prepared"])
+        goal, source, mode = PREPARATION_COHORTS[len(cohorts)]
+        boards, sources, fit_identity = cohort(prepared, goal, source, mode)
+        unit = "cohort-" + str(len(cohorts) + 1)
+        identity = digest({"generation": generation, "goal": goal, "source": source,
+                           "mode": mode, "identity": fit_identity})
+        reference = _preparation_receipt(store, generation, unit, stage="cohort-inputs", identity=identity)
+        if reference is None:
+            if on_stage_start: on_stage_start(unit)
+            event("tier_preparation_started", generation=generation, stage=unit)
+            reference = write_checkpoint(store, {"boards": boards, "sources": sources},
+                stage="cohort-inputs", identity=identity,
+                recovery_path=_preparation_receipt_path(generation, unit))
+            verified_checkpoint_bytes(store, reference, stage="cohort-inputs", identity=identity)
+        cohorts.append({"goal": goal, "source": source, "mode": mode, "identity": fit_identity,
+                        "inputs": reference, "reusedOriginal": False})
+        state.setdefault("fitReferences", [])
+        state["preparationVersion"] = 1
+        store.put_json(state_path, state)
+        _preparation_pending(store, state, on_progress, unit)
     return _advance_prepared_fits(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
 
 
@@ -697,6 +839,8 @@ def _advance_prepared_fits(store, state, *, on_stage_start=None, on_progress=Non
     from tier_pipeline_checkpoints import read_checkpoint
     from tier_computation_cache import write_index
     from target_fit_cache import load_or_fit_target
+    if _preparation_ordinal(state) != 12:
+        raise ValueError("The captured tier preparation is incomplete.")
     generation = state["generation"]
     state_path = PREFIX + "generations/" + generation + "/state.json"
     references = state.setdefault("fitReferences", [])
@@ -894,7 +1038,11 @@ def resume_tier_generation(store, generation, *, generated_at_utc, on_progress=N
     if (state["createdAtUtc"] != generated_at_utc
             or not (state.get("phaseInputs") or state.get("computationGeneration"))):
         raise ValueError("The pinned tier generation has incompatible time or phase inputs.")
+    if state.get("preparationVersion") and not state.get("fitsReady"):
+        return _advance_preparation(store, state, on_progress=on_progress, on_stage_start=on_stage_start)
     if state.get("preparedFitInputs") and not state.get("fitsReady"):
+        if _preparation_ordinal(state) < 12:
+            return _advance_preparation(store, state, on_progress=on_progress, on_stage_start=on_stage_start)
         return _advance_prepared_fits(store, state, on_progress=on_progress, on_stage_start=on_stage_start)
     return _advance_finish(store, state, on_progress=on_progress, on_stage_start=on_stage_start)
 
@@ -1060,8 +1208,8 @@ def _advance_reused_computation(store, state, *, on_stage_start=None, on_progres
 def _advance_finish(store, state, *, on_stage_start=None, on_progress=None, verified_computation=None):
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
     from tier_diagnostics import event, phase
-    if state.get("preparedFitInputs") and not state.get("fitsReady"):
-        return _advance_prepared_fits(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
+    if (state.get("preparationVersion") or state.get("preparedFitInputs")) and not state.get("fitsReady"):
+        return _advance_preparation(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
     generation, identity, created = state["generation"], state["identity"], state["createdAtUtc"]
     state_path = PREFIX+"generations/"+generation+"/state.json"
     public_path = PREFIX+"generations/"+generation+"/public.json"
@@ -1172,20 +1320,25 @@ def _stage_identity(generation, stage, predecessor, created):
 
 
 def _pin_phase_inputs(store, generation, context):
-    from sss_scoring import payload_sha256
     from tier_pipeline_checkpoints import write_checkpoint
+    return {name: write_checkpoint(store, _phase_input_payload(context, name), stage="phase-inputs-"+name,
+                identity=digest({"generation": generation, "kind": name}))
+            for name in PHASE_INPUT_NAMES}
+
+
+def _phase_input_payload(context, name):
+    from sss_scoring import payload_sha256
     first, second, catalog, policy, merged, prepared = context
+    if name == "model":
+        return {"prepared": prepared}
     hashes = {"phoenix1": payload_sha256(first), "phoenix2": payload_sha256(second),
               "currentCatalog": payload_sha256(catalog), "officialManifest": merged["manifestSha256"]}
     official = {**merged, "_releaseSourceHashes": hashes}
     small = {key: value for key, value in official.items() if key in
         {"manifestSha256", "effectiveInputSha256", "sourceDates", "_releaseSourceHashes"}}
     small["charts"] = {cid: chart for cid, chart in merged.get("charts", {}).items() if chart.get("sourceExclusions")}
-    payloads = {"model": {"prepared": prepared}, "official": {"merged": official},
-                "provenance": {"policy": policy.public(), "merged": small}}
-    return {name: write_checkpoint(store, payload, stage="phase-inputs-"+name,
-                identity=digest({"generation": generation, "kind": name}))
-            for name, payload in payloads.items()}
+    return {"official": {"merged": official},
+            "provenance": {"policy": policy.public(), "merged": small}}[name]
 
 
 def _load_phase_inputs(store, state, stage):
@@ -1244,7 +1397,8 @@ def advance_tier_publication(store, state, *, on_stage_start=None):
                 or captured.get("createdAtUtc") != created
                 or captured.get("pinnedInputsSha256") != state["inputs"]["payloadSha256"]):
             raise ValueError("The pinned tier generation has incompatible code, time or inputs.")
-        if captured.get("phaseInputs") or captured.get("computationGeneration"):
+        if (len(captured.get("phaseInputs", {})) == len(PHASE_INPUT_NAMES)
+                or captured.get("computationGeneration")):
             try:
                 candidate = _advance_finish(store, captured, on_stage_start=on_stage_start)
             except TierAnalysisPending as pending:
