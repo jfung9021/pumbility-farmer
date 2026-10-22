@@ -43,7 +43,8 @@ class _HashingReader:
 
 
 def write_checkpoint(store, payload: Mapping[str, Any], *, stage: str,
-                     identity: str, predecessor: str | None = None) -> dict:
+                     identity: str, predecessor: str | None = None,
+                     recovery_path: str | None = None) -> dict:
     content = hashlib.sha256()
     with tempfile.TemporaryFile() as staged:
         with gzip.GzipFile(filename="", fileobj=staged, mode="wb", mtime=0) as compressed:
@@ -54,17 +55,22 @@ def write_checkpoint(store, payload: Mapping[str, Any], *, stage: str,
         body = staged.read()
     blob_sha = hashlib.sha256(body).hexdigest()
     path = PREFIX + blob_sha + ".json.gz"
+    reference = {"version": 1, "stage": stage, "identity": identity,
+            "predecessorSha256": predecessor, "path": path,
+            "blobSha256": blob_sha, "payloadSha256": content.hexdigest(),
+            "compressedBytes": len(body), "schemaVersion": payload.get("schemaVersion"),
+            "validation": "transition-validated-v1"}
+    # A recovery receipt is not committed progress until its immutable bytes
+    # validate. Writing it first closes the blob-write/manifest-write crash gap.
+    if recovery_path is not None:
+        store.put_json(recovery_path, reference)
     # An identical content-addressed write is idempotent. No mutable artifact
     # path is used for checkpoint payloads, including concurrent retries.
     # The private bucket accepts opaque binary artifacts, including gzip files.
     from tier_diagnostics import event
     event("tier_checkpoint_upload", stage=stage, artifact_bytes=len(body))
     store.put_bytes(path, body, content_type="application/octet-stream")
-    return {"version": 1, "stage": stage, "identity": identity,
-            "predecessorSha256": predecessor, "path": path,
-            "blobSha256": blob_sha, "payloadSha256": content.hexdigest(),
-            "compressedBytes": len(body), "schemaVersion": payload.get("schemaVersion"),
-            "validation": "transition-validated-v1"}
+    return reference
 
 
 def verified_checkpoint_bytes(store, reference: Mapping[str, Any], *, stage: str | None = None,

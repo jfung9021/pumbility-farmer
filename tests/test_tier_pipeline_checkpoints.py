@@ -127,6 +127,10 @@ class PipelineResumeTests(TestCase):
         return next(value for path, value in self.store.values.items() if path.endswith("/state.json"))
 
     def prepare(self):
+        for ordinal in range(1, 13):
+            with self.assertRaises(tiers.TierAnalysisPending) as preparation:
+                self.advance()
+            self.assertTrue(preparation.exception.sequence.endswith("-prepare-" + str(ordinal)))
         with self.assertRaises(tiers.TierAnalysisPending) as prepared:
             self.advance()
         self.assertEqual(prepared.exception.stage, "prepared-inputs")
@@ -209,6 +213,9 @@ class PipelineResumeTests(TestCase):
         state = {"inputs": ref, "generatedAtUtc": self.timestamp}
         started = []
         with patch("production_tiers._finish_stage", side_effect=self.transition):
+            for _ in range(12):
+                result = tiers.advance_tier_publication(self.store, state, on_stage_start=started.append)
+                state = result["state"]
             prepared = tiers.advance_tier_publication(self.store, state, on_stage_start=started.append)
             self.assertEqual(prepared["stage"], "prepared-inputs")
             self.assertEqual(prepared["progressOrdinal"], 9)

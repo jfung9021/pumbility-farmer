@@ -80,7 +80,18 @@ TIER_PUBLICATION_LOCK = "pumbility:tier-publication:inputs"
 
 
 class JobLeaseHeldError(RuntimeError):
-    """Another live worker already owns this delivery's job."""
+    """An atomic claim was refused; operational metadata stays internal."""
+
+    def __init__(
+        self, message: str, *, blocking_job_id: str | None = None,
+        blocking_status: str | None = None, lease_expires_at: datetime | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.blocking_job_id = blocking_job_id
+        self.blocking_status = blocking_status
+        self.lease_expires_at = lease_expires_at
+        self.retry_after_seconds = retry_after_seconds
 
 
 class JobLeaseLostError(RuntimeError):
@@ -2684,8 +2695,30 @@ class PumbilityJobStore:
                         ),
                     )
                     claim = cursor.fetchone()[0]
-                    if not isinstance(claim, Mapping) or not claim.get("claimed"):
-                        raise JobLeaseHeldError("The Pumbility job lease is held by another worker.")
+                    if not isinstance(claim, Mapping) or type(claim.get("claimed")) is not bool:
+                        raise RuntimeError("The Pumbility job claim returned an invalid result.")
+                    if not claim["claimed"]:
+                        blocking = claim.get("job")
+                        if not isinstance(blocking, Mapping) or not blocking.get("external_key"):
+                            raise RuntimeError("The Pumbility job claim did not identify its blocker.")
+                        blocking_status = str(blocking.get("status") or "")
+                        lease_expires_at = _parse_timestamp(blocking.get("lease_expires_at"))
+                        retry_after_seconds = None
+                        if blocking_status == "running":
+                            if lease_expires_at is None:
+                                raise RuntimeError("The Pumbility claim blocker has no lease expiry.")
+                            cursor.execute("select clock_timestamp()")
+                            database_now = _parse_timestamp(cursor.fetchone()[0])
+                            if database_now is None:
+                                raise RuntimeError("The Pumbility claim clock is unavailable.")
+                            retry_after_seconds = max(0.0, (lease_expires_at - database_now).total_seconds())
+                        raise JobLeaseHeldError(
+                            "The Pumbility job claim is blocked.",
+                            blocking_job_id=str(blocking["external_key"]),
+                            blocking_status=blocking_status,
+                            lease_expires_at=lease_expires_at,
+                            retry_after_seconds=retry_after_seconds,
+                        )
                     job_row = claim.get("job")
                     job_uuid = job_row.get("id") if isinstance(job_row, Mapping) else None
                 else:

@@ -66,7 +66,9 @@ class PlayerLeaseStoreTests(unittest.TestCase):
     def test_live_owner_duplicate_is_specific_no_write_error(self):
         self.cursor.fetchone.side_effect = [
             ("job-uuid", "running", "live-owner"),
-            ({"claimed": False},),
+            ({"claimed": False, "job": {"external_key": "player-refresh-test",
+                "status": "running", "lease_expires_at": isoformat_utc(NOW + timedelta(seconds=800))}},),
+            (NOW,),
         ]
         with self.assertRaises(JobLeaseHeldError):
             self.jobs.save(player_job("running"))
