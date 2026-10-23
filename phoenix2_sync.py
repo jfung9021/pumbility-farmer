@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
+from song_bpm_metadata import bpm_metadata_identity, enrich_charts_bpm
 
 
 # Compatibility constant for existing Phoenix 2 callers.
@@ -22,6 +23,7 @@ INCREMENTAL_SCORE_LOOKBACK = timedelta(days=7)
 CHART_FIELDS = (
     "id",
     "songName",
+    "songType",
     "type",
     "level",
     "difficulty",
@@ -30,6 +32,7 @@ CHART_FIELDS = (
     "stepArtist",
     "bpmMin",
     "bpmMax",
+    "bpmFocal",
 )
 SCORE_FIELDS = (
     "playerId",
@@ -109,6 +112,9 @@ def sanitize_chart(row: Mapping[str, Any]) -> dict[str, Any] | None:
     if chart_id is None or str(chart_id).strip() == "":
         return None
     sanitized = {field: row.get(field) for field in CHART_FIELDS}
+    for field in ("songType", "bpmFocal"):
+        if field not in row:
+            sanitized.pop(field, None)
     sanitized["id"] = str(chart_id)
     bpm_min = _finite_number(row.get("bpmMin"))
     bpm_max = _finite_number(row.get("bpmMax"))
@@ -123,6 +129,12 @@ def sanitize_chart(row: Mapping[str, Any]) -> dict[str, Any] | None:
             sanitized["bpmMax"],
             sanitized["bpmMin"],
         )
+    if "bpmFocal" in row:
+        focal = row.get("bpmFocal")
+        low, high = sanitized["bpmMin"], sanitized["bpmMax"]
+        sanitized["bpmFocal"] = (float(focal) if isinstance(focal, (int, float))
+            and not isinstance(focal, bool) and math.isfinite(focal) and focal > 0
+            and low is not None and high is not None and low <= focal <= high else None)
     return sanitized
 
 
@@ -142,8 +154,9 @@ def _song_bpm_range(row: Mapping[str, Any]) -> tuple[float | None, float | None]
 def attach_song_bpm_metadata(
     charts: Sequence[Mapping[str, Any]],
     songs: Sequence[Mapping[str, Any]],
+    *, mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> list[dict[str, Any]]:
-    """Join the v2 song catalog's BPM range onto chart rows by song name."""
+    """Join upstream ranges, then apply the current mix's approved song metadata."""
     bpm_by_song = {
         str(row.get("name") or ""): _song_bpm_range(row)
         for row in songs
@@ -155,7 +168,7 @@ def attach_song_bpm_metadata(
             str(row.get("songName") or ""), (None, None)
         )
         enriched.append({**row, "bpmMin": bpm_min, "bpmMax": bpm_max})
-    return enriched
+    return enrich_charts_bpm(enriched, mix=resolve_mix(mix).api_value)
 
 
 def sanitize_score(row: Mapping[str, Any], player_id: str | None = None) -> dict[str, Any] | None:
@@ -234,6 +247,8 @@ def sanitize_snapshot(
         for raw in source.get("charts", [])
         if isinstance(raw, Mapping) and (sanitized := sanitize_chart(raw)) is not None
     ]
+    if requested.key == DEFAULT_MIX_KEY:
+        charts = enrich_charts_bpm(charts, mix=requested.api_value)
     scores = merge_best_scores(
         [],
         [raw for raw in source.get("scores", []) if isinstance(raw, Mapping)],
@@ -269,6 +284,7 @@ def sanitize_snapshot(
         "players": sorted(players, key=lambda row: row["playerId"]),
         "charts": sorted(charts, key=lambda row: row["id"]),
         "scores": scores,
+        **(bpm_metadata_identity() if requested.key == DEFAULT_MIX_KEY else {}),
     }
 
 
@@ -350,7 +366,7 @@ def synchronize_mix_snapshot(
     )
     charts = [
         sanitized
-        for raw in attach_song_bpm_metadata(charts_full, songs_full)
+        for raw in attach_song_bpm_metadata(charts_full, songs_full, mix=mix_spec)
         if (sanitized := sanitize_chart(raw)) is not None
     ]
     charts.sort(key=lambda row: row["id"])

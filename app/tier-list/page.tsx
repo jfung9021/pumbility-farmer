@@ -13,6 +13,7 @@ import { BpmRangeFilter } from "../_components/bpm-range-filter";
 import { ExplanatorySection } from "../_components/explanatory-section";
 import { SiteHeader } from "../_components/site-header";
 import { readJsonResponse } from "../../lib/api-response";
+import { formatDisplayBpm, requireFocalBpmMetadata } from "../../lib/song-bpm";
 import { loadTierChartDetails } from "../../lib/tier-chart-details";
 import { chartEvidenceLines, plainTierDataWarning, TIER_INTERVAL_TOOLTIP } from "../../lib/tier-evidence-copy";
 import { loadWithGenerationRecovery, MODEL_DELAY_THRESHOLD_MS } from "../../lib/refresh-reliability";
@@ -25,7 +26,7 @@ import {
 } from "../../lib/format-difficulty";
 import { tierMetricFromSearchParams, tierModeFromSearchParams } from "../../lib/page-view-state";
 import { DEFAULT_SCORING_GOAL, SCORING_GOALS, hasScoringGoalVariants, isSssScoringChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal } from "../../lib/scoring-variants";
-import { chartBpmRange, clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
+import { clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
 import {
   clearingPercentileRange,
   clearingSkillPercentile,
@@ -71,7 +72,7 @@ const TierScoresContext = createContext<{
 }>({ selected: false, loading: false, unavailable: false, scores: new Map() });
 const PumbilityPolicyContext = createContext<PumbilityAggregation | null>(null);
 const RatingCompressionContext = createContext(false);
-const TierDetailContext = createContext<{compact: boolean; generatedAtUtc: string; goal: ScoringGoal; select: (chart: ChartResult) => void; reload: (chartId: string) => Promise<string>}>({compact:false, generatedAtUtc:"", goal:"general", select:() => {}, reload:async () => {throw new Error("Reload the tier list to continue.");}});
+const TierDetailContext = createContext<{compact: boolean; generatedAtUtc: string; bpmMetadataRevision?: string; goal: ScoringGoal; select: (chart: ChartResult) => void; reload: (chartId: string) => Promise<{generatedAtUtc:string; bpmMetadataRevision?:string}>}>({compact:false, generatedAtUtc:"", goal:"general", select:() => {}, reload:async () => {throw new Error("Reload the tier list to continue.");}});
 
 function PersonalChartScore({ chartId }: { chartId: string }) {
   const { selected, loading, unavailable, scores } = useContext(TierScoresContext);
@@ -83,9 +84,14 @@ function PersonalChartScore({ chartId }: { chartId: string }) {
 
 const TierBrowseContext = createContext({ metric: "scoring" as TierMetricKey, showRating: false });
 function chartBpmLabel(chart: ChartResult) {
-  const bpm = chartBpmRange(chart);
-  if (!bpm) return "— BPM";
-  return `${bpm.min === bpm.max ? bpm.min : `${bpm.min}–${bpm.max}`} BPM`;
+  return formatDisplayBpm(chart);
+}
+
+function ArtworkMetadata({ chart }: { chart: ChartResult }) {
+  return <span className="tier-art-meta" aria-hidden="true">
+    <span className="tier-art-bpm">{formatDisplayBpm(chart)}</span>
+    <span className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>{chartCountLabel(chart)}</span>
+  </span>;
 }
 
 const groupTone = ["lime", "green", "mint", "slate", "orange", "rose", "red"];
@@ -206,6 +212,7 @@ function ChartDetails({ chart, metric, headingId, detailsLoaded = false }: { cha
             ? <span><b>{chart.difficulty}</b> chart</span>
             : <span><b>{chart.difficulty}</b> official</span>}
           <span><b>{chartGrade(chart, metric)}</b> estimated</span>
+          <span>{chartBpmLabel(chart)}</span>
           <span>{selected.evidenceStatus}</span>
           {sssScoring && metric !== "clearing" ? <span><b>{target.label} ≥{target.score.toLocaleString()}</b> · {chart.scoringSource === "official" ? "Combined official leaderboards" : "Submitted successful best scores"}{metric === "pumbility" ? " + Clearing" : ""}</span> : null}
           {selectedOfficialEvidence ? <span>{metric === "pumbility" && clearingUnavailable ? "Official Scoring; Clearing unavailable" : metric === "pumbility" && !abilityClearing ? "Official Scoring + player-submitted Clearing" : "Official PIUScores leaderboard"}</span> : metric === "clearing" ? <span>{clearingUnavailable ? "Clearing data unavailable" : "Player-submitted clears"}</span> : submittedProfile ? <span>{metric === "pumbility" ? "Player-submitted score profile + clears" : "Player-submitted score profile"}</span> : null}
@@ -243,9 +250,9 @@ function ChartCard({ chart, metric }: { chart: ChartResult; metric: TierMetricKe
     <button className="tier-row-button" onClick={() => details.select(chart)} type="button" aria-label={`View details for ${chart.songName}, ${chart.difficulty}, ${chartBpmLabel(chart)}`}>
       <span className="chart-art compact-jacket" data-chart-type={chart.type} aria-hidden="true">
         {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
-        <span className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>{chartCountLabel(chart)}</span>
+        <ArtworkMetadata chart={chart} />
       </span>
-      <span className="tier-row-copy"><span className="tier-song" title={chart.songName}>{chart.songName}</span><span className="tier-chart-bpm">{chartBpmLabel(chart)}</span>{showRating ? <span className="tier-chart-rating">{chartGrade(chart, metric)}</span> : null}</span>
+      <span className="tier-row-copy"><span className="tier-song" title={chart.songName}>{chart.songName}</span>{showRating ? <span className="tier-chart-rating">{chartGrade(chart, metric)}</span> : null}</span>
     </button>
     <PersonalChartScore chartId={chart.chartId} />
   </article>;
@@ -261,8 +268,8 @@ function LazyChartDetails({chart, metric}: {chart: ChartResult; metric: TierMetr
     if (!source.compact) return;
     let cancelled = false;
     setLoaded(null); setError(null);
-    loadWithGenerationRecovery(source.generatedAtUtc,
-      generation => loadTierChartDetails(chart.chartId, generation),
+    loadWithGenerationRecovery({generatedAtUtc:source.generatedAtUtc, bpmMetadataRevision:source.bpmMetadataRevision},
+      generation => loadTierChartDetails(chart.chartId, generation.generatedAtUtc, generation.bpmMetadataRevision),
       async () => {
         if (cancelled) throw new DOMException("Cancelled", "AbortError");
         if (recoveryUsed.current) throw new Error("The tier list changed again. Reload the page to view this chart.");
@@ -273,7 +280,7 @@ function LazyChartDetails({chart, metric}: {chart: ChartResult; metric: TierMetr
       if (!cancelled) setLoaded(projectScoringGoal(response.chart, source.goal, metric));
     }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Chart details could not be loaded."); });
     return () => { cancelled = true; };
-  }, [attempt, chart.chartId, metric, source.compact, source.generatedAtUtc, source.goal]);
+  }, [attempt, chart.chartId, metric, source.compact, source.generatedAtUtc, source.bpmMetadataRevision, source.goal, source.reload]);
   if (!source.compact) return <ChartDetails chart={chart} metric={metric} headingId="chart-detail-dialog-title" detailsLoaded />;
   if (loaded) return <ChartDetails chart={loaded} metric={metric} headingId="chart-detail-dialog-title" detailsLoaded />;
   return <div className="chart-copy"><h3 id="chart-detail-dialog-title">{chart.songName}</h3><p role="status">{error || "Loading chart details..."}</p>{error ? <button type="button" onClick={() => setAttempt(value => value + 1)}>Retry</button> : null}</div>;
@@ -286,9 +293,8 @@ function CompactChartCard({ chart, onSelect }: { chart: ChartResult; metric?: Ti
       <span className="chart-art compact-jacket" data-chart-type={chart.type} aria-hidden="true">
         {chart.imageUrl ? <img src={chart.imageUrl} alt="" loading="lazy" /> : <span>{chart.difficulty}</span>}
         <span className="tier-art-title"><span className="tier-song">{chart.songName}</span></span>
-        <span className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>{chartCountLabel(chart)}</span>
+        <ArtworkMetadata chart={chart} />
       </span>
-      <span className="tier-chart-bpm">{chartBpmLabel(chart)}</span>
       {showRating ? <span className="tier-chart-rating">{chartGrade(chart, metric)}</span> : null}
     </button>
     <PersonalChartScore chartId={chart.chartId} />
@@ -381,6 +387,7 @@ function ChartDetailDialog({ chart, metric, onClose }: { chart: ChartResult; met
           <div className="chart-dialog-art-rail">
             <div className="chart-art jacket chart-dialog-jacket" data-chart-type={chart.type} aria-hidden="true">
               {chart.imageUrl ? <img src={chart.imageUrl} alt="" /> : <span>{chart.difficulty}</span>}
+              <ArtworkMetadata chart={chart} />
             </div>
             <PersonalChartScore chartId={chart.chartId} />
             <ChartVideoLink
@@ -538,13 +545,14 @@ export default function TierListPage() {
   const loadLatest = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     try {
-      const response = await fetch("/api/tier-list", { cache: "no-store" });
+      const response = await fetch("/api/tier-list?bpmPolicy=focal-v1", { cache: "no-store" });
       if (response.status === 404) {
         setPayload(null);
         setMessage("No stored combined analysis is available yet.");
         return null;
       }
       const latest = await readJsonResponse<AnalysisPayload>(response);
+      requireFocalBpmMetadata(latest.bpmMetadata);
       if (latest.mix?.key !== "combined") {
         throw new Error("The server returned a version-specific tier list.");
       }
@@ -569,7 +577,7 @@ export default function TierListPage() {
       throw new Error("This chart is no longer in the latest tier list.");
     }
     setSelectedChart(current => current?.chartId === chartId ? chart : current);
-    return latest.generatedAtUtc;
+    return {generatedAtUtc:latest.generatedAtUtc, bpmMetadataRevision:latest.bpmMetadata?.bpmMetadataRevision};
   }, [loadLatest]);
 
   useEffect(() => {
@@ -683,7 +691,7 @@ export default function TierListPage() {
     <PumbilityPolicyContext.Provider value={pumbilityPolicy?.aggregation ?? null}>
     <ClearingRecordMinimumContext.Provider value={minimumScoreRecords}>
     <RatingCompressionContext.Provider value={hasMidpointCompression(payload) || localAveragePumbility}>
-    <TierDetailContext.Provider value={{compact:payload?.tierListView?.kind === "list", generatedAtUtc:payload?.generatedAtUtc ?? "", goal:scoringGoal, select:setSelectedChart, reload:reloadSelectedChart}}>
+    <TierDetailContext.Provider value={{compact:payload?.tierListView?.kind === "list", generatedAtUtc:payload?.generatedAtUtc ?? "", bpmMetadataRevision:payload?.bpmMetadata?.bpmMetadataRevision, goal:scoringGoal, select:setSelectedChart, reload:reloadSelectedChart}}>
     <main className="tier-list-page">
       <SiteHeader active="tier-list" />
 
@@ -752,7 +760,7 @@ export default function TierListPage() {
         <div className="tier-active-filters" aria-label="Applied filters">
           {filter.query ? <button aria-label="Remove search filter" onClick={() => updateFilter({query: ""})} type="button">Search: {filter.query} ×</button> : null}
           {filter.level !== "All" ? <button aria-label="Remove level filter" onClick={() => updateFilter({level: "All"})} type="button">{filter.level === "20+" ? "Only 20+" : activeMode === "coop" ? `${filter.level} players` : `${activeMode === "singles" ? "S" : "D"}${filter.level}`} ×</button> : null}
-          {selectedBpm ? <button aria-label="Remove BPM filter" onClick={() => updateFilter({bpm: null})} type="button">{selectedBpm.min}–{selectedBpm.max} BPM ×</button> : null}
+          {selectedBpm ? <button aria-label="Remove main BPM filter" onClick={() => updateFilter({bpm: null})} type="button">Main BPM {selectedBpm.min}–{selectedBpm.max} ×</button> : null}
         </div>
         {selectedPlayerKey ? <div className="tier-score-freshness"><RefreshMeta generatedAtUtc={activePlayerScores?.syncedAtUtc} label="Player scores synced" loading={loadingScores} loadingLabel="Loading player scores..." nowMs={nowMs} />{scoresError ? <span role="status">{scoresError}</span> : null}</div> : null}
 

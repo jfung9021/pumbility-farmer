@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDisplayBpm } from "../../lib/song-bpm";
+
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChartVideoLink } from "../_components/chart-video-link";
@@ -101,10 +103,10 @@ function ContributionDialog({bucket, onClose}: {bucket: RadarBucket; onClose: ()
 
 function SuggestionRow({chart}: {chart: RadarSuggestion}) {
   const prefix = chart.type === "Single" ? "S" : "D";
-  const bpm = chart.bpmMin === chart.bpmMax ? `${chart.bpmMin}` : `${chart.bpmMin}–${chart.bpmMax}`;
+  const bpm = formatDisplayBpm(chart);
   return <li className="radar-chart-row">
     <div className="radar-jacket chart-art" data-chart-type={chart.type} aria-hidden="true">{chart.imageUrl ? <img alt="" loading="lazy" src={chart.imageUrl} /> : <span>{chart.difficulty}</span>}</div>
-    <div className="radar-chart-copy"><strong>{chart.songName}</strong><span><b>{chart.difficulty}</b> official · {prefix}{formatEstimatedDifficulty(chart.estimatedDifficulty)} calculated</span><details className="radar-song-details"><summary>Chart details</summary><span>{bpm} BPM</span></details></div>
+    <div className="radar-chart-copy"><strong>{chart.songName}</strong><span><b>{chart.difficulty}</b> official · {prefix}{formatEstimatedDifficulty(chart.estimatedDifficulty)} calculated</span><details className="radar-song-details"><summary>Chart details</summary><span>{bpm}</span></details></div>
     <PlayerResult className="radar-personal-score" compact formattedScore={chart.personalScore === null ? undefined : formatTierScore(chart.personalScore)} plate={chart.personalPlate} score={chart.personalScore} />
     <ChartVideoLink chartId={chart.chartId} difficulty={chart.difficulty} songName={chart.songName} variant="recommendation" />
   </li>;
@@ -162,8 +164,8 @@ export default function SkillRadarPage() {
     const controller = new AbortController();
     const isCurrent = () => !controller.signal.aborted && activePlayerKeyRef.current === playerKey;
     setSelected(""); setLoading(true); setError(null); setProfile(null);
-    fetch(`/api/skill-radar?${new URLSearchParams({playerKey})}`, {signal:controller.signal, cache:"no-store"})
-      .then(response => readJsonResponse<unknown>(response)).then(value => validateSkillRadarResponse(value, playerKey))
+    fetch(`/api/skill-radar?${new URLSearchParams({playerKey, bpmPolicy:"focal-v1"})}`, {signal:controller.signal, cache:"no-store"})
+      .then(response => readJsonResponse<unknown>(response)).then(value => validateSkillRadarResponse(value, playerKey, "focal-v1"))
       .then(value => {if (isCurrent()) {setProfile(value); setSelected(value.groups.weaknesses[0] ?? value.buckets[0]?.key ?? "");}})
       .catch(error => {if (isCurrent()) setError(error instanceof Error ? error.message : "Skill Radar could not be loaded.");})
       .finally(() => {if (isCurrent()) setLoading(false);});

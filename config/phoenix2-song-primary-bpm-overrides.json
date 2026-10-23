@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "mix": "Phoenix2",
+  "policy": "User-confirmed focal BPM choices take precedence over research proposals and upper-bound fallbacks. Preserve the original BPM ranges.",
+  "songs": {
+    "Banya Classic Remix": {
+      "recommendedPrimaryBpm": 170,
+      "confirmedBy": "user",
+      "confirmedOn": "2026-10-24",
+      "confirmation": "and confirming the other upper bound fallbacks as well",
+      "reason": "User confirmed the remaining 170 BPM upper-bound fallback as the chosen focal BPM for Banya Classic Remix."
+    },
+    "Love Witch": {
+      "recommendedPrimaryBpm": 170,
+      "confirmedBy": "user",
+      "confirmedOn": "2026-10-24",
+      "confirmation": "and confirming the other upper bound fallbacks as well",
+      "reason": "User confirmed the remaining 170 BPM upper-bound fallback as the chosen focal BPM for Love Witch."
+    },
+    "Transmission": {
+      "recommendedPrimaryBpm": 169,
+      "confirmedBy": "user",
+      "confirmedOn": "2026-10-24",
+      "confirmation": "transmission should be labeled as 169",
+      "reason": "User-confirmed focal BPM supersedes the previous 225 BPM upper-bound fallback."
+    }
+  }
+}

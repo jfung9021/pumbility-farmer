@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { selectBpmPayload, validateBpmPolicy } from "../../../lib/server-song-bpm";
 
 import { localAnalysisEnabled } from "../../../lib/local-analysis";
 import {
@@ -23,6 +24,10 @@ const RECOMMENDATION_MODE_KEYS = new Set<RecommendationModeKey>([
 ]);
 
 export async function GET(request: NextRequest) {
+  const bpmPolicy = request.nextUrl.searchParams.get("bpmPolicy");
+  try { validateBpmPolicy(bpmPolicy); } catch (error) {
+    return NextResponse.json({error: (error as Error).message}, {status: 400});
+  }
   if (!localAnalysisEnabled()) {
     return NextResponse.json(
       { error: "Local recommendation mode is disabled." },
@@ -57,7 +62,7 @@ export async function GET(request: NextRequest) {
     const payload = await readLocalRecommendationIndex();
     if (!playerKey) {
       const response = recommendationsForRating(payload, rating);
-      return NextResponse.json(mode ? recommendationsForMode(response, mode, difficulty) : response, {
+      return NextResponse.json(selectBpmPayload(mode ? recommendationsForMode(response, mode, difficulty) : response, bpmPolicy), {
         headers: { "Cache-Control": "no-store, max-age=0" },
       });
     }
@@ -69,7 +74,7 @@ export async function GET(request: NextRequest) {
         { status: 404, headers: { "Cache-Control": "no-store" } },
       );
     }
-    return NextResponse.json(mode ? recommendationsForMode(response, mode, difficulty) : response, {
+    return NextResponse.json(selectBpmPayload(mode ? recommendationsForMode(response, mode, difficulty) : response, bpmPolicy), {
       headers: { "Cache-Control": "no-store, max-age=0" },
     });
   } catch (error) {

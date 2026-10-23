@@ -12,9 +12,10 @@ import {
 export class OfficialComparisonNotFoundError extends Error {}
 export class OfficialComparisonGenerationError extends Error {}
 
-export function officialComparisonDirectory(): string {
-  return process.env.PIU_LOCAL_OFFICIAL_COMPARISON_DIR
+export function officialComparisonDirectory(bpmPolicy?: string): string {
+  const base = process.env.PIU_LOCAL_OFFICIAL_COMPARISON_DIR
     || path.join(process.cwd(), ".local-data", "piu-scores", "official", "comparison", "current");
+  return bpmPolicy === "focal-v1" ? path.join(base, "focal-v1") : base;
 }
 
 async function readJson(filePath: string): Promise<unknown> {
@@ -30,9 +31,10 @@ async function readJson(filePath: string): Promise<unknown> {
 
 const readIndex = cachedFileReader(async filePath => validateOfficialComparisonIndex(await readJson(filePath)));
 
-export async function readLocalOfficialComparisonIndex(): Promise<OfficialComparisonIndex> {
+export async function readLocalOfficialComparisonIndex(bpmPolicy?: string): Promise<OfficialComparisonIndex> {
   try {
-    const index = await readIndex(path.join(officialComparisonDirectory(), "index.json"));
+    const index = await readIndex(path.join(officialComparisonDirectory(bpmPolicy), "index.json"));
+    if (index.schemaVersion !== (bpmPolicy === "focal-v1" ? 3 : 2)) throw new Error("The official comparison BPM policy does not match the requested contract.");
     return { ...index, players: index.players.filter(player => player.recordedScoreCount >= MINIMUM_OFFICIAL_SCORES) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -42,15 +44,15 @@ export async function readLocalOfficialComparisonIndex(): Promise<OfficialCompar
   }
 }
 
-export async function readLocalOfficialComparisonPlayer(playerKey: string, generation?: string) {
+export async function readLocalOfficialComparisonPlayer(playerKey: string, generation?: string, bpmPolicy?: string) {
   if (!isOfficialPlayerKey(playerKey)) throw new OfficialComparisonNotFoundError("The selected official player was not found.");
-  const index = await readLocalOfficialComparisonIndex();
+  const index = await readLocalOfficialComparisonIndex(bpmPolicy);
   if (generation && generation !== index.generation) {
     throw new OfficialComparisonGenerationError("The official leaderboard snapshot changed. Reload the comparison.");
   }
   if (!index.players.some(player => player.playerKey === playerKey)) {
     throw new OfficialComparisonNotFoundError("The selected official player was not found.");
   }
-  const payload = await readJson(path.join(officialComparisonDirectory(), "generations", index.generation, "players", `${playerKey}.json`));
+  const payload = await readJson(path.join(officialComparisonDirectory(bpmPolicy), "generations", index.generation, "players", `${playerKey}.json`));
   return validateOfficialComparisonPlayer(payload, index, playerKey);
 }

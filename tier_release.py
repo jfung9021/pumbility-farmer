@@ -51,7 +51,7 @@ def submitted_tier_inputs(base, phoenix2):
             continue
         prefix = "S" if mode == "Single" else "D"
         records.append({**{key: copy.deepcopy(chart.get(key)) for key in (
-            "songName", "noteCount", "imageUrl", "stepArtist", "bpmMin", "bpmMax")},
+            "songName", "songType", "noteCount", "imageUrl", "stepArtist", "bpmMin", "bpmMax", "bpmFocal")},
             "chartId": str(chart["id"]), "type": mode, "mode": "Singles" if mode == "Single" else "Doubles",
             "level": int(level), "folder": f"{prefix}{int(level)}",
             "difficulty": chart.get("difficulty") or f"{prefix}{int(level)}"})

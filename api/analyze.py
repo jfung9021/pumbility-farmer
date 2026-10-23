@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Annotated
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -26,6 +27,7 @@ router = APIRouter()
 def get_analysis(
     job_id: str | None = Query(default=None, alias="jobId"),
     mix: str = Query(default=DEFAULT_MIX_KEY),
+    bpm_policy: Annotated[str, Query(alias="bpmPolicy")] = "",
 ):
     try:
         mix_spec = resolve_mix(mix)
@@ -61,7 +63,8 @@ def get_analysis(
                 status_code=404,
                 content={"error": "No completed analysis is stored yet."},
             )
-        return JSONResponse(content=payload)
+        from bpm_metadata_overlay import select_bpm_payload
+        return JSONResponse(content=select_bpm_payload(payload, bpm_policy, mix=mix_spec.api_value))
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
     except (RuntimeError, json.JSONDecodeError):

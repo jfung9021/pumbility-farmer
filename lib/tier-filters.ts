@@ -1,5 +1,7 @@
+import { displayBpmRange, focalBpm, type SongBpm } from "./song-bpm.ts";
+
 export type BpmRange = { min: number; max: number };
-type ChartBpm = { bpmMin?: number | null; bpmMax?: number | null };
+type ChartBpm = SongBpm;
 
 export function matchesTierLevel(chart: { level: number; type: string }, selected: string): boolean {
   if (selected === "All") return true;
@@ -8,25 +10,21 @@ export function matchesTierLevel(chart: { level: number; type: string }, selecte
 }
 
 export function chartBpmRange(chart: ChartBpm): BpmRange | null {
-  const { bpmMin, bpmMax } = chart;
-  if (typeof bpmMin !== "number" || typeof bpmMax !== "number"
-    || !Number.isFinite(bpmMin) || !Number.isFinite(bpmMax)
-    || bpmMin <= 0 || bpmMax < bpmMin) return null;
-  return { min: bpmMin, max: bpmMax };
+  return displayBpmRange(chart);
 }
 
 export function tierBpmBounds(charts: ChartBpm[]): BpmRange | null {
-  const ranges = charts.map(chartBpmRange).filter((range): range is BpmRange => range !== null);
-  if (!ranges.length) return null;
-  const min = Math.floor(Math.min(...ranges.map((range) => range.min)));
-  const max = Math.ceil(Math.max(...ranges.map((range) => range.max)));
+  const bpms = charts.map(focalBpm).filter((bpm): bpm is number => bpm !== null);
+  if (!bpms.length) return null;
+  const min = Math.floor(Math.min(...bpms));
+  const max = Math.ceil(Math.max(...bpms));
   return { min, max: Math.max(min + 1, max) };
 }
 
 export function matchesTierBpm(chart: ChartBpm, selected: BpmRange | null): boolean {
   if (!selected) return true;
-  const bpm = chartBpmRange(chart);
-  return bpm !== null && bpm.min >= selected.min && bpm.max <= selected.max;
+  const bpm = focalBpm(chart);
+  return bpm !== null && bpm >= selected.min && bpm <= selected.max;
 }
 
 export function clampBpmRange(range: BpmRange, bounds: BpmRange): BpmRange {

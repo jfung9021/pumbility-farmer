@@ -1,3 +1,5 @@
+import { focalBpm, focalBpmBucket } from "./song-bpm.ts";
+
 /** Public, client-safe contracts for the official leaderboard comparison. */
 export const OFFICIAL_BPM_LABELS = [
   "<150", "150–159", "160–169", "170–179", "180–189",
@@ -6,6 +8,7 @@ export const OFFICIAL_BPM_LABELS = [
 
 export type OfficialComparisonMode = "singles" | "doubles";
 export const OFFICIAL_COMPARISON_METHOD = "official-comparison-sg-perfect-pg-v2";
+export const OFFICIAL_COMPARISON_FOCAL_METHOD = "official-comparison-sg-perfect-pg-v3";
 export const MINIMUM_OFFICIAL_SCORES = 200;
 
 export interface OfficialComparisonChart {
@@ -16,6 +19,8 @@ export interface OfficialComparisonChart {
   level: number;
   bpmMin: number | null;
   bpmMax: number | null;
+  bpmFocal?: number | null;
+  songType?: string | null;
 }
 
 export interface OfficialComparisonContributor {
@@ -37,7 +42,10 @@ export interface OfficialComparisonBucket {
 }
 
 export interface OfficialComparisonIndex {
-  schemaVersion: 2;
+  schemaVersion: 2 | 3;
+  bpmMetadataVersion?: 1;
+  bpmPolicy?: "focal-v1";
+  bpmMetadataRevision?: string;
   generation: string;
   generatedAtUtc: string;
   sourceDates: { Phoenix: string; Phoenix2: string };
@@ -47,7 +55,10 @@ export interface OfficialComparisonIndex {
 }
 
 export interface OfficialComparisonPlayer {
-  schemaVersion: 2;
+  schemaVersion: 2 | 3;
+  bpmMetadataVersion?: 1;
+  bpmPolicy?: "focal-v1";
+  bpmMetadataRevision?: string;
   generation: string;
   playerKey: string;
   displayName: string;
@@ -83,11 +94,18 @@ function invalid(message: string): never {
   throw new OfficialComparisonValidationError(message);
 }
 
-export function validateOfficialComparisonIndex(value: unknown): OfficialComparisonIndex {
-  if (!object(value) || value.schemaVersion !== 2 || !text(value.generation)
+function validBpmIdentity(value: Record<string, unknown>): boolean {
+  return value.bpmMetadataVersion === 1 && value.bpmPolicy === "focal-v1"
+    && typeof value.bpmMetadataRevision === "string" && /^[a-f0-9]{64}$/.test(value.bpmMetadataRevision);
+}
+
+export function validateOfficialComparisonIndex(value: unknown, expectedBpmPolicy?: "focal-v1"): OfficialComparisonIndex {
+  if (!object(value) || (value.schemaVersion !== 2 && value.schemaVersion !== 3) || !text(value.generation)
     || !/^[a-zA-Z0-9_-]+$/.test(value.generation) || !text(value.generatedAtUtc)
     || !object(value.sourceDates) || !text(value.sourceDates.Phoenix) || !text(value.sourceDates.Phoenix2)
-    || !object(value.method) || value.method.version !== OFFICIAL_COMPARISON_METHOD
+    || !object(value.method) || value.method.version !== (value.schemaVersion === 3 ? OFFICIAL_COMPARISON_FOCAL_METHOD : OFFICIAL_COMPARISON_METHOD)
+    || value.schemaVersion === 3 && (!validBpmIdentity(value) || value.method.bpmPolicy !== "focal-v1")
+    || expectedBpmPolicy === "focal-v1" && value.schemaVersion !== 3
     || !Array.isArray(value.players) || !Array.isArray(value.charts)) {
     invalid("The official comparison catalog is invalid. Rebuild the comparison artifacts.");
   }
@@ -107,6 +125,9 @@ export function validateOfficialComparisonIndex(value: unknown): OfficialCompari
       || ![chart.bpmMin, chart.bpmMax].every(bpm => bpm === null || (typeof bpm === "number" && Number.isFinite(bpm)))) {
       invalid("The official comparison chart catalog is invalid.");
     }
+    if (value.schemaVersion === 3 && (chart.songType != null && typeof chart.songType !== "string" || chart.bpmFocal !== null && focalBpm(chart as unknown as OfficialComparisonChart) === null)) {
+      invalid("The official comparison chart focal BPM is invalid.");
+    }
     chartIds.add(chart.chartId);
   }
   return value as unknown as OfficialComparisonIndex;
@@ -117,7 +138,8 @@ export function validateOfficialComparisonPlayer(
   index: OfficialComparisonIndex,
   playerKey: string,
 ): OfficialComparisonPlayer {
-  if (!object(value) || value.schemaVersion !== 2 || value.generation !== index.generation
+  if (!object(value) || value.schemaVersion !== index.schemaVersion || value.generation !== index.generation
+    || index.schemaVersion === 3 && (!validBpmIdentity(value) || value.bpmMetadataRevision !== index.bpmMetadataRevision)
     || value.playerKey !== playerKey || !text(value.displayName)
     || !index.players.some(player => player.playerKey === playerKey)
     || !Array.isArray(value.buckets) || value.buckets.length !== 18 || !object(value.scores)
@@ -157,8 +179,9 @@ export function validateOfficialComparisonPlayer(
       const low = chart?.bpmMin;
       const high = chart?.bpmMax;
       const bucketFor = (bpm: number) => bpm < 150 ? 0 : Math.min(8, Math.floor((bpm - 150) / 10) + 1);
-      if (!chart || chart.mode !== bucket.mode || low == null || high == null || low <= 0 || high < low
-        || bucketFor(low) !== bucket.bucketIndex || bucketFor(high) !== bucket.bucketIndex) {
+      if (!chart || chart.mode !== bucket.mode || (index.schemaVersion === 3
+        ? focalBpmBucket(chart) !== bucket.bucketIndex
+        : low == null || high == null || low <= 0 || high < low || bucketFor(low) !== bucket.bucketIndex || bucketFor(high) !== bucket.bucketIndex)) {
         invalid("A contributing chart does not match its official BPM bucket.");
       }
       contributorIds.add(contributor.chartId);

@@ -11,7 +11,7 @@ from pumbility_contract import hybrid_clearing_method_identity, hybrid_tier_meth
 from tier_postprocessing import finalize_tiers, initial_fit_payload, validate_postprocessing
 
 CURRENT_METADATA = ("chartId", "type", "mode", "level", "difficulty", "folder", "songName",
-                    "noteCount", "imageUrl", "stepArtist", "bpmMin", "bpmMax")
+                    "noteCount", "imageUrl", "stepArtist", "songType", "bpmMin", "bpmMax", "bpmFocal")
 
 
 def retain_lower_submitted_scoring(payload: Mapping[str, Any], submitted: Mapping[str, Any]) -> dict[str, Any]:

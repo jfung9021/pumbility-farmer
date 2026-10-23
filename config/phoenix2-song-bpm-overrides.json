@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "songs": {
+    "Moment Day": {
+      "bpm": { "min": 158, "max": 158 },
+      "confirmedBy": "user",
+      "confirmedOn": "2026-10-23",
+      "confirmation": "moment day is 158bpm",
+      "reason": "User resolved the conflicting 155/158 BPM video descriptions in favor of 158 BPM."
+    }
+  }
+}

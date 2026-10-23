@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { enrichBpmPayload } from "./server-song-bpm.ts";
 import { cachedFileReader } from "./local-file-cache.ts";
 
 import type { AnalysisPayload, CrossLevelClearingCurve, OfficialCrossLevelCurve, OfficialScoringSpread } from "./types";
@@ -1014,7 +1015,7 @@ export async function readLocalAnalysisPayload(
     throw new LocalAnalysisValidationError("The local aggregate contains a credential-shaped value.");
   }
   try {
-    return validateLocalAnalysisPayload(JSON.parse(raw), mix);
+    return enrichBpmPayload(validateLocalAnalysisPayload(JSON.parse(raw), mix), mix);
   } catch (error) {
     if (error instanceof LocalAnalysisValidationError) throw error;
     throw new LocalAnalysisValidationError("The local analysis file is not valid JSON.");
@@ -1039,7 +1040,7 @@ async function readValidatedCombinedAnalysisPayload(resultsPath: string): Promis
     );
   }
   try {
-    return validateLocalAnalysisPayload(JSON.parse(raw), "combined");
+    return enrichBpmPayload(validateLocalAnalysisPayload(JSON.parse(raw), "combined"), "combined");
   } catch (error) {
     if (error instanceof LocalAnalysisValidationError) throw error;
     throw new LocalAnalysisValidationError(

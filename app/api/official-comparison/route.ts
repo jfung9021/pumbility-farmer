@@ -10,10 +10,12 @@ export async function GET(request: Request) {
   const headers = { "Cache-Control": "no-store" };
   if (!localAnalysisEnabled()) return NextResponse.json({ error: "Local analysis mode is disabled." }, { status: 404, headers });
   const params = new URL(request.url).searchParams;
+  const bpmPolicy = params.get("bpmPolicy") || undefined;
+  if (bpmPolicy && bpmPolicy !== "focal-v1") return NextResponse.json({error:"Invalid BPM policy."}, {status:400, headers});
   const playerKey = params.get("playerKey") || "";
   if (!isOfficialPlayerKey(playerKey)) return NextResponse.json({ error: "A valid official playerKey is required." }, { status: 400, headers });
   try {
-    return NextResponse.json(await readLocalOfficialComparisonPlayer(playerKey, params.get("generation") || undefined), { headers });
+    return NextResponse.json(await readLocalOfficialComparisonPlayer(playerKey, params.get("generation") || undefined, bpmPolicy), { headers });
   } catch (error) {
     const status = error instanceof OfficialComparisonGenerationError ? 409
       : error instanceof OfficialComparisonNotFoundError ? 404

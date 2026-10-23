@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 
 
@@ -30,6 +31,11 @@ def stage_reference_inputs(
 
 
 def main() -> int:
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from scripts.build_song_bpm_runtime import build, render
+    compiled = render(build(PROJECT_ROOT / "config"))
+    if (PROJECT_ROOT / "config/phoenix2-song-bpm-runtime.json").read_text(encoding="utf-8") != compiled:
+        raise RuntimeError("BPM runtime metadata is stale. Run npm run bpm:build before deployment.")
     counts = stage_reference_inputs()
     print(json.dumps({"status": "staged", **counts}, sort_keys=True))
     return 0

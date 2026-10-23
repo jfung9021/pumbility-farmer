@@ -64,7 +64,7 @@ import pandas as pd
 from pumbility_contract import PHOENIX2_MINIMUM_ANALYSIS_SCORES, SCRIPT_VERSION
 import requests
 
-from mix_registry import DEFAULT_MIX_KEY, resolve_mix
+from mix_registry import DEFAULT_MIX_KEY, MixSpec, resolve_mix
 from phoenix2_sync import attach_song_bpm_metadata
 
 
@@ -389,7 +389,7 @@ def pull_live_snapshot(
     charts_full = client.fetch_page_collection(
         "api/v2/charts", {"mix": mix, "limit": 100}
     )
-    charts = attach_song_bpm_metadata(charts_full, songs)
+    charts = attach_song_bpm_metadata(charts_full, songs, mix=mix_spec)
     if not charts:
         raise ApiError(f"The {mix_label} chart catalog was empty.")
 
@@ -442,7 +442,7 @@ def pull_live_snapshot(
     return players, charts, all_scores
 
 
-def load_snapshot(raw_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+def load_snapshot(raw_dir: Path, *, mix: str | MixSpec | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     players_path = raw_dir / "players.json"
     charts_path = raw_dir / "charts.json"
     scores_path = raw_dir / "scores.jsonl.gz"
@@ -454,6 +454,18 @@ def load_snapshot(raw_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, A
     scores = _read_jsonl_gz(scores_path)
     if not isinstance(players, list) or not isinstance(charts, list):
         raise ValueError("Cached players.json and charts.json must contain arrays.")
+    manifest_path = raw_dir / "snapshot_manifest.json"
+    inferred_mix = mix
+    if inferred_mix is None and manifest_path.exists():
+        inferred_mix = _read_json(manifest_path).get("mix")
+        if isinstance(inferred_mix, Mapping):
+            inferred_mix = inferred_mix.get("key") or inferred_mix.get("apiValue")
+    if inferred_mix is None:
+        inferred_mix = next((part for part in reversed(raw_dir.parts)
+                             if part in ("phoenix1", "phoenix2")), None)
+    if inferred_mix is not None:
+        from song_bpm_metadata import enrich_charts_bpm
+        charts = enrich_charts_bpm(charts, mix=resolve_mix(inferred_mix).api_value)
     return players, charts, scores
 
 
@@ -1105,7 +1117,7 @@ def analyze_snapshot(
         "mode", "modeRank", "levelRank", "levelPercentile", "levelComparisonCharts",
         "folder", "relativeGroupRank", "relativeGroup", "effectBandRank", "effectBand",
         "songName", "difficulty", "type", "level", "chartId", "imageUrl", "noteCount",
-        "stepArtist", "bpmMin", "bpmMax", "estimatedDifficulty", "averageDifficulty",
+        "stepArtist", "songType", "bpmMin", "bpmMax", "bpmFocal", "estimatedDifficulty", "averageDifficulty",
         "difficultyDelta", "folderMeasuredCharts", "folderRangeCompression",
         "difficultyDeltaCi95Low", "difficultyDeltaCi95High",
         "difficultyCi95Low", "difficultyCi95High", "pumbilityPerLevel", "rawEasePb",

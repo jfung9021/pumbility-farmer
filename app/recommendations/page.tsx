@@ -12,6 +12,7 @@ import {
   type KeyboardEvent,
 } from "react";
 
+import { displayBpmRange, formatDisplayBpm, requireFocalBpmMetadata } from "../../lib/song-bpm";
 import { RefreshMeta } from "../_components/refresh-meta";
 import { GlobalRefreshNotice } from "../_components/global-refresh-notice";
 import { usePlayerProfile } from "../_components/player-profile-provider";
@@ -270,15 +271,8 @@ function RecommendationReadiness({
 }
 
 function formatBpm(minimum: number | null | undefined, maximum: number | null | undefined): string | null {
-  const min = typeof minimum === "number" && Number.isFinite(minimum) && minimum > 0 ? minimum : null;
-  const max = typeof maximum === "number" && Number.isFinite(maximum) && maximum > 0 ? maximum : null;
-  if (min === null && max === null) return null;
-  const low = (min ?? max) as number;
-  const high = (max ?? min) as number;
-  const format = (value: number) => new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 2,
-  }).format(value);
-  return low === high ? `${format(low)} BPM` : `${format(low)}–${format(high)} BPM`;
+  const chart = { bpmMin: minimum, bpmMax: maximum };
+  return displayBpmRange(chart) ? formatDisplayBpm(chart) : null;
 }
 
 function RecommendationCard({
@@ -930,11 +924,12 @@ export default function RecommendationsPage() {
       const params = new URLSearchParams({ playerKey: selectedKey, mode: activeMode });
       if (requestedDifficulty) params.set("difficulty", requestedDifficulty);
       const response = await fetch(
-        `/api/recommendations?${params.toString()}`,
+        `/api/recommendations?${params.toString()}&bpmPolicy=focal-v1`,
         { cache: "no-store", signal: controller.signal },
       );
       if (response.status === 404) return null;
       const payload = await readJsonResponse<PlayerRecommendationsResponse>(response);
+      requireFocalBpmMetadata(payload.bpmMetadata);
       if (!isCurrent()) return null;
       if (payload.player.playerKey !== selectedKey) throw new Error("The recommendation response belongs to a different player.");
       const scopedPayload = cachePlayerPayload(

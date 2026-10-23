@@ -52,7 +52,8 @@ class LocalDatabaseScoreClient:
                     order by c.upstream_chart_id
                     """
                 )
-                self._catalog = [dict(row[0]) for row in cursor.fetchall()]
+                from song_bpm_metadata import enrich_charts_bpm
+                self._catalog = enrich_charts_bpm([dict(row[0]) for row in cursor.fetchall()])
         return self._catalog
 
     def fetch_page_collection(
@@ -67,6 +68,7 @@ class LocalDatabaseScoreClient:
             songs = {
                 str(chart.get("songName") or ""): {
                     "name": chart.get("songName"),
+                    **({"type": chart["songType"]} if chart.get("songType") else {}),
                     "bpm": {"min": chart.get("bpmMin"), "max": chart.get("bpmMax")},
                 }
                 for chart in self._read_catalog()

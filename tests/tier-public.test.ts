@@ -44,3 +44,27 @@ test("lazy evidence is deduplicated, retried after failures, and isolated by pub
   const mismatch = createTierChartDetailLoader((async () => Response.json({generatedAtUtc:"wrong", chart:source.doubles[0]})) as typeof fetch);
   await assert.rejects(mismatch("d18", source.generatedAtUtc), /do not match/);
 });
+
+test("compact rows and lazy detail requests preserve and pin the BPM metadata revision", async () => {
+  const payload = structuredClone(source);
+  payload.bpmMetadata = {bpmMetadataVersion:1,bpmPolicy:"focal-v1",bpmMetadataRevision:"a".repeat(64)};
+  Object.assign(payload.doubles[0], {bpmMin:100,bpmMax:225,bpmFocal:169,songType:"Arcade"});
+  const compact = compactTierPayload(payload);
+  assert.deepEqual(compact.bpmMetadata, payload.bpmMetadata);
+  assert.equal(compact.doubles[0].bpmFocal, 169);
+  assert.equal(compact.doubles[0].bpmMin, 100);
+  assert.equal(compact.doubles[0].bpmMax, 225);
+  assert.deepEqual(tierChartDetails(payload, "d18")?.bpmMetadata, payload.bpmMetadata);
+  let calls = 0;
+  const load = createTierChartDetailLoader((async (url: string) => {
+    calls++;
+    const params = new URL(url, "https://example.test").searchParams;
+    assert.equal(params.get("bpmPolicy"), "focal-v1");
+    return Response.json({...tierChartDetails(payload, "d18"), bpmMetadata:{...payload.bpmMetadata,bpmMetadataRevision:params.get("bpmMetadataRevision")}});
+  }) as typeof fetch);
+  await load("d18", payload.generatedAtUtc, "a".repeat(64));
+  await load("d18", payload.generatedAtUtc, "b".repeat(64));
+  assert.equal(calls, 2);
+  const mismatch = createTierChartDetailLoader((async () => Response.json(tierChartDetails(payload, "d18"))) as typeof fetch);
+  await assert.rejects(mismatch("d18",payload.generatedAtUtc,"b".repeat(64)), /do not match/);
+});

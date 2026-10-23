@@ -42,7 +42,7 @@ def _new_row(chart: Mapping[str, Any]) -> dict[str, Any]:
         "difficulty": chart.get("difficulty") or f"{'S' if mode == 'Single' else 'D'}{level}",
         "folder": f"{'S' if mode == 'Single' else 'D'}{level}",
         "imageUrl": chart.get("imageUrl"), "noteCount": chart.get("noteCount"),
-        "stepArtist": chart.get("stepArtist"), "bpmMin": chart.get("bpmMin"), "bpmMax": chart.get("bpmMax"),
+        "stepArtist": chart.get("stepArtist"), "songType": chart.get("songType"), "bpmMin": chart.get("bpmMin"), "bpmMax": chart.get("bpmMax"), "bpmFocal": chart.get("bpmFocal"),
         "phoenix1Contributors": 0, "phoenix2Contributors": 0,
         "tierMetrics": {"clearing": {**_empty_metric(), "clearCount": 0, "ratedClearCount": 0,
                                       "missingSkillCount": 0}, "pumbility": _empty_metric()},

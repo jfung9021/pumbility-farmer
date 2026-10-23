@@ -17,9 +17,13 @@ from typing import Any, Mapping, Sequence
 
 from phoenix2_pumbility import (GRADE_BANDS, GRADE_PENALTY_UNITS_BY_TYPE,
     PLATE_BONUS_UNITS_BY_TYPE, PLATE_CODES, normalize_plate)
+from song_bpm_metadata import bpm_bucket_index, bpm_metadata_identity, enrich_charts_bpm
 
 METHOD_VERSION = 6
 PROFILE_VERSION = 11
+FOCAL_METHOD_VERSION = 7
+FOCAL_PROFILE_VERSION = 12
+BPM_POLICY = "focal-v1"
 SUGGESTION_LIMIT = 10
 REFERENCE = {"grade": "SSS+", "plate": "UG", "minimumScore": 995_000}
 MODES = (("singles", "Single"), ("doubles", "Double"))
@@ -50,7 +54,16 @@ def uncapped_radar_score(aligned_level, bucket, mode_key):
     return 100*(aligned_level-minimum)/(scale["maximumAlignedLevel"]-minimum)
 
 
-def bpm_bucket(chart):
+def validate_bpm_policy(bpm_policy):
+    if bpm_policy not in (None, "", BPM_POLICY):
+        raise ValueError("Unsupported BPM policy.")
+    return BPM_POLICY if bpm_policy == BPM_POLICY else None
+
+
+def bpm_bucket(chart, *, bpm_policy=None):
+    if validate_bpm_policy(bpm_policy):
+        index = bpm_bucket_index(chart.get("bpmFocal"))
+        return index if index is not None else "unknownBpm"
     low, high = chart.get("bpmMin"), chart.get("bpmMax")
     if not finite(low) or not finite(high) or low <= 0 or high < low:
         return "unknownBpm"
@@ -99,7 +112,7 @@ def _compare_priced(a, b):
     return (left > right)-(left < right)
 
 
-def aggregate_bpm_progression(charts: Sequence[Mapping], scores: Sequence[Mapping]):
+def aggregate_bpm_progression(charts: Sequence[Mapping], scores: Sequence[Mapping], *, bpm_policy=None):
     """Tracker-priced contributions with SSS+ UG-equivalent aggregation."""
     catalog = {str(row.get("chartId", row.get("id"))): row for row in charts
         if row.get("type", row.get("chartType")) in ("Single", "Double")
@@ -119,7 +132,7 @@ def aggregate_bpm_progression(charts: Sequence[Mapping], scores: Sequence[Mappin
         if chart is None:
             excluded["unknownChart"] += 1
             continue
-        index = bpm_bucket(chart)
+        index = bpm_bucket(chart, bpm_policy=bpm_policy)
         if not isinstance(index, int):
             excluded[index] += 1
             continue
@@ -153,7 +166,10 @@ def aggregate_bpm_progression(charts: Sequence[Mapping], scores: Sequence[Mappin
     return {"buckets": result, "excluded": excluded}
 
 
-def build_suggestion_catalog(tiers: Mapping, chart_metadata: Sequence[Mapping]):
+def build_suggestion_catalog(tiers: Mapping, chart_metadata: Sequence[Mapping], *, bpm_policy=None):
+    focal = validate_bpm_policy(bpm_policy)
+    if focal:
+        chart_metadata = enrich_charts_bpm(chart_metadata, mix="Phoenix2")
     metadata = {str(c.get("chartId", c.get("id"))): c for c in chart_metadata}
     charts, seen = [], set()
     for mode, chart_type in MODES:
@@ -167,8 +183,8 @@ def build_suggestion_catalog(tiers: Mapping, chart_metadata: Sequence[Mapping]):
             current = metadata.get(cid)
             if not current or current.get("type", current.get("chartType")) != chart_type:
                 continue
-            chart = {**row, "bpmMin": current.get("bpmMin"), "bpmMax": current.get("bpmMax")}
-            index = bpm_bucket(chart)
+            chart = {**row, **{field: current.get(field) for field in ("bpmMin", "bpmMax", "bpmFocal")}}
+            index = bpm_bucket(chart, bpm_policy=bpm_policy)
             if not isinstance(index, int):
                 continue
             seen.add(cid)
@@ -176,9 +192,11 @@ def build_suggestion_catalog(tiers: Mapping, chart_metadata: Sequence[Mapping]):
                 "difficulty": str(row.get("difficulty") or f"{'S' if mode == 'singles' else 'D'}{row['level']}"),
                 "type": chart_type, "level": int(row["level"]), "imageUrl": row.get("imageUrl") or None,
                 "bpmMin": chart["bpmMin"], "bpmMax": chart["bpmMax"],
-                "estimatedDifficulty": rating, "bpmBucketId": str(index)})
+                "estimatedDifficulty": rating, "bpmBucketId": str(index),
+                **({"bpmFocal": chart["bpmFocal"]} if focal else {})})
     charts.sort(key=lambda c: (c["estimatedDifficulty"], c["songName"], c["chartId"]))
-    return {"schemaVersion": 1, "methodVersion": METHOD_VERSION,
+    return {"schemaVersion": 1, "methodVersion": FOCAL_METHOD_VERSION if focal else METHOD_VERSION,
+        **(bpm_metadata_identity() if focal else {}),
         "tierGeneratedAtUtc": tiers.get("generatedAtUtc"),
         "tierIdentity": tiers.get("summary", {}).get("method", {}).get("productionTierPublication", {}).get("publicPayloadSha256")
             or content_digest(charts),
@@ -186,8 +204,14 @@ def build_suggestion_catalog(tiers: Mapping, chart_metadata: Sequence[Mapping]):
 
 
 def build_skill_radar(charts, scores, suggestion_catalog, *, player_key, display_name,
-                      generated_at_utc, player_synced_at_utc=None, personal_scores=None):
-    aggregate = aggregate_bpm_progression(charts, scores)
+                      generated_at_utc, player_synced_at_utc=None, personal_scores=None, bpm_policy=None):
+    focal = validate_bpm_policy(bpm_policy)
+    if focal:
+        charts = enrich_charts_bpm(charts, mix="Phoenix2")
+        if any(suggestion_catalog.get(key) != value for key, value in bpm_metadata_identity().items()):
+            raise ValueError("The Skill Radar catalog BPM metadata revision does not match.")
+    aggregate = (aggregate_bpm_progression(charts, scores, bpm_policy=focal) if focal
+                 else aggregate_bpm_progression(charts, scores))
     metadata = {str(row.get("chartId", row.get("id"))): row for row in charts}
     scores_by_chart = {row["chartId"]: row for row in personal_scores or []}
     buckets = []
@@ -241,7 +265,8 @@ def build_skill_radar(charts, scores, suggestion_catalog, *, player_key, display
     for group, members in groups.items():
         for row in members:
             row["group"] = group
-    return {"methodVersion": METHOD_VERSION, "reference": dict(REFERENCE),
+    return {"methodVersion": FOCAL_METHOD_VERSION if focal else METHOD_VERSION,
+        **(bpm_metadata_identity() if focal else {}), "reference": dict(REFERENCE),
         "player": {"playerKey": player_key, "displayName": display_name},
         "generatedAtUtc": generated_at_utc, "tierGeneratedAtUtc": suggestion_catalog["tierGeneratedAtUtc"],
         "playerSyncedAtUtc": player_synced_at_utc,

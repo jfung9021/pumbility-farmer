@@ -29,7 +29,7 @@ def current_clearing_catalog(payload: Mapping[str, Any], phoenix2: Mapping[str, 
         for row in payload.get(key, []):
             cid = str(row["chartId"])
             catalog[cid] = {**catalog.get(cid, {}), **{field: row.get(field) for field in (
-                "type", "level", "noteCount", "songName", "difficulty", "imageUrl", "stepArtist", "bpmMin", "bpmMax")}, "id": cid}
+                "type", "level", "noteCount", "songName", "songType", "difficulty", "imageUrl", "stepArtist", "bpmMin", "bpmMax", "bpmFocal")}, "id": cid}
     return [catalog[cid] for cid in sorted(catalog)]
 
 

@@ -23,7 +23,7 @@ class LocalDatabaseScoreClientTests(unittest.TestCase):
         self.assertEqual(client.fetch_page_collection("api/v2/songs", params), [
             {"name": "New song", "bpm": {"min": 110, "max": 130}},
         ])
-        self.assertEqual(client.fetch_page_collection("api/v2/charts", params), [chart])
+        self.assertEqual(client.fetch_page_collection("api/v2/charts", params), [{**chart, "bpmFocal": None}])
         connect.assert_called_once_with("postgresql://localhost/local", prepare_threshold=None)
         schema.assert_called_once_with(cursor)
 

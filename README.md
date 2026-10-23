@@ -28,14 +28,62 @@ buckets with zeros. The exact contributing charts, scores, assumed plates, and
 Pumbility values are included in the profile so the selected BPM comparison can
 show how each player's estimate was calculated. Ties are ordered by song name
 then chart ID. Empty buckets remain unknown. Source dates and recorded
-coverage are visible; missing or bucket-crossing BPM excludes a chart only from
-the radar. The builder publishes an index last, after immutable per-player
+coverage are visible. Variable-tempo songs use their selected focal BPM; unknown
+focal values exclude a chart only from the radar. The builder publishes an index last, after immutable per-player
 generation files. Rerun it when the official captures or BPM metadata change.
 
 Local artifacts live under `.local-data/piu-scores/official/comparison/current`.
 Hosted readers use the equivalent private Blob prefix
 `analysis/official-comparison/current`; generating local files does not publish
 them or deploy the feature.
+
+## Display BPM and focal BPM
+
+Current Phoenix 2 chart labels retain the complete corrected `bpmMin`–`bpmMax`
+interval, including decimal precision. Tier artwork shows it in the bottom left
+of every square. Numerical filters use inclusive `bpmFocal` membership. Personal
+Skill Radar and official comparison categories use the same focal value with
+half-open categories (`<150`, `[150,160)`, …, `[210,220)`, `220+`). For example,
+Transmission displays `100–225` and filters as `169`; The Devil displays
+`130–240` and categorizes as `240`; Appassionata displays `160–210` and uses `210`.
+Moment Day displays and uses `158`.
+
+The four accepted source/override files in `config/phoenix2-song-*.json` compile
+into `config/phoenix2-song-bpm-runtime.json`. Runtime readers do not require the
+dated research outputs. Exact song names and song variants are preserved, and
+Phoenix 1 archive evidence is unchanged. New unmatched ranges stay visible with
+unknown focal BPM until a decision is recorded. No request-time upper-bound
+guess is made.
+
+```powershell
+npm run bpm:build
+npm run bpm:check
+.venv/Scripts/python.exe scripts/build_bpm_metadata_view.py --source PATH_TO_EXISTING_TIERS --output SEPARATE_STAGED_PATH --public
+.venv/Scripts/python.exe scripts/build_local_skill_radar.py --bpm-policy focal-v1 --tiers SEPARATE_STAGED_PATH
+.venv/Scripts/python.exe scripts/build_official_player_comparison.py --bpm-policy focal-v1
+```
+
+`bpmPolicy=focal-v1` explicitly selects the new API contract. Metadata views pin
+`bpmMetadataVersion=1` and a deterministic `bpmMetadataRevision`, separately from
+the numerical tier generation. The personal radar uses method 7/profile 12 and
+official comparison schema 3. Legacy selectors retain their existing contracts.
+The builders stage complete generations and select them only after writing all
+profiles. They reuse cached scores and tier fits without a score fetch or refit.
+Python metadata views verify and re-sign a published public tier payload; local
+TypeScript projections retain the original publication as base evidence and do
+not claim its signature applies to the derived view.
+
+For stored chart metadata, `scripts/backfill_song_bpm_metadata.py` provides a
+separate pinned dry-run/apply migration and optional local snapshot staging.
+Follow `--help`; apply requires the saved plan, rechecks active chart IDs and
+revision hashes, and updates only chart metadata under the publication lock.
+Do not use the full snapshot importer for this metadata-only change. Players,
+consents and score history are preserved. Local artifact generation does not
+publish artifacts, run this database migration, or deploy production.
+
+The correction inventory, provenance and accepted focal values are recorded in
+`output/bpm-semantics-plan-2026-10-24/metadata-baseline.json`; implementation and
+verification results are in `output/bpm-implementation-2026-10-24/`.
 
 ## Analysis method
 

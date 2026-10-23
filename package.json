@@ -26,7 +26,9 @@
     "benchmark:top50": "node --experimental-strip-types scripts/benchmark_top50_export.ts",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test:frontend": "node --experimental-strip-types --test tests/*.test.ts"
+    "test:frontend": "node --experimental-strip-types --test tests/*.test.ts",
+    "bpm:build": "python scripts/build_song_bpm_runtime.py --offline",
+    "bpm:check": "python scripts/build_song_bpm_runtime.py --check --offline"
   },
   "dependencies": {
     "@resvg/resvg-js": "2.6.2",

@@ -1,0 +1,3034 @@
+{
+  "schemaVersion": 1,
+  "mix": "Phoenix2",
+  "researchedOn": "2026-10-23",
+  "generatedAtUtc": "2026-10-23T15:57:41.851833+00:00",
+  "definition": "The tempo of the defining gameplay/musical focal section, climax, or signature challenge, even when a different tempo occupies more time. Brief empty/gimmick spikes do not automatically qualify.",
+  "decisionCriterion": "gameplay-focal-point",
+  "status": "Research proposals only; no runtime or production activation.",
+  "sourceCatalogFile": "config/phoenix2-song-bpm.json",
+  "sourceCatalogSha256": "072552da03d1ec3ca7397ed877ec79443e90b5d7c42cd65c1114a4b6825f7cc2",
+  "summary": {
+    "rangedSongEntries": 32,
+    "numericRecommendations": 32,
+    "unresolvedSongs": 0,
+    "confidenceCounts": {
+      "medium": 15,
+      "high": 17
+    },
+    "userDirectedSongs": 4,
+    "userPreferredSongs": 1,
+    "uniqueSourceUrls": 138,
+    "sourceEvidenceAccessCounts": {
+      "opened": 101,
+      "search-snippet": 46
+    },
+    "publicTimingTemplatesAnalyzed": 20,
+    "recommendationsChangedAfterFocalClarification": 12,
+    "deepResearchedSongs": 7,
+    "deepResearchResolutionCounts": {
+      "user-confirmed": 3,
+      "inferred": 2,
+      "direct": 2
+    },
+    "upperBoundFallbackSongs": 0,
+    "focalEvidenceUnresolvedSongs": 0,
+    "deepResearchQueries": 86,
+    "additionalPublicFanTimingFilesInspected": 4
+  },
+  "interpretationNotes": [
+    "Focal tempo represents the signature playing section or musical climax, not necessarily the longest-duration tempo or the maximum displayed BPM.",
+    "Recommendations are judgments unless marked as direct evidence or explicit user direction. Confidence is not a measure of community consensus.",
+    "Korean forums and player discussions were searched; some useful contribution text was available only in indexed snippets. Access and applicability are recorded per source.",
+    "Wiki mirrors can share the same underlying article; multiple URLs are not automatically independent corroboration.",
+    "The canonical BPM ranges and Moment Day user override are unchanged.",
+    "The seven previously unresolved songs received a deeper Korean forum, Reddit, guide, and timing-source investigation. Search negatives and blocked access are documented, not treated as proof that no other evidence exists.",
+    "A numeric proposal may be a reasoned inference rather than a directly stated main BPM. Upper-bound-fallback entries, where present, are low-confidence operational defaults and do not establish the true focal tempo.",
+    "The other 25 song decisions are byte-for-byte equivalent as JSON objects to the saved pre-pass research. Original BPM ranges, user-confirmed values, and application behavior remain unchanged."
+  ],
+  "supportingTimingFile": "output/primary-bpm-research-2026-10-23/ucs-timing-profiles.json",
+  "criterionAdjustments": [
+    {
+      "songName": "Appassionata",
+      "previousBpm": 160,
+      "focalBpm": 210,
+      "reason": "210 is the defining high-speed climax and matches the user preference; 160 is the duration mode."
+    },
+    {
+      "songName": "Banya-P Classic Remix",
+      "previousBpm": null,
+      "focalBpm": 180,
+      "reason": "180 is inferred from the decisive Moonlight component; its low-speed reading gimmick is a separate concern."
+    },
+    {
+      "songName": "Beat of The War",
+      "previousBpm": 186,
+      "focalBpm": 202,
+      "reason": "202 represents the fast closing gameplay focus; 186 occupies more time."
+    },
+    {
+      "songName": "BRAIN POWER",
+      "previousBpm": 170,
+      "focalBpm": 173,
+      "reason": "173 aligns with the chorus and characteristic late material; 170 is the longer opening pulse."
+    },
+    {
+      "songName": "CHAOS AGAIN",
+      "previousBpm": null,
+      "focalBpm": 230,
+      "reason": "230 is the effective gameplay maximum; 240 is a no-note section and 260 the piano ending."
+    },
+    {
+      "songName": "Come to Me",
+      "previousBpm": 100,
+      "focalBpm": 107,
+      "reason": "107 identifies the distinctive middle transition/gimmick focus; this choice is chart-dependent and 100 remains the musical baseline."
+    },
+    {
+      "songName": "Galaxy Collapse",
+      "previousBpm": 270,
+      "focalBpm": 320,
+      "reason": "320 is the retained arcade-cut fast finale; the original recording 520 section was cut."
+    },
+    {
+      "songName": "Love is a Danger Zone 2 Try To B.P.M",
+      "previousBpm": null,
+      "focalBpm": 169,
+      "reason": "169 represents the ending acceleration and final twist-run highlight, rather than a stable whole-song tempo."
+    },
+    {
+      "songName": "Lucid(PIU Edit)",
+      "previousBpm": 180,
+      "focalBpm": 190,
+      "reason": "190 represents the final musical culmination; the difficult middle changing-tempo passage and duration-mode 180 remain important qualifications."
+    },
+    {
+      "songName": "The Devil",
+      "previousBpm": null,
+      "focalBpm": 240,
+      "reason": "240 is the user-directed focal endpoint and the documented decisive ending of the accelerando."
+    },
+    {
+      "songName": "Tream Vook of the war",
+      "previousBpm": null,
+      "focalBpm": 202,
+      "reason": "202 is explicitly associated with the post-break drills, jumps and weight-shift challenge."
+    },
+    {
+      "songName": "Turkey Virus",
+      "previousBpm": null,
+      "focalBpm": 162,
+      "reason": "162 is inferred from the decisive final Beethoven Virus section and that constituent tempo."
+    }
+  ],
+  "songs": [
+    {
+      "songName": "* this game does not exist *",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 40.0,
+        "max": 240.0
+      },
+      "recommendedPrimaryBpm": 230,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "230 defines the late running section; 190 lasts longer and 240 is a shorter finale.",
+      "competingBpms": [
+        190,
+        115,
+        240
+      ],
+      "limitations": [
+        "No useful Korean forum main-tempo discussion was returned; Korean evidence is a community wiki mirror, not a measured community consensus.",
+        "Public UCS base is a music timing template, not an official per-chart note-density measure. BPM can encode half/double-time and gimmicks; the timing distribution supports interpretation rather than mechanically determining the musical primary.",
+        "230 is a focal-point judgment backed by Korean commentary, not the majority-duration tempo;190 remains the time-mode alternative."
+      ],
+      "sources": [
+        {
+          "url": "https://namu.moe/w/*%20this%20game%20does%20not%20exist%20*",
+          "title": "* this game does not exist * — Korean Namu article mirror",
+          "sourceType": "community-wiki-mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact Phoenix Arcade song; main-tempo comment appears under D26 but describes the music."
+        },
+        {
+          "url": "https://songbpm.com/@litmus/this-game-does-not-exist-_idicHLzsP",
+          "title": "BPM and key for * this game does not exist * by litmus* — SongBPM",
+          "sourceType": "music-metadata-aggregator",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Commercial recording corroborates the 230 pulse through half-time equivalence, not an independent Phoenix chart timing measurement."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs695.zip",
+          "title": "CS695 public UCS music timing base — Pump Pro+",
+          "sourceType": "public-ucs-timing-analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact named Arcade song timing template; not a specific official chart or note-density analysis. Catalog-duration clipping/last-tempo tail assumptions apply."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"이 게임은 존재하지 않습니다\" \"BPM\"",
+        "\"이 게임은 존재하지\" 펌프 240",
+        "\"이 게임은 존재하지 않습니다\" site:arca.live"
+      ],
+      "previousDurationOrMainTempoProposal": 230
+    },
+    {
+      "songName": "Alice in Misanthrope",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 154.0,
+        "max": 174.0
+      },
+      "recommendedPrimaryBpm": 172,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "direct",
+      "summary": "172 is supported by the composer and the song timing template.",
+      "competingBpms": [
+        154,
+        158,
+        174
+      ],
+      "limitations": [
+        "158 appeared in old osu! scorepost metadata, while other osu! records and the composer use 172; such scorepost metadata is not treated as evidence overriding the creator.",
+        "No useful Korean forum primary-BPM statement was found.",
+        "Public UCS base is a music timing template, not an official per-chart note-density measure. BPM can encode half/double-time and gimmicks; the timing distribution supports interpretation rather than mechanically determining the musical primary."
+      ],
+      "sources": [
+        {
+          "url": "https://manbow.nothing.sh/event/event.cgi?action=More_def&event=110&num=501",
+          "title": "BOFU2016 No.501 Alice in Misanthrope -厭世アリス- / LeaF",
+          "sourceType": "composer-original-event-entry-and-reply",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Primary source for the original composition underlying the Phoenix song; reply around source lines 1262–1266."
+        },
+        {
+          "url": "https://wikiwiki.jp/sixtargate/Alice_in_Misanthrope",
+          "title": "Alice in Misanthrope -厭世アリス- — Sixtar Gate Japanese Wiki",
+          "sourceType": "community-game-guide",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Guide states Sixtar uses the album recording; corroborates musical base tempo, not exact Phoenix timing."
+        },
+        {
+          "url": "https://robeats.fandom.com/wiki/Alice_in_Misanthrope",
+          "title": "Alice in Misanthrope — Robeats Wiki",
+          "sourceType": "community-game-guide",
+          "language": "en",
+          "access": "search-snippet",
+          "applicability": "Other game's recording; corroborating context only. Full open failed."
+        },
+        {
+          "url": "https://namu.moe/w/Alice%20in%20Misanthrope%20-%E5%8E%AD%E4%B8%96%E3%82%A2%E3%83%AA%E3%82%B9-",
+          "title": "Alice in Misanthrope -厭世アリス- — Korean Namu article mirror",
+          "sourceType": "community-wiki-mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Composition identity and range context; not the source of the 172 recommendation."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs715.zip",
+          "title": "CS715 public UCS music timing base — Pump Pro+",
+          "sourceType": "public-ucs-timing-analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact named Arcade song timing template; not a specific official chart or note-density analysis. Catalog-duration clipping/last-tempo tail assumptions apply."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"앨리스 인 미산트로프\" BPM 172",
+        "\"앨리스 인 미산트로프\" site:dcinside.com",
+        "\"Alice in Misanthrope\" \"172\" 펌프"
+      ],
+      "previousDurationOrMainTempoProposal": 172
+    },
+    {
+      "songName": "Appassionata",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 160.0,
+        "max": 210.0
+      },
+      "recommendedPrimaryBpm": 210,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "user-preferred",
+      "confidence": "high",
+      "basis": "inference",
+      "summary": "210 is the defining high-speed climax and matches the user preference; 160 is the duration mode.",
+      "competingBpms": [
+        160,
+        170,
+        180,
+        190,
+        200
+      ],
+      "limitations": [
+        "Naver blog/cafe domains were reported blocked by robots.txt; forum queries did not return useful main-tempo evidence.",
+        "Public UCS base is a music timing template, not an official per-chart note-density measure. BPM can encode half/double-time and gimmicks; the timing distribution supports interpretation rather than mechanically determining the musical primary.",
+        "Confidence is high for the chosen user-defined focal policy; the source does not claim210 is the song-wide constant or duration majority."
+      ],
+      "sources": [
+        {
+          "url": "https://namu.moe/w/Appassionata(%ED%8E%8C%ED%94%84%20%EC%9E%87%20%EC%97%85)",
+          "title": "Appassionata(펌프 잇 업) — Korean Namu article mirror",
+          "sourceType": "community-wiki-mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact Phoenix 2.02 original Arcade arrangement by Cashew x D_AAN x Jehezukiel."
+        },
+        {
+          "url": "https://soundcloud.com/cashewnuts/appassionata",
+          "title": "[PIU 2024 PHOENIX] Appassionata — Cashew",
+          "sourceType": "composer-upload",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Primary source confirms exact arrangement/range, without choosing one primary tempo."
+        },
+        {
+          "url": "https://scoresaber.com/map/47638/difficulty/676854",
+          "title": "Appassionata by Cashew x D_AAN x Jehezukiel — ScoreSaber",
+          "sourceType": "community-chart-metadata",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Secondary base-timing convention only; user chart metadata can encode tempo changes separately and does not prove duration dominance."
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/s16/713-appassionata",
+          "title": "Appassionata S16 — ArcadeStat player contributions",
+          "sourceType": "player-community-comments",
+          "language": "ko",
+          "access": "search-snippet",
+          "applicability": "Exact Phoenix chart commentary; no explicit primary-BPM judgment."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs374.zip",
+          "title": "CS374 public UCS music timing base — Pump Pro+",
+          "sourceType": "public-ucs-timing-analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact named Arcade song timing template; not a specific official chart or note-density analysis. Catalog-duration clipping/last-tempo tail assumptions apply."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"열정\" \"Appassionata\" \"BPM\" 펌프",
+        "site:dcinside.com \"열정\" \"160\" 펌프",
+        "펌프 열정 Appassionata BPM (dcinside/Arca/Naver/Tistory domain search)"
+      ],
+      "userDirection": {
+        "recommendedPrimaryBpm": 210,
+        "status": "user-preferred",
+        "evidence": "The user said Appassionata should probably use 210 BPM."
+      },
+      "previousDurationOrMainTempoProposal": 160
+    },
+    {
+      "songName": "Aragami",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 48.0,
+        "max": 196.0
+      },
+      "recommendedPrimaryBpm": 196,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "inference",
+      "summary": "196 is the principal fast musical/gameplay pulse, with slower introductory and transitional sections.",
+      "competingBpms": [
+        48,
+        65,
+        98,
+        178
+      ],
+      "limitations": [
+        "Different games use different chart slowdowns and cuts; recommendation concerns the musical base, not exact Phoenix timing blocks.",
+        "No useful Korean forum main-BPM statement was returned.",
+        "Public UCS base is a music timing template, not an official per-chart note-density measure. BPM can encode half/double-time and gimmicks; the timing distribution supports interpretation rather than mechanically determining the musical primary."
+      ],
+      "sources": [
+        {
+          "url": "https://wikiwiki.jp/taiko-fumen/%E5%8F%8E%E9%8C%B2%E6%9B%B2/%E3%81%8A%E3%81%AB/Aragami",
+          "title": "Aragami(おに) — Taiko chart guide",
+          "sourceType": "community-chart-guide",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Same composition, different game cut and 65–196 chart range; musical-base evidence rather than identical Phoenix timing."
+        },
+        {
+          "url": "https://www.namu.moe/w/Aragami/%EB%A6%AC%EB%93%AC%20%EA%B2%8C%EC%9E%84%20%EC%88%98%EB%A1%9D",
+          "title": "Aragami/리듬 게임 수록 — Korean Namu article mirror",
+          "sourceType": "community-wiki-mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Includes exact Phoenix entry and other versions; 196 base inference is cross-version."
+        },
+        {
+          "url": "https://manbow.nothing.sh/event/event.cgi?action=More_def&event=96&num=211",
+          "title": "G2R2014 No.211 Aragami / xi",
+          "sourceType": "composer-original-event-entry",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Primary composition identity and short arrangement context."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs678.zip",
+          "title": "CS678 public UCS music timing base — Pump Pro+",
+          "sourceType": "public-ucs-timing-analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact named Arcade song timing template; not a specific official chart or note-density analysis. Catalog-duration clipping/last-tempo tail assumptions apply."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"아라가미\" 펌프 BPM 196",
+        "site:dcinside.com \"아라가미\" \"196\"",
+        "펌프 아라가미 BPM 기본 주로 (Korean community domain search)"
+      ],
+      "previousDurationOrMainTempoProposal": 196
+    },
+    {
+      "songName": "Banya Classic Remix",
+      "songType": "Remix",
+      "originalBpmRange": {
+        "min": 162.0,
+        "max": 170.0
+      },
+      "recommendedPrimaryBpm": 170,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "user-directed",
+      "confidence": "high",
+      "basis": "user-direction",
+      "summary": "User confirmed the remaining 170 BPM upper-bound fallback as the chosen focal BPM for Banya Classic Remix.",
+      "competingBpms": [
+        162,
+        168,
+        170
+      ],
+      "limitations": [
+        "The focal BPM is user-confirmed. Earlier online sources establish the original range; the original batch findings preserve the superseded fallback and its research limitations."
+      ],
+      "sources": [
+        {
+          "url": "https://readonly.wiki/w/Banya%20Classic%20Remix",
+          "title": "Banya Classic Remix — Korean Readonly Wiki",
+          "sourceType": "community-wiki-mirror",
+          "language": "ko",
+          "access": "search-snippet",
+          "applicability": "Exact medley; opening the page timed out. Does not establish a dominant BPM."
+        },
+        {
+          "url": "https://wikiwiki.jp/piujpn/Banya%20Classic%20Remix",
+          "title": "Banya Classic Remix — Japanese PIU Wiki",
+          "sourceType": "community-game-guide",
+          "language": "ja",
+          "evidence": "Lists the exact medley at162-170 and names all three constituents, with no main-BPM nomination.",
+          "access": "search-snippet",
+          "applicability": "Exact Exceed 2 remix; not Banya-P Classic Remix or B.P Classic Remix.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://xx.piugame.com/piu.prime2/intro/pdf/PumpItUp_Prime2_FullSongList.pdf",
+          "title": "Pump It Up Prime2 Full Song List — Andamiro",
+          "sourceType": "official-game-songlist",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Older official catalog confirms medley range; open returned502, and the range cannot establish main tempo."
+        },
+        {
+          "url": "https://namu.moe/w/Banya%20Classic%20Remix",
+          "title": "Banya Classic Remix — Korean Namu mirror, Phoenix 2 chart guide",
+          "sourceType": "community-chart-guide",
+          "language": "ko",
+          "evidence": "The exact medley contains Beethoven Virus, Winter, and Pump Me Amadeus. S13 discussion emphasizes twists throughout and late two-/three-note patterns; D15 spreads the S13 material across two pads. D21 instead emphasizes opening/middle twists and weight shifts, with later material comparatively easier. No unique main tempo is named.",
+          "access": "opened",
+          "applicability": "Exact Exceed 2 remix and Phoenix 2 chart set; distinguishes song-level ambiguity from a particular chart's focal section.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://github.com/rayden-61/PIU-Simfiles/blob/0dc5a57919d1847070337fe3be3e61ad4bb0e721/04%20-%20EXCEED~ZERO/(2)%20B29%20-%20%5BRemix%5D%20Banya%20Classic%20Remix/B29%20-%20%5BRemix%5D%20Banya%20Classic%20Remix.ssc",
+          "title": "B29 — Banya Classic Remix.ssc, pinned public PIU-Simfiles transcription",
+          "sourceType": "public-fan-chart-transcription",
+          "language": "en/data",
+          "evidence": "Inspected only the active S13/S19/D15/D21 transcriptions, not UCS/custom charts. Per-chart BPM changes are 0=162,80=168,172=170,284=162. Parsed S19 note rows show its longest uninterrupted quarter-beat sequence at beats244-252 (33 rows,170BPM); D21 has a longer sequence at123.5-132 (35 rows,168BPM). Late S13 material after284 is162BPM. These different hotspots do not produce one defensible common focal tempo.",
+          "access": "opened",
+          "applicability": "Exact B29 medley. Text chart data supports tempo/section correspondence, with unofficial transcription provenance. File Git blob SHA ec755ced6ab14fcee9cb220b77174291ab4fb2c9; not an official game extraction and not an audio measurement.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://gall.dcinside.com/board/view?id=pumpitup&no=412102",
+          "title": "난이도 조정의 이유 — EXC, Pump it up DCInside gallery, 2018-11-13",
+          "sourceType": "firsthand-korean-forum-post",
+          "language": "ko",
+          "evidence": "EXC's post titled 'Reason for difficulty adjustment' names Banya Classic Remix. The readable post body does not state a numeric BPM or identify a primary musical component; comments were not returned by the accessible page.",
+          "access": "opened",
+          "applicability": "Exact song and historically defining chart-rating context. Useful evidence that the S13 chart is distinctive, but cannot resolve its song-level tempo.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://www.reddit.com/r/PumpItUp/comments/p6qeuf/what_are_some_of_the_most_inaccurate_difficulty/",
+          "title": "What are some of the most inaccurate difficulty ratings of all time? — r/PumpItUp",
+          "sourceType": "player-forum-discussion",
+          "language": "en",
+          "evidence": "Players cite Banya Classic Remix's former S7/current S13 difficulty and refer to EXC's rerating rationale. The relevant discussion does not nominate a focal BPM or identify a specific tempo section.",
+          "access": "opened",
+          "applicability": "Exact medley; older rating discussion, not Phoenix 2 tempo metadata.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://xx.piugame.com/piu.xx/intro/pdf/PumpItUp_xx_FullSongList.pdf",
+          "title": "Pump It Up XX Full Song List — Andamiro",
+          "sourceType": "official-game-catalog",
+          "language": "ko/en",
+          "evidence": "The indexed official catalog gives the exact remix as162-170; its separate Winter and Pump Me Amadeus rows are168 and170. It supplies no song-level focal choice.",
+          "access": "search-snippet",
+          "applicability": "Official range and constituent corroboration only; an older catalog is not evidence of primary tempo.",
+          "retrievedOn": "2026-10-23"
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-deep-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"반야 클래식 리믹스\" BPM",
+        "\"반야 클래식 리믹스\" \"주\"",
+        "\"Banya Classic Remix\" \"변속\"",
+        "site:dcinside.com \"반야\" \"클래식\" \"BPM\""
+      ],
+      "previousDurationOrMainTempoProposal": null,
+      "resolutionType": "user-confirmed",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "priorDetailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "previousResearchSnapshotFile": "output/primary-bpm-deep-research-2026-10-23/research-before-deep-pass.json",
+      "deepResearchedOn": "2026-10-23",
+      "deepSearchLog": [
+        {
+          "query": "\"Banya Classic Remix\" BPM reddit",
+          "channel": "general-web/reddit",
+          "outcome": "Catalogs and range-only entries; no primary-BPM claim."
+        },
+        {
+          "query": "site:reddit.com/r/PumpItUp \"classic remix\"",
+          "channel": "reddit",
+          "outcome": "Located and opened the historic difficulty-rerating discussion; no numeric focal tempo.",
+          "sourceUrls": [
+            "https://www.reddit.com/r/PumpItUp/comments/p6qeuf/what_are_some_of_the_most_inaccurate_difficulty/"
+          ]
+        },
+        {
+          "query": "site:reddit.com/r/PumpItUp \"Banya Classic Remix\" \"bpm\"",
+          "channel": "reddit",
+          "outcome": "No useful exact-song tempo result returned."
+        },
+        {
+          "query": "site:reddit.com/r/PumpItUp \"Banya\" \"remix\" \"tempo\"",
+          "channel": "reddit",
+          "outcome": "Generic Stepmania classical-music discussion, excluded because it did not address this exact medley."
+        },
+        {
+          "query": "\"반야 클래식 리믹스\" 후반",
+          "channel": "korean-web",
+          "outcome": "Korean guide descriptions of late patterns; no numeric focal nomination."
+        },
+        {
+          "query": "\"반야 클래식 리믹스\" \"아마데우스\"",
+          "channel": "korean-web",
+          "outcome": "Constituent lists and official catalog rows; not a primary-tempo selection."
+        },
+        {
+          "query": "site:dcinside.com \"반야클래식\"",
+          "channel": "korean-forum",
+          "outcome": "No useful exact medley tempo result returned."
+        },
+        {
+          "query": "site:gall.dcinside.com \"반야\" \"클래식\" \"BPM\"",
+          "channel": "korean-forum",
+          "outcome": "No useful numeric focal claim; followed the guide's explicit EXC forum citation instead."
+        },
+        {
+          "query": "펌프 \"반클\" \"변속\"",
+          "channel": "korean-web-alias",
+          "outcome": "Alias is ambiguous and produced unrelated vehicle-clutch results; excluded."
+        },
+        {
+          "query": "\"반야 클래식\" \"폭타\"; \"반야 클래식\" \"중반\"",
+          "channel": "korean-web",
+          "outcome": "Returned guide material or unrelated classical-remix pages; no new numerical section-to-focal claim."
+        },
+        {
+          "query": "site:blog.naver.com \"반야 클래식 리믹스\"",
+          "channel": "korean-blog",
+          "outcome": "Naver blog was blocked by robots.txt; no independent evidence recovered."
+        },
+        {
+          "query": "\"Banya Classic Remix\" \"S19\" \"hard\"; \"Banya Classic Remix\" \"climax\"; \"Banya Classic Remix\" \"162\" \"hardest\"",
+          "channel": "english-chart-search",
+          "outcome": "No accessible exact-medley focal-BPM statement. Similarity-card162-162 values were excluded as known range-reduction artifacts."
+        },
+        {
+          "query": "site:arcadestat.app \"Banya Classic Remix\" \"Contributions\"; \"Banya Classic Remix\" \"Winter\"; \"Banya Classic Remix\" \"middle\"",
+          "channel": "korean-player-contributions",
+          "outcome": "Tier listings were indexed, but no exact chart contribution identifying a focal tempo surfaced. Direct list opens returned an app shell."
+        },
+        {
+          "query": "\"Banya Classic Remix\" \"BPM\" \"simfile\"; rayden-61/PIU-Simfiles stepp1-phoenix recursive tree and exact B29 SSC",
+          "channel": "public-chart-timing",
+          "outcome": "Inspected pinned exact medley text timing and active chart note grids. Found conflicting chart-specific hotspots; no one song-level focal selection.",
+          "sourceUrls": [
+            "https://github.com/rayden-61/PIU-Simfiles/blob/0dc5a57919d1847070337fe3be3e61ad4bb0e721/04%20-%20EXCEED~ZERO/(2)%20B29%20-%20%5BRemix%5D%20Banya%20Classic%20Remix/B29%20-%20%5BRemix%5D%20Banya%20Classic%20Remix.ssc"
+          ]
+        }
+      ],
+      "userDirection": {
+        "recommendedPrimaryBpm": 170,
+        "confirmedBy": "user",
+        "confirmedOn": "2026-10-24",
+        "confirmation": "and confirming the other upper bound fallbacks as well",
+        "reason": "User confirmed the remaining 170 BPM upper-bound fallback as the chosen focal BPM for Banya Classic Remix."
+      },
+      "previousResearchDecision": {
+        "recommendedPrimaryBpm": 170,
+        "resolutionType": "upper-bound-fallback",
+        "confidence": "low",
+        "fallbackUsed": true,
+        "fallbackReason": "Deep Korean forum, Reddit, Korean/Japanese guide, official catalog, and exact public chart-timing searches did not establish a single song-level focal tempo. The three real component tempos support different chart-specific hotspots. Use the stored upper endpoint 170 under the user's explicit last-resort policy; this is not an established focal-BPM fact."
+      }
+    },
+    {
+      "songName": "Banya-P Classic Remix",
+      "songType": "Remix",
+      "originalBpmRange": {
+        "min": 92.0,
+        "max": 180.0
+      },
+      "recommendedPrimaryBpm": 180,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "180 is inferred from the decisive Moonlight component; its low-speed reading gimmick is a separate concern.",
+      "competingBpms": [
+        92,
+        168
+      ],
+      "limitations": [
+        "No source explicitly labels180 the entire medley main BPM. Recommendation infers the Moonlight musical pulse from its documented focal role; slower reading gimmicks are part of that role."
+      ],
+      "sources": [
+        {
+          "url": "https://wikiwiki.jp/piujpn/Banya-P%20Classic%20Remix",
+          "title": "Banya-P Classic Remix — Japanese PIU Wiki",
+          "sourceType": "community-game-guide",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Exact NX Remix; distinct from B.P Classic Remix and Banya Classic Remix."
+        },
+        {
+          "url": "https://www.namu.moe/w/%ED%8E%8C%ED%94%84%20%EC%9E%87%20%EC%97%85%20PHOENIX/%EB%82%9C%EC%9D%B4%EB%8F%84%20%ED%91%9C%EA%B8%B0%20%EB%AC%B8%EC%A0%9C",
+          "title": "펌프 잇 업 PHOENIX/난이도 표기 문제 — Korean Namu article mirror",
+          "sourceType": "community-chart-guide",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact Phoenix medley and temporal structure. Does not quantify section duration or nominate one primary tempo."
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/s15/3984-banya-p-classic-remix",
+          "title": "Banya-P Classic Remix S15 — ArcadeStat Korean player contributions",
+          "sourceType": "player-community-comments",
+          "language": "ko",
+          "access": "search-snippet",
+          "applicability": "Exact chart player opinion, supporting different component sections; direct open served generic app information."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/news/prime-2/ver-1-song-list.pdf",
+          "title": "Pump It Up Prime2 song list — Moonlight component entry",
+          "sourceType": "official-songlist-mirror",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Component source tempo, not a measured timing timeline of the full medley."
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/d23/5077",
+          "title": "Banya-P Classic Remix D23 — Korean player contributions",
+          "sourceType": "player-community-comments",
+          "language": "ko",
+          "access": "search-snippet",
+          "applicability": "Exact medley high double. Qualifies180 as musical pulse rather than literal low-scroll challenge speed."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"반야-P 클래식 리믹스\" BPM",
+        "\"반야-P 클래식\" 변속",
+        "\"Banya-P Classic Remix\" \"변속\""
+      ],
+      "previousDurationOrMainTempoProposal": null
+    },
+    {
+      "songName": "Beat of The War",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 140.0,
+        "max": 202.0
+      },
+      "recommendedPrimaryBpm": 202,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "202 represents the fast closing gameplay focus; 186 occupies more time.",
+      "competingBpms": [
+        186,
+        140
+      ],
+      "limitations": [
+        "Korean forum results concerned difficulty rankings and did not resolve primary tempo.",
+        "Public UCS base is a music timing template, not an official per-chart note-density measure. BPM can encode half/double-time and gimmicks; the timing distribution supports interpretation rather than mechanically determining the musical primary.",
+        "202 as focal point is our synthesis of nominal metadata, late-run commentary, and timing placement; no source directly declares that every chart peaks at202."
+      ],
+      "sources": [
+        {
+          "url": "https://www.pumpproplus.com/article-details.aspx?id=d85dc919-504f-4e41-8434-334c3e9aed71",
+          "title": "Pump It Up M Ver.1.40 — Pump Pro+",
+          "sourceType": "game-release-report",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Same Arcade song in mobile edition; single displayed BPM suggests conventional main tempo but does not independently quantify Phoenix timing."
+        },
+        {
+          "url": "https://www.neoseeker.com/pump-it-up-exceed/faqs/191090-walkthrough.html",
+          "title": "Pump It Up Exceed FAQ v1.01 — yyr57695",
+          "sourceType": "historical-player-guide",
+          "language": "en",
+          "access": "search-snippet",
+          "applicability": "Earlier Arcade entry. Full open failed; agreement with202 is corroborating context only."
+        },
+        {
+          "url": "https://www.namu.moe/w/Beat%20of%20the%20war?from=%EB%B9%84%ED%8A%B8+%EC%98%A4%EB%B8%8C+%EB%8D%94+%EC%9B%8C",
+          "title": "Beat of the war — Korean Namu article mirror",
+          "sourceType": "community-wiki-mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact Phoenix2 Arcade song; validates range and historical display caveat, not a primary-tempo claim."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/base/cs043.zip",
+          "title": "CS043 public UCS music timing base — Pump Pro+",
+          "sourceType": "public-ucs-timing-analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact named Arcade song timing template; not a specific official chart or note-density analysis. Catalog-duration clipping/last-tempo tail assumptions apply."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"비트 오브 더 워\" BPM 주",
+        "\"비트 오브 더 워\" \"202\" \"변속\"",
+        "\"비트 오브 더 워\" site:dcinside.com"
+      ],
+      "previousDurationOrMainTempoProposal": 186
+    },
+    {
+      "songName": "Beat of The War 2",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 120.0,
+        "max": 190.0
+      },
+      "recommendedPrimaryBpm": 190,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "inference",
+      "summary": "190 characterizes opening and returning fast patterns after the slower middle.",
+      "competingBpms": [
+        120,
+        140,
+        160
+      ],
+      "limitations": [
+        "Strongest numerical player evidence is search-indexed, not fully retrievable in the site's current rendered page.",
+        "Public UCS base is a music timing template, not an official per-chart note-density measure. BPM can encode half/double-time and gimmicks; the timing distribution supports interpretation rather than mechanically determining the musical primary."
+      ],
+      "sources": [
+        {
+          "url": "https://arcadestat.app/en/pump/tier/d20/3588",
+          "title": "Beat of The War2 D20 — ArcadeStat Korean player contribution",
+          "sourceType": "player-community-comments",
+          "language": "ko",
+          "access": "search-snippet",
+          "applicability": "Earlier D20 label for Phoenix Arcade chart now D21; describes same music, not Full Song. Direct open returned an empty/generic shell."
+        },
+        {
+          "url": "https://pumpitupdistrict.spb.ru/index.php?catid=19&id=76%3Aexceed-to-zero&view=article",
+          "title": "Exceed to Zero song catalog — Pump It Up District",
+          "sourceType": "fan-song-catalog",
+          "language": "ru",
+          "access": "search-snippet",
+          "applicability": "Exact Arcade identity C01; enumeration is not a duration weighting."
+        },
+        {
+          "url": "https://www.namu.moe/w/Beat%20of%20the%20war%202",
+          "title": "Beat of the war2 — Korean Namu article mirror",
+          "sourceType": "community-wiki-mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Phoenix2 Arcade version; Full Song is treated separately in this research."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/base/cs065.zip",
+          "title": "CS065 public UCS music timing base — Pump Pro+",
+          "sourceType": "public-ucs-timing-analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact named Arcade song timing template; not a specific official chart or note-density analysis. Catalog-duration clipping/last-tempo tail assumptions apply."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"비트 오브 더 워 2\" \"BPM\"",
+        "\"비트 오브 더 워 2\" \"190\" \"변속\"",
+        "\"비트 오브 더 워 2\" \"190BPM\""
+      ],
+      "previousDurationOrMainTempoProposal": 190
+    },
+    {
+      "songName": "Beat of the War 2 - FULL SONG -",
+      "songType": "FullSong",
+      "originalBpmRange": {
+        "min": 120.0,
+        "max": 190.0
+      },
+      "recommendedPrimaryBpm": 190,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "direct",
+      "summary": "190 is supported by newly located Full Song-specific Korean analysis, which explicitly identifies almost190 BPM while describing the exhausting sustained runs, trills, repeated notes, and closing reprise. The exact Full Song public SSC independently returns to190 for its final large section. Choosing190 therefore represents the sustained defining gameplay and returning finale, rather than simply inheriting the Arcade value or taking the range maximum. A separate Japanese player account also emphasizes the full-length stamina burden and difficult ending. Reddit corroborates the exact Full Song's footswitch difficulty without supplying a numeric tempo.",
+      "competingBpms": [
+        120,
+        140,
+        160,
+        190
+      ],
+      "limitations": [
+        "The strongest explicit numeric commentary describes a historical rating of the same Full Song chart, not a newly measured Phoenix2 audio track.",
+        "The public SSC is a fan transcription; it corroborates the proposal but is not an official game file.",
+        "This selects a representative focal tempo, preserving the meaningful120,140,160 BPM sections in the original range metadata."
+      ],
+      "sources": [
+        {
+          "url": "https://www.namu.moe/w/Beat%20of%20the%20war%202",
+          "title": "Beat of the war 2 — dedicated Full Song section",
+          "sourceType": "Korean community wiki mirror",
+          "language": "ko",
+          "evidence": "Maintains a separate Full Song section with S21 and Double charts under the song's120–190 BPM range.",
+          "access": "opened",
+          "applicability": "Variant and historical chart identity corroboration; the song's shared header alone is not focal-tempo evidence.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://xx.piugame.com/piu.prime2/intro/pdf/PumpItUp_Prime2_FullSongList.pdf",
+          "title": "Pump It Up Prime2 Full Song List — Andamiro",
+          "sourceType": "official-game-songlist",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Exact Full Song identity and range; official PDF open returned502. Range alone does not determine primary BPM."
+        },
+        {
+          "url": "https://namu.moe/w/%ED%8E%8C%ED%94%84%20%EC%9E%87%20%EC%97%85%20PRIME%202/%EB%82%9C%EC%9D%B4%EB%8F%84%20%ED%91%9C%EA%B8%B0%20%EB%AC%B8%EC%A0%9C",
+          "title": "펌프 잇 업 PRIME 2/난이도 표기 문제 — Beat of the war 2 Full Song S19",
+          "sourceType": "Korean community chart analysis",
+          "language": "ko",
+          "evidence": "The Full Song-specific S19 entry says the chart lasts more than4:30, describes its BPM as nearly190, and has little rest outside the middle. It describes repeated16th-note stairs, twisted trills, triples, exhausting repeated-note material, and a final reprise of the early patterns.",
+          "access": "opened",
+          "applicability": "Explicit Full Song analysis, independent of the Arcade section. Historical PRIME2 difficultyS19 corresponds to the variant now listedS21; exact chart and variant identity is corroborated separately.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://github.com/rayden-61/PIU-Simfiles/blob/0dc5a57919d1847070337fe3be3e61ad4bb0e721/05%20-%20NX~NX2/%282%29%20D42%20-%20%5BFull%20Song%5D%20Beat%20of%20the%20War%202/D42%20-%20%5BFull%20Song%5D%20Beat%20of%20the%20War%202.ssc",
+          "title": "Beat of The War 2 — exact Full Song fan SSC at pinned commit",
+          "sourceType": "public fan chart transcription",
+          "language": "en/data",
+          "evidence": "The exact Full Song title and S21/D21-labeled chart blocks contain BPM events0=190,408=140,415.75=120,543.75=160,639.75=190, corroborating both the long opening190 section and returning190 finale.",
+          "access": "opened",
+          "applicability": "Exact Full Song, not Arcade or the unreleased D&G arrangement. Fan-maintained transcription rather than an official timing export; old Double level label differs from currentD22.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://1949.hatenablog.com/entry/2021/06/02/073747",
+          "title": "Pump It Up XX 逆張りS20難易度ランキング — Beat of the War 2 Full Song",
+          "sourceType": "firsthand player blog",
+          "language": "ja",
+          "evidence": "The exact Full Song entry describes long repeated awkward patterns, difficult stamina demands, and an unpleasant ending. It supplies no numeric BPM.",
+          "access": "opened",
+          "applicability": "Exact Full Song under historicalXX S20 rating; supports focal stamina and ending characterization only.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://www.reddit.com/r/PumpItUp/comments/1fnma0j/the_s20_sweep_is_over_its_time_for_me_to_sweep/",
+          "title": "The S20 sweep is over, it's time for me to sweep bothS21 andS22 as well",
+          "sourceType": "player forum discussion",
+          "language": "en",
+          "evidence": "A commenter explicitly identifies both Arcade and Full Song as footswitch roadblocks. A reply emphasizes footspeed, although that reply does not distinguish the arrangements or provide BPM.",
+          "access": "opened",
+          "applicability": "Full Song is explicitly named. Used for gameplay context, not independent numeric190 proof.",
+          "retrievedOn": "2026-10-23"
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-deep-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"비트 오브 더 워 2 풀송\" \"BPM\" 주",
+        "\"비트 오브 더 워 2\" \"풀송\" \"190\""
+      ],
+      "previousDurationOrMainTempoProposal": null,
+      "resolutionType": "direct",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "priorDetailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "previousResearchSnapshotFile": "output/primary-bpm-deep-research-2026-10-23/research-before-deep-pass.json",
+      "deepResearchedOn": "2026-10-23",
+      "deepSearchLog": [
+        {
+          "query": "\"비트 오브 더 워 2\" \"풀송\" 후살",
+          "channel": "Korean web/forum search",
+          "outcome": "No numeric Full Song focal commentary surfaced; shared wiki and official range lists dominated."
+        },
+        {
+          "query": "\"비오워\" \"풀송\"190; \"비오워2\" \"풀송\"; \"비트오브더워2\" \"풀송\"",
+          "channel": "Korean alias searches",
+          "outcome": "No independent exact-variant tempo discussion found under shortened/spaceless titles."
+        },
+        {
+          "query": "\"비오워\" \"풀송\" site:gall.dcinside.com; \"비트 오브 더 워 2\" 풀송 공략",
+          "channel": "Korean forum and guide search",
+          "outcome": "No usable DCInside numeric claim; wiki Full Song section and historical lists surfaced."
+        },
+        {
+          "query": "\"Beat of The War 2 - FULL SONG -\" \"190\" -site:piuscores.arroweclip.se",
+          "channel": "Exact variant plus numeric search",
+          "outcome": "Located Korean PRIME2 chart analysis explicitly describing the exact Full Song as almost190 BPM with sustained exhausting patterns.",
+          "sourceUrls": [
+            "https://namu.moe/w/%ED%8E%8C%ED%94%84%20%EC%9E%87%20%EC%97%85%20PRIME%202/%EB%82%9C%EC%9D%B4%EB%8F%84%20%ED%91%9C%EA%B8%B0%20%EB%AC%B8%EC%A0%9C"
+          ]
+        },
+        {
+          "query": "site:reddit.com/r/PumpItUp \"Beat of the War 2\" full",
+          "channel": "Reddit search",
+          "outcome": "Found a thread explicitly mentioning both Arcade and Full Song footswitch difficulty; no numeric BPM conclusion.",
+          "sourceUrls": [
+            "https://www.reddit.com/r/PumpItUp/comments/1fnma0j/the_s20_sweep_is_over_its_time_for_me_to_sweep/"
+          ]
+        },
+        {
+          "query": "\"Beat of the war 2\" \"Full Song\" \"bpm\" -site:piuscores.arroweclip.se",
+          "channel": "English and Japanese chart/source search",
+          "outcome": "Found firsthand Japanese Full Song stamina/ending commentary; excluded unrelated forum234 BPM speculation and mobile120 listing because neither establishes the Phoenix Full Song focal tempo.",
+          "sourceUrls": [
+            "https://1949.hatenablog.com/entry/2021/06/02/073747"
+          ]
+        },
+        {
+          "query": "Beat of the War — repository rayden-61/PIU-Simfiles; exact Full Song pinned SSC",
+          "channel": "Public text chart data",
+          "outcome": "Default-branch code search returned no results; parent discovered branch tree. Opened exact pinned Full Song SSC through GitHub connector and confirmed S21/D21 timing events, including190 finale.",
+          "sourceUrls": [
+            "https://github.com/rayden-61/PIU-Simfiles/blob/0dc5a57919d1847070337fe3be3e61ad4bb0e721/05%20-%20NX~NX2/%282%29%20D42%20-%20%5BFull%20Song%5D%20Beat%20of%20the%20War%202/D42%20-%20%5BFull%20Song%5D%20Beat%20of%20the%20War%202.ssc"
+          ]
+        }
+      ]
+    },
+    {
+      "songName": "BRAIN POWER",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 170.0,
+        "max": 173.0
+      },
+      "recommendedPrimaryBpm": 173,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "173 aligns with the chorus and characteristic late material; 170 is the longer opening pulse.",
+      "competingBpms": [
+        170
+      ],
+      "limitations": [
+        "The3 BPM choice may be immaterial for wide radar buckets but should not be silently treated as an exact constant.",
+        "Public UCS base is a music timing template, not an official per-chart note-density measure. BPM can encode half/double-time and gimmicks; the timing distribution supports interpretation rather than mechanically determining the musical primary.",
+        "173 is a focal-section synthesis rather than a published Phoenix-wide primary assertion.170 remains a real sustained opening tempo and the duration-mode alternative."
+      ],
+      "sources": [
+        {
+          "url": "https://wikiwiki.jp/sixtargate/Brain_Power",
+          "title": "Brain Power — Sixtar Gate Japanese Wiki",
+          "sourceType": "community-game-guide",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Another game uses a near-SDVX cut of comparable duration; musical structure evidence, not identical Phoenix timings."
+        },
+        {
+          "url": "https://gamerch.com/musicdiver/624313",
+          "title": "Brain Power — MUSIC DIVER guide",
+          "sourceType": "community-game-guide",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Other-game base label corroboration; exact edit may differ from Phoenix."
+        },
+        {
+          "url": "https://db.chunirec.net/music/Brain%2BPower/15d40acf31987841",
+          "title": "Brain Power — ChuniDB",
+          "sourceType": "community-game-metadata",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Corroborates game main-tempo convention, not exact Phoenix cut duration."
+        },
+        {
+          "url": "https://reicon.tistory.com/461",
+          "title": "[펌프 잇 업]52. 브레인 파워 — 레이콘",
+          "sourceType": "Korean-player-blog",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact original XX/Phoenix song; validates range and Korean player context, no explicit primary BPM."
+        },
+        {
+          "url": "https://songbpm.com/@noma/brain-power-mTqz_S5E8z",
+          "title": "Brain Power by NOMA — SongBPM",
+          "sourceType": "music-metadata-aggregator",
+          "language": "en",
+          "access": "search-snippet",
+          "applicability": "Different-duration commercial recording; weaker than cut-specific structural evidence for radar use."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs661.zip",
+          "title": "CS661 public UCS music timing base — Pump Pro+",
+          "sourceType": "public-ucs-timing-analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact named Arcade song timing template; not a specific official chart or note-density analysis. Catalog-duration clipping/last-tempo tail assumptions apply."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"브레인 파워\" \"170\" \"173\"",
+        "\"브레인 파워\" \"173\" \"170\" 변속",
+        "\"BRAIN POWER\" \"기본\"173",
+        "펌프 브레인 파워 주 BPM (Korean community domain search)"
+      ],
+      "previousDurationOrMainTempoProposal": 170
+    },
+    {
+      "songName": "CHAOS AGAIN",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 150.0,
+        "max": 260.0
+      },
+      "recommendedPrimaryBpm": 230,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "230 is the effective gameplay maximum; 240 is a no-note section and 260 the piano ending.",
+      "competingBpms": [
+        210,
+        260
+      ],
+      "limitations": [
+        "Public UCS base is a music timing template, not an official per-chart note-density measure. BPM can encode half/double-time and gimmicks; the timing distribution supports interpretation rather than mechanically determining the musical primary.",
+        "230 is our focal-point synthesis;210 competes as the long late-burst tempo. Some detailed difficulty commentary describes the harder pre-2.00 chart; later nerfs weaken any chart-wide certainty."
+      ],
+      "sources": [
+        {
+          "url": "https://www.namu.moe/w/CHAOS%20AGAIN",
+          "title": "CHAOS AGAIN — Korean Namu article mirror",
+          "sourceType": "community-wiki-mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact Phoenix song; detailed D26 account includes pre-2.00 behavior and explicitly says2.00 reduced the final movement distance, so focal inference is medium confidence."
+        },
+        {
+          "url": "https://wikiwiki.jp/piujpn/CHAOS%20AGAIN",
+          "title": "CHAOS AGAIN — Japanese PIU Wiki",
+          "sourceType": "community-game-guide",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Exact Phoenix song with150–260 interval. Supports absence of a simple sustained baseline."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs349.zip",
+          "title": "CS349 public UCS music timing base — Pump Pro+",
+          "sourceType": "public-ucs-timing-analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact named Arcade song timing template; not a specific official chart or note-density analysis. Catalog-duration clipping/last-tempo tail assumptions apply."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"카오스 어게인\" \"BPM\"",
+        "\"카오스 어게인\"230",
+        "site:arca.live \"카오스 어게인\" BPM",
+        "\"카오스 어게인\" site:dcinside.com"
+      ],
+      "previousDurationOrMainTempoProposal": null
+    },
+    {
+      "songName": "Come to Me",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 100.0,
+        "max": 107.0
+      },
+      "recommendedPrimaryBpm": 107,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "107 identifies the distinctive middle transition/gimmick focus; this choice is chart-dependent and 100 remains the musical baseline.",
+      "competingBpms": [
+        100
+      ],
+      "limitations": [
+        "107 is a song-level focal judgment drawn especially from the characteristic gimmick charts, not a universal hardest section for every chart.",
+        "D15 gimmicks were removed in Phoenix, and some S18 details changed; the 100 baseline remains credible for ordinary musical-tempo usage.",
+        "Both 100 and 107 should remain documented; no located Korean source explicitly declares one universal primary BPM."
+      ],
+      "sources": [
+        {
+          "url": "https://m.namu.moe/w/Come%20to%20Me",
+          "title": "Come to Me — Korean Namuwiki mirror",
+          "sourceType": "community-wiki",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact PIU song; article includes PHOENIX 2 chart changes."
+        },
+        {
+          "url": "https://xx.piugame.com/piu.prime2/intro/pdf/PumpItUp_Prime2_FullSongList.pdf",
+          "title": "Pump It Up PRIME 2 Full Song List",
+          "sourceType": "official-catalog",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Older PIU version, same arcade song; no main-tempo statement."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs042.zip",
+          "title": "Pump Pro+ UCS timing base CS042",
+          "sourceType": "public-ucs-timing-template",
+          "language": "timing-data",
+          "access": "opened",
+          "applicability": "Same PIU arcade song timing template; public community mirror of UCS data. Full derivation and hash are in ucs-timing-profiles.json."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"컴 투 미\" \"BPM\" 펌프",
+        "\"컴 투 미\" 펌프 BPM 100 107 변속",
+        "site:dcinside.com \"컴투미\" \"107\"",
+        "\"컴투미\" \"펌프\" site:dcinside.com"
+      ],
+      "previousDurationOrMainTempoProposal": 100
+    },
+    {
+      "songName": "Crash-Landing Rendezvous",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 128.0,
+        "max": 190.0
+      },
+      "recommendedPrimaryBpm": 190,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "inference",
+      "summary": "190 carries the final galloping/high-speed section.",
+      "competingBpms": [
+        128,
+        165
+      ],
+      "limitations": [
+        "The located DCInside score post contained no useful tempo evidence.",
+        "The public timing grid is 1.66 seconds longer than catalog duration; the quoted 67% estimate clips the ending.",
+        "The original osu! entry direct-open returned an account shell; indexed BPM evidence is marked snippet-only."
+      ],
+      "sources": [
+        {
+          "url": "https://osu.ppy.sh/beatmapsets/2242631",
+          "title": "Xyris — Crash-Landing Rendezvous, TMWC2024 beatmap",
+          "sourceType": "original-event-beatmap",
+          "language": "en",
+          "access": "search-snippet",
+          "applicability": "Original track/event source, longer than the PIU arcade cut; not proof of cut-specific duration."
+        },
+        {
+          "url": "https://scoresaber.com/map/71083/difficulty/632409",
+          "title": "Crash-Landing Rendezvous — ScoreSaber",
+          "sourceType": "community-chart",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Independent fan chart of the same composition; not the PIU arrangement."
+        },
+        {
+          "url": "https://arcadestat.app/es/pump/tier/d17/4751",
+          "title": "Crash-Landing Rendezvous D17 — ArcadeStat",
+          "sourceType": "player-discussion",
+          "language": "ko/es",
+          "access": "search-snippet",
+          "applicability": "Exact PIU D17 chart; localized page translates Korean contributions."
+        },
+        {
+          "url": "https://wikiwiki.jp/piujpn/Crash-Landing%20Rendezvous",
+          "title": "Crash-Landing Rendezvous — Japanese PIU wiki",
+          "sourceType": "community-wiki",
+          "language": "ja",
+          "access": "search-snippet",
+          "applicability": "Exact PIU song identity and version context."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs718.zip",
+          "title": "Pump Pro+ UCS timing base CS718",
+          "sourceType": "public-ucs-timing-template",
+          "language": "timing-data",
+          "access": "opened",
+          "applicability": "Same PIU arcade song timing template; public community mirror of UCS data. Full derivation and hash are in ucs-timing-profiles.json."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"크래쉬 랜딩 랑데부\" BPM",
+        "\"크래쉬\" \"랑데부\" site:dcinside.com"
+      ],
+      "previousDurationOrMainTempoProposal": 190
+    },
+    {
+      "songName": "Galaxy Collapse",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 150.0,
+        "max": 320.0
+      },
+      "recommendedPrimaryBpm": 320,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "inference",
+      "summary": "320 is the retained arcade-cut fast finale; the original recording 520 section was cut.",
+      "competingBpms": [
+        270,
+        300,
+        150
+      ],
+      "limitations": [
+        "320 is a focal selection for the retained fast ending, not a claim that most of the song is 320.",
+        "The UCS template stops at 109.27 seconds versus 124 catalog seconds; its existing 320 block is observed, while extending that tempo for the additional 14.73 seconds remains an assumption.",
+        "The original full-track 520 passage is absent from the PIU cut and must not be used."
+      ],
+      "sources": [
+        {
+          "url": "https://d.namu.moe/w/Galaxy%20Collapse(Kurokotei)",
+          "title": "Galaxy Collapse (Kurokotei) — Korean Namuwiki mirror",
+          "sourceType": "community-wiki",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Critical version distinction: original full song versus PHOENIX 2 arcade cut."
+        },
+        {
+          "url": "https://robeats.fandom.com/wiki/Galaxy_Collapse",
+          "title": "Galaxy Collapse — RoBeats wiki",
+          "sourceType": "community-wiki",
+          "language": "en",
+          "access": "search-snippet",
+          "applicability": "Different game's full-track cut; useful only to show the composition contains distinct substantial tempi."
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/s23/4895",
+          "title": "Galaxy Collapse S23 — ArcadeStat",
+          "sourceType": "player-discussion",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Exact current PIU S23; confirms sections but does not name a primary."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs677.zip",
+          "title": "Pump Pro+ UCS timing base CS677",
+          "sourceType": "public-ucs-timing-template",
+          "language": "timing-data",
+          "access": "opened",
+          "applicability": "Same PIU arcade song timing template; public community mirror of UCS data. Full derivation and hash are in ucs-timing-profiles.json."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"갤럭시 컬랩스\" BPM 300",
+        "\"Galaxy Collapse\" \"주\" BPM",
+        "site:dcinside.com \"갤럭시\" \"270\" 펌프",
+        "\"갤럭시 컬랩스\" \"BPM\""
+      ],
+      "previousDurationOrMainTempoProposal": 270
+    },
+    {
+      "songName": "Giselle",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 128.0,
+        "max": 152.0
+      },
+      "recommendedPrimaryBpm": 152,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "inference",
+      "summary": "152 is the established fast musical pulse and the representative bracket/run tempo.",
+      "competingBpms": [
+        128
+      ],
+      "limitations": [
+        "No direct accessible Korean forum primary-BPM statement was found.",
+        "Composer full version and original BMS have different cuts and lower bounds from PIU; PIU UCS timing is the cut-specific support."
+      ],
+      "sources": [
+        {
+          "url": "https://gdbg.tv/artist/sobrem",
+          "title": "Sobrem — GroundbreakinG artist/compilation page",
+          "sourceType": "artist-compilation",
+          "language": "ja/en",
+          "access": "opened",
+          "applicability": "Composer-related long version; supports representative musical tempo, not arcade duration."
+        },
+        {
+          "url": "https://manbow.nothing.sh/event/event.cgi?action=More_def&event=123&num=262",
+          "title": "G2R2018 official entry No.262 — Giselle / Widowmaker",
+          "sourceType": "composer-event-entry",
+          "language": "ja/ko",
+          "access": "opened",
+          "applicability": "Original BMS, distinct lower bound from PIU; do not substitute its interval."
+        },
+        {
+          "url": "https://namu.moe/w/Giselle",
+          "title": "Giselle — Korean Namuwiki mirror",
+          "sourceType": "community-wiki",
+          "language": "ko",
+          "access": "search-snippet",
+          "applicability": "Version-specific context; direct opens to normal/mobile mirror failed with server error."
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/s18/790",
+          "title": "Giselle S18 — ArcadeStat",
+          "sourceType": "player-discussion",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Exact PIU S18 chart; section-specific corroboration."
+        },
+        {
+          "url": "https://db.chunirec.net/music/34cde09a5f4d991f",
+          "title": "Giselle — ChuniDB",
+          "sourceType": "community-catalog",
+          "language": "en",
+          "access": "search-snippet",
+          "applicability": "Other game's same composition; not direct PIU timing."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs685.zip",
+          "title": "Pump Pro+ UCS timing base CS685",
+          "sourceType": "public-ucs-timing-template",
+          "language": "timing-data",
+          "access": "opened",
+          "applicability": "Same PIU arcade song timing template; public community mirror of UCS data. Full derivation and hash are in ucs-timing-profiles.json."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"Giselle\" \"BPM\" 펌프 지젤",
+        "\"Giselle\" \"128\" \"152\" 변속",
+        "\"지젤\" \"152\" \"변속\" 펌프",
+        "site:gall.dcinside.com/mini/board/view/ \"지젤\" \"152\""
+      ],
+      "previousDurationOrMainTempoProposal": 152
+    },
+    {
+      "songName": "Halcyon",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 40.0,
+        "max": 191.0
+      },
+      "recommendedPrimaryBpm": 191,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "direct",
+      "summary": "191 defines the full-speed chorus after the decelerating opening.",
+      "competingBpms": [
+        95,
+        95.5
+      ],
+      "limitations": [
+        "The direct basic-BPM statement is for another chart of the same composition.",
+        "The PIU template is short by 60.22 seconds; its extended duration distribution assumes the final 191 tempo persists.",
+        "Automated album catalogs disagree by 1 BPM or half-time; exact game sources support 191."
+      ],
+      "sources": [
+        {
+          "url": "https://wikiwiki.jp/nanairo_t/%E3%83%8A%E3%83%8A%E3%82%A4%E3%83%AD%E8%AD%9C%E9%9D%A2%E3%83%91%E3%83%83%E3%82%AF/%E5%8F%8E%E9%8C%B2%E8%AD%9C%E9%9D%A2/%E3%81%8A%E3%81%AB/Halcyon",
+          "title": "Halcyon — Nanairo chart guide",
+          "sourceType": "community-chart-guide",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Different chart/cut, but explicit representative BPM for xi's same composition."
+        },
+        {
+          "url": "https://www.readonly.wiki/w/Halcyon",
+          "title": "Halcyon — Korean read-only wiki",
+          "sourceType": "community-wiki",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Older multi-game page; supports the composition's tempo structure, not PHOENIX 2 chart revisions."
+        },
+        {
+          "url": "https://maidb.my.id/songs/halcyon-8lnwh",
+          "title": "Halcyon — MaiDB",
+          "sourceType": "community-catalog",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Other-game context only; independent explanatory corroboration."
+        },
+        {
+          "url": "https://www.shazam.com/song/1350310321/halcyon",
+          "title": "Halcyon (Parousia) — Shazam",
+          "sourceType": "audio-analysis-catalog",
+          "language": "en",
+          "access": "search-snippet",
+          "applicability": "5-minute album version, not the PIU game cut."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs673.zip",
+          "title": "Pump Pro+ UCS timing base CS673",
+          "sourceType": "public-ucs-timing-template",
+          "language": "timing-data",
+          "access": "opened",
+          "applicability": "Same PIU arcade song timing template; public community mirror of UCS data. Full derivation and hash are in ucs-timing-profiles.json."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"할시온\" 펌프 BPM 191",
+        "\"할시온\" \"펌프\" \"주BPM\"",
+        "\"할시온\" \"191\" \"40\" 변속",
+        "site:gall.dcinside.com/mini/board/view/ \"할시온\" \"BPM\""
+      ],
+      "previousDurationOrMainTempoProposal": 191
+    },
+    {
+      "songName": "Karyawisata",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 150.0,
+        "max": 173.0
+      },
+      "recommendedPrimaryBpm": 173,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "direct",
+      "summary": "173 is the established active/focal tempo beyond the slower section.",
+      "competingBpms": [
+        150
+      ],
+      "limitations": [
+        "Korean searches found no useful forum claim identifying a primary; strongest direct evidence is official Japanese PIU material.",
+        "Low-speed/gimmick sections remain relevant even when the representative value is173."
+      ],
+      "sources": [
+        {
+          "url": "https://xx.piugame.com/bbs/board.php?bo_table=jp_notice&page=1&wr_id=51",
+          "title": "Pump It Up PRIME Japanese Edition 1.10.0 official update",
+          "sourceType": "official-update",
+          "language": "ja",
+          "access": "search-snippet",
+          "applicability": "Exact arcade song; older PRIME version. Direct open timed out."
+        },
+        {
+          "url": "https://w.atwiki.jp/pumpiuup/pages/22.html",
+          "title": "Lv4 — Japanese PIU reference",
+          "sourceType": "community-catalog",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Explicit nominal BPM with range retained, same arcade song."
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/d22/3113",
+          "title": "Karyawisata D22 — ArcadeStat",
+          "sourceType": "player-discussion",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Current PIU chart commentary supports nonconstant structure, not the numeric primary itself."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/base/cs214.zip",
+          "title": "Pump Pro+ UCS timing base CS214",
+          "sourceType": "public-ucs-timing-template",
+          "language": "timing-data",
+          "access": "opened",
+          "applicability": "Same PIU arcade song timing template; public community mirror of UCS data. Full derivation and hash are in ucs-timing-profiles.json."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"까랴위사따\" BPM",
+        "\"Karyawisata\" \"주\" BPM",
+        "\"까랴위사따\" 변속",
+        "site:dcinside.com \"까랴\" \"173\"",
+        "\"Karyawisata\" site:arca.live"
+      ],
+      "previousDurationOrMainTempoProposal": 173
+    },
+    {
+      "songName": "Love is a Danger Zone 2 - FULL SONG -",
+      "songType": "FullSong",
+      "originalBpmRange": {
+        "min": 100.0,
+        "max": 162.0
+      },
+      "recommendedPrimaryBpm": 162,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "162 is inferred from the composition nominal tempo and the full-song late challenge; exact full-song timing remains unmeasured.",
+      "competingBpms": [
+        100
+      ],
+      "limitations": [
+        "The Korean page shares one nominal BPM across variants, so it is weaker than a full-song tempo timeline.",
+        "Do not infer full-song primary solely from the arcade version."
+      ],
+      "sources": [
+        {
+          "url": "https://namu.moe/w/Love%20is%20A%20Danger%20Zone%20pt.2",
+          "title": "Love is A Danger Zone pt.2 — Korean Namuwiki mirror",
+          "sourceType": "community-wiki",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Same composition and explicit full-song section, though header BPM is shared with arcade."
+        },
+        {
+          "url": "https://xx.piugame.com/piu.prime2/intro/pdf/PumpItUp_Prime2_FullSongList.pdf",
+          "title": "Pump It Up PRIME 2 Full Song List — Full Song row",
+          "sourceType": "official-catalog",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Exact full-song variant; older version."
+        },
+        {
+          "url": "https://pumpitup.fandom.com/wiki/Love_is_a_Danger_Zone_2_-_FULL_SONG_-",
+          "title": "Love is a Danger Zone2 FULL SONG — PIU Wiki",
+          "sourceType": "community-catalog",
+          "language": "en",
+          "access": "search-snippet",
+          "applicability": "Exact full-song identity; range corroboration only."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"러브 이즈 어 댄저 존 2\" \"풀송\" \"100\"",
+        "\"Love is A Danger Zone pt.2\" \"풀 송\" BPM"
+      ],
+      "previousDurationOrMainTempoProposal": 162
+    },
+    {
+      "songName": "Love is a Danger Zone 2 Try To B.P.M",
+      "songType": "Remix",
+      "originalBpmRange": {
+        "min": 140.0,
+        "max": 169.0
+      },
+      "recommendedPrimaryBpm": 169,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "169 represents the ending acceleration and final twist-run highlight, rather than a stable whole-song tempo.",
+      "competingBpms": [
+        140
+      ],
+      "limitations": [
+        "The 169 value is explicitly the final tempo; treating the final highlight as the focal BPM is an inference, not a published universal primary statement.",
+        "There is no single sustained main plateau, so this should not be presented as ordinary constant musical tempo.",
+        "No exact timing alignment between the final highlight notes and the last 169-BPM section was independently measured."
+      ],
+      "sources": [
+        {
+          "url": "https://m.namu.moe/w/Love%20is%20A%20Danger%20Zone%202%20Try%20To%20B.P.M",
+          "title": "Love is A Danger Zone2 Try To B.P.M — Korean Namuwiki mirror",
+          "sourceType": "community-wiki",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact Remix entry, with PHOENIX2 chart table."
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/d23/2112",
+          "title": "Love is a Danger Zone2 Try To B.P.M D23 — ArcadeStat",
+          "sourceType": "player-discussion",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Exact current D23; qualitative corroboration of accelerating structure."
+        },
+        {
+          "url": "https://xx.piugame.com/piu.prime2/intro/pdf/PumpItUp_Prime2_FullSongList.pdf",
+          "title": "Pump It Up PRIME2 Full Song List — TTB Remix",
+          "sourceType": "official-catalog",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Exact remix identity and range."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"Love is a Danger Zone2 Try To B.P.M\" 변속",
+        "\"Love is A Danger Zone2 Try To B.P.M\" \"BPM\"",
+        "\"러브 이즈 어 데인저 존 2\" \"Try To\" 변속"
+      ],
+      "previousDurationOrMainTempoProposal": null
+    },
+    {
+      "songName": "Love Witch",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 155.0,
+        "max": 170.0
+      },
+      "recommendedPrimaryBpm": 170,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "user-directed",
+      "confidence": "high",
+      "basis": "user-direction",
+      "summary": "User confirmed the remaining 170 BPM upper-bound fallback as the chosen focal BPM for Love Witch.",
+      "competingBpms": [
+        155,
+        170
+      ],
+      "limitations": [
+        "The focal BPM is user-confirmed. Earlier online sources establish the original range; the original batch findings preserve the superseded fallback and its research limitations."
+      ],
+      "sources": [
+        {
+          "url": "https://changelog.gg/games/pump-it-up-rise-2756930/updates/2025-11-25-0-5-1-patch-note-5th-update-pre-season-2-complete-30a5",
+          "title": "PUMP IT UP RISE0.5.1 official update mirror",
+          "sourceType": "official-update-mirror",
+          "language": "en",
+          "evidence": "The song introduction names Love Witch bySHK and supplies155-170; it does not designate a main or focal tempo.",
+          "access": "opened",
+          "applicability": "Exact original song; copied release notes are range evidence rather than independent focal corroboration.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://wapineo-game.tistory.com/entry/%ED%8E%8C%ED%94%84-%EB%9D%BC%EC%9D%B4%EC%A6%88-051-%EC%97%85%EB%8D%B0%EC%9D%B4%ED%8A%B8-%EB%82%B4%EC%97%AD-%EC%9E%85%EB%8B%88%EB%8B%A4",
+          "title": "펌프 라이즈0.5.1 업데이트 내역",
+          "sourceType": "Korean-blog-update-repost",
+          "language": "ko",
+          "access": "search-snippet",
+          "applicability": "Same RISE song; reproduces official source and is not independent numeric corroboration."
+        },
+        {
+          "url": "https://m.namu.moe/w/%ED%8E%8C%ED%94%84%20%EC%9E%87%20%EC%97%85%20PHOENIX%202",
+          "title": "펌프 잇 업 PHOENIX2 — Korean song table",
+          "sourceType": "community-wiki",
+          "language": "ko",
+          "access": "search-snippet",
+          "applicability": "Exact target version; confirms identity/range only."
+        },
+        {
+          "url": "https://m.namu.moe/w/Love%20Witch",
+          "title": "Love Witch — Korean community wiki mirror",
+          "sourceType": "community-wiki",
+          "language": "ko",
+          "evidence": "The page identifies SHK, RISE Vol.1 and155-170. Its chart sections list RISE singles and half doubles with embedded videos; no prose identifies a focal section's numeric tempo. Last revision shown2026-09-17.",
+          "access": "opened",
+          "applicability": "Exact SHK RISE-origin song; its listed chart levels predate the Phoenix 2 arcade transfer. Range and identity support only.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://wikiwiki.jp/piujpn/Love%20Witch",
+          "title": "Love Witch — Japanese Pump It Up Wiki",
+          "sourceType": "community-wiki",
+          "language": "ja",
+          "evidence": "The retrieved page source gives SHK, RISE,155-170 and the official BGA identifierzuHR2KosH2I. No focal-tempo commentary appears.",
+          "access": "opened",
+          "applicability": "Exact SHK song; range/identity only.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://piurise.com/board/update/post/27",
+          "title": "펌프 라이즈0.5.1 업데이트 내역 입니다.",
+          "sourceType": "Korean-forum-release-note-repost",
+          "language": "ko",
+          "evidence": "The search-indexed post names 러브 위치, SHK and155-170. The opened page exposed forum metadata but not the full post body. No numeric focal statement was retrieved.",
+          "access": "search-snippet",
+          "applicability": "Exact original song; repost of official notes, not independent evidence of focal tempo.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://forums.somethingawful.com/showthread.php?pagenumber=181&perpage=40&threadid=2524210&userid=0",
+          "title": "The Beatmania IIDX Thread — RISE division-course discussion",
+          "sourceType": "English-player-forum",
+          "language": "en",
+          "evidence": "A November2025 player post lists Love Witch among the RISE Veteran division songs and links gameplay; surrounding prose concerns division life-bar rules and achievement, without a BPM or defining-section analysis.",
+          "access": "opened",
+          "applicability": "Exact RISE song; negative tempo result from a relevant English forum.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://www.reddit.com/r/PumpItUp/search/?q=%22Love%20Witch%22&restrict_sr=1",
+          "title": "r/PumpItUp exact-title post search: Love Witch",
+          "sourceType": "Reddit-native-search",
+          "language": "en",
+          "evidence": "The public native search page explicitly returned no matching results for the exact title.",
+          "access": "opened",
+          "applicability": "Documented negative result; this is search coverage, not BPM evidence.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://www.reddit.com/r/PumpItUp/search/?q=%22Love%20Witch%22&type=comments&restrict_sr=1",
+          "title": "r/PumpItUp exact-title comment search: Love Witch",
+          "sourceType": "Reddit-native-search",
+          "language": "en",
+          "evidence": "The public native comment search explicitly returned no matching results.",
+          "access": "opened",
+          "applicability": "Documented negative result, not evidence that no unindexed discussion exists.",
+          "retrievedOn": "2026-10-23"
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-deep-research-2026-10-23/batch-2-findings.json",
+      "koreanSearches": [
+        "\"Love Witch\" 펌프 변속",
+        "\"러브 위치\" \"펌프\" \"170\"",
+        "\"러브 위치\" \"변속\"",
+        "\"러브 위치\" SHK",
+        "site:arca.live/b/pumpitup \"러브\" \"위치\"",
+        "\"Love Witch\" \"펌프\" \"후반\"",
+        "\"러브 위치\" \"후살\""
+      ],
+      "previousDurationOrMainTempoProposal": null,
+      "resolutionType": "user-confirmed",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "priorDetailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "previousResearchSnapshotFile": "output/primary-bpm-deep-research-2026-10-23/research-before-deep-pass.json",
+      "deepResearchedOn": "2026-10-23",
+      "deepSearchLog": [
+        {
+          "query": "\"Love Witch\" \"SHK\" BPM",
+          "channel": "web-music-and-composer",
+          "outcome": "Exact release tables supplied155-170. O2Jam/Studio Doma results were excluded."
+        },
+        {
+          "query": "\"러브 위치\" 펌프 후살",
+          "channel": "Korean-web",
+          "outcome": "No relevant exact-song numeric focal result."
+        },
+        {
+          "query": "\"Love Witch\" site:reddit.com pump",
+          "channel": "Reddit-index-search",
+          "outcome": "No relevant exact-song discussion."
+        },
+        {
+          "query": "\"러브위치\" 펌프",
+          "channel": "Korean-web",
+          "outcome": "No relevant section-tempo discussion; unrelated pop song results excluded."
+        },
+        {
+          "query": "site:reddit.com/r/PumpItUp \"Love Witch\"",
+          "channel": "Reddit-index-search",
+          "outcome": "No relevant indexed result; followed by native post and comment searches."
+        },
+        {
+          "query": "\"Love Witch\" \"펌프\" 변속",
+          "channel": "Korean-web",
+          "outcome": "Only artist/song-list context, no numeric defining section."
+        },
+        {
+          "query": "\"Love Witch\" \"펌프\" site:dcinside.com",
+          "channel": "Korean-forum-DCInside-index",
+          "outcome": "No relevant exact-song numeric discussion."
+        },
+        {
+          "query": "\"Love Witch\" site:arca.live",
+          "channel": "Korean-forum-Arca-index",
+          "outcome": "No relevant exact-song numeric discussion."
+        },
+        {
+          "query": "\"러브 위치\" \"라이즈\"; \"러브위치\" \"라이즈\"",
+          "channel": "Korean-web-and-PIURise",
+          "outcome": "Found update repost and PIURise song database; both range-only."
+        },
+        {
+          "query": "\"Love Witch\" \"170\"; \"Love Witch\" \"155\" 펌프; \"Love Witch\" \"SHK\" \"170\"",
+          "channel": "web-numeric-variants",
+          "outcome": "Exact hits reproduce155-170, with no numeric focal selection."
+        },
+        {
+          "query": "\"러브위치\" site:gall.dcinside.com; \"러브 위치\" site:arca.live/b",
+          "channel": "Korean-forum-alias-search",
+          "outcome": "No relevant exact-song focal analysis."
+        },
+        {
+          "query": "\"Love Witch\" \"SHK\" site:youtube.com",
+          "channel": "video-index-search",
+          "outcome": "No usable indexed numeric section analysis. Existing Nevsister extraction already confirms the range only."
+        },
+        {
+          "query": "\"러브 위치\" site:piurise.com",
+          "channel": "Korean-forum-PIURise-index",
+          "outcome": "Found song list and update post, with155-170 but no focal selection."
+        },
+        {
+          "query": "\"러브 위치\" \"펌프\" \"후반\"; \"러브\" \"위치\" \"후살\" 펌프",
+          "channel": "Korean-section-analysis-search",
+          "outcome": "No usable exact-song numeric section link."
+        },
+        {
+          "query": "\"Love Witch\" \"S20\" BPM",
+          "channel": "chart-specific-web",
+          "outcome": "Found relevant English forum course listing, but it contains no tempo analysis."
+        },
+        {
+          "query": "\"Love Witch\" site:arcadestat.app; \"Love Witch\" site:arcadestat.app/en/pump/tier/s21/",
+          "channel": "Korean-player-chart-comments-index",
+          "outcome": "Tier-list mentions found; no exact-song numeric focal comment retrieved. Opened tier pages exposed a JavaScript shell."
+        },
+        {
+          "query": "\"Love Witch\" SHK site:soundcloud.com; \"Love Witch\" \"SHK\" 曲 BPM; \"Love Witch\" SHK2025",
+          "channel": "composer-music-and-Japanese-web",
+          "outcome": "No exact-song composer focal BPM statement. Unrelated music results excluded."
+        },
+        {
+          "query": "DCInside PumpItUp native search for 러브 위치",
+          "channel": "Korean-forum-native-search",
+          "outcome": "Web tool could not open query URL; direct public HTTP request returned an empty body. Classified as unavailable, not evidence of no posts."
+        },
+        {
+          "query": "r/PumpItUp native exact-title posts and comments",
+          "channel": "Reddit-native-search",
+          "outcome": "Both public pages explicitly returned no matching results.",
+          "sourceUrls": [
+            "https://www.reddit.com/r/PumpItUp/search/?q=%22Love%20Witch%22&restrict_sr=1",
+            "https://www.reddit.com/r/PumpItUp/search/?q=%22Love%20Witch%22&type=comments&restrict_sr=1"
+          ]
+        },
+        {
+          "query": "Public exact-song simfile/timing search and rayden-61/PIU-Simfiles stepp1-phoenix tree",
+          "channel": "parent-reported-independent-timing-search",
+          "outcome": "Parent checked public tree0dc5a57919d1847070337fe3be3e61ad4bb0e721 and global exact-song BPMS searches; no exact RISE timing file found. Older O2Jam/other-game matches excluded."
+        }
+      ],
+      "userDirection": {
+        "recommendedPrimaryBpm": 170,
+        "confirmedBy": "user",
+        "confirmedOn": "2026-10-24",
+        "confirmation": "and confirming the other upper bound fallbacks as well",
+        "reason": "User confirmed the remaining 170 BPM upper-bound fallback as the chosen focal BPM for Love Witch."
+      },
+      "previousResearchDecision": {
+        "recommendedPrimaryBpm": 170,
+        "resolutionType": "upper-bound-fallback",
+        "confidence": "low",
+        "fallbackUsed": true,
+        "fallbackReason": "Targeted Korean forum and blog searches, native Reddit post/comment searches, Japanese and Korean song pages, release notes, artist/music searches, English forum discussion and public timing searches produced identity/range evidence but no attributable numeric tempo for a defining section. Use the stored upper endpoint170 only under the user's last-resort rule. This is not a sourced assertion that170 is the focal tempo."
+      }
+    },
+    {
+      "songName": "Lucid(PIU Edit)",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 40.0,
+        "max": 190.0
+      },
+      "recommendedPrimaryBpm": 190,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "190 represents the final musical culmination; the difficult middle changing-tempo passage and duration-mode 180 remain important qualifications.",
+      "competingBpms": [
+        180
+      ],
+      "limitations": [
+        "190 is the musical/nominal culminating section; some charts have their hardest gameplay during the middle variable-speed section.",
+        "180 is the duration mode and remains a credible alternative if the intended meaning changes back to sustained musical tempo.",
+        "The original EZ2AC Lucid at 175 is a different arrangement."
+      ],
+      "sources": [
+        {
+          "url": "https://w.atwiki.jp/pumpiuup/pages/22.html",
+          "title": "Lv4 — Japanese PIU reference (Lucid PIU Edit)",
+          "sourceType": "community-catalog",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Exact PIU edit; older version nominal BPM."
+        },
+        {
+          "url": "https://www.pumpproplus.com/article-details.aspx?id=4E4EE7D8-2982-4376-8DE6-0674F484FB5C",
+          "title": "Pump It Up M Ver1.41 — Pump Pro+",
+          "sourceType": "community-release-report",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Mobile port report of same PIU edit; may reflect display/nominal BPM."
+        },
+        {
+          "url": "https://m.namu.moe/w/Lucid",
+          "title": "Lucid — Korean Namuwiki mirror, PIU Edit section",
+          "sourceType": "community-wiki",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact PIU edit with current PHOENIX2 charts, distinct from original EZ2AC175-BPM Lucid."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/base/cs143.zip",
+          "title": "Pump Pro+ UCS timing base CS143",
+          "sourceType": "public-ucs-timing-template",
+          "language": "timing-data",
+          "access": "opened",
+          "applicability": "Same PIU arcade song timing template; public community mirror of UCS data. Full derivation and hash are in ucs-timing-profiles.json."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"Lucid(PIU Edit)\" \"BPM\"",
+        "\"루시드\" \"주BPM\" 펌프",
+        "\"루시드(PIU Edit)\" 변속 BPM"
+      ],
+      "previousDurationOrMainTempoProposal": 180
+    },
+    {
+      "songName": "Mental Rider",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 120.0,
+        "max": 140.0
+      },
+      "recommendedPrimaryBpm": 140,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "direct",
+      "summary": "140 is explicitly tied to the characteristic 24th-note crossover-trill highlight.",
+      "competingBpms": [
+        120
+      ],
+      "limitations": [
+        "The clearest focal statement concerns D24; other chart difficulties distribute emphasis differently.",
+        "The UCS timing grid ends 72.20 seconds before catalog duration; extended percentages should not be cited as measured full-song timings.",
+        "No independent Korean forum primary-BPM statement was found."
+      ],
+      "sources": [
+        {
+          "url": "https://www.namu.moe/w/Mental%20Rider",
+          "title": "Mental Rider — Korean Namuwiki mirror",
+          "sourceType": "community-wiki",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact PIU song with PHOENIX2 chart table."
+        },
+        {
+          "url": "https://xx.piugame.com/piu.xx/intro/pdf/PumpItUp_xx_FullSongList.pdf",
+          "title": "Pump It Up XX official full song list",
+          "sourceType": "official-catalog",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Older PIU version, same arcade song."
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/d23/4991",
+          "title": "Mental Rider D23 — ArcadeStat",
+          "sourceType": "player-discussion",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Current PIU chart qualitative context only."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/base/cs163.zip",
+          "title": "Pump Pro+ UCS timing base CS163",
+          "sourceType": "public-ucs-timing-template",
+          "language": "timing-data",
+          "access": "opened",
+          "applicability": "Same PIU arcade song timing template; public community mirror of UCS data. Full derivation and hash are in ucs-timing-profiles.json."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"Mental Rider\" \"BPM\"140",
+        "\"멘탈 라이더\" 변속120140",
+        "site:dcinside.com \"멘탈라이더\" \"140\"",
+        "\"멘탈라이더\" 비피엠",
+        "\"멘탈 라이더\" \"140BPM\""
+      ],
+      "previousDurationOrMainTempoProposal": 140
+    },
+    {
+      "songName": "Neo Catharsis",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 120.0,
+        "max": 300.0
+      },
+      "recommendedPrimaryBpm": 210,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "210 represents the post-acceleration climax; 200 is the reference/time-mode alternative and 300 a separate acceleration.",
+      "competingBpms": [
+        200,
+        140,
+        300
+      ],
+      "limitations": [
+        "This is an interpretive gameplay focal value, not an official declaration of a single tempo throughout the song.",
+        "The 300 acceleration and 200 reference remain in the original range/evidence; 210 is chosen for the defining sustained playing section.",
+        "No community-wide consensus or useful exact main-tempo DCInside post was established."
+      ],
+      "sources": [
+        {
+          "url": "https://www.namu.moe/w/Neo%20Catharsis",
+          "title": "Neo Catharsis",
+          "sourceType": "Korean community wiki mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Arcade song and Phoenix/Phoenix 2 charts; the AV setting is explicitly different from the sustained highlight tempo."
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/s20/147",
+          "title": "Neo Catharsis (Pump It Up S20) Chart Constant & Difficulty Tier | ArcadeStat",
+          "sourceType": "Firsthand Korean player contribution, search-indexed translation",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Arcade S20 contribution; independent player report. Opening the page returned a JavaScript-only shell, so the contribution was read in search results."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs354.zip",
+          "title": "Pump Pro+ UCS base CS354 — Neo Catharsis",
+          "sourceType": "Public music timing template, derived duration analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact arcade song base. Game timing can encode half/double-time; template ends at 119.63 seconds versus catalog duration 125, so an extended-tail estimate has a 5.37-second assumption."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-2-findings.json",
+      "koreanSearches": [
+        "\"네오 카타르시스\" \"BPM\"",
+        "site:dcinside.com \"네오\" \"카타르시스\" \"BPM\"",
+        "\"Neo Catharsis\" \"주\" \"210\""
+      ],
+      "previousDurationOrMainTempoProposal": 210
+    },
+    {
+      "songName": "Neo Catharsis - SHORT CUT -",
+      "songType": "ShortCut",
+      "originalBpmRange": {
+        "min": 120.0,
+        "max": 300.0
+      },
+      "recommendedPrimaryBpm": 210,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "210 is the strongest exact-shortcut focal proposal after connecting its public timing transcription to the dense sustained gameplay. The shortcut's long210 section contains substantially more active rows than its similarly long200 opening in the S23 and D25 transcriptions. Korean exact-shortcut chart discussion emphasizes fast packed runs, difficult later brackets, and the section after the runs. The300 peak is a brief acceleration endpoint with actual notes, but does not represent the sustained signature challenge. This is an inference from exact shortcut timing and player descriptions; it is not a shortcut-specific community statement naming210, and it does not silently inherit the Arcade recommendation.",
+      "competingBpms": [
+        200,
+        210
+      ],
+      "limitations": [
+        "No exact-shortcut Korean or Reddit post explicitly naming210 as the focal BPM was found. Selection is a labeled inference from exact-variant timing and gameplay structure.",
+        "The public SSC is fan-maintained and has not been compared frame-by-frame against official Phoenix2 gameplay in this pass.",
+        "Several encoded chart BPMs are scaled for gimmicks and are not literal musical tempos; raw maximums in these chart blocks must not be used as song BPM.",
+        "The300 endpoint has real notes; its exclusion as representative follows the focal-point criterion and brief duration, not an assertion that it is empty.",
+        "Later brackets and235–240 bursts can dominate individual chart difficulty, so210 is a song-level representative proposal rather than a claim that every chart's hardest instant is210."
+      ],
+      "sources": [
+        {
+          "url": "https://www.namu.moe/w/Neo%20Catharsis",
+          "title": "Neo Catharsis — dedicated Short Cut section",
+          "sourceType": "Korean community wiki mirror",
+          "language": "ko",
+          "evidence": "The dedicated shortcut section identifies its PHOENIX2.08 introduction and separate S19/S21/S23/D23/D25 chart set, with laterD23→D24 adjustment. It describes difficult charts but supplies no shortcut-specific numeric focal claim.",
+          "access": "opened",
+          "applicability": "Variant identity corroboration. Shared Arcade200 AV reference and Arcade210 commentary were not treated as direct shortcut evidence.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/d24/4975",
+          "title": "Neo Catharsis - SHORT CUT - D24 — Korean player contributions",
+          "sourceType": "Korean player chart discussion",
+          "language": "ko/en",
+          "evidence": "Belics warns about stairs amid runs and later brackets; MUISIKI highlights the bracketed jacks after the runs. Neither assigns a numeric tempo.",
+          "access": "search-snippet",
+          "applicability": "Exact currentD24 shortcut, not the former ArcadeD24. Open returned a JavaScript shell; indexed contributions supply the gameplay evidence.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/s23/4345",
+          "title": "Neo Catharsis - SHORT CUT - S23 — Korean player contributions",
+          "sourceType": "Korean player chart discussion",
+          "language": "ko/en",
+          "evidence": "Exact-shortcut contributions by 김꽁치2세 and 도둑 characterize packed notes, side patterns, and difficult fast gameplay; they do not state a numeric focal tempo.",
+          "access": "search-snippet",
+          "applicability": "Exact S23 variant. Direct page open returned a JavaScript shell; evidence comes from indexed translated contributions, not a full opened page.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://github.com/rayden-61/PIU-Simfiles/blob/0dc5a57919d1847070337fe3be3e61ad4bb0e721/16%20-%20PHOENIX/18F76%20-%20%5BShort%20Cut%5D%20Neo%20Catharsis/%5BShort%20Cut%5D%20Neo%20Catharsis.ssc",
+          "title": "Neo Catharsis — exact Short Cut fan SSC at pinned commit",
+          "sourceType": "public fan chart transcription",
+          "language": "en/data",
+          "evidence": "Global music timing sets210 at beats112–192, about31.57–54.43s relative to beat0. Chart-specific timing maps place236 S23 and239 D25 active note rows there, versus123 each in the200 opening. The300 peak lasts0.8s. Custom UCS charts were excluded from note counts.",
+          "access": "opened",
+          "applicability": "Exact Short Cut with separately labeled standard S19/S21/S23/D23/D25 transcriptions; D23 is the historical rating of currentD24. Fan source includes deliberate scroll/gimmick BPM scaling, so musical tempo was separated from each chart's encoded BPM.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/d23/4354-neo-catharsis-short-cut",
+          "title": "Neo Catharsis - SHORT CUT - D23 — historical player contributions",
+          "sourceType": "Korean player chart discussion",
+          "language": "ko/en",
+          "evidence": "NIGHT explicitly identifies the section after the run as difficult; kazminy describes fast runs with breathing gaps and moderate brackets.",
+          "access": "search-snippet",
+          "applicability": "Historical D23-labeled exact shortcut, separate from Arcade. Corroborates sectional gameplay emphasis only.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://gall.dcinside.com/mini/board/view/?id=pumpitup&no=260381",
+          "title": "네오 카타르시스 숏컷 S23 SS+ — DCInside Pump it up mini gallery",
+          "sourceType": "Korean player forum post",
+          "language": "ko",
+          "evidence": "Exact shortcutS23 result post dated2026-07-29 contains score images and a short celebratory remark, with no prose numeric tempo analysis and no comments.",
+          "access": "opened",
+          "applicability": "Exact-variant Korean forum avenue was checked; this post is not affirmative BPM evidence.",
+          "retrievedOn": "2026-10-23"
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-deep-research-2026-10-23/batch-1-findings.json",
+      "koreanSearches": [
+        "\"네오 카타르시스\" \"숏컷\" \"210\"",
+        "\"네오 카타르시스\" \"숏 컷\" \"210\"",
+        "\"네오숏\" \"BPM\"",
+        "\"네오 카타르시스\" \"숏컷\" 후살",
+        "\"네오\" \"숏컷\" \"210\" 펌프"
+      ],
+      "previousDurationOrMainTempoProposal": null,
+      "resolutionType": "inferred",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "priorDetailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-2-findings.json",
+      "previousResearchSnapshotFile": "output/primary-bpm-deep-research-2026-10-23/research-before-deep-pass.json",
+      "deepResearchedOn": "2026-10-23",
+      "deepSearchLog": [
+        {
+          "query": "\"네오 카타르시스\" \"숏컷\" 후살; \"네오 카타르시스\" \"숏컷\" \"BPM\"",
+          "channel": "Korean web and forum search",
+          "outcome": "Exact shortcut ArcadeStat player contributions and score posts surfaced, but no explicit numeric focal tempo."
+        },
+        {
+          "query": "\"네오 카타르시스\" \"숏컷\" \"210\"; \"네오 카타르시스\" \"숏컷\" \"200\"",
+          "channel": "Korean targeted numeric search",
+          "outcome": "Results mentioning210 or200 predominantly described Arcade charts or shared headers; excluded as direct shortcut evidence."
+        },
+        {
+          "query": "\"네오숏\" 펌프210; \"네오카타르시스\" \"숏컷\"; \"네오 카타르시스\" \"숏\" \"후반\"",
+          "channel": "Korean alias and ending searches",
+          "outcome": "No independent numeric exact-cut focal claim located; shortened title searches also returned unrelated material."
+        },
+        {
+          "query": "\"네오 카타르시스\" \"숏컷\" site:gall.dcinside.com; site:gall.dcinside.com \"네오\" \"숏컷\" \"300\"",
+          "channel": "Korean forum search",
+          "outcome": "Opened exactS23 result post260381: no numeric tempo prose and no comments. No useful300 focal discussion found.",
+          "sourceUrls": [
+            "https://gall.dcinside.com/mini/board/view/?id=pumpitup&no=260381"
+          ]
+        },
+        {
+          "query": "\"네오 카타르시스\" \"숏\" site:blog.naver.com; \"네오 카타르시스\" \"숏컷\" site:tistory.com",
+          "channel": "Korean blog search",
+          "outcome": "Naver was blocked by robots; Tistory search supplied no exact-cut numeric focal claim."
+        },
+        {
+          "query": "site:reddit.com \"Neo Catharsis\" \"short\"; site:reddit.com/r/PumpItUp \"Neo Catharsis\" shortcut",
+          "channel": "Reddit search",
+          "outcome": "Broader query returned Arcade/general discussion and unrelated recent preview commentary; no exact-shortcut tempo analysis."
+        },
+        {
+          "query": "site:reddit.com/r/PumpItUp \"Neo Catharsis\" \"short cut\"; site:reddit.com/r/PumpItUp \"Neo Catharsis\" \"shortcut\" \"BPM\"",
+          "channel": "Reddit exact variant and numeric search",
+          "outcome": "Both targeted searches returned no results."
+        },
+        {
+          "query": "\"Neo Catharsis - SHORT CUT -\" \"210\"; \"Neo Catharsis\" \"short cut\" \"210bpm\"; \"Neo Catharsis\" \"short cut\" \"climax\"",
+          "channel": "English exact-variant and focal search",
+          "outcome": "No exact-cut direct numeric focal statement; excluded Arcade references and unrelated catharsis material."
+        },
+        {
+          "query": "Neo Catharsis — repository rayden-61/PIU-Simfiles; exact shortcut pinned SSC",
+          "channel": "Public text chart data",
+          "outcome": "Default-branch code search returned no results; parent located exact shortcut in branch tree. Opened pinned SSC through GitHub connector, separated custom UCS entries from standard-chart-labeled entries, and connected210 musical timing to the sustained dense S23/D25 section.",
+          "sourceUrls": [
+            "https://github.com/rayden-61/PIU-Simfiles/blob/0dc5a57919d1847070337fe3be3e61ad4bb0e721/16%20-%20PHOENIX/18F76%20-%20%5BShort%20Cut%5D%20Neo%20Catharsis/%5BShort%20Cut%5D%20Neo%20Catharsis.ssc"
+          ]
+        }
+      ]
+    },
+    {
+      "songName": "PaPa helloizing",
+      "songType": "Remix",
+      "originalBpmRange": {
+        "min": 145.0,
+        "max": 158.0
+      },
+      "recommendedPrimaryBpm": 158,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "Choose158 because the exact remix's defining final longer twisting run can now be linked to that pulse. The Korean S19 contribution previously isolated this final run as harder than earlier short runs. The pinned public S19 transcription encodes the final run at beats346-368 as79BPM with dense1/8-beat note rows, equivalent to158BPM16ths. Independently within the same exact-song transcription, the less gimmicked S10 chart places the corresponding final music interval at beat352 onward at158BPM. Integrating each chart's per-chart tempo map places both transitions at approximately142.39 seconds and the final chord at159.10 seconds (before the common20.5ms offset), demonstrating that these are the same real-time musical passage despite different chart beat coordinates. The158 selection is therefore a clearly labeled inference combining a player-identified focal section with exact-song timing evidence. It happens to equal the upper endpoint, but it was not selected under the upper-bound fallback rule. The standalone Blazing158 listing is corroboration only; the conclusion no longer depends on assuming the ending is Blazing.",
+      "competingBpms": [
+        145,
+        158
+      ],
+      "limitations": [
+        "158 is an inference from player focal-section commentary plus fan chart timing, not a composer/official declaration or a measured audio BPM.",
+        "The S19 commentary was accessible as an indexed automatic translation; no claim of broad community consensus is made.",
+        "A song-level158 number does not describe the145 portions or chart-specific timing gimmicks. Preserve145-158 as original range metadata.",
+        "No useful exact-song Reddit focal-tempo discussion was found. Korean song-page access remained limited.",
+        "The finale's constituent identity was not independently established, but is no longer required because exact-song S10/S19 timing supplies the numeric link."
+      ],
+      "sources": [
+        {
+          "url": "https://wikiwiki.jp/piujpn/PaPa%20helloizing",
+          "title": "PaPa helloizing — Japanese PIU Wiki",
+          "sourceType": "community-game-guide",
+          "language": "ja",
+          "evidence": "Identifies the145-158 remix and its Papa Gonzales, Hello, and Blazing components. Lists the exact Arcade S10/S19 charts.",
+          "access": "opened",
+          "applicability": "Confirms exact remix identity; component identity alone is insufficient to determine the tempo of its finale.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/s10/3745",
+          "title": "PaPa helloizing S10 — Korean contributions on ArcadeStat",
+          "sourceType": "firsthand-player-chart-commentary",
+          "language": "ko/en",
+          "evidence": "STELLAR describes three-song tempo changes and remix-length stamina, with a warning about the final three-note bracket. It does not nominate a primary BPM, but independently corroborates the ending-pattern location.",
+          "access": "search-snippet",
+          "applicability": "Exact S10 chart; source location observation only, not a tempo claim.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://arcadestat.app/es/pump/tier/s19/3711",
+          "title": "PaPa helloizing S19 — Korean player contribution by 고옹식, indexed Spanish translation",
+          "sourceType": "firsthand-player-chart-commentary",
+          "language": "ko/es",
+          "evidence": "The indexed contribution describes short earlier runs and says that the final, somewhat longer twisting run is harder to process. It names neither a constituent song nor a BPM; the focal-section observation is the part used here.",
+          "access": "search-snippet",
+          "applicability": "Exact Phoenix PaPa helloizing S19. Direct Korean/English opens returned a JavaScript shell. The automatic Spanish translation is awkward, so it is used only for the coarse final-run location corroborated by chart rows.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://www.namu.moe/w/Blazing",
+          "title": "Blazing — Korean Namu mirror",
+          "sourceType": "community-game-guide",
+          "language": "ko",
+          "evidence": "Standalone BanYa Blazing is158BPM. This is consistent with158 being a constituent pulse but does not itself establish placement in the exact remix.",
+          "access": "opened",
+          "applicability": "Constituent corroboration only; not used to infer unverified musical section identity.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://github.com/rayden-61/PIU-Simfiles/blob/0dc5a57919d1847070337fe3be3e61ad4bb0e721/08%20-%20FIESTA/1033%20-%20%5BRemix%5D%20Papa%20Helloizing/1033%20-%20%5BRemix%5D%20Papa%20Helloizing.ssc",
+          "title": "1033 — PaPa helloizing.ssc, pinned public PIU-Simfiles transcription",
+          "sourceType": "public-fan-chart-transcription",
+          "language": "en/data",
+          "evidence": "Inspected active S10 and S19 only, excluding the custom UCS D24. S10 uses145/158 changes and its final158 section starts at beat352, with final chord at396. S19 uses145/158 plus halved/quartered timing gimmicks, then79BPM from346 to368 with1/8-beat run rows; final chord368 switches to158. Per-chart timing integration aligns S10 beat352 and S19 beat346 at142.39s, and both final chords at159.10s. Thus the difficult S19 final run has the same158BPM musical pulse as the S10 final section, encoded in half-time. S10's120BPM change at482.75 lies after its final note396 and was excluded as irrelevant tail timing.",
+          "access": "opened",
+          "applicability": "Exact1033 Fiesta remix, not Papa Gonzales, Hello William, standalone Blazing, or another remix. Git blob SHA a11f2477d6055c38a382f79962e68db059545f55. This is fan transcription evidence, not an official extraction or measured audio analysis.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://xx.piugame.com/piu.prime2/intro/pdf/PumpItUp_Prime2_FullSongList.pdf",
+          "title": "Pump It Up Prime2 Full Song List — Andamiro",
+          "sourceType": "official-game-catalog",
+          "language": "ko/en",
+          "evidence": "Indexed official row gives exact PaPa helloizing remix145-158 and S8/S19, the older label for the current lower S10 chart. No primary BPM is designated.",
+          "access": "search-snippet",
+          "applicability": "Official original range only; preserves the distinction between range metadata and the proposed focal number.",
+          "retrievedOn": "2026-10-23"
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-deep-research-2026-10-23/batch-0-findings.json",
+      "koreanSearches": [
+        "\"파파 헬로이징\" 변속",
+        "\"파파 헬로이징\" BPM 주",
+        "site:dcinside.com \"파파 헬로이징\"",
+        "\"파파 헬로이징\" \"후살\"",
+        "\"파파 헬로이징\" \"블레이징\" \"마지막\""
+      ],
+      "previousDurationOrMainTempoProposal": null,
+      "resolutionType": "inferred",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "priorDetailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-2-findings.json",
+      "previousResearchSnapshotFile": "output/primary-bpm-deep-research-2026-10-23/research-before-deep-pass.json",
+      "deepResearchedOn": "2026-10-23",
+      "deepSearchLog": [
+        {
+          "query": "\"PaPa helloizing\" reddit",
+          "channel": "reddit/general-web",
+          "outcome": "No useful exact-song Reddit tempo discussion returned."
+        },
+        {
+          "query": "site:reddit.com \"PaPa\" \"helloizing\"",
+          "channel": "reddit",
+          "outcome": "No relevant exact-song result returned."
+        },
+        {
+          "query": "site:reddit.com/r/PumpItUp \"helloizing\"",
+          "channel": "reddit",
+          "outcome": "No relevant exact-song focal-BPM discussion returned."
+        },
+        {
+          "query": "\"파파 헬로이징\" 블레이징 후반",
+          "channel": "korean-web",
+          "outcome": "No direct source linking constituent name to finale recovered."
+        },
+        {
+          "query": "\"파파 헬로이징\" \"블레이징\"; \"파파 헬로이징\" \"S19\" \"블레이징\"",
+          "channel": "korean-web",
+          "outcome": "Constituent lists and general catalogs; no additional numeric section linkage."
+        },
+        {
+          "query": "site:dcinside.com \"파파헬로\"; site:gall.dcinside.com \"파파\" \"헬로이징\" \"속도\"",
+          "channel": "korean-forum",
+          "outcome": "No useful exact-song tempo or final-section statement returned."
+        },
+        {
+          "query": "펌프 \"파헬\" \"변속\"; \"파파헬로이징\" 펌프",
+          "channel": "korean-web-alias",
+          "outcome": "No stronger focal-BPM evidence surfaced through aliases."
+        },
+        {
+          "query": "site:tistory.com \"파파\" \"헬로이징\"",
+          "channel": "korean-blog",
+          "outcome": "A song-popularity blog listed the exact title but no BPM/section discussion, so it was excluded from decision evidence."
+        },
+        {
+          "query": "\"파파 헬로이징\" \"158\" \"후반\"; \"PaPa helloizing\" \"79\"",
+          "channel": "korean-and-english-tempo-search",
+          "outcome": "No external prose explaining the final half-time encoding; resolved via exact chart text instead."
+        },
+        {
+          "query": "\"PaPa helloizing\" \"Blazing\"; \"PaPa helloizing\" \"BPM\" \"158\"",
+          "channel": "general-web",
+          "outcome": "Exact range/component catalogs and indexed player commentary; no direct primary-tempo statement."
+        },
+        {
+          "query": "site:arcadestat.app/ko/pump/tier/s19/3711; indexed exact S19 contribution",
+          "channel": "korean-player-contributions",
+          "outcome": "Korean URL returned JavaScript shell/generic indexing, while the indexed Spanish page preserved the Korean contributor's final-run observation.",
+          "sourceUrls": [
+            "https://arcadestat.app/es/pump/tier/s19/3711"
+          ]
+        },
+        {
+          "query": "PaPa helloizing (GitHub code search); rayden-61/PIU-Simfiles exact1033 SSC",
+          "channel": "public-chart-timing",
+          "outcome": "Located a public text transcription and parsed S10/S19 separately. Matched the final focal passage to158BPM via real-time alignment, accounting for S19's79BPM half-time gimmick.",
+          "sourceUrls": [
+            "https://github.com/rayden-61/PIU-Simfiles/blob/0dc5a57919d1847070337fe3be3e61ad4bb0e721/08%20-%20FIESTA/1033%20-%20%5BRemix%5D%20Papa%20Helloizing/1033%20-%20%5BRemix%5D%20Papa%20Helloizing.ssc"
+          ]
+        }
+      ]
+    },
+    {
+      "songName": "Reincarnate in “A”",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 65.0,
+        "max": 220.0
+      },
+      "recommendedPrimaryBpm": 220,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "direct",
+      "summary": "A current Korean exact-song article now documents the Phoenix 2S25 specifically: its late sewing-machine killer is strengthened to two holds plus a repeated single note, likened to NyarlathotepS22's ending at220BPM, followed by demanding two-note footswitch repeats and three-note patterns. This supplies the previously missing explicit numeric link to a defining late gameplay challenge. Select220 under the user's focal-point criterion. The value happens to equal the upper endpoint, but the selection is supported by section-specific prose and is not the upper-bound fallback. Confidence is medium because the retrieved numeric focal link is one community-wiki description focused onS25; it is not an official song-level designation or independent consensus.",
+      "competingBpms": [
+        65,
+        220
+      ],
+      "limitations": [
+        "The decisive numeric focal link is one Korean community-wiki description, not an official designation or multi-source consensus.",
+        "The explicit220 gameplay example isS25; selection for every song chart follows the requested shared song-level focal metadata policy.",
+        "No measured timing map or audio analysis was performed; some Korean forum native searches were unavailable."
+      ],
+      "sources": [
+        {
+          "url": "https://namu.moe/w/Reincarnate%20in%20%22A%22",
+          "title": "Reincarnate in A — Korean community wiki mirror, Phoenix 2S25 section",
+          "sourceType": "Korean-chart-analysis",
+          "language": "ko",
+          "evidence": "The article lists both RISE and Phoenix 2 charts, and in its arcade single section describesS25's enhanced late sewing-machine killer as analogous to NyarlathotepS22's final killer played at220BPM. It then notes demanding repeated footswitch pairs and triples. The page's last revision is2026-10-19.",
+          "access": "opened",
+          "applicability": "Exact target Phoenix 2S25 and exact RISE-origin song; direct numeric late-section evidence, unlike the earlier range-only revision.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://wikiwiki.jp/piujpn/Reincarnate%20in%20%E2%80%9CA%E2%80%9D",
+          "title": "Reincarnate in A — Japanese Pump It Up Wiki",
+          "sourceType": "community-wiki",
+          "language": "ja",
+          "evidence": "The exact-song page identifies TAG underground overlay and65-220, corroborating identity and allowed range; it does not itself name a focal tempo.",
+          "access": "opened",
+          "applicability": "Same RISE song; original chart levels predate the arcade transfer.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://booth.pm/ja/items/7401604",
+          "title": "Reincarnate in A — TAG official BOOTH release",
+          "sourceType": "composer-official-listing",
+          "language": "ja",
+          "evidence": "Composer's exact RISE release listing confirms identity. No BPM or focal-tempo field was present in the retrieved page.",
+          "access": "opened",
+          "applicability": "Official identity check only.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://piurise.com/board/play/post/2",
+          "title": "리인카네이트 인 A — HD24 1,000,000 PG",
+          "sourceType": "Korean-player-forum",
+          "language": "ko",
+          "evidence": "Exact RISE gameplay post; opened page has no tempo commentary and no registered comments. It therefore adds search coverage, not numeric corroboration.",
+          "access": "opened",
+          "applicability": "Exact original song, different RISE chart; not evidence for220.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://www.reddit.com/r/PumpItUp/search/?q=%22Reincarnate%20in%22&type=comments&restrict_sr=1",
+          "title": "r/PumpItUp comment search: Reincarnate in",
+          "sourceType": "Reddit-native-search",
+          "language": "en",
+          "evidence": "Native exact-phrase comment search explicitly returned no matching results. A broader native post search forReincarnate only surfaced unrelated old-song posts.",
+          "access": "opened",
+          "applicability": "Negative search result; no numeric corroboration.",
+          "retrievedOn": "2026-10-23"
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-deep-research-2026-10-23/batch-2-findings.json",
+      "koreanSearches": [
+        "\"리인카네이트\" \"220\" 펌프",
+        "\"리인카네이트 인\" 변속",
+        "\"리인카네이트\" site:dcinside.com",
+        "\"리인카네이트\" \"펌프잇업\""
+      ],
+      "previousDurationOrMainTempoProposal": null,
+      "resolutionType": "direct",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "priorDetailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-2-findings.json",
+      "previousResearchSnapshotFile": "output/primary-bpm-deep-research-2026-10-23/research-before-deep-pass.json",
+      "deepResearchedOn": "2026-10-23",
+      "deepSearchLog": [
+        {
+          "query": "\"Reincarnate in\" \"BPM\" \"220\"; \"Reincarnate in\" \"220\" pump -scoresaber -songdata -motionless",
+          "channel": "web-exact-song-numeric",
+          "outcome": "Japanese wiki and song list confirmed65-220. Unrelated Motionless in White/Rein results excluded."
+        },
+        {
+          "query": "\"리인카\" \"펌프\" 변속; \"리인카네이트\" \"재봉틀\"; \"리인카네이트\" \"220\"",
+          "channel": "Korean-web-chart-analysis",
+          "outcome": "No additional indexed numerical focal analysis. Directly opening the current exact-song Korean page revealed new Phoenix 2S25 prose linking its late killer to220."
+        },
+        {
+          "query": "\"Reincarnate in\" site:reddit.com; site:reddit.com/r/PumpItUp \"Reincarnate\"",
+          "channel": "Reddit-index-search",
+          "outcome": "No relevant exact-song numeric discussion."
+        },
+        {
+          "query": "\"리인카네이트\" site:gall.dcinside.com",
+          "channel": "Korean-forum-DCInside-index",
+          "outcome": "Found a RISE arcade-transfer discussion naming the song, with no numeric tempo analysis.",
+          "sourceUrls": [
+            "https://gall.dcinside.com/mini/board/view/?id=pumpitup&no=253294"
+          ]
+        },
+        {
+          "query": "\"Reincarnate\" \"220\" \"펌프\"",
+          "channel": "Korean-web-numeric",
+          "outcome": "Range-only song-list results; direct Korean article provided the stronger exact-section link."
+        },
+        {
+          "query": "\"Reincarnate\" site:arcadestat.app",
+          "channel": "Korean-player-chart-comments-index",
+          "outcome": "CurrentD21/D24 tier-list entries found, but no separate numeric focal comment."
+        },
+        {
+          "query": "DCInside PumpItUp native search for 리인카",
+          "channel": "Korean-forum-native-search",
+          "outcome": "Web tool could not open the query URL and direct public HTTP returned an empty body; unavailable, not proof of no discussions."
+        },
+        {
+          "query": "r/PumpItUp native post searchReincarnate and comment search exact phraseReincarnate in",
+          "channel": "Reddit-native-search",
+          "outcome": "Broader post search surfaced unrelated old-song threads; exact-phrase comment search returned no results.",
+          "sourceUrls": [
+            "https://www.reddit.com/r/PumpItUp/search/?q=Reincarnate&restrict_sr=1",
+            "https://www.reddit.com/r/PumpItUp/search/?q=%22Reincarnate%20in%22&type=comments&restrict_sr=1"
+          ]
+        },
+        {
+          "query": "TAG official BOOTH release listing and PIURiseHD24 gameplay post",
+          "channel": "composer-and-Korean-forum-direct-reads",
+          "outcome": "Identity confirmed, but no additional tempo prose. Over the Period similarity was not used as evidence for220."
+        },
+        {
+          "query": "Public exact-song timing and rayden-61/PIU-Simfiles stepp1-phoenix tree",
+          "channel": "parent-reported-independent-timing-search",
+          "outcome": "No exact RISE timing data available in the inspected public tree/global search. Direct Korean numeric section evidence was sufficient without fallback."
+        }
+      ]
+    },
+    {
+      "songName": "Switronic",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 120.0,
+        "max": 170.0
+      },
+      "recommendedPrimaryBpm": 120,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "direct",
+      "summary": "120 is explicitly identified as main BPM; the 170 section is a slower-feeling bridge.",
+      "competingBpms": [
+        170
+      ],
+      "limitations": [
+        "No usable numeric main-BPM forum post was found in the scoped DCInside/Arca searches.",
+        "The Korean wiki mirror is the strongest explicit source; the independent beatmap is supporting evidence only."
+      ],
+      "sources": [
+        {
+          "url": "https://readonly.wiki/w/Switronic",
+          "title": "Switronic - 읽기전용위키",
+          "sourceType": "Korean community wiki archival mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Arcade original, not its separate constant-120 shortcut. Historical XX account, consistent with the unchanged Phoenix 2 range."
+        },
+        {
+          "url": "https://scoresaber.com/map/134807/difficulty/420331",
+          "title": "Switronic | ScoreSaber!",
+          "sourceType": "Independent fan beatmap metadata",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Same song/artist in another rhythm game; supporting musical-tempo evidence, not official Phoenix chart timing."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs306.zip",
+          "title": "Pump Pro+ UCS base CS306 — Switronic",
+          "sourceType": "Public music timing template, derived duration analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact arcade song base. Distribution is derived from encoded timing, not published primary metadata; 126.68-second template is clipped to the 123-second catalog duration."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-2-findings.json",
+      "koreanSearches": [
+        "\"스위트로닉\" \"BPM\"",
+        "site:arca.live \"스위트로닉\" \"120\"",
+        "site:dcinside.com \"스위트로닉\" \"120\""
+      ],
+      "previousDurationOrMainTempoProposal": 120
+    },
+    {
+      "songName": "The Devil",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 130.0,
+        "max": 240.0
+      },
+      "recommendedPrimaryBpm": 240,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "user-directed",
+      "confidence": "high",
+      "basis": "direct",
+      "summary": "240 is the user-directed focal endpoint and the documented decisive ending of the accelerando.",
+      "competingBpms": [
+        130,
+        240
+      ],
+      "limitations": [
+        "240 is the selected focal endpoint, not a claim that the entire accelerando stays at 240 or that this plateau is longest.",
+        "Existing timing-duration context and the original 130–240 range are preserved.",
+        "No useful exact-song DCInside numeric-tempo discussion was found."
+      ],
+      "sources": [
+        {
+          "url": "https://m.namu.moe/w/The%20Devil",
+          "title": "The Devil",
+          "sourceType": "Korean community wiki mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact arcade song; charts are labelled for Phoenix 2, though some difficulty labels lag the local catalog. Tempo/arrangement evidence is song-level."
+        },
+        {
+          "url": "https://namu.moe/w/%ED%9B%84%EC%82%B4?from=%ED%9B%84%EC%82%B4%EA%B3%A1",
+          "title": "후살",
+          "sourceType": "Korean community wiki, related gameplay concept",
+          "language": "ko",
+          "access": "search-snippet",
+          "applicability": "Same wiki ecosystem as the song article, so this is supporting explanation, not an independent consensus source."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/base/cs119.zip",
+          "title": "Pump Pro+ UCS base CS119 — The Devil",
+          "sourceType": "Public music timing template, derived duration analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact song timing base, 104.47 seconds versus 104-second catalog duration; a derived timing interpretation, not a published musical-main statement."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-2-findings.json",
+      "koreanSearches": [
+        "\"마왕\" \"펌프\" \"BPM\" 240",
+        "site:dcinside.com \"마왕\" 펌프 BPM"
+      ],
+      "userDirection": {
+        "recommendedPrimaryBpm": 240,
+        "status": "user-directed",
+        "evidence": "The user explicitly said The Devil should use 240 BPM."
+      },
+      "previousDurationOrMainTempoProposal": null
+    },
+    {
+      "songName": "Transmission",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 100.0,
+        "max": 225.0
+      },
+      "recommendedPrimaryBpm": 169,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "user-directed",
+      "confidence": "high",
+      "basis": "user-direction",
+      "summary": "User-confirmed focal BPM supersedes the previous 225 BPM upper-bound fallback.",
+      "competingBpms": [
+        100,
+        225
+      ],
+      "limitations": [
+        "The focal BPM is user-confirmed. Earlier online sources establish the original range; the original batch findings preserve the superseded fallback and its research limitations."
+      ],
+      "sources": [
+        {
+          "url": "https://namu.moe/w/Transmission(%ED%8E%8C%ED%94%84%20%EC%9E%87%20%EC%97%85)",
+          "title": "Transmission(펌프 잇 업) — Korean community wiki mirror",
+          "sourceType": "community-wiki-music-description",
+          "language": "ko",
+          "evidence": "The exact-song article lists Sakuzyo and100-225. It identifies metric modulation and a resemblance to the composer'sPANDORA PARADOXXX, but offers no numeric section or primary tempo. Last revision shown2026-10-05.",
+          "access": "opened",
+          "applicability": "Exact RISE-origin song; range/genre evidence only. Another song's BPM is not transferred.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://wikiwiki.jp/piujpn/Transmission",
+          "title": "Transmission — Japanese Pump It Up Wiki",
+          "sourceType": "community-wiki",
+          "language": "ja",
+          "evidence": "Exact Sakuzyo RISE metadata gives100-225; the retrieved article has no numeric section analysis.",
+          "access": "opened",
+          "applicability": "Same song; range and identity only, with pre-arcade chart levels.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://steamdb.info/patchnotes/19391529/",
+          "title": "PUMP IT UP RISE0.2.1 official patch-note mirror",
+          "sourceType": "official-update-mirror",
+          "language": "en",
+          "evidence": "The introductory song entry identifies Transmission bySakuzyo at100-225. No main/focal designation is provided.",
+          "access": "opened",
+          "applicability": "Exact original song; authoritative range only.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://gall.dcinside.com/mini/board/view/?id=pumpitup&no=253294",
+          "title": "라이즈에 실라프즈, 리인카네이트, 트랜스미션 같은",
+          "sourceType": "Korean-player-forum",
+          "language": "ko",
+          "evidence": "July2026 post names Transmission while speculating about RISE songs being tied to arcade-linked charts. Retrieved body contains no tempo or defining-section analysis; comment bodies were not exposed in the read.",
+          "access": "opened",
+          "applicability": "Exact song context; relevant forum search negative for BPM evidence.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://www.reddit.com/r/PumpItUp/search/?q=Transmission&restrict_sr=1",
+          "title": "r/PumpItUp native post search: Transmission",
+          "sourceType": "Reddit-native-search",
+          "language": "en",
+          "evidence": "The public native search explicitly returned no matching results.",
+          "access": "opened",
+          "applicability": "Documented negative search result, not numeric evidence.",
+          "retrievedOn": "2026-10-23"
+        },
+        {
+          "url": "https://www.reddit.com/r/PumpItUp/search/?q=Transmission&type=comments&restrict_sr=1",
+          "title": "r/PumpItUp native comment search: Transmission",
+          "sourceType": "Reddit-native-search",
+          "language": "en",
+          "evidence": "The public native comment search explicitly returned no matching results.",
+          "access": "opened",
+          "applicability": "Negative search coverage; does not prove no unindexed discussion exists.",
+          "retrievedOn": "2026-10-23"
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-deep-research-2026-10-23/batch-2-findings.json",
+      "koreanSearches": [
+        "\"트랜스미션\" \"225\" 펌프",
+        "\"트랜스미션\" \"변속\" 펌프",
+        "site:dcinside.com \"트랜스미션\" \"펌프\"",
+        "\"트랜스미션\" site:arca.live 펌프"
+      ],
+      "previousDurationOrMainTempoProposal": null,
+      "resolutionType": "user-confirmed",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "priorDetailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-2-findings.json",
+      "previousResearchSnapshotFile": "output/primary-bpm-deep-research-2026-10-23/research-before-deep-pass.json",
+      "deepResearchedOn": "2026-10-23",
+      "deepSearchLog": [
+        {
+          "query": "\"Transmission\" \"Sakuzyo\" \"BPM\"; \"트랜스미션\" 펌프BPM",
+          "channel": "web-exact-song-numeric",
+          "outcome": "Release note and Japanese/Korean metadata results only; all give100-225."
+        },
+        {
+          "query": "\"Transmission\" \"Sakuzyo\" site:reddit.com; site:reddit.com/r/PumpItUp \"Transmission\"",
+          "channel": "Reddit-index-search",
+          "outcome": "No relevant exact-song numeric analysis; unrelated automotive results excluded."
+        },
+        {
+          "query": "\"Transmission\" \"Sakuzyo\" \"225\"; \"Transmission\" \"Sakuzyo\" \"200\"; \"Transmission\" \"Sakuzyo\" \"150\"",
+          "channel": "web-numeric-probes",
+          "outcome": "Only range-table evidence.200 and150 were search probes and are not asserted to be measured target-song tempos."
+        },
+        {
+          "query": "\"트랜스미션\" site:gall.dcinside.com/mini/board/view",
+          "channel": "Korean-forum-DCInside-index",
+          "outcome": "Found the exact RISE arcade-linkage discussion, opened it, and found no numeric tempo in retrieved body."
+        },
+        {
+          "query": "\"트랜스미션\" \"펌프\" \"후살\"; \"트랜스미션\" \"후반\"",
+          "channel": "Korean-section-analysis-search",
+          "outcome": "No relevant exact-song numeric focal discussion."
+        },
+        {
+          "query": "\"트랜스미션\" \"펌프\" site:arca.live",
+          "channel": "Korean-forum-Arca-index",
+          "outcome": "No usable exact-song numeric focal result."
+        },
+        {
+          "query": "\"Transmission\" \"Sakuzyo\" site:youtube.com",
+          "channel": "video-index-search",
+          "outcome": "No usable indexed numeric section commentary. Existing Nevsister extraction confirms only the range."
+        },
+        {
+          "query": "\"Transmission\" \"펌프\" \"225\"; \"Transmission\" \"Pump It Up\" \"tempo\"",
+          "channel": "Korean-and-English-numeric-web",
+          "outcome": "No exact-song focal section linked to a number; unrelated song/automotive results excluded."
+        },
+        {
+          "query": "\"Transmission\" site:arcadestat.app; site:arcadestat.app/en/pump/tier/d25/; site:arcadestat.app/en/pump/tier/s24/",
+          "channel": "Korean-player-chart-comments-index",
+          "outcome": "Song appears in current tiers, but no exact-song numeric focal comment was retrieved. Directly opened Korean/English tier pages produced a JavaScript shell."
+        },
+        {
+          "query": "\"Transmission\" \"225 BPM\" pump",
+          "channel": "web-exact-number",
+          "outcome": "No primary/focal statement for the exact Sakuzyo song."
+        },
+        {
+          "query": "DCInside PumpItUp native search for 트랜스미션",
+          "channel": "Korean-forum-native-search",
+          "outcome": "Web tool could not open query URL; public HTTP request returned an empty body. Classified as unavailable rather than no results."
+        },
+        {
+          "query": "r/PumpItUp native Transmission posts and comments",
+          "channel": "Reddit-native-search",
+          "outcome": "Both public native searches explicitly returned no matching results.",
+          "sourceUrls": [
+            "https://www.reddit.com/r/PumpItUp/search/?q=Transmission&restrict_sr=1",
+            "https://www.reddit.com/r/PumpItUp/search/?q=Transmission&type=comments&restrict_sr=1"
+          ]
+        },
+        {
+          "query": "\"Transmission\" \"Sakuzyo\" composer; \"Transmission\" \"削除\" \"Pump\"; \"Transmission\" \"Sakuzyo\" メトリック",
+          "channel": "composer-music-and-Japanese-web",
+          "outcome": "Exact soundtrack listing and existing range pages found; no composer numeric focal explanation."
+        },
+        {
+          "query": "Public exact-song simfile/timing search and rayden-61/PIU-Simfiles stepp1-phoenix tree",
+          "channel": "parent-reported-independent-timing-search",
+          "outcome": "Parent checked tree0dc5a57919d1847070337fe3be3e61ad4bb0e721 and global BPMS searches. No exact RISE timing file found; similarly named unrelated files excluded."
+        }
+      ],
+      "userDirection": {
+        "recommendedPrimaryBpm": 169,
+        "confirmedBy": "user",
+        "confirmedOn": "2026-10-24",
+        "confirmation": "transmission should be labeled as 169",
+        "reason": "User-confirmed focal BPM supersedes the previous 225 BPM upper-bound fallback."
+      },
+      "previousResearchDecision": {
+        "recommendedPrimaryBpm": 225,
+        "resolutionType": "upper-bound-fallback",
+        "confidence": "low",
+        "fallbackUsed": true,
+        "fallbackReason": "Korean DCInside/Arca/PIURise and section-specific queries, native Reddit post/comment searches, exact-song Korean/Japanese pages, official release notes, artist/music/numeric searches and public timing searches did not yield a numeric tempo attributable to the defining section. Use225 solely as the user-authorized upper-endpoint fallback. Metric modulation and resemblance toPANDORA PARADOXXX do not establish225 or any other focal BPM."
+      }
+    },
+    {
+      "songName": "Tream Vook of the war",
+      "songType": "Remix",
+      "originalBpmRange": {
+        "min": 184.0,
+        "max": 202.0
+      },
+      "recommendedPrimaryBpm": 202,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "202 is explicitly associated with the post-break drills, jumps and weight-shift challenge.",
+      "competingBpms": [
+        184,
+        202
+      ],
+      "limitations": [
+        "The most explicit focal analysis concerns historical XX D15, corresponding to the inherited lower-double chart now listed as D17; it is not a separate analysis of every current chart.",
+        "The recommendation is a focal-section inference, not an official single-primary metadata field.",
+        "No exact remix UCS timing base was available; a duration majority is not required under the clarified criterion."
+      ],
+      "sources": [
+        {
+          "url": "https://www.namu.moe/w/Tream%20Vook%20of%20the%20war",
+          "title": "Tream Vook of the war",
+          "sourceType": "Korean community wiki mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact remix, including Phoenix 2 charts."
+        },
+        {
+          "url": "https://xx.piugame.com/bbs/board.php?bo_table=jp_notice&wr_id=60",
+          "title": "Pump It Up PRIME Japanese Edition 1.16.0 アップデート開始！!",
+          "sourceType": "Official Andamiro update notice",
+          "language": "ja",
+          "access": "search-snippet",
+          "applicability": "Older official appearance of same remix; range corroboration, not section-duration evidence."
+        },
+        {
+          "url": "https://dark.namu.moe/w/%ED%8E%8C%ED%94%84%20%EC%9E%87%20%EC%97%85%20XX/%EB%82%9C%EC%9D%B4%EB%8F%84%20%ED%91%9C%EA%B8%B0%20%EB%AC%B8%EC%A0%9C",
+          "title": "펌프 잇 업 XX/난이도 표기 문제 — Tream Vook of the war D15",
+          "sourceType": "Korean community chart difficulty analysis, wiki mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Historical XX D15 is the inherited lower-double chart now D17, as the exact-song article records. Direct numeric identification of the defining late challenge."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-2-findings.json",
+      "koreanSearches": [
+        "\"트림 부크 오브 더 워\" BPM",
+        "site:dcinside.com \"트림 북\" BPM",
+        "\"Tream Vook of the war\" BPM 주",
+        "\"Tream Vook of the war\" \"202\" \"후반\""
+      ],
+      "previousDurationOrMainTempoProposal": null
+    },
+    {
+      "songName": "Turkey Virus",
+      "songType": "Remix",
+      "originalBpmRange": {
+        "min": 150.0,
+        "max": 162.0
+      },
+      "recommendedPrimaryBpm": 162,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "medium",
+      "basis": "inference",
+      "summary": "162 is inferred from the decisive final Beethoven Virus section and that constituent tempo.",
+      "competingBpms": [
+        150,
+        162
+      ],
+      "limitations": [
+        "The final Beethoven section's numeric BPM was inferred from constituent metadata and the remix interval; an exact remix timing map was not available.",
+        "Evidence for the defining focal section is strongest for S15; lower charts may emphasize different patterns.",
+        "This is a medium-confidence focal inference, not a directly published main-BPM statement.",
+        "The attempted Turkey Virus Korean wiki song page was inaccessible; the Korean blog was opened successfully."
+      ],
+      "sources": [
+        {
+          "url": "https://reicon.tistory.com/73",
+          "title": "[펌프 잇 업] 9. 터키 바이러스 (Turkey Virus)",
+          "sourceType": "Korean firsthand rhythm-game blog",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact NX Absolute remix; older charts/levels but relevant song structure."
+        },
+        {
+          "url": "https://wikiwiki.jp/piujpn/Turkey%20Virus",
+          "title": "Turkey Virus - 新・Pump It Up Wiki*",
+          "sourceType": "Japanese rhythm-game community wiki",
+          "language": "ja",
+          "access": "opened",
+          "applicability": "Exact remix and current chart identity; no evidence of duration dominance."
+        },
+        {
+          "url": "https://arcadestat.app/en/pump/tier/s15/3155",
+          "title": "Turkey Virus S15 — ArcadeStat",
+          "sourceType": "Firsthand Korean player contributions, search-indexed translation",
+          "language": "ko/en",
+          "access": "search-snippet",
+          "applicability": "Exact Turkey Virus S15. Contributor text was read in indexed search results, including Korean originals; opening the URL returned a generic platform page rather than those contributions. The focal-section identification is supported, while mapping it to 162 remains an inference from constituent metadata."
+        },
+        {
+          "url": "https://seore.org/w/Beethoven%20Virus",
+          "title": "Beethoven Virus",
+          "sourceType": "Korean community wiki mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Constituent tempo supporting the inferred 162 value for Turkey Virus's final Beethoven section; not direct timing of the remix."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-2-findings.json",
+      "koreanSearches": [
+        "\"터키 바이러스\" \"BPM\"",
+        "\"터키 바이러스\" 변속 펌프",
+        "site:dcinside.com \"터키 바이러스\" bpm"
+      ],
+      "previousDurationOrMainTempoProposal": null
+    },
+    {
+      "songName": "Versailles",
+      "songType": "Arcade",
+      "originalBpmRange": {
+        "min": 160.0,
+        "max": 175.0
+      },
+      "recommendedPrimaryBpm": 175,
+      "decisionCriterion": "gameplay-focal-point",
+      "selectionStatus": "researched-proposal",
+      "confidence": "high",
+      "basis": "inference",
+      "summary": "175 carries the sustained late run and returns after the 160 bridge.",
+      "competingBpms": [
+        160
+      ],
+      "limitations": [
+        "The SM map is fan-authored; it is corroborated by an independent UCS base and separate Korean gameplay report.",
+        "The UCS full-duration percentage includes a 49.22-second final-tempo tail assumption; its encoded grid alone still favors 175 strongly.",
+        "No useful DCInside main-tempo discussion was found in the scoped query.",
+        "Indexed player contribution could not be read in a rendered full page through the web tool."
+      ],
+      "sources": [
+        {
+          "url": "https://zenius-i-vanisher.com/simfiles/Z-I-v%20Battle%20Royale%202024/Versailles/Versailles.sm",
+          "title": "Versailles / HyuN & MIIM — public SM timing data",
+          "sourceType": "Fan-authored song timing map",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Fan DDR-style chart set to the same HyuN & MIIM audio; its source page says the audio was cut from video. Not official PIU chart data."
+        },
+        {
+          "url": "https://zenius-i-vanisher.com/v5.2/viewsimfile.php?simfileid=60958",
+          "title": "Versailles - Z-I-v Battle Royale 2024 - Simfiles - ZIv",
+          "sourceType": "Fan timing-map publication metadata",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Provenance for timing map; same author/source, not counted as independent corroboration."
+        },
+        {
+          "url": "https://arcadestat.app/es/pump/tier/s19/609",
+          "title": "Versailles (Pump It Up S19) Constante y nivel de dificultad | ArcadeStat",
+          "sourceType": "Firsthand Korean player contribution, search-indexed translation",
+          "language": "ko/es",
+          "access": "search-snippet",
+          "applicability": "Exact arcade S19; opening /es and /ko versions returned JavaScript-only shells, so contribution evidence is from search results."
+        },
+        {
+          "url": "https://namu.moe/w/Versailles(%ED%8E%8C%ED%94%84%20%EC%9E%87%20%EC%97%85)",
+          "title": "Versailles(펌프 잇 업)",
+          "sourceType": "Korean community wiki mirror",
+          "language": "ko",
+          "access": "opened",
+          "applicability": "Exact arcade song and Phoenix 2 charts; range and sustained-section context only."
+        },
+        {
+          "url": "https://www.pumpproplus.com/downloads/ucs/cs340.zip",
+          "title": "Pump Pro+ UCS base CS340 — Versailles",
+          "sourceType": "Public music timing template, derived duration analysis",
+          "language": "en",
+          "access": "opened",
+          "applicability": "Exact arcade song base. The full-duration percentage assumes 49.22 seconds after template end continue at 175; the separate fan SM map also has no later tempo change."
+        }
+      ],
+      "detailedEvidenceFile": "output/primary-bpm-research-2026-10-23/batch-2-findings.json",
+      "koreanSearches": [
+        "\"베르사이유\" \"펌프\" \"175\"",
+        "\"베르사이유\" 펌프 BPM 변속",
+        "site:dcinside.com \"베르사이유\" \"브픔\"",
+        "\"베르사이유\" \"160\" \"175\" 펌프"
+      ],
+      "previousDurationOrMainTempoProposal": 175
+    }
+  ],
+  "manualPrimaryOverridesFile": "config/phoenix2-song-primary-bpm-overrides.json",
+  "manualPrimaryOverridesSha256": "d11ab17bb7d428f582bfcdf2f9cf39c7ae180a1023bd4e958fd1b8688ec28056",
+  "fallbackPolicy": "Only after deep source research fails to support a more likely focal BPM, use the stored BPM range upper endpoint, explicitly labeled upper-bound-fallback and low confidence. Do not describe a fallback as a sourced focal tempo.",
+  "fallbackPolicyAppliedTo": [
+    "Banya Classic Remix",
+    "Beat of the War 2 - FULL SONG -",
+    "Love Witch",
+    "Neo Catharsis - SHORT CUT -",
+    "PaPa helloizing",
+    "Reincarnate in “A”",
+    "Transmission"
+  ],
+  "deepResearchPass": {
+    "date": "2026-10-23",
+    "completedOnAsiaTokyo": "2026-10-24",
+    "scope": [
+      "Banya Classic Remix",
+      "Beat of the War 2 - FULL SONG -",
+      "Love Witch",
+      "Neo Catharsis - SHORT CUT -",
+      "PaPa helloizing",
+      "Reincarnate in “A”",
+      "Transmission"
+    ],
+    "previousResearchSha256": "678f88884e8e396e260c4b292e3754016ec2818fb55e763b1dcaf43690926edd",
+    "resultsFile": "output/primary-bpm-deep-research-2026-10-23/findings.json",
+    "changeLogFile": "output/primary-bpm-deep-research-2026-10-23/decision-and-change-log.txt",
+    "publicTimingInventoryFile": "output/primary-bpm-deep-research-2026-10-23/public-timing-source-inventory.json"
+  }
+}

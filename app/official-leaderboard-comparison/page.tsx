@@ -54,7 +54,7 @@ function useOfficialPlayer(playerKey: string, index: OfficialComparisonIndex | n
     setLoaded({ requestId, result: { status: "loading" } });
     loadWithGenerationRecovery(index, async catalog => {
       if (!catalog.players.some(player => player.playerKey === playerKey)) throw new Error("This player is no longer in the latest official player list.");
-      const params = new URLSearchParams({ playerKey, generation: catalog.generation });
+      const params = new URLSearchParams({ playerKey, generation: catalog.generation, bpmPolicy:"focal-v1" });
       const data = await readJsonResponse<unknown>(await fetch(`/api/official-comparison?${params}`, { signal: controller.signal, cache: "no-store" }));
       return validateOfficialComparisonPlayer(data, catalog, playerKey);
     }, async () => {
@@ -228,9 +228,9 @@ export default function OfficialLeaderboardComparisonPage() {
   useEffect(() => {
     const controller = new AbortController();
     setIndexError("");
-    fetch("/api/official-comparison/players", { signal: controller.signal, cache: "no-store" })
+    fetch("/api/official-comparison/players?bpmPolicy=focal-v1", { signal: controller.signal, cache: "no-store" })
       .then((response) => readJsonResponse<unknown>(response))
-      .then((data) => { const catalog = validateOfficialComparisonIndex(data); if (!controller.signal.aborted) setIndex(catalog); })
+      .then((data) => { const catalog = validateOfficialComparisonIndex(data, "focal-v1"); if (!controller.signal.aborted) setIndex(catalog); })
       .catch((error: unknown) => { if (!controller.signal.aborted) setIndexError(error instanceof Error ? error.message : "Unable to load official data."); });
     return () => controller.abort();
   }, [indexAttempt]);
@@ -238,9 +238,9 @@ export default function OfficialLeaderboardComparisonPage() {
   const recoverIndex = useCallback((generation: string) => {
     const existing = recoveryRequests.current.get(generation);
     if (existing) return existing;
-    const request = fetch("/api/official-comparison/players", { cache: "no-store" })
+    const request = fetch("/api/official-comparison/players?bpmPolicy=focal-v1", { cache: "no-store" })
       .then(response => readJsonResponse<unknown>(response))
-      .then(value => { const catalog = validateOfficialComparisonIndex(value); setIndex(catalog); return catalog; });
+      .then(value => { const catalog = validateOfficialComparisonIndex(value, "focal-v1"); setIndex(catalog); return catalog; });
     recoveryRequests.current.set(generation, request);
     return request;
   }, []);

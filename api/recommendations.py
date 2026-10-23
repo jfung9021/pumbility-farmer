@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import timedelta
-from typing import Mapping
+from typing import Annotated, Mapping
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -196,7 +196,13 @@ def get_player_recommendations(
     player_key: str = Query(default="", alias="playerKey"),
     mode: str = Query(default=""),
     difficulty: str = Query(default=""),
+    bpm_policy: Annotated[str, Query(alias="bpmPolicy")] = "",
 ):
+    from bpm_metadata_overlay import select_bpm_payload, validate_bpm_policy
+    try:
+        validate_bpm_policy(bpm_policy)
+    except ValueError as error:
+        return JSONResponse(status_code=400, content={"error": str(error)})
     normalized_key = player_key.strip()
     if not normalized_key:
         return JSONResponse(
@@ -260,7 +266,7 @@ def get_player_recommendations(
                     difficulty=selected_difficulty,
                 )
                 return JSONResponse(
-                    content=with_staleness(public_cache, payload),
+                    content=select_bpm_payload(with_staleness(public_cache, payload), bpm_policy),
                     headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
                 )
         else:
@@ -286,7 +292,7 @@ def get_player_recommendations(
             difficulty=selected_difficulty,
         )
         return JSONResponse(
-            content=response,
+            content=select_bpm_payload(response, bpm_policy),
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
     except RecommendationArtifactQueryError as exc:
