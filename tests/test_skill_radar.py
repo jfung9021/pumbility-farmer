@@ -166,7 +166,7 @@ class RadarPolicyTests(unittest.TestCase):
 
     def test_ug_reference_keeps_actual_pg_bonus_and_scale_anchors(self):
         self.assertEqual(METHOD_VERSION,6)
-        self.assertEqual(PROFILE_VERSION,10)
+        self.assertEqual(PROFILE_VERSION,11)
         for mode,level,expected_rating in (("Single",10,0),("Double",11,0),
                 ("Single",25,100),("Double",26,100)):
             charts=[chart(str(i),mode=mode,level=level) for i in range(5)]
@@ -344,7 +344,7 @@ class RadarPolicyTests(unittest.TestCase):
         self.assertEqual(len(members),18)
         self.assertEqual(len(set(members)),18)
 
-    def test_suggestions_prefer_five_charts_in_starting_folder_sorted_by_pumbility(self):
+    def test_suggestions_prefer_ten_charts_in_starting_folder_sorted_by_pumbility(self):
         earned=[chart("e"+str(i),level=18) for i in range(5)]
         candidates=[chart("c"+str(i),level=19) for i in range(12)]
         candidates += [chart("cross",level=19,bpmMin=150,bpmMax=160),chart("wrong",level=20)]
@@ -356,14 +356,14 @@ class RadarPolicyTests(unittest.TestCase):
             display_name="PLAYER",generated_at_utc=STAMP,
             personal_scores=[{"chartId":"c1","score":999999,"plateCode":"PG"}])
         suggestions=response["buckets"][2]["suggestions"]
-        self.assertEqual([row["chartId"] for row in suggestions],["c2","c1","c10","c5","c4"])
+        self.assertEqual([row["chartId"] for row in suggestions],["c2","c1","c10","c5","c4","c9","c3","c8","c6","c0"])
         self.assertTrue(all(row["level"]==19 for row in suggestions))
         self.assertEqual(suggestions[1]["personalScore"],999999)
         self.assertEqual(suggestions[1]["personalPlate"],"PG")
         self.assertNotIn("cross",[row["chartId"] for row in catalog["charts"]])
         self.assertEqual(response["buckets"][0]["suggestions"],[])
 
-    def test_suggestions_fill_higher_folders_then_sort_all_five_by_pumbility(self):
+    def test_suggestions_fill_higher_folders_then_sort_all_available_by_pumbility(self):
         earned=[chart("e"+str(i),level=18) for i in range(5)]
         candidates=[chart("base-a",level=19),chart("base-b",level=19),
             chart("next-a",level=20),chart("next-b",level=20),chart("later",level=21),
@@ -375,9 +375,25 @@ class RadarPolicyTests(unittest.TestCase):
             player_key=KEY,display_name="PLAYER",generated_at_utc=STAMP,
             personal_scores=[{"chartId":"next-a","score":990123,"plateCode":"SG"}])
         suggestions=response["buckets"][2]["suggestions"]
-        self.assertEqual([c["chartId"] for c in suggestions],["next-a","base-b","base-a","later","next-b"])
-        self.assertEqual([c["level"] for c in suggestions],[20,19,19,21,20])
-        self.assertEqual((suggestions[0]["personalScore"],suggestions[0]["personalPlate"]),(990123,"SG"))
+        self.assertEqual([c["chartId"] for c in suggestions],["too-far","next-a","base-b","base-a","later","next-b"])
+        self.assertEqual([c["level"] for c in suggestions],[22,20,19,19,21,20])
+        self.assertEqual((suggestions[1]["personalScore"],suggestions[1]["personalPlate"]),(990123,"SG"))
+
+    def test_ten_suggestions_do_not_change_five_score_ratings_or_grouping(self):
+        earned=[chart("e"+str(i),level=18) for i in range(7)]
+        candidates=[chart("practice"+str(i),level=19) for i in range(12)]
+        charts=earned+candidates
+        rows=[score(c["id"]) for c in earned]
+        with patch("skill_radar.SUGGESTION_LIMIT",5):
+            previous=profile(charts,rows)
+        current=profile(charts,rows)
+        self.assertEqual(len(previous["buckets"][2]["suggestions"]),5)
+        self.assertEqual(len(current["buckets"][2]["suggestions"]),10)
+        self.assertEqual(current["buckets"][2]["selectedCharts"],5)
+        for result in (previous,current):
+            for bucket in result["buckets"]:
+                bucket.pop("suggestions")
+        self.assertEqual(previous,current)
 
     def test_suggestions_skip_empty_folders_and_return_only_existing_charts(self):
         earned=[chart("e"+str(i),level=18) for i in range(5)]
@@ -397,7 +413,7 @@ class RadarPolicyTests(unittest.TestCase):
             tiers_for(earned+candidates,[18.5]*5+[22.9,21.99999,22.0,22.2,22.1,22.5,23.0,21.5]))["buckets"][2]
         self.assertAlmostEqual(bucket["rawEquivalentLevel"],21.2,places=3)
         self.assertEqual(bucket["suggestedLevel"],22)
-        self.assertEqual([c["chartId"] for c in bucket["suggestions"]],["c1","c2","c4","c3","c5"])
+        self.assertEqual([c["chartId"] for c in bucket["suggestions"]],["wrong","c1","c2","c4","c3","c5","c0","c6"])
         for points, expected in ((360.29,22),(360.28,21)):
             boundary=profile(earned,[score(c["id"],pumbility=points) for c in earned])["buckets"][2]
             self.assertEqual(boundary["suggestedLevel"],expected)
@@ -510,7 +526,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_method_and_profile_version_changes_invalidate_cached_profiles(self):
         store=Store()
-        with patch("skill_radar_runtime.METHOD_VERSION",5), patch("skill_radar_runtime.PROFILE_VERSION",9):
+        with patch("skill_radar_runtime.METHOD_VERSION",5), patch("skill_radar_runtime.PROFILE_VERSION",10):
             old_revision=read_skill_radar(store,KEY)
             self.assertIs(old_revision,read_skill_radar(store,KEY))
         current=read_skill_radar(store,KEY)

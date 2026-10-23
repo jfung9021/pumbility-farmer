@@ -2,6 +2,8 @@ export type RadarMode = "singles" | "doubles";
 export type RadarGroup = "weaknesses" | "strengths" | "everythingElse";
 
 export const RADAR_REFERENCE = {grade:"SSS+", plate:"UG", minimumScore:995000} as const;
+export const RADAR_SUGGESTION_LIMIT = 10;
+export const RADAR_INITIAL_SUGGESTIONS = 5;
 
 export interface RadarBpmBucket {
   id: string;
@@ -141,7 +143,7 @@ export function validateSkillRadarResponse(value: unknown, expectedPlayerKey?: s
     keys.add(bucket.key);
     if (![bucket.rawEquivalentLevel, bucket.displayEquivalentLevel, bucket.radarScore, bucket.suggestedLevel].every(finite) || (bucket.rawEquivalentLevel as number) < 0 || !whole(bucket.usableCharts) || !whole(bucket.selectedCharts) || bucket.selectedCharts > 5 || bucket.usableCharts < bucket.selectedCharts || bucket.needsPlays !== (bucket.selectedCharts < 5)) return invalid();
     if (!close(bucket.displayEquivalentLevel as number, Math.max(0, (bucket.rawEquivalentLevel as number) - (bucket.mode === "doubles" ? 1 : 0))) || !close(bucket.radarScore as number, radarScoreForLevel(bucket.displayEquivalentLevel as number, bins.get(bucket.bpmBucketId)!, bucket.mode)) || bucket.suggestedLevel !== Math.max(16, Math.floor((bucket.rawEquivalentLevel as number) + 1.5 + 1e-9))) return invalid();
-    if (!RADAR_GROUPS.some(group => group.key === bucket.group) || !Array.isArray(bucket.suggestions) || bucket.suggestions.length > 5) return invalid();
+    if (!RADAR_GROUPS.some(group => group.key === bucket.group) || !Array.isArray(bucket.suggestions) || bucket.suggestions.length > RADAR_SUGGESTION_LIMIT) return invalid();
     if (!Array.isArray(bucket.contributingCharts) || bucket.contributingCharts.length !== bucket.selectedCharts) return invalid();
     const contributionIds = new Set<string>();
     let contributionCents = 0;

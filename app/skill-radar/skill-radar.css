@@ -52,6 +52,9 @@
 .radar-ladder h3 { align-items: center; color: var(--muted); display: flex; flex-wrap: wrap; font-size: 11px; gap: 6px; justify-content: space-between; margin: 0; padding: 14px; }
 .radar-ladder h3 span { color: var(--ink); font-variant-numeric: tabular-nums; }
 .radar-ladder ol { list-style: none; margin: 0; padding: 0; }
+.radar-ladder-actions { align-items: center; border-top: 1px solid var(--line); display: flex; gap: 12px; justify-content: space-between; padding: 10px 14px; }
+.radar-ladder-actions > span { color: var(--muted); font-size: 11px; }
+.radar-ladder-actions button { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; color: var(--ink); font-size: 12px; min-height: 44px; min-width: 88px; padding: 8px 14px; }
 .radar-chart-row { align-items: center; border-top: 1px solid rgba(255,255,255,.045); display: grid; gap: 10px; grid-template-columns: 46px minmax(0, 1fr) auto 44px; min-width: 0; padding: 12px 14px; }
 .radar-jacket { aspect-ratio: 1; border-radius: 6px; height: 46px; overflow: hidden; width: 46px; }
 .radar-jacket img { height: 100%; object-fit: cover; width: 100%; }

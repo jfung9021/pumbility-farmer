@@ -20,7 +20,7 @@ test("Python profile satisfies the public contract with all eighteen categories 
     assert.equal(bucket.suggestedLevel, Math.max(16, Math.floor(bucket.rawEquivalentLevel + 1.5 + 1e-9)));
     assert.equal(bucket.displayEquivalentLevel, Math.max(0, bucket.rawEquivalentLevel - (bucket.mode === "doubles" ? 1 : 0)));
     assert.equal(bucket.radarScore, radarScoreForLevel(bucket.displayEquivalentLevel, profile.bpmBuckets.find(bin => bin.id === bucket.bpmBucketId)!, bucket.mode));
-    assert.ok(bucket.suggestions.length <= 5);
+    assert.ok(bucket.suggestions.length <= 10);
     assert.ok(bucket.suggestions.every(chart => chart.level >= bucket.suggestedLevel && chart.level <= 30));
     assert.equal(bucket.contributingCharts.length, bucket.selectedCharts);
   }
@@ -161,12 +161,15 @@ test("sparse buckets average their available contributions rather than five slot
   assert.throws(() => validateSkillRadarResponse(changed), /invalid/);
 });
 
-test("recommendations allow five sorted charts from the target and higher folders", () => {
+test("recommendations allow up to ten sorted charts from the target and higher folders", () => {
   const value = structuredClone(fixture);
   const bucket = value.buckets.find((bucket: any) => bucket.mode === "singles" && bucket.suggestedLevel === 19);
-  bucket.suggestions = Array.from({length:5}, (_, index) => ({...bucket.suggestions[0], chartId:`practice-${index}`, level:index === 0 ? 20 : 19, difficulty:index === 0 ? "S20" : "S19", estimatedDifficulty:18.8 + index/10}));
-  assert.equal(validateSkillRadarResponse(value).buckets.find(bucket => bucket.key === "singles:1")!.suggestions.length, 5);
-  bucket.suggestions.push({...bucket.suggestions[4], chartId:"sixth"});
+  const template = bucket.suggestions[0];
+  for (const count of [0, 5, 6, 9, 10]) {
+    bucket.suggestions = Array.from({length:count}, (_, index) => ({...template, chartId:`practice-${index}`, level:index === 0 ? 20 : 19, difficulty:index === 0 ? "S20" : "S19", estimatedDifficulty:18.8 + index/10}));
+    assert.equal(validateSkillRadarResponse(value).buckets.find(bucket => bucket.key === "singles:1")!.suggestions.length, count);
+  }
+  bucket.suggestions.push({...bucket.suggestions[9], chartId:"eleventh"});
   assert.throws(() => validateSkillRadarResponse(value), /invalid/);
   bucket.suggestions.pop();
   bucket.suggestions[0].level = 18;
