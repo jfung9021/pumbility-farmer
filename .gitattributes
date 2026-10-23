@@ -1,3 +1,4 @@
+*.pdf binary
 # These provenance documents pin the exact bytes of one another with SHA-256.
 # Preserve their original line endings across Windows and Linux checkouts.
 config/phoenix2-song-*.json -text
