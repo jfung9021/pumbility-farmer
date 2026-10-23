@@ -113,7 +113,7 @@ local filesystem tracing warnings; the build succeeds. The older local snapshot
 roster differs from the later frozen research catalog; no charts were inserted
 into that capture merely to match the newer count.
 
-Activation order for a later production release
+Original activation plan (completed by the authorized release below)
 
 1. Retain the current pointers and compiled input hashes for rollback. Deploy
    backend support for the focal-v1 selector and compiled metadata first.
@@ -125,7 +125,52 @@ Activation order for a later production release
    and prepared matching artifact pointers. Apply that plan under the lock.
 4. Release the frontend requesting focal-v1, then verify live list/details,
    Jonathan's radar and official comparison. Never use the full importer for this
-   metadata-only migration. No production step above was executed in this task.
+   metadata-only migration.
+
+Authorized production release, 2026-10-24 JST
+
+The owner subsequently requested push, merge and production deployment after
+mobile/Appassionata QA. PR #146 was prepared from current production main,
+including its ten radar suggestions, More control, and schema-60 projections.
+The initial hosted build exposed Git line-ending conversion of byte-hashed
+authority files. .gitattributes now preserves their exact provenance bytes;
+the next hosted frontend/backend build passed without changing the semantic
+metadata revision.
+
+The actual production roster contains all4847 planned Phoenix2 charts. A saved,
+hashed metadata plan pins every chart revision and the publication pointers.
+All4847 charts gained focal/song-variant metadata;100 charts also received the
+previously approved display-interval additions/corrections. The hosted release
+used the same migration plan/resolver and temporal-revision statements, with
+batched execution under the publication lock and one transaction. The complete
+plan was reconstructed and matched before applying, and every resulting chart
+payload hash was checked before commit. Scores, players, identities, consent,
+chart IDs and numerical fitted tier values were not rewritten. The local CLI's
+loopback guard remains intact. Authorized linked-project SQL access supplied a
+temporary least-privilege release login, removed after each operation; no
+production environment variable or runtime credential was changed.
+
+Official focal artifacts were derived from the actual hosted legacy generation,
+preserving5690 players,1389 charts and355633 scores. All5690 immutable profile
+hashes were read back before promoting the matching focal-v1 index in the
+metadata transaction. The legacy official index remained unchanged.
+Runtime metadata revision:
+60a50c007ed1448998fe4bec9006b3a2edf72459a6344e9b2eedd6f3780f40ad
+Production migration plan SHA256:
+606d3fcbc759f65813b49e3079a9363ba24542c63dff18a82e9c38a823757627
+Hosted official focal generation:
+6d0f5e37a603e1d161371007c463fe74737b55514294638db8ce7583df2a9cc0
+
+Release validation: the production Next build/typecheck passed;321 frontend
+tests passed initially and the3 schema-projection failures passed after the
+focused schema-60 field repair (16 affected tests). The affected Python sweep
+passed285 of288 cases initially; its2 projection errors passed after that same
+repair (10 affected tests). The remaining latency fixture mismatch is the
+documented pre-existing issue above. Foundation/migration/analyzer checks also
+passed. The hosted preview returned the approved chart values and Jonathan's
+method-7 profile passed the actual frontend validator. Mobile checks already
+cover Appassionata at320/390/430px in grid/list/dialog, with no label collision.
+Post-merge production smoke results are recorded with PR #146.
 
 Reproducible commands and source details are also documented in README.md.
 Machine-readable inventory, hashes and evidence: verification.json.
