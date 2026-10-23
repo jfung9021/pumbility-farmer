@@ -530,6 +530,9 @@ export interface ChartResult {
   stepArtist: string | null;
   bpmMin?: number | null;
   bpmMax?: number | null;
+  /** Full display endpoints remain separate from the numerical focal tempo. */
+  bpmFocal?: number | null;
+  songType?: string;
   estimatedDifficulty: number | null;
   officialEvidence?: OfficialTierEvidence;
   officialContributors?: number;
@@ -638,7 +641,16 @@ export interface ModeSummary {
   folders: Record<string, FolderSummary>;
 }
 
+export interface BpmMetadataIdentity {
+  bpmMetadataVersion: 1;
+  bpmPolicy: "focal-v1";
+  bpmMetadataRevision: string;
+  baseGeneratedAtUtc?: string;
+  basePublicPayloadSha256?: string;
+}
+
 export interface AnalysisPayload {
+  bpmMetadata?: BpmMetadataIdentity;
   /** Compact list rows keep calculation evidence in the on-demand chart route. */
   tierListView?: { version: 1; kind: "list"; detailsAvailable: boolean; detailsPrefix?: string; detailsGeneratedAtUtc?: string };
   schemaVersion?: number;
@@ -675,6 +687,7 @@ export interface AnalysisPayload {
 }
 
 export interface TierChartDetailsResponse {
+  bpmMetadata?: BpmMetadataIdentity;
   generatedAtUtc: string;
   chart: ChartResult;
 }
@@ -732,6 +745,9 @@ export interface RecommendationChartEstimate {
   stepArtist: string | null;
   bpmMin?: number | null;
   bpmMax?: number | null;
+  /** Full display endpoints remain separate from the numerical focal tempo. */
+  bpmFocal?: number | null;
+  songType?: string;
   estimatedDifficulty: number;
   difficultyModelContinuous?: number | null;
   difficultyModelSignal?: number | null;
@@ -781,6 +797,8 @@ export interface RecommendationTopScore {
   stepArtist: string | null;
   bpmMin: number | null;
   bpmMax: number | null;
+  bpmFocal?: number | null;
+  songType?: string;
   estimatedDifficulty: number | null;
   difficultyDelta: number | null;
   difficultyCi95Low: number | null;
@@ -905,6 +923,7 @@ export interface RecommendationPlayersResponse {
 }
 
 export interface PlayerRecommendationsResponse {
+  bpmMetadata?: BpmMetadataIdentity;
   generatedAtUtc: string;
   recommendationsGeneratedAtUtc?: string;
   modelGeneratedAtUtc?: string;

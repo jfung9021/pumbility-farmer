@@ -105,7 +105,7 @@ def compact_tier_payload(payload: Mapping[str, Any], *, details_prefix: str | No
     """Project validated data without recalculating or rounding any tier values."""
     if payload.get("tierListView", {}).get("kind") == "list":
         return dict(payload)
-    result = _pick(payload, ["schemaVersion", "generatedAtUtc", "mix", "relativeGroups", "effectBands"])
+    result = _pick(payload, ["schemaVersion", "generatedAtUtc", "mix", "relativeGroups", "effectBands", "bpmMetadata"])
     summary = payload.get("summary", {})
     method = summary.get("method", {})
     compact_method = _pick(method, FIELDS["method"])

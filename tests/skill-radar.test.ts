@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -7,6 +7,36 @@ import { readLocalSkillRadar, readLocalSkillRadarPlayers } from "../lib/local-sk
 import { radarAxisLabelLayout, radarPlayerFromUrl, radarPlayerUrl, radarPoint, radarScoreForLevel, validateSkillRadarResponse } from "../lib/skill-radar.ts";
 
 const fixture = JSON.parse(await readFile(new URL("./fixtures/skill-radar-profile.json", import.meta.url), "utf8"));
+
+function focalFixture() {
+  const value = structuredClone(fixture);
+  Object.assign(value, {methodVersion:7,bpmMetadataVersion:1,bpmPolicy:"focal-v1",bpmMetadataRevision:"a".repeat(64)});
+  for (const bucket of value.buckets) for (const chart of bucket.suggestions) chart.bpmFocal = chart.bpmMin;
+  return value;
+}
+
+test("focal radar method has an explicit strict contract and preserves full-range suggestions", () => {
+  const value = focalFixture();
+  const bucket = value.buckets.find((bucket: any) => bucket.bpmBucketId === "2" && bucket.mode === "singles");
+  assert.ok(bucket);
+  bucket.suggestions = [structuredClone(value.buckets.find((bucket: any) => bucket.suggestions.length).suggestions[0])];
+  Object.assign(bucket.suggestions[0], {bpmMin:100,bpmMax:225,bpmFocal:169});
+  assert.equal(validateSkillRadarResponse(value).methodVersion, 7);
+  for (const mutate of [
+    (profile: any) => {delete profile.bpmMetadataRevision;},
+    (profile: any) => {profile.bpmMetadataRevision = "bad";},
+    (profile: any) => {profile.bpmPolicy = "legacy";},
+    (profile: any) => {profile.buckets.find((bucket: any) => bucket.bpmBucketId === "2" && bucket.suggestions.length).suggestions[0].bpmFocal = 170;},
+    (profile: any) => {profile.buckets.find((bucket: any) => bucket.suggestions.length).suggestions[0].privateEvidence = [];},
+  ]) {
+    const broken = structuredClone(value); mutate(broken);
+    assert.throws(() => validateSkillRadarResponse(broken), /invalid/);
+  }
+  const legacy = structuredClone(fixture);
+  assert.throws(() => validateSkillRadarResponse(legacy, undefined, "focal-v1"), /invalid/);
+  legacy.bpmPolicy = "focal-v1";
+  assert.throws(() => validateSkillRadarResponse(legacy), /invalid/);
+});
 
 test("Python profile satisfies the public contract with all eighteen categories and exact mappings", () => {
   const profile = validateSkillRadarResponse(fixture, fixture.player.playerKey);
@@ -274,5 +304,32 @@ test("local reader accepts the shared DTO, rejects traversal and fails on corrup
   } finally {
     assert.equal(path.dirname(path.resolve(directory)), path.resolve(tmpdir()));
     await rm(directory, {recursive:true, force:true});
+  }
+});
+
+test("focal local reader pins pointer, manifest, roster and profile to one complete generation", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "piu-focal-radar-"));
+  try {
+    const directory = path.join(root,"players");
+    const profile = focalFixture();
+    const key = profile.player.playerKey;
+    const identity = {bpmMetadataVersion:1,bpmPolicy:"focal-v1",bpmMetadataRevision:profile.bpmMetadataRevision};
+    const generation = "b".repeat(64);
+    const focalRoot = path.join(root,"focal-v1");
+    const target = path.join(focalRoot,"generations",generation);
+    await mkdir(path.join(target,"players"),{recursive:true});
+    await writeFile(path.join(focalRoot,"current.json"),JSON.stringify({generation,...identity}));
+    await writeFile(path.join(target,"manifest.json"),JSON.stringify({generation,...identity,methodVersion:7,profileVersion:12,players:[key]}));
+    await writeFile(path.join(target,"players.json"),JSON.stringify({generation,...identity,generatedAtUtc:profile.generatedAtUtc,players:[{...profile.player,phoenix2ScoreCount:100}]}));
+    await writeFile(path.join(target,"players",`${key}.json`),JSON.stringify(profile));
+    assert.equal((await readLocalSkillRadar(key,directory,undefined,"focal-v1")).methodVersion,7);
+    assert.equal((await readLocalSkillRadarPlayers(path.join(root,"players.json"),"focal-v1")).players.length,1);
+    await writeFile(path.join(target,"players",`${key}.json`),JSON.stringify({...profile,bpmMetadataRevision:"c".repeat(64)}));
+    await assert.rejects(readLocalSkillRadar(key,directory,undefined,"focal-v1"),/does not match/);
+    await writeFile(path.join(focalRoot,"current.json"),JSON.stringify({generation:"../private",...identity}));
+    await assert.rejects(readLocalSkillRadar(key,directory,undefined,"focal-v1"),/generation is invalid/);
+  } finally {
+    assert.equal(path.dirname(path.resolve(root)),path.resolve(tmpdir()));
+    await rm(root,{recursive:true,force:true});
   }
 });

@@ -11,7 +11,9 @@ from phoenix2_sync import merge_best_scores
 from pumbility_contract import (combined_tier_blob_path, find_player_metadata,
     recommendation_blob_path, recommendation_phoenix2_shard_path, recommendation_player_state_path)
 from pumbility_contract import player_refresh_enabled
-from skill_radar import (BPM_BUCKETS, METHOD_VERSION, PROFILE_VERSION, build_skill_radar, build_suggestion_catalog, content_digest)
+from skill_radar import (BPM_BUCKETS, METHOD_VERSION, PROFILE_VERSION, FOCAL_METHOD_VERSION,
+    FOCAL_PROFILE_VERSION, build_skill_radar, build_suggestion_catalog, content_digest, validate_bpm_policy)
+from song_bpm_metadata import bpm_metadata_identity, enrich_charts_bpm
 from tier_scores import _sync_time, public_tier_scores
 
 SKILL_METADATA_PATH = "analysis/private/skill-radar/phoenix2-metadata.json"
@@ -30,7 +32,8 @@ class SkillRadarIneligibleError(ValueError):
     pass
 
 
-def read_skill_radar_players(store):
+def read_skill_radar_players(store, *, bpm_policy=None):
+    focal = validate_bpm_policy(bpm_policy)
     index = store.get_json(recommendation_blob_path())
     if index is None:
         raise RuntimeError("The player list is unavailable.")
@@ -44,18 +47,26 @@ def read_skill_radar_players(store):
             "eligibility": {mode: bool(row.get("eligibility", {}).get(mode)) for mode in ("singles", "doubles", "coop")},
             "phoenix2ScoreCount": count})
     return {"generatedAtUtc": index.get("generatedAtUtc"),
+        **(bpm_metadata_identity() if focal else {}),
         "refreshSupported": player_refresh_enabled(index),
         "method": {"minimumPhoenix2Scores": MINIMUM_PHOENIX2_SCORES}, "players": players}
 
 
-def skill_metadata(charts):
+def skill_metadata(charts, *, bpm_policy=None):
     """All chart levels, with no player state or history in the metadata object."""
-    fields = ("id", "type", "level", "songName", "bpmMin", "bpmMax", "imageUrl")
-    return {"schemaVersion": 1, "charts": [{key: row.get(key) for key in fields}
+    focal = validate_bpm_policy(bpm_policy)
+    if focal:
+        charts = enrich_charts_bpm(charts, mix="Phoenix2")
+    fields = ("id", "type", "level", "songName", "songType", "bpmMin", "bpmMax", "bpmFocal", "imageUrl")
+    return {"schemaVersion": 1, **(bpm_metadata_identity() if focal else {}), "charts": [{key: row.get(key) for key in fields}
         for row in charts if row.get("type") in ("Single", "Double")]}
 
 
-def read_skill_radar(store, player_key):
+def read_skill_radar(store, player_key, *, bpm_policy=None):
+    focal = validate_bpm_policy(bpm_policy)
+    identity = bpm_metadata_identity() if focal else {}
+    method_version = FOCAL_METHOD_VERSION if focal else METHOD_VERSION
+    profile_version = FOCAL_PROFILE_VERSION if focal else PROFILE_VERSION
     if not PLAYER_KEY.fullmatch(player_key):
         raise ValueError("A valid playerKey is required.")
     index = store.get_json(recommendation_blob_path())
@@ -81,24 +92,28 @@ def read_skill_radar(store, player_key):
     all_metadata = loader() if callable(loader) else store.get_json(SKILL_METADATA_PATH)
     if not isinstance(all_metadata, Mapping) or not isinstance(all_metadata.get("charts"), list):
         raise RuntimeError("The all-level Phoenix 2 chart metadata is unavailable.")
-    charts = all_metadata["charts"]
+    if focal and any(key in all_metadata and all_metadata[key] != value for key, value in identity.items()):
+        raise RuntimeError("The Skill Radar metadata BPM revision does not match.")
+    charts = enrich_charts_bpm(all_metadata["charts"], mix="Phoenix2") if focal else all_metadata["charts"]
     revision_reader = getattr(store, "artifact_revision", None)
     tier_revision = revision_reader(combined_tier_blob_path()) if callable(revision_reader) else None
-    catalog_key = content_digest({"method": METHOD_VERSION, "metadata": charts, "tier": tier_revision}) if tier_revision else None
+    catalog_key = content_digest({"method": method_version, "bpm": identity, "metadata": charts, "tier": tier_revision}) if tier_revision else None
     with _cache_lock:
         catalog = _catalog_cache.get(catalog_key) if catalog_key else None
     if catalog is None:
         tiers = store.get_json(combined_tier_blob_path())
         if tiers is None or not any("sssplus" in row.get("pumbilityVariants", {}) for mode in ("singles", "doubles") for row in tiers.get(mode, [])):
             raise RuntimeError("The SSS+ Pumbility analysis is unavailable.")
-        catalog = build_suggestion_catalog(tiers, charts)
+        if focal and any(key in tiers and tiers[key] != value for key, value in identity.items()):
+            raise RuntimeError("The Skill Radar tier BPM revision does not match.")
+        catalog = build_suggestion_catalog(tiers, charts, bpm_policy=focal)
         if catalog_key:
             with _cache_lock:
                 _catalog_cache[catalog_key] = catalog
                 _catalog_cache.move_to_end(catalog_key)
                 while len(_catalog_cache) > 8:
                     _catalog_cache.popitem(last=False)
-    revision = content_digest({"method": METHOD_VERSION, "profile": PROFILE_VERSION, "playerKey": player_key, "scores": scores,
+    revision = content_digest({"method": method_version, "profile": profile_version, "bpm": identity, "playerKey": player_key, "scores": scores,
         "bpmCalibration": BPM_BUCKETS,
         "metadata": catalog["metadataRevision"], "tier": catalog["tierIdentity"],
         "playerRevision": [(source or {}).get("lastSyncedAtUtc") for source in (base, live)],
@@ -114,7 +129,7 @@ def read_skill_radar(store, player_key):
         display_name=str(metadata.get("displayName") or metadata.get("username") or "Player"),
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
         player_synced_at_utc=_sync_time((base or {}).get("lastSyncedAtUtc"), (live or {}).get("lastSyncedAtUtc")),
-        personal_scores=personal)
+        personal_scores=personal, bpm_policy=focal)
     with _cache_lock:
         _cache[revision] = profile
         _cache.move_to_end(revision)

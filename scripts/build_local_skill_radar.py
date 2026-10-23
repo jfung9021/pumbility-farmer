@@ -15,8 +15,10 @@ sys.path.insert(0, str(ROOT))
 from piu_misgrade_analyzer import load_snapshot
 from piu_recommendations import public_player_key
 from phoenix2_sync import merge_best_scores
-from skill_radar import METHOD_VERSION, build_skill_radar, build_suggestion_catalog
+from skill_radar import (METHOD_VERSION, PROFILE_VERSION, FOCAL_METHOD_VERSION, FOCAL_PROFILE_VERSION,
+    build_skill_radar, build_suggestion_catalog, content_digest, validate_bpm_policy)
 from skill_radar_runtime import MINIMUM_PHOENIX2_SCORES, skill_metadata
+from song_bpm_metadata import bpm_metadata_identity, enrich_charts_bpm
 from tier_scores import public_tier_scores, _sync_time
 
 
@@ -28,14 +30,22 @@ def write_json(path, value):
     os.replace(temp, path)
 
 
-def build(source_root, output_dir, *, tiers_path=None, player_key=None):
+def build(source_root, output_dir, *, tiers_path=None, player_key=None, bpm_policy=None):
+    focal = validate_bpm_policy(bpm_policy)
+    if focal and player_key is not None:
+        raise ValueError("A focal BPM generation must include every eligible player; omit --player-key.")
+    identity = bpm_metadata_identity() if focal else {}
     data = source_root/".local-data/piu-scores"
     players, charts, scores = load_snapshot(data/"phoenix2/current")
+    if focal:
+        charts = enrich_charts_bpm(charts, mix="Phoenix2")
     tiers_path = tiers_path or data/"combined/experiments/submitted-sssplus-calibration/web_results.json"
     tiers = json.loads(tiers_path.read_text(encoding="utf-8"))
     if not any("sssplus" in row.get("pumbilityVariants", {}) for mode in ("singles", "doubles") for row in tiers.get(mode, [])):
         raise ValueError("Build the SSS+ Pumbility analysis before generating Skill Radar.")
-    catalog = build_suggestion_catalog(tiers, charts)
+    if focal and any(key in tiers and tiers[key] != value for key, value in identity.items()):
+        raise ValueError("The tier payload BPM metadata revision does not match.")
+    catalog = build_suggestion_catalog(tiers, charts, bpm_policy=focal)
     del tiers
     gc.collect()
     named = {public_player_key(row.get("playerId", row.get("userId"))): row for row in players
@@ -56,7 +66,12 @@ def build(source_root, output_dir, *, tiers_path=None, player_key=None):
     del scores
     allowed = {str(row.get("id", row.get("chartId"))) for row in charts}
     created = datetime.now(timezone.utc).isoformat()
-    write_json(output_dir/"metadata.json", skill_metadata(charts))
+    publication_root = output_dir/focal if focal else output_dir
+    generation = content_digest({"bpmMetadata": identity, "catalog": catalog,
+        "players": sorted(named), "generatedAtUtc": created}) if focal else None
+    if focal:
+        output_dir = publication_root/"generations"/generation
+    write_json(output_dir/"metadata.json", skill_metadata(charts, bpm_policy=focal))
     write_json(output_dir/"suggestion-catalog.json", catalog)
     counts = []
     public_players = []
@@ -70,7 +85,7 @@ def build(source_root, output_dir, *, tiers_path=None, player_key=None):
         profile = build_skill_radar(charts, rows, catalog, player_key=key,
             display_name=str(label.get("displayName") or label.get("username") or player["username"]),
             generated_at_utc=created, player_synced_at_utc=_sync_time(player.get("lastSyncedAtUtc")),
-            personal_scores=public_tier_scores(merge_best_scores([], rows, player_id=internal), allowed))
+            personal_scores=public_tier_scores(merge_best_scores([], rows, player_id=internal), allowed), bpm_policy=focal)
         write_json(output_dir/"players"/(key+".json"), profile)
         counts.append(key)
         public_players.append({"playerKey": key, "username": str(player["username"]),
@@ -78,11 +93,18 @@ def build(source_root, output_dir, *, tiers_path=None, player_key=None):
             "eligibility": {mode: bool(label.get("eligibility", {}).get(mode)) for mode in ("singles", "doubles", "coop")}})
     public_players.sort(key=lambda row: (row["displayName"].casefold(), row["playerKey"]))
     write_json(output_dir/"players.json", {"generatedAtUtc": created, "refreshSupported": False,
+        **identity, **({"generation": generation} if focal else {}),
         "method": {"minimumPhoenix2Scores": MINIMUM_PHOENIX2_SCORES}, "players": public_players})
-    report = {"methodVersion": METHOD_VERSION, "generatedAtUtc": created, "tierGeneratedAtUtc": catalog["tierGeneratedAtUtc"],
+    report = {"methodVersion": FOCAL_METHOD_VERSION if focal else METHOD_VERSION,
+        **({"profileVersion": FOCAL_PROFILE_VERSION, "generation": generation, **identity} if focal else {}),
+        "generatedAtUtc": created, "tierGeneratedAtUtc": catalog["tierGeneratedAtUtc"],
         "players": counts, "allLevelCharts": len(charts), "ratedSuggestions": len(catalog["charts"]),
         "scoreFetches": 0, "modelRefits": 0}
     write_json(output_dir/"manifest.json", report)
+    if focal:
+        # This is the only mutable publication pointer. Interrupted staging leaves
+        # the previous complete generation selected.
+        write_json(publication_root/"current.json", {"generation": generation, **identity})
     return report
 
 
@@ -92,8 +114,10 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=ROOT/".local-data/piu-scores/skill-radar")
     parser.add_argument("--tiers", type=Path)
     parser.add_argument("--player-key")
+    parser.add_argument("--bpm-policy", choices=("focal-v1",))
     args = parser.parse_args()
-    report = build(args.source_root.resolve(), args.output_dir.resolve(), tiers_path=args.tiers, player_key=args.player_key)
+    report = build(args.source_root.resolve(), args.output_dir.resolve(), tiers_path=args.tiers,
+        player_key=args.player_key, bpm_policy=args.bpm_policy)
     print(json.dumps({key: len(value) if key == "players" else value for key, value in report.items()}, sort_keys=True))
     return 0
 

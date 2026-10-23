@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { selectBpmPayload, validateBpmPolicy } from "../../../lib/server-song-bpm";
 import { tierBrowserJson } from "../../../lib/tier-browser-payload";
 
 import {
@@ -12,7 +13,11 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const bpmPolicy = request.nextUrl.searchParams.get("bpmPolicy");
+  try { validateBpmPolicy(bpmPolicy); } catch (error) {
+    return NextResponse.json({error: (error as Error).message}, {status: 400});
+  }
   if (!localAnalysisEnabled()) {
     return NextResponse.json(
       { error: "Local analysis mode is disabled." },
@@ -21,7 +26,7 @@ export async function GET() {
   }
   try {
     const payload = await readLocalCombinedAnalysisPayload();
-    return new Response(tierBrowserJson(payload), {
+    return new Response(tierBrowserJson(selectBpmPayload(payload, bpmPolicy)), {
       headers: { "Cache-Control": "no-store, max-age=0", "Content-Type": "application/json; charset=utf-8" },
     });
   } catch (error) {

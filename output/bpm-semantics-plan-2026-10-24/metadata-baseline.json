@@ -1,0 +1,779 @@
+{
+  "date": "2026-10-24",
+  "kind": "Read-only planning baseline; no runtime metadata activated",
+  "inputFiles": {
+    "verifiedRanges": {
+      "path": "config/phoenix2-song-bpm.json",
+      "sha256": "072552da03d1ec3ca7397ed877ec79443e90b5d7c42cd65c1114a4b6825f7cc2"
+    },
+    "rangeUserOverrides": {
+      "path": "config/phoenix2-song-bpm-overrides.json",
+      "sha256": "0fa8daba9c6c94d3fc72ce18793a28d0fa364c886ebdcd476b55e340c001c180"
+    },
+    "focalResearch": {
+      "path": "config/phoenix2-song-primary-bpm-research.json",
+      "sha256": "da22df2278eaf1f6b9c15dd79c81e896d5a5c0e159c89383f8a6dec7a00ea929"
+    },
+    "focalUserOverrides": {
+      "path": "config/phoenix2-song-primary-bpm-overrides.json",
+      "sha256": "d11ab17bb7d428f582bfcdf2f9cf39c7ae180a1023bd4e958fd1b8688ec28056"
+    },
+    "frozenSourceCatalog": {
+      "path": "output/phoenix2-bpm-ranges-2026-10-23/source-catalog.json",
+      "sha256": "33962d9cdc24aaa62b398ff1deab3b5f565ecdf4bd5a8f349905133447fd4741"
+    }
+  },
+  "summary": {
+    "songs": 675,
+    "charts": 4847,
+    "fixedBpmSongs": 643,
+    "rangedBpmSongs": 32,
+    "rangeAdditions": 7,
+    "rangeCorrections": 9,
+    "chartsWithAddedOrCorrectedDisplayMetadata": 100,
+    "currentFallbackEntries": 0,
+    "allSongAndVariantKeysUnique": true,
+    "allChartJoinsExactAndCovered": true,
+    "all675FocalValuesValidWithinDisplayRange": true
+  },
+  "rangeCorrectionsAndAdditions": [
+    {
+      "songName": "Barber's Madness",
+      "songType": "Arcade",
+      "upstreamBpm": null,
+      "displayBpmRange": {
+        "min": 195.0,
+        "max": 195.0
+      },
+      "bpmFocal": 195.0,
+      "changeType": "added",
+      "chartCount": 8
+    },
+    {
+      "songName": "Dignity - FULL SONG -",
+      "songType": "FullSong",
+      "upstreamBpm": null,
+      "displayBpmRange": {
+        "min": 195.0,
+        "max": 195.0
+      },
+      "bpmFocal": 195.0,
+      "changeType": "added",
+      "chartCount": 4
+    },
+    {
+      "songName": "Euphorianic - SHORT CUT -",
+      "songType": "ShortCut",
+      "upstreamBpm": null,
+      "displayBpmRange": {
+        "min": 140.0,
+        "max": 140.0
+      },
+      "bpmFocal": 140.0,
+      "changeType": "added",
+      "chartCount": 6
+    },
+    {
+      "songName": "HUSH - FULL SONG -",
+      "songType": "FullSong",
+      "upstreamBpm": {
+        "min": 82.0,
+        "max": 82.0
+      },
+      "displayBpmRange": {
+        "min": 81.5,
+        "max": 81.5
+      },
+      "bpmFocal": 81.5,
+      "changeType": "adjusted",
+      "chartCount": 2
+    },
+    {
+      "songName": "Hyacinth",
+      "songType": "Arcade",
+      "upstreamBpm": {
+        "min": 193.0,
+        "max": 193.0
+      },
+      "displayBpmRange": {
+        "min": 192.0,
+        "max": 192.0
+      },
+      "bpmFocal": 192.0,
+      "changeType": "adjusted",
+      "chartCount": 8
+    },
+    {
+      "songName": "Love is a Danger Zone 2 Try To B.P.M",
+      "songType": "Remix",
+      "upstreamBpm": null,
+      "displayBpmRange": {
+        "min": 140.0,
+        "max": 169.0
+      },
+      "bpmFocal": 169,
+      "changeType": "added",
+      "chartCount": 4
+    },
+    {
+      "songName": "Meteo5cience (GADGET mix)",
+      "songType": "Remix",
+      "upstreamBpm": null,
+      "displayBpmRange": {
+        "min": 140.0,
+        "max": 140.0
+      },
+      "bpmFocal": 140.0,
+      "changeType": "added",
+      "chartCount": 4
+    },
+    {
+      "songName": "Moment Day",
+      "songType": "Arcade",
+      "upstreamBpm": {
+        "min": 155.0,
+        "max": 155.0
+      },
+      "displayBpmRange": {
+        "min": 158,
+        "max": 158
+      },
+      "bpmFocal": 158,
+      "changeType": "adjusted",
+      "chartCount": 11
+    },
+    {
+      "songName": "Phantom",
+      "songType": "Arcade",
+      "upstreamBpm": {
+        "min": 140.0,
+        "max": 140.0
+      },
+      "displayBpmRange": {
+        "min": 136.0,
+        "max": 136.0
+      },
+      "bpmFocal": 136.0,
+      "changeType": "adjusted",
+      "chartCount": 8
+    },
+    {
+      "songName": "Pneumonoultramicroscopicsilicovolcanoconiosis ft. Kagamine Len/GUMI",
+      "songType": "Arcade",
+      "upstreamBpm": null,
+      "displayBpmRange": {
+        "min": 156.0,
+        "max": 156.0
+      },
+      "bpmFocal": 156.0,
+      "changeType": "added",
+      "chartCount": 4
+    },
+    {
+      "songName": "She Likes Pizza",
+      "songType": "Arcade",
+      "upstreamBpm": {
+        "min": 229.5,
+        "max": 229.5
+      },
+      "displayBpmRange": {
+        "min": 230.0,
+        "max": 230.0
+      },
+      "bpmFocal": 230.0,
+      "changeType": "adjusted",
+      "chartCount": 6
+    },
+    {
+      "songName": "Simon Says, EURODANCE!! (feat. Sara☆M)",
+      "songType": "Arcade",
+      "upstreamBpm": {
+        "min": 180.0,
+        "max": 180.0
+      },
+      "displayBpmRange": {
+        "min": 157.0,
+        "max": 157.0
+      },
+      "bpmFocal": 157.0,
+      "changeType": "adjusted",
+      "chartCount": 9
+    },
+    {
+      "songName": "Spooky Macaron",
+      "songType": "Arcade",
+      "upstreamBpm": {
+        "min": 201.0,
+        "max": 201.0
+      },
+      "displayBpmRange": {
+        "min": 200.0,
+        "max": 200.0
+      },
+      "bpmFocal": 200.0,
+      "changeType": "adjusted",
+      "chartCount": 8
+    },
+    {
+      "songName": "Trotpris - SHORT CUT -",
+      "songType": "ShortCut",
+      "upstreamBpm": {
+        "min": 156.12,
+        "max": 156.12
+      },
+      "displayBpmRange": {
+        "min": 156.118,
+        "max": 156.118
+      },
+      "bpmFocal": 156.118,
+      "changeType": "adjusted",
+      "chartCount": 2
+    },
+    {
+      "songName": "Violet Perfume",
+      "songType": "Arcade",
+      "upstreamBpm": {
+        "min": 145.0,
+        "max": 145.0
+      },
+      "displayBpmRange": {
+        "min": 140.0,
+        "max": 140.0
+      },
+      "bpmFocal": 140.0,
+      "changeType": "adjusted",
+      "chartCount": 9
+    },
+    {
+      "songName": "Viyella's Nightmare",
+      "songType": "Arcade",
+      "upstreamBpm": null,
+      "displayBpmRange": {
+        "min": 220.0,
+        "max": 220.0
+      },
+      "bpmFocal": 220.0,
+      "changeType": "added",
+      "chartCount": 7
+    }
+  ],
+  "rangedSongFocalMappings": [
+    {
+      "songName": "* this game does not exist *",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 40.0,
+        "max": 240.0
+      },
+      "bpmFocal": 230,
+      "bucket": "220+",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 9
+    },
+    {
+      "songName": "Alice in Misanthrope",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 154.0,
+        "max": 174.0
+      },
+      "bpmFocal": 172,
+      "bucket": "170-179",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 9
+    },
+    {
+      "songName": "Appassionata",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 160.0,
+        "max": 210.0
+      },
+      "bpmFocal": 210,
+      "bucket": "210-219",
+      "selectionStatus": "user-preferred",
+      "chartCount": 9
+    },
+    {
+      "songName": "Aragami",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 48.0,
+        "max": 196.0
+      },
+      "bpmFocal": 196,
+      "bucket": "190-199",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 9
+    },
+    {
+      "songName": "Banya Classic Remix",
+      "songType": "Remix",
+      "displayBpmRange": {
+        "min": 162.0,
+        "max": 170.0
+      },
+      "bpmFocal": 170,
+      "bucket": "170-179",
+      "selectionStatus": "user-directed",
+      "chartCount": 4
+    },
+    {
+      "songName": "Banya-P Classic Remix",
+      "songType": "Remix",
+      "displayBpmRange": {
+        "min": 92.0,
+        "max": 180.0
+      },
+      "bpmFocal": 180,
+      "bucket": "180-189",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 4
+    },
+    {
+      "songName": "Beat of The War",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 140.0,
+        "max": 202.0
+      },
+      "bpmFocal": 202,
+      "bucket": "200-209",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 8
+    },
+    {
+      "songName": "Beat of The War 2",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 120.0,
+        "max": 190.0
+      },
+      "bpmFocal": 190,
+      "bucket": "190-199",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 8
+    },
+    {
+      "songName": "Beat of the War 2 - FULL SONG -",
+      "songType": "FullSong",
+      "displayBpmRange": {
+        "min": 120.0,
+        "max": 190.0
+      },
+      "bpmFocal": 190,
+      "bucket": "190-199",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 2
+    },
+    {
+      "songName": "BRAIN POWER",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 170.0,
+        "max": 173.0
+      },
+      "bpmFocal": 173,
+      "bucket": "170-179",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 12
+    },
+    {
+      "songName": "CHAOS AGAIN",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 150.0,
+        "max": 260.0
+      },
+      "bpmFocal": 230,
+      "bucket": "220+",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 10
+    },
+    {
+      "songName": "Come to Me",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 100.0,
+        "max": 107.0
+      },
+      "bpmFocal": 107,
+      "bucket": "<150",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 7
+    },
+    {
+      "songName": "Crash-Landing Rendezvous",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 128.0,
+        "max": 190.0
+      },
+      "bpmFocal": 190,
+      "bucket": "190-199",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 7
+    },
+    {
+      "songName": "Galaxy Collapse",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 150.0,
+        "max": 320.0
+      },
+      "bpmFocal": 320,
+      "bucket": "220+",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 10
+    },
+    {
+      "songName": "Giselle",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 128.0,
+        "max": 152.0
+      },
+      "bpmFocal": 152,
+      "bucket": "150-159",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 9
+    },
+    {
+      "songName": "Halcyon",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 40.0,
+        "max": 191.0
+      },
+      "bpmFocal": 191,
+      "bucket": "190-199",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 7
+    },
+    {
+      "songName": "Karyawisata",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 150.0,
+        "max": 173.0
+      },
+      "bpmFocal": 173,
+      "bucket": "170-179",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 9
+    },
+    {
+      "songName": "Love is a Danger Zone 2 - FULL SONG -",
+      "songType": "FullSong",
+      "displayBpmRange": {
+        "min": 100.0,
+        "max": 162.0
+      },
+      "bpmFocal": 162,
+      "bucket": "160-169",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 2
+    },
+    {
+      "songName": "Love is a Danger Zone 2 Try To B.P.M",
+      "songType": "Remix",
+      "displayBpmRange": {
+        "min": 140.0,
+        "max": 169.0
+      },
+      "bpmFocal": 169,
+      "bucket": "160-169",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 4
+    },
+    {
+      "songName": "Love Witch",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 155.0,
+        "max": 170.0
+      },
+      "bpmFocal": 170,
+      "bucket": "170-179",
+      "selectionStatus": "user-directed",
+      "chartCount": 8
+    },
+    {
+      "songName": "Lucid(PIU Edit)",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 40.0,
+        "max": 190.0
+      },
+      "bpmFocal": 190,
+      "bucket": "190-199",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 9
+    },
+    {
+      "songName": "Mental Rider",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 120.0,
+        "max": 140.0
+      },
+      "bpmFocal": 140,
+      "bucket": "<150",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 8
+    },
+    {
+      "songName": "Neo Catharsis",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 120.0,
+        "max": 300.0
+      },
+      "bpmFocal": 210,
+      "bucket": "210-219",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 8
+    },
+    {
+      "songName": "Neo Catharsis - SHORT CUT -",
+      "songType": "ShortCut",
+      "displayBpmRange": {
+        "min": 120.0,
+        "max": 300.0
+      },
+      "bpmFocal": 210,
+      "bucket": "210-219",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 5
+    },
+    {
+      "songName": "PaPa helloizing",
+      "songType": "Remix",
+      "displayBpmRange": {
+        "min": 145.0,
+        "max": 158.0
+      },
+      "bpmFocal": 158,
+      "bucket": "150-159",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 2
+    },
+    {
+      "songName": "Reincarnate in “A”",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 65.0,
+        "max": 220.0
+      },
+      "bpmFocal": 220,
+      "bucket": "220+",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 7
+    },
+    {
+      "songName": "Switronic",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 120.0,
+        "max": 170.0
+      },
+      "bpmFocal": 120,
+      "bucket": "<150",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 11
+    },
+    {
+      "songName": "The Devil",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 130.0,
+        "max": 240.0
+      },
+      "bpmFocal": 240,
+      "bucket": "220+",
+      "selectionStatus": "user-directed",
+      "chartCount": 8
+    },
+    {
+      "songName": "Transmission",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 100.0,
+        "max": 225.0
+      },
+      "bpmFocal": 169,
+      "bucket": "160-169",
+      "selectionStatus": "user-directed",
+      "chartCount": 7
+    },
+    {
+      "songName": "Tream Vook of the war",
+      "songType": "Remix",
+      "displayBpmRange": {
+        "min": 184.0,
+        "max": 202.0
+      },
+      "bpmFocal": 202,
+      "bucket": "200-209",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 4
+    },
+    {
+      "songName": "Turkey Virus",
+      "songType": "Remix",
+      "displayBpmRange": {
+        "min": 150.0,
+        "max": 162.0
+      },
+      "bpmFocal": 162,
+      "bucket": "160-169",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 2
+    },
+    {
+      "songName": "Versailles",
+      "songType": "Arcade",
+      "displayBpmRange": {
+        "min": 160.0,
+        "max": 175.0
+      },
+      "bpmFocal": 175,
+      "bucket": "170-179",
+      "selectionStatus": "researched-proposal",
+      "chartCount": 8
+    }
+  ],
+  "frozenCatalogProjection": {
+    "caveat": "Prediction on frozen23October source catalog, using old upstream whole-range buckets versus proposed corrected range plus focal BPM. Not a production/player score analysis. Includes all chart levels; official subset restricts Single/Double level20+.",
+    "singleDoubleChartBucketChanges": 236,
+    "level20PlusSingleDoubleBucketChanges": 101,
+    "migrations": [
+      {
+        "from": "180-189",
+        "to": "150-159",
+        "charts": 9
+      },
+      {
+        "from": "excluded",
+        "to": "150-159",
+        "charts": 15
+      },
+      {
+        "from": "excluded",
+        "to": "160-169",
+        "charts": 15
+      },
+      {
+        "from": "excluded",
+        "to": "170-179",
+        "charts": 38
+      },
+      {
+        "from": "excluded",
+        "to": "180-189",
+        "charts": 4
+      },
+      {
+        "from": "excluded",
+        "to": "190-199",
+        "charts": 52
+      },
+      {
+        "from": "excluded",
+        "to": "200-209",
+        "charts": 12
+      },
+      {
+        "from": "excluded",
+        "to": "210-219",
+        "charts": 21
+      },
+      {
+        "from": "excluded",
+        "to": "220+",
+        "charts": 50
+      },
+      {
+        "from": "excluded",
+        "to": "<150",
+        "charts": 20
+      }
+    ],
+    "officialLevel20PlusMigrations": [
+      {
+        "from": "180-189",
+        "to": "150-159",
+        "charts": 2
+      },
+      {
+        "from": "excluded",
+        "to": "150-159",
+        "charts": 7
+      },
+      {
+        "from": "excluded",
+        "to": "160-169",
+        "charts": 8
+      },
+      {
+        "from": "excluded",
+        "to": "170-179",
+        "charts": 13
+      },
+      {
+        "from": "excluded",
+        "to": "180-189",
+        "charts": 2
+      },
+      {
+        "from": "excluded",
+        "to": "190-199",
+        "charts": 21
+      },
+      {
+        "from": "excluded",
+        "to": "200-209",
+        "charts": 4
+      },
+      {
+        "from": "excluded",
+        "to": "210-219",
+        "charts": 15
+      },
+      {
+        "from": "excluded",
+        "to": "220+",
+        "charts": 26
+      },
+      {
+        "from": "excluded",
+        "to": "<150",
+        "charts": 3
+      }
+    ],
+    "proposedAllLevelBucketsByMode": {
+      "Single": {
+        "190-199": 247,
+        "180-189": 234,
+        "210-219": 100,
+        "150-159": 365,
+        "160-169": 360,
+        "220+": 152,
+        "170-179": 420,
+        "<150": 761,
+        "200-209": 211
+      },
+      "Double": {
+        "200-209": 149,
+        "160-169": 224,
+        "<150": 437,
+        "190-199": 173,
+        "170-179": 289,
+        "180-189": 160,
+        "150-159": 237,
+        "220+": 117,
+        "210-219": 68
+      }
+    }
+  }
+}

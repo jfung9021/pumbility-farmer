@@ -1,0 +1,131 @@
+BPM DISPLAY/FILTER IMPLEMENTATION — 24 October 2026
+
+Implemented locally. Production deployment, publication and database activation
+were not performed. No implementation blocker remains for the local release.
+
+Completed behavior
+
+All 675 accepted Phoenix 2 song variants now have compiled display intervals and
+independent focal BPM values. The 32 variable-tempo songs keep their complete
+corrected ranges; all 7 missing-BPM additions and 9 interval corrections are
+retained. The four authority files were not changed during implementation.
+verification.json records every interval addition/correction and all 32 focal
+decisions. The frozen catalog covers 4,847 charts, with 100 receiving corrected
+or added display metadata. No active upper-bound fallback remains following
+the user's confirmations.
+
+Examples: Transmission displays100–225 and uses169, The Devil displays130–240
+and uses240, Appassionata displays160–210 and uses210, Moment Day uses158 for
+both display and categorization. Banya Classic Remix and Love Witch use170.
+Neo Catharsis SHORT CUT retains120–300 and uses210. Decimal precision survives.
+
+Tier filters now use inclusive focal membership. Personal Skill Radar actual
+contributions and suggestions, and official comparison categories, use the same
+half-open scalar categories. Existing score/plate/Pumbility formulas, tier fits,
+radar ceilings, eligibility and non-BPM ordering are retained. Future unmatched
+ranges remain visible with unknown focal BPM and cannot enter active filters or
+radar categories until a decision is recorded. Phoenix 1 archive evidence and
+recovery baselines are preserved.
+
+Every tier-list artwork square now shows the display BPM in its bottom left:
+named grid, readable list, ranked/unrated sections and chart details, including
+missing-image placeholders. Labels stay on one line inside the square. Following
+the user's design correction, BPM and the redesign's rounded rectangle level
+indicator share one bottom row, using inherited typography and a subtle neutral
+gradient. Full-size/accessible labels retain the range.
+
+Metadata plumbing and compatibility
+
+song_bpm_metadata.py provides exact song+variant resolution, validation and the
+shared bucket helper. scripts/build_song_bpm_runtime.py compiles/checks the small
+runtime config without network access or dated research-cache dependencies.
+npm run bpm:build / bpm:check expose this workflow; backend bundle staging also
+rejects a stale compiled catalog.
+
+Current sync/snapshot loading, analyzer and recommendation projections, model
+catalogs, Top Scores, combined tier catalog builders and local readers preserve
+songType/bpmMin/bpmMax/bpmFocal. New fields remain optional on historical rows.
+Snapshot schema stays2 so the change does not trigger a full score refetch.
+
+bpmPolicy=focal-v1 selects the new API semantics. Metadata identity is version1
+with revision60a50c007ed1448998fe4bec9006b3a2edf72459a6344e9b2eedd6f3780f40ad.
+Personal radar uses method7/profile12; official comparison uses schema3/methodv3.
+Legacy contracts remain deliberate. Lazy tier details and caches pin both the
+numerical generation and metadata revision. Python signed tier overlays verify
+the base hash and produce a matching derived public hash. TypeScript local views
+retain the publication as base evidence without claiming a Python signature for
+their derived JSON.
+
+scripts/build_bpm_metadata_view.py stages metadata over retained tier artifacts.
+bpm_metadata_migration.py / scripts/backfill_song_bpm_metadata.py provide a pinned
+metadata-only database dry-run/apply and separate local snapshot staging. Apply
+checks the complete active chart roster, source/payload/revision/pointer hashes
+under the publication advisory lock and one transaction; it changes only chart
+metadata revisions and typed display columns, preserving players/consents/scores.
+Prepared artifact pointers can be promoted in that transaction. Full snapshot
+import/reconciliation is deliberately not used for this metadata operation.
+
+Local results and verification
+
+199 personal radar profiles and5,690 official profiles were regenerated from
+cached evidence with zero score fetches or model refits. All5,889 profiles passed
+the actual frontend validators. The official catalog has1,389 charts, all with
+BPM metadata. The local captured snapshot retains4,675 charts,965 players and
+60,272 scores; player and score files are byte-identical in its staged candidate.
+All2,579,502 compared non-BPM scalar values in the tier artifact are unchanged.
+
+Resolver/compiler, metadata migration, overlay/API, analyzer, sync/snapshot,
+recommendation and affected tier pipeline tests passed, including focused repairs
+for optional metadata serialization and route defaults.108 focused frontend
+tests passed across the final affected batches. Typecheck, production build,
+offline BPM check and backend bundle staging passed. A local HTTP smoke test
+returned Jonathan's method7 radar, schema3 official data and intact Appassionata
+range160–210/focal210. Desktop and320px mobile grid/list/dialog UI were checked;
+the revised62px readable-list artwork fits the complete7-character range alongside
+its level badge without overlap. All675 catalog labels have at most7 characters.
+Updated screenshot: tier-artwork-row-preview.jpg. The earlier preview is retained
+as historical evidence. This design correction passed typecheck,70 frontend
+checks and desktop/320px grid, list and dialog browser measurements.
+
+Further user refinements: BPM and level now share one responsive font-size token
+(11px on the checked desktop artwork,9px at320px). Removed duplicate BPM text
+outside grid/list artwork. Grid title and BPM share the same left inset (6px on
+desktop,4px on mobile). Browser measurements confirmed equal sizes, matching left
+edges, no duplicate line and no overlap at320px. Typecheck and70 frontend checks
+passed. Latest screenshot: tier-artwork-aligned-preview.jpg.
+
+Unit-label refinement: artwork labels now include BPM (for example160–210 BPM).
+To preserve the same one-line font size beside the level badge, viewports below
+430px use three grid columns; readable-list art is84px and narrow detail art is
+84px. Wider mobile grids retain four columns. Title alignment and removal of the
+duplicate external label are retained. Typecheck and73 frontend/formatter checks
+passed. Browser checks confirmed fit in320px grid/list/dialog and at the430px
+four-column boundary. Latest screenshot: tier-artwork-bpm-suffix-preview.jpg.
+One final general review was performed; no recursive review cycle was used.
+
+Existing/incidental observations left unchanged
+
+The latency test test_tier_response_matches_fastapi_dict_contract_exactly expects
+an unprojected fixture, while the saved pre-task route already returns its compact
+list projection. This pre-existing mismatch was reproduced using the baseline
+route and was not repaired as part of the BPM work. Next build also reports two
+local filesystem tracing warnings; the build succeeds. The older local snapshot
+roster differs from the later frozen research catalog; no charts were inserted
+into that capture merely to match the newer count.
+
+Activation order for a later production release
+
+1. Retain the current pointers and compiled input hashes for rollback. Deploy
+   backend support for the focal-v1 selector and compiled metadata first.
+2. Stage and validate all official focal-v1 generation profiles before promoting
+   their matching index. Retain legacy artifacts during the rollout. Personal
+   hosted radar resolves the same revision over retained relational evidence.
+3. Prepare the dedicated chart-metadata migration from the actual active roster
+   through the existing loopback database workflow; review its saved pinned plan
+   and prepared matching artifact pointers. Apply that plan under the lock.
+4. Release the frontend requesting focal-v1, then verify live list/details,
+   Jonathan's radar and official comparison. Never use the full importer for this
+   metadata-only migration. No production step above was executed in this task.
+
+Reproducible commands and source details are also documented in README.md.
+Machine-readable inventory, hashes and evidence: verification.json.

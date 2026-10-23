@@ -79,6 +79,7 @@ from piu_recommendations import (
     _prepare_phoenix1_rating_frames_from_frames,
     _records_to_frame_consuming,
     _recommendation_chart_rows,
+    _omit_unavailable_bpm_fields,
     build_player_recommendation,
     fit_score_response_model_mode_from_frames,
     fit_score_response_model_from_frames,
@@ -228,11 +229,16 @@ def _model_catalog_records(
         "stepArtist",
         "bpmMin",
         "bpmMax",
+        "bpmFocal",
+        "songType",
     )
     standard_fields = [
         column for column in catalog_fields if column in phoenix2_catalog.columns
     ]
-    records = _frame_records(phoenix2_catalog[standard_fields])
+    records = [
+        _omit_unavailable_bpm_fields(row)
+        for row in _frame_records(phoenix2_catalog[standard_fields])
+    ]
     retained_ids = {str(row.get("chartId") or "") for row in records}
     for chart in phoenix2_snapshot.get("charts", []):
         if not isinstance(chart, Mapping) or chart.get("type") != "CoOp":
@@ -245,7 +251,7 @@ def _model_catalog_records(
             for field in catalog_fields
         }
         record["chartId"] = chart_id
-        records.append(record)
+        records.append(_omit_unavailable_bpm_fields(record))
         retained_ids.add(chart_id)
     return records
 

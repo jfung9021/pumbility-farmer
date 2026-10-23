@@ -39,12 +39,13 @@ export function BpmRangeFilter({ bounds, selected, onChange }: {
   return (
     <fieldset className="bpm-filter" disabled={!bounds}>
       <legend className="bpm-filter-heading">
-        <span>BPM range</span>
+        <span>Main BPM range</span>
         <button disabled={!bounds || !selected} onClick={() => onChange(null)} type="button">Reset</button>
       </legend>
+      <p className="bpm-filter-help">Variable-tempo songs are filtered by their main BPM. Chart labels show the full range.</p>
       <div className="bpm-range-track" data-stacked-labels={labelsOverlap || undefined} ref={trackRef} style={style}>
-        <input aria-label="Minimum BPM slider" aria-valuetext={`${value.min} BPM`} max={limits.max} min={limits.min} onChange={(event) => setMinimum(Number(event.target.value))} step="1" style={{ zIndex: value.min === limits.max ? 2 : undefined }} type="range" value={value.min} />
-        <input aria-label="Maximum BPM slider" aria-valuetext={`${value.max} BPM`} max={limits.max} min={limits.min} onChange={(event) => setMaximum(Number(event.target.value))} step="1" type="range" value={value.max} />
+        <input aria-label="Minimum focal BPM slider" aria-valuetext={`${value.min} BPM`} max={limits.max} min={limits.min} onChange={(event) => setMinimum(Number(event.target.value))} step="1" style={{ zIndex: value.min === limits.max ? 2 : undefined }} type="range" value={value.min} />
+        <input aria-label="Maximum focal BPM slider" aria-valuetext={`${value.max} BPM`} max={limits.max} min={limits.min} onChange={(event) => setMaximum(Number(event.target.value))} step="1" type="range" value={value.max} />
         {bounds ? <>
           <span aria-hidden="true" className="bpm-handle-label bpm-minimum-label">{value.min}</span>
           <span aria-hidden="true" className="bpm-handle-label bpm-maximum-label">{value.max}</span>

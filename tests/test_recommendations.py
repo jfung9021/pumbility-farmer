@@ -2354,6 +2354,37 @@ class PlayerRecommendationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "integer from 0 to 1000000"):
                     _public_top_score_value(value)
 
+    def test_optional_focal_metadata_survives_top_scores_and_model_catalog(self) -> None:
+        from recommendation_refresh import _model_catalog_records
+
+        combined = [dict(row) for row in self.combined]
+        combined[0].update(bpmMin=100, bpmMax=225, bpmFocal=169, songType="Arcade")
+        mode = build_player_recommendation(
+            "player", self.snapshot, combined, {"singles": 10.0}, self._fixed_score_model()
+        )["modes"]["singles"]
+        first = mode["topScores"][0]
+        self.assertEqual(
+            {field: first[field] for field in ("bpmMin", "bpmMax", "bpmFocal", "songType")},
+            {"bpmMin": 100, "bpmMax": 225, "bpmFocal": 169, "songType": "Arcade"},
+        )
+        rows = _model_catalog_records(
+            {"charts": [
+                {"id": "coop-present", "type": "CoOp", "bpmFocal": 169, "songType": "Arcade"},
+                {"id": "coop-absent", "type": "CoOp"},
+            ]},
+            pd.DataFrame([
+                {"chartId": "present", "type": "Single", "bpmFocal": 169, "songType": "Arcade"},
+                {"chartId": "absent", "type": "Double", "bpmFocal": np.nan, "songType": None},
+            ]),
+        )
+        by_id = {row["chartId"]: row for row in rows}
+        for chart_id in ("present", "coop-present"):
+            self.assertEqual(by_id[chart_id]["bpmFocal"], 169)
+            self.assertEqual(by_id[chart_id]["songType"], "Arcade")
+        for chart_id in ("absent", "coop-absent"):
+            self.assertNotIn("bpmFocal", by_id[chart_id])
+            self.assertNotIn("songType", by_id[chart_id])
+
     def test_top_scores_cap_at_fifty_with_deterministic_tie_breaks(self) -> None:
         charts = []
         scores = []

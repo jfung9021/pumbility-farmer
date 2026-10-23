@@ -163,6 +163,8 @@ RECOMMENDATION_CHART_FIELDS = (
     "stepArtist",
     "bpmMin",
     "bpmMax",
+    "bpmFocal",
+    "songType",
     "estimatedDifficulty",
     "difficultyModelContinuous",
     "difficultyModelSignal",
@@ -2117,6 +2119,10 @@ def build_coop_chart_results(
                 "stepArtist": chart.get("stepArtist"),
                 "bpmMin": chart.get("bpmMin"),
                 "bpmMax": chart.get("bpmMax"),
+                **_omit_unavailable_bpm_fields({
+                    "bpmFocal": chart.get("bpmFocal"),
+                    "songType": chart.get("songType"),
+                }),
                 "estimatedDifficulty": estimated,
                 "difficultyModelContinuous": (
                     round(float(continuous_difficulties[chart_id]), 6)
@@ -2498,6 +2504,8 @@ def build_combined_chart_results(
         "stepArtist",
         "bpmMin",
         "bpmMax",
+    "bpmFocal",
+    "songType",
         "estimatedDifficulty",
         "whatIfEstimates",
         "tierMetrics",
@@ -2879,7 +2887,7 @@ def _recommendation_chart_rows(
             if chart.get("type") == "CoOp"
             else TOP_SCORE_CHART_FIELDS
         )
-        rows.append({key: chart.get(key) for key in fields})
+        rows.append(_omit_unavailable_bpm_fields({key: chart.get(key) for key in fields}))
     return rows
 
 
@@ -2900,6 +2908,15 @@ def _json_safe_scalar(value: Any) -> Any:
     except (TypeError, ValueError):
         pass
     return value.item() if isinstance(value, np.generic) else value
+
+
+def _omit_unavailable_bpm_fields(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep additive BPM metadata optional for historical and unknown rows."""
+    return {
+        key: value
+        for key, value in row.items()
+        if key not in {"bpmFocal", "songType"} or _json_safe_scalar(value) is not None
+    }
 
 
 def _public_top_score_value(value: Any) -> int:
@@ -2954,7 +2971,7 @@ def _public_top_scores(
                 return _json_safe_scalar(analysis_chart.get(field))
             return _json_safe_scalar(catalog_chart.get(field))
 
-        row = {field: chart_value(field) for field in TOP_SCORE_CHART_FIELDS}
+        row = _omit_unavailable_bpm_fields({field: chart_value(field) for field in TOP_SCORE_CHART_FIELDS})
         row.update(
             {
                 "mode": chart_value("mode") or MODE_LABELS.get(chart_type),
@@ -4083,10 +4100,10 @@ def build_player_coop_mode(
             (
                 public_score,
                 {
-                    **{
+                    **_omit_unavailable_bpm_fields({
                         field: _json_safe_scalar(chart.get(field))
                         for field in TOP_SCORE_CHART_FIELDS
-                    },
+                    }),
                     "mode": "Co-op",
                     "songName": chart.get("songName") or "Unknown chart",
                     "difficulty": chart.get("difficulty")

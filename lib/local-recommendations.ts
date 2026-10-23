@@ -199,6 +199,8 @@ const TOP_SCORE_KEYS = new Set([
   "plateCode",
 ]);
 const OPTIONAL_TOP_SCORE_KEYS = new Set([
+  "bpmFocal",
+  "songType",
   "percentileScore",
   "percentileGrade",
   "percentilePlate",
@@ -275,6 +277,8 @@ function isRecommendationTopScore(value: unknown): value is RecommendationTopSco
     && (score.stepArtist === null || typeof score.stepArtist === "string")
     && isNullableFiniteNumber(score.bpmMin)
     && isNullableFiniteNumber(score.bpmMax)
+    && (score.bpmFocal === undefined || score.bpmFocal === null || (typeof score.bpmFocal === "number" && Number.isFinite(score.bpmFocal) && score.bpmFocal > 0 && typeof score.bpmMin === "number" && typeof score.bpmMax === "number" && score.bpmFocal >= score.bpmMin && score.bpmFocal <= score.bpmMax))
+    && (score.songType === undefined || typeof score.songType === "string")
     && isNullableFiniteNumber(score.estimatedDifficulty)
     && isNullableFiniteNumber(score.difficultyDelta)
     && isNullableFiniteNumber(score.difficultyCi95Low)
@@ -411,7 +415,8 @@ export async function readLocalRecommendationIndex(): Promise<LocalRecommendatio
       "The local recommendation index is not valid JSON.",
     );
   }
-  return validateLocalRecommendationIndex(value);
+  const { enrichBpmPayload } = await import("./server-song-bpm.ts");
+  return enrichBpmPayload(validateLocalRecommendationIndex(value));
 }
 
 export async function readLocalRecommendationPlayer(
@@ -420,7 +425,10 @@ export async function readLocalRecommendationPlayer(
 ): Promise<RecommendationPlayer | null> {
   const metadata = payload.players.find((row) => row.playerKey === playerKey);
   if (!metadata) return null;
-  if ("modes" in metadata) return metadata;
+  if ("modes" in metadata) {
+    const { enrichBpmPayload } = await import("./server-song-bpm.ts");
+    return enrichBpmPayload(metadata);
+  }
   if (
     !payload.generationKey
     || !/^[a-f0-9]{20}$/.test(payload.generationKey)
@@ -488,7 +496,8 @@ export async function readLocalRecommendationPlayer(
       "The selected local recommendation contains invalid top scores.",
     );
   }
-  return player;
+  const { enrichBpmPayload } = await import("./server-song-bpm.ts");
+  return enrichBpmPayload(player);
 }
 
 function manualMode(

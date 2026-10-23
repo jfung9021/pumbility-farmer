@@ -1744,7 +1744,11 @@ test("reads a privacy-safe local aggregate", async () => {
   };
   try {
     await writeFile(resultsPath, JSON.stringify(payload), "utf8");
-    assert.deepEqual(await readLocalAnalysisPayload(resultsPath), payload);
+    const resolved = await readLocalAnalysisPayload(resultsPath);
+    assert.deepEqual(resolved, { ...payload, bpmMetadata: resolved.bpmMetadata,
+      summary: { ...payload.summary, method: { bpmMetadata: resolved.bpmMetadata } } });
+    assert.equal(resolved.bpmMetadata?.bpmPolicy, "focal-v1");
+    assert.match(resolved.bpmMetadata?.bpmMetadataRevision ?? "", /^[a-f0-9]{64}$/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

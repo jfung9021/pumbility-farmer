@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Annotated
 
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
@@ -11,6 +12,8 @@ from analysis_runtime import PrivateBlobStore
 from pumbility_contract import combined_tier_blob_path
 from tier_scores import TIER_SCORE_MODES, TierScoresNotFoundError, read_tier_player_scores
 from tier_public import compact_tier_payload, detail_shard_path, tier_chart_details, tier_detail_generated_at
+from bpm_metadata_overlay import select_bpm_payload, validate_bpm_policy
+from song_bpm_metadata import bpm_metadata_identity
 
 
 router = APIRouter()
@@ -20,11 +23,19 @@ router = APIRouter()
 def get_tier_chart_details(
     chart_id: str = Query(default="", alias="chartId"),
     generated_at_utc: str = Query(default="", alias="generatedAtUtc"),
+    bpm_policy: Annotated[str, Query(alias="bpmPolicy")] = "",
+    bpm_metadata_revision: Annotated[str, Query(alias="bpmMetadataRevision")] = "",
 ):
     headers = {"Cache-Control": "no-store"}
     if not chart_id.strip() or not generated_at_utc.strip():
         return JSONResponse(status_code=400, content={"error": "A chartId and generatedAtUtc are required."}, headers=headers)
     try:
+        focal = validate_bpm_policy(bpm_policy)
+    except ValueError as error:
+        return JSONResponse(status_code=400, content={"error": str(error)}, headers=headers)
+    try:
+        if focal and bpm_metadata_revision != bpm_metadata_identity()["bpmMetadataRevision"]:
+            return JSONResponse(status_code=409, content={"error": "The BPM metadata has changed. Reload the tier list."}, headers=headers)
         store = PrivateBlobStore(canary_domain="tier-list")
         payload = store.get_json(combined_tier_blob_path())
         if payload is None:
@@ -45,7 +56,7 @@ def get_tier_chart_details(
             details = {"generatedAtUtc": generated_at_utc, "chart": chart} if chart else None
         else:
             details = tier_chart_details(payload, chart_id)
-        return JSONResponse(content=details, headers=headers) if details else JSONResponse(status_code=404, content={"error": "The selected chart was not found."}, headers=headers)
+        return JSONResponse(content=select_bpm_payload(details, bpm_policy), headers=headers) if details else JSONResponse(status_code=404, content={"error": "The selected chart was not found."}, headers=headers)
     except (RuntimeError, ValueError, json.JSONDecodeError):
         return JSONResponse(status_code=503, content={"error": "Chart details are temporarily unavailable."}, headers=headers)
     except Exception:
@@ -76,7 +87,11 @@ def get_tier_player_scores(
 
 
 @router.get("/api/tier-list")
-def get_combined_tier_list():
+def get_combined_tier_list(bpm_policy: Annotated[str, Query(alias="bpmPolicy")] = ""):
+    try:
+        focal = validate_bpm_policy(bpm_policy)
+    except ValueError as error:
+        return JSONResponse(status_code=400, content={"error": str(error)}, headers={"Cache-Control": "no-store"})
     try:
         payload = PrivateBlobStore(canary_domain="tier-list").get_json(
             combined_tier_blob_path()
@@ -86,8 +101,9 @@ def get_combined_tier_list():
                 status_code=404,
                 content={"error": "The combined tier list has not been generated yet."},
             )
-        return JSONResponse(content=compact_tier_payload(payload), headers={"Cache-Control": "no-store"})
-    except (RuntimeError, json.JSONDecodeError):
+        selected = select_bpm_payload(payload, bpm_policy)
+        return JSONResponse(content=compact_tier_payload(selected), headers={"Cache-Control": "no-store"})
+    except (RuntimeError, ValueError, json.JSONDecodeError):
         return JSONResponse(
             status_code=503,
             content={"error": "The combined tier-list service is temporarily unavailable."},

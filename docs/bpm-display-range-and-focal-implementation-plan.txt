@@ -1,0 +1,493 @@
+BPM DISPLAY RANGES AND FOCAL BPM: IMPLEMENTATION PLAN
+24 October 2026 (Asia/Tokyo)
+Status: implemented and locally verified; production activation remains separate.
+Implementation record: output/bpm-implementation-2026-10-24/implementation-report.txt.
+Plan amendment24October: add a one-line display-BPM overlay at the bottom left
+inside every tier-list chart artwork square, including small responsive layouts.
+Implemented design correction24October: use the redesign's rounded rectangle
+level indicator beside BPM in one bottom row, with the page's typography and
+neutral gradient. The smallest readable-list artwork is62px to keep both readable.
+This supersedes the earlier suggestion to raise the badge above the BPM strip.
+
+1. Approved behavior and scope
+
+Keep each song's complete verified BPM interval wherever a chart/song BPM is
+shown. Use its chosen focal BPM for every numerical BPM filter and skill bucket.
+"Original range" here means the intact effective interval from our corrected
+NEVSISTER catalog, including approved additions/corrections. It does not mean
+restoring superseded upstream mistakes. Retain upstream values as audit evidence.
+
+The same exact song variant supplies metadata for all its Single, Double and
+CoOp charts. Arcade, Full Song, Short Cut, remix and edit variants remain distinct.
+Apply the new rules to current Phoenix2 metadata and its derived combined views;
+do not rewrite the archived Phoenix1 source catalog or its historical evidence.
+
+Examples (display | numerical focal | category):
+  Transmission             100-225 | 169 | 160-169
+  The Devil                130-240 | 240 | 220+
+  Appassionata             160-210 | 210 | 210-219
+  Neo Catharsis SHORT CUT   120-300 | 210 | 210-219
+  Banya Classic Remix      162-170 | 170 | 170-179
+  Love Witch               155-170 | 170 | 170-179
+  PaPa helloizing          145-158 | 158 | 150-159
+  Moment Day                  158 | 158 | 150-159
+
+This scope includes personal Skill Radar performance and practice suggestions,
+official-player comparison BPM categories, existing tier BPM filters, and BPM
+metadata displayed on tiers/recommendations/Top Scores. Existing recommendation
+pages have no BPM filter; do not introduce a new filtering feature there.
+Preserve score/plate/Pumbility calculations, tier difficulty fits, independent
+radar ceilings, chart eligibility rules, player identities and non-BPM sorting.
+Category membership, contributors, radar values, targets and suggestions may
+change as the intended result of admitting or regrouping charts.
+
+2. Frozen correction inventory and planning evidence
+
+Read-only baseline: output/bpm-semantics-plan-2026-10-24/metadata-baseline.json.
+It pins hashes of all four correction inputs plus the source catalog and records
+every changed interval, every ranged-song focal value and exact chart counts.
+
+  675 songs; 4,847 unique charts; all exact song+variant joins covered.
+  643 fixed-tempo songs; 32 variable-tempo songs covering 226 charts.
+  7 missing-BPM additions and 9 interval corrections affect 100 charts.
+  All 675 proposed focal values are valid and inside their display intervals.
+  No active upper-bound fallback remains after the user confirmations.
+
+The frozen catalog predicts 236 Single/Double chart bucket changes, including
+101 level20+ charts. These are catalog-level predictions, not measured changes
+to production player profiles or a guarantee of the active official-board set.
+Reconcile the actual active chart roster at implementation; do not hardcode the
+frozen song/chart totals as permanent future catalog limits.
+
+Source-grounded subagent audits, with file/function/line references:
+  output/bpm-semantics-plan-2026-10-24/data-pipeline-audit.txt
+  output/bpm-semantics-plan-2026-10-24/frontend-filter-audit.txt
+  output/bpm-semantics-plan-2026-10-24/analyzer-runtime-audit.txt
+
+3. Data contract, authority and identity
+
+Retain the current chart fields and add one scalar:
+  bpmMin: number|null     complete corrected display interval lower endpoint
+  bpmMax: number|null     complete corrected display interval upper endpoint
+  bpmFocal: number|null   selected tempo for filters and categorization
+  songType: string        Arcade/FullSong/ShortCut/Remix identity, not chart mode
+
+Example runtime chart metadata:
+  {songName:"Transmission", songType:"Arcade",
+   bpmMin:100, bpmMax:225, bpmFocal:169}
+
+Never encode the chosen focal as bpmMin=bpmMax for a variable-tempo song. Never
+infer a midpoint, range maximum, AV setting or chart-specific playback speed in
+an API or browser. For a fixed-tempo song, focal equals its corrected single BPM.
+Keep fractional precision through every numerical comparison:81.5 and156.118
+are real corrected values, not values to round before filtering.
+
+Authoritative inputs:
+  config/phoenix2-song-bpm.json
+  config/phoenix2-song-bpm-overrides.json
+  config/phoenix2-song-primary-bpm-research.json
+  config/phoenix2-song-primary-bpm-overrides.json
+
+Interval precedence: explicit interval override > verified corrected catalog >
+valid upstream interval for a genuinely new unmatched song.
+Focal precedence: explicit focal override > retained user direction/preference >
+stored researched focal proposal > corrected fixed BPM where min=max.
+Preserve The Devil240 and Appassionata210 stored in the research file, as well as
+the separate Transmission169/Banya Classic170/Love Witch170 override entries.
+Moment Day158 applies to both its display value and fixed focal value.
+
+Introduce a shared Python resolver, proposed song_bpm_metadata.py, plus a small
+compiler/check command, proposed scripts/build_song_bpm_runtime.py. Compile a
+compact generated config/phoenix2-song-bpm-runtime.json for runtime use, with
+all675 effective song records and compact selection provenance. Runtime must
+not depend on dated output folders, raw video caches or the one-time research
+packaging script. Original sources, history and manual overrides remain intact.
+
+Match (mix, exact songName, exact songType). Preserve chart UUIDs and existing DB
+song IDs. The source has no separate stable song UUID; all frozen exact names
+are unique. Recover missing legacy songType only for a unique exact full name.
+Reject/report a supplied mismatched variant or ambiguous name; do not apply the
+video extractor's fuzzy/prefix matching or strip variant/edit qualifiers.
+
+Use a separate bpmMetadataVersion=1, bpmPolicy="focal-v1", and deterministic
+bpmMetadataRevision digest. Hash effective values, exact identities and resolver
+policy; keep provenance-file hashes separately. Exclude generated timestamps
+from the semantic digest. Store these once per artifact/generation where
+possible, rather than copying evidence paragraphs into each chart.
+
+For a future unmatched range, display its valid interval but keep its focal
+unknown until the documented research/fallback process records a decision.
+Do not apply the earlier last-resort upper-bound rule automatically at request
+time. With an active BPM filter, unknown focal values do not match; without a
+BPM filter, the chart remains visible. Unknown values cannot enter skill bins.
+The current migration must have no missing focal assignments for its pinned set.
+
+4. Implementation work packages and dependencies
+
+WP1 — Compile and validate the accepted metadata (foundation)
+  Implement the shared resolver/compiler with exact joins and precedence above.
+  Check all four source schemas/mix values, unique keys, positive finite non-bool
+  values, ordered endpoints and focal-in-interval. Verify research interval
+  objects still match the corrected catalog and overrides survive regeneration.
+  Generate a per-chart migration preview, source hashes and semantic digest.
+  Compiler --check/offline mode must detect a stale generated runtime catalog.
+  No network scan, score capture or video extraction is needed for this work.
+
+WP2 — Apply the same resolver at every current-P2 entry point
+  phoenix2_sync.py: CHART_FIELDS, sanitize_chart, attach_song_bpm_metadata,
+    synchronize_mix_snapshot and analyzer_input.
+  piu_misgrade_analyzer.py: explicit P2 raw/snapshot load boundaries and output
+    columns. Pass mix explicitly so a P1 loader cannot acquire P2 overrides.
+  analysis_runtime.py: fresh sync, raw-directory snapshots and stored-snapshot
+    reanalysis, before source identity/checkpoint calculation.
+  recommendation_refresh.py: live metadata enrichment and model catalog rows.
+  scripts/build_local_recommendations.py, scripts/build_local_skill_radar.py,
+    official-comparison builder and offline database refresh client must resolve
+    the same metadata instead of reconstructing a focal from range endpoints.
+  Preserve bpmFocal and songType in sanitization and relevant snapshot fields;
+    preserve an explicit semantic revision if it is attached at snapshot level.
+  Apply current P2 metadata when packaging current combined chart views, using
+    the existing current-chart identity mapping. Do not rekey P1 chart history
+    or assign P2 metadata by an unqualified archived song name.
+
+WP3 — Carry dual metadata through all public/private projections
+  piu_misgrade_analyzer.py result output_columns.
+  piu_recommendations.py RECOMMENDATION_CHART_FIELDS, derived Top Score keys,
+    Single/Double/CoOp row construction and combined output columns.
+  recommendation_refresh.py _model_catalog_records, model.catalog,
+    model.recommendationCharts, refreshed cached responses and player shards.
+  cross_level_clearing.py current_clearing_catalog; hybrid_tiers.py
+    CURRENT_METADATA; official_cross_level_scoring.py _new_row;
+    tier_release.py submitted_tier_inputs.
+  config/tier-public-fields.json plus Python tier_public.py and TypeScript
+    lib/tier-browser-payload.ts, including compact lists and lazy detail shards.
+  lib/types.ts chart/recommendation/Top Score contracts and
+    lib/local-recommendations.ts exact Top Score/CoOp key validation.
+  Retain display endpoints everywhere; publish bpmFocal as operational metadata
+    where numerical consumers need it, without displaying it as the song range.
+  Use deliberate field allowlists; do not weaken exact validators to permit
+    arbitrary fields or publish the evidence-rich source documents per chart.
+
+WP4 — Replace numerical BPM semantics (after WP1–3)
+  Keep one shared Python scalar bucket helper for both radar implementations:
+    positive bpmFocal <150 -> bin0; [150,160) -> bin1; ...;
+    [210,220) -> bin7; >=220 -> bin8.
+  Keep exact half-open boundaries; do not round169.999 into170.
+  skill_radar.py bpm_bucket and aggregate_bpm_progression use this scalar.
+    build_suggestion_catalog must overlay bpmFocal from the same current
+    metadata as bpmMin/bpmMax before it computes a bucket. Both actual
+    contributions and practice candidates must agree. Valid resolved ranges
+    are no longer excluded merely for spanning multiple display categories.
+  official_player_comparison.py bpm_bucket, aggregate_bpm_skill and
+    _chart_metadata use the same scalar policy. Retain that feature's existing
+    distinct SG/PG formula, top-five zero-padding and level20+ scope.
+  lib/tier-filters.ts keeps chartBpmRange as a display helper. Add a separate
+    validated focal accessor; matchesTierBpm uses inclusive scalar membership:
+      selected.min <= bpmFocal <= selected.max.
+    Slider limits use floor(min focal)/ceil(max focal), retaining the existing
+    minimum span and clamping. Do not derive limits from display-range spikes.
+  Slider intervals are inclusive at both ends; category intervals are half-open.
+    These are intentional different contracts, shared in cross-language tests.
+  Preserve tier title/artist/official-level filter composition, per-mode state,
+    reset behavior and all existing non-BPM ordering. Official comparison's
+    existing bpm URL parameter remains a bucket INDEX0..8, not literal BPM.
+
+WP5 — Preserve display ranges and update the relevant explanations
+  Tier rows/compact tiles/ARIA labels: app/tier-list/page.tsx.
+  Recommendation cards and Top Score dialogs: app/recommendations/page.tsx.
+  Radar suggestion Chart details: app/skill-radar/page.tsx.
+  Use a shared full-range formatter if needed to prevent these surfaces from
+    drifting. Display equal endpoints once, complete ranges with both endpoints,
+    preserve configured meaningful decimal precision, and preserve unknown
+    labels. Existing two-decimal formatting must not obscure156.118.
+  Required tier-artwork overlay (user addition24October):
+    Put the corrected display BPM at the BOTTOM LEFT INSIDE EVERY tier-list
+    chart-art square, on ONE LINE. Use bpmMin/bpmMax, never bpmFocal. Examples:
+    Transmission100–225; Appassionata160–210; fixed Moment Day158;
+    fractional Trotpris156.118. Do not truncate a range or replace it with169.
+    Apply through one reusable artwork-label renderer in ChartCard,
+    CompactChartCard and ChartDetailDialog in app/tier-list/page.tsx, covering
+    Named grid, Readable list and detail artwork, ranked/estimated/unrated
+    sections, all modes/metrics/goals, and missing-image placeholders.
+    Scope styling to app/tier-list/tier-list.css and the tier-list artwork
+    wrappers. The current broad .compact-jacket span/.jacket span rules in
+    app/globals.css must not override the overlay's small font or color.
+    Anchor the overlay absolutely with a small inset; keep the square's size,
+    aspect ratio, rounded clipping and chart-detail click target unchanged.
+    Use small responsive tabular numerals, a single line and a compact dark
+    translucent backing or gradient for contrast on light/dark artwork.
+    Use the complete numeric value/range without a redundant BPM suffix in
+    the tiny overlay. Retain the full "... BPM" accessible label on the chart
+    button and full-size display labels; mark duplicate decorative overlay
+    text appropriately so it is not announced twice.
+    Font sizing must be based on the actual square's available inline width,
+    not just viewport width. The frozen catalog's longest numeric/range labels
+    are7 characters, including156.118 and184–202; size/test all675 labels.
+    The readable-list art column is62px desktop/52px mobile before spacing;
+    mobile Named grid uses four flexible columns. Measure the rendered art
+    square at the smallest supported viewport instead of assuming grid size.
+    Reserve a bottom text strip so the entire range fits WITHIN its square.
+    Do not use wrapping, ellipsis, clipping or hover-only disclosure to hide
+    digits. If the bottom-right difficulty badge competes for width on small
+    art, position it above this strip or adjust only its artwork placement,
+    retaining legibility and avoiding the title overlay. Do not shrink text
+    indefinitely to force an unreadable label or enlarge the overall grid.
+    Keep existing external BPM labels and unrelated card layout in this scope;
+    this amendment adds the requested artwork placement, not a card redesign.
+  Keep radar axis and selected-filter intervals as category/control labels;
+    they are not a song's own displayed interval. Do not add focal BPM badges.
+  Keep the filter control's existing interaction; add concise copy:
+    "Variable-tempo songs are filtered by their main BPM.
+     Chart labels show the full range."
+  Update app/about/page.tsx personal-radar and comparison descriptions, and the
+    README statement that bucket-spanning songs are excluded. Replace those
+    statements with focal classification. No BPM display currently exists in
+    Top50 image exports or official score rows; retain those layouts.
+
+5. Stored metadata migration: explicit and bounded
+
+Ordinary reanalysis is insufficient: analysis_runtime.py's reanalyze-only path
+sanitizes old stored metadata and deliberately skips snapshot publication.
+Hosted radar reads active relational chart_revisions.payload via
+pumbility_store.py read_skill_radar_metadata, not just a generated JSON file.
+
+Implement a dedicated metadata-only chart-revision backfill, with dry-run and
+apply modes. Resolve/stage all intended current P2 chart rows, pin their IDs and
+old revision hashes, and report changed display/focal fields before applying.
+Under the existing publication advisory lock and one database transaction:
+  - verify expected source revisions and the complete intended active chart set;
+  - revise only changed chart metadata payloads and their matching typed
+    bpm_min/bpm_max display columns; keep identity/active status unchanged;
+  - preserve players, consents, scores, score revisions and checkpoint history;
+  - bump the relational source revision once and record the BPM semantic digest;
+  - coordinate the matching validated artifact release pointer promotion.
+Focal initially fits existing JSON revision payloads. There is no current SQL
+focal filter requiring a new database column; avoid an unnecessary schema change.
+The same-input rerun must be a no-op, not a new series of chart revisions.
+
+Do not send charts-only data to scripts/backfill_pumbility_supabase.py _import_mix.
+That existing full-snapshot reconciler revokes absent consents, deactivates
+absent charts and expires absent scores. It is not a chart-only update API.
+Do not bump the global SNAPSHOT_SCHEMA_VERSION solely for this additive field:
+phoenix2_sync.py discards older snapshots on that boundary and can refetch full
+player histories. Use explicit additive upgrade plus the separate BPM version.
+
+For local cached inputs, stage a new candidate directory and regenerate the
+normal snapshot manifest/checksums. Preserve players/scores bytes or verified
+equal digests; never hand-edit charts.json under an unchanged checksum manifest.
+Write all local radar profiles/roster into a candidate generation, not a partial
+--player-key run that rewrites shared metadata/roster while other files are old.
+
+6. Rebuilds, cache identity and artifact contracts
+
+Use retained scores and official boards. Reuse the existing fitted numerical
+tiers/model parameters and publish a metadata-overlay generation with an explicit
+base numerical generation plus new BPM revision. Do not claim the numerical
+model was trained on a newly hashed snapshot by overwriting its old source hash.
+Extend existing publication validation to distinguish unchanged fitted inputs
+from changed metadata; preserve both identities. No score-history pulls,
+official board recaptures, calibration changes or tier-model refits are required
+solely to implement these BPM semantics.
+
+Repackage full/compact/lazy tier rows and recommendation model/catalog/player
+payloads, including cached selected-player responses. Rebuild personal radar
+suggestion catalog and every eligible profile; rebuild official comparison
+catalog and every profile. Do not patch final radar numbers in place.
+
+Include BPM policy/revision in source/checkpoint compatibility, model metadata
+overlays, release manifests and cache keys. A focal-only or policy-only change
+must invalidate relevant catalogs/profiles. Keep existing score/calibration/tier
+identity dependencies. Update skill_radar_runtime.py skill_metadata projection,
+both relational and JSON fallback loaders, local generation manifests and
+lib/local-skill-radar.ts manifest/profile consistency checks.
+
+As audited: personal METHOD6/PROFILE11 -> planned METHOD7/PROFILE12;
+official comparison schema2/methodv2 -> planned schema3/methodv3. Use the next
+available versions if unrelated work advances them before implementation.
+These DTO/method changes are independent of the raw snapshot schema version.
+Record bpmMetadataVersion/policy/revision in matching producer and reader shapes.
+
+Strict consumers are an implementation dependency, not an optional cleanup:
+  lib/skill-radar.ts pins METHOD6 and exact response/suggestion keys today;
+    adding bpmFocal/revision requires matching types and allowed-key sets.
+  lib/official-comparison.ts recomputes contributor membership from both DISPLAY
+    endpoints today. New-method validation must instead check bpmFocal.
+  lib/local-recommendations.ts Top Score exact keys must match changed producers.
+Keep all privacy, score, eligibility, formula and generation checks intact.
+
+7. Release order and rollback
+
+Choose an explicit versioned consumer-first rollout, rather than exposing new
+profiles to an old exact-key validator. Implement an API/request contract
+selector, proposed bpmPolicy=focal-v1, for the changed radar/comparison and any
+other strict response shape. Existing no-selector callers retain the matching
+legacy response contract during transition; new code understands both explicit
+contracts and requests the focal contract once available. This is internal
+compatibility, not a new user option. Never satisfy a focal request with an
+unmarked legacy-shaped or partially enriched payload. Keep legacy classification
+inside its versioned serializer/path until that compatibility contract is retired.
+
+Release steps:
+  1. Finish resolver/producers/readers/tests locally; prepare compact runtime
+     metadata and complete immutable candidate artifacts under a new revision.
+  2. Validate every candidate profile with the actual TypeScript validator,
+     not only Python assertions. Verify list/detail/index/profile digests agree.
+  3. Ship backward-compatible consumers and versioned server support while the
+     previous complete generation remains available.
+  4. Acquire the existing refresh/publication lease. Check that pinned source
+     and pointer revisions still match; stop promotion if a concurrent refresh
+     has changed them. Rebuild only the affected candidate, not score history.
+  5. Apply the guarded metadata transaction and promote the validated matching
+     generation. Pin each request to one BPM metadata revision and its tier/
+     recommendation/comparison generation. Do not read independently changing
+     global "current" metadata and a different generation's chart rows.
+  6. Activate focal requests in the current frontend; run bounded local/hosted
+     read-only smoke checks. Normal incremental sync/player refresh must retain
+     corrections through the central resolver.
+
+Reuse existing immutable generation files and DB publication transactions.
+Cross-store writes are not automatically atomic: stage blobs/files first and
+switch one authoritative release pointer last. The metadata-only transaction
+and pointer coordination are explicit new implementation work, not behavior
+already provided by ordinary reanalysis or per-file atomic JSON writes.
+For local mode, publish a complete prepared directory/generation pointer only
+after all listed profiles exist. Official comparison already writes generation
+profiles before replacing its index; preserve this order and request pinning.
+
+Retain the previous complete metadata revision/artifacts/contracts. Rollback
+restores that matching release together; do not pair an old comparison index
+with new profiles or restore only one cache/pointer. Test interrupted staging,
+failed guarded promotion and rollback using local fixtures before deployment.
+
+8. Verification and acceptance
+
+Resolver/data:
+  - All frozen675/4,847 mappings pass; all643 fixed focal values equal corrected
+    fixed BPM and all32 ranged focal assignments match the accepted sources.
+  - Every one of the16 additions/corrections below survives; source precision,
+    range integrity, variant separation and user precedence are preserved.
+  - Invalid/nonpositive/bool/NaN/infinite/out-of-range focal input is rejected;
+    unknown future metadata follows the explicit display/filter policy.
+
+Numerical behavior:
+  - Test category edges149.999,150,159.999,160,...,169,169.999,170,219.999,220.
+  - Transmission matches inclusive169-169 and160-170 filters, fails170-180,
+    enters category160-169 and still displays100-225 on each relevant surface.
+  - Test all32 expected categories in the appendix, full/shortcut/remix identity,
+    and examples above through both personal and official radar producers.
+  - Suggestion and performance category agree; one unique chart counts once.
+    Preserve supplied/recomputed score evidence, prices, independent ceilings,
+    Double alignment, tie ordering, zero-padding and eligibility thresholds.
+
+Serialization/cache/publication:
+  - Range and focal survive Single/Double/CoOp, Overall, full/compact/detail,
+    recommendation model/materialization, cached response and refresh paths.
+  - Validate all candidate personal/official profiles with their exact TS
+    contracts; reject mixed revisions and wrong focal category membership.
+  - A focal-only change produces new semantic/cache identities; unchanged
+    inputs produce the same semantic digest and no-op backfill.
+  - Players/scores/consents/chart IDs and all numerical fitted tier quantities
+    remain unchanged. Expected radar membership/value changes are recorded.
+  - Old/new request contracts, stale-generation409 handling, source lease
+    conflicts, interrupted staging and rollback retain coherent responses.
+
+Existing suites to extend narrowly:
+  tests/test_nevsister_song_bpms.py; proposed tests/test_song_bpm_metadata.py;
+  tests/test_phoenix2_sync.py; tests/test_local_snapshot.py;
+  tests/test_analysis_runtime.py; tests/test_pumbility_store.py;
+  tests/test_analyzer.py; tests/test_recommendations.py;
+  tests/test_refresh_pumbility_supabase_player.py;
+  tests/test_tier_public.py; tests/test_tier_release.py; tests/test_hybrid_tiers.py;
+  tests/test_skill_radar.py; tests/test_official_player_comparison.py;
+  tests/tier-list-personalization.test.ts; tests/tier-public.test.ts;
+  tests/skill-radar.test.ts; tests/official-comparison.test.ts;
+  tests/official-comparison-display.test.ts; tests/frontend-api.test.ts.
+Select affected cases/modules, then existing typecheck and production build.
+Before framework code edits, use bundled Next16.3 docs under
+node_modules/next/dist/docs/; the current project does not enable Cache Components.
+
+Perform one desktop/mobile UI pass using candidate artifacts: tier range labels,
+focal filter/keyboard controls, recommendations/Top Scores, radar suggestions,
+contributor dialogs and official comparison. Confirm complete ranges and no
+invalid-profile banner. No need to create a new visualization or redesign.
+For the tier-artwork amendment, check Named grid and Readable list at desktop,
+390px and the minimum supported mobile width, including dialog artwork and
+missing-image cards. Test fixed/ranged/fractional/unknown labels in all relevant
+sections. Every overlay must sit at bottom left, contain the complete corrected
+display value, and fit on a single line inside the art with no clipping or
+collision with the difficulty badge/title. Add a scoped DOM layout assertion
+that text scrollWidth<=clientWidth and its bounds stay inside the art, plus
+visual QA of contrast/readability; do not rely only on a nowrap CSS declaration.
+Retain full BPM button accessibility labels and keyboard/click behavior.
+
+9. Completion record and stopping boundary
+
+During implementation save: semantic/provenance hashes; exact source-to-chart
+mapping; all16 before/after interval changes; all32 focal decisions; user override
+history; actual migration/rebuild counts; before/after bucket membership; input
+score/consent/identity preservation; artifact validation and rollback results.
+Keep this planning baseline separate from future measured implementation results.
+
+Complete the implementation once the scoped acceptance checks pass. Perform at
+most one general review; make only a focused repair for a proven scoped failure.
+Do not refit unrelated models, revisit settled BPM research, clean the dirty
+workspace, or start recursive review cycles. This request ends at the plan;
+implementation, backfill and production activation are separate subsequent work.
+
+APPENDIX A — Complete interval additions/corrections
+APPENDIX B — Complete32 ranged-song focal/category assignments
+The tables below are generated from the pinned read-only metadata baseline.
+
+APPENDIX A
+Song | Variant | Previous upstream | Corrected display | Focal | Charts
+Barber's Madness | Arcade | missing | 195 | 195 | 8
+Dignity - FULL SONG - | FullSong | missing | 195 | 195 | 4
+Euphorianic - SHORT CUT - | ShortCut | missing | 140 | 140 | 6
+HUSH - FULL SONG - | FullSong | 82 | 81.5 | 81.5 | 2
+Hyacinth | Arcade | 193 | 192 | 192 | 8
+Love is a Danger Zone 2 Try To B.P.M | Remix | missing | 140-169 | 169 | 4
+Meteo5cience (GADGET mix) | Remix | missing | 140 | 140 | 4
+Moment Day | Arcade | 155 | 158 | 158 | 11
+Phantom | Arcade | 140 | 136 | 136 | 8
+Pneumonoultramicroscopicsilicovolcanoconiosis ft. Kagamine Len/GUMI | Arcade | missing | 156 | 156 | 4
+She Likes Pizza | Arcade | 229.5 | 230 | 230 | 6
+Simon Says, EURODANCE!! (feat. Sara☆M) | Arcade | 180 | 157 | 157 | 9
+Spooky Macaron | Arcade | 201 | 200 | 200 | 8
+Trotpris - SHORT CUT - | ShortCut | 156.12 | 156.118 | 156.118 | 2
+Violet Perfume | Arcade | 145 | 140 | 140 | 9
+Viyella's Nightmare | Arcade | missing | 220 | 220 | 7
+
+APPENDIX B
+Song | Variant | Display interval | Focal | Category | Charts | Decision
+* this game does not exist * | Arcade | 40-240 | 230 | 220+ | 9 | researched-proposal
+Alice in Misanthrope | Arcade | 154-174 | 172 | 170-179 | 9 | researched-proposal
+Appassionata | Arcade | 160-210 | 210 | 210-219 | 9 | user-preferred
+Aragami | Arcade | 48-196 | 196 | 190-199 | 9 | researched-proposal
+Banya Classic Remix | Remix | 162-170 | 170 | 170-179 | 4 | user-directed
+Banya-P Classic Remix | Remix | 92-180 | 180 | 180-189 | 4 | researched-proposal
+Beat of The War | Arcade | 140-202 | 202 | 200-209 | 8 | researched-proposal
+Beat of The War 2 | Arcade | 120-190 | 190 | 190-199 | 8 | researched-proposal
+Beat of the War 2 - FULL SONG - | FullSong | 120-190 | 190 | 190-199 | 2 | researched-proposal
+BRAIN POWER | Arcade | 170-173 | 173 | 170-179 | 12 | researched-proposal
+CHAOS AGAIN | Arcade | 150-260 | 230 | 220+ | 10 | researched-proposal
+Come to Me | Arcade | 100-107 | 107 | <150 | 7 | researched-proposal
+Crash-Landing Rendezvous | Arcade | 128-190 | 190 | 190-199 | 7 | researched-proposal
+Galaxy Collapse | Arcade | 150-320 | 320 | 220+ | 10 | researched-proposal
+Giselle | Arcade | 128-152 | 152 | 150-159 | 9 | researched-proposal
+Halcyon | Arcade | 40-191 | 191 | 190-199 | 7 | researched-proposal
+Karyawisata | Arcade | 150-173 | 173 | 170-179 | 9 | researched-proposal
+Love is a Danger Zone 2 - FULL SONG - | FullSong | 100-162 | 162 | 160-169 | 2 | researched-proposal
+Love is a Danger Zone 2 Try To B.P.M | Remix | 140-169 | 169 | 160-169 | 4 | researched-proposal
+Love Witch | Arcade | 155-170 | 170 | 170-179 | 8 | user-directed
+Lucid(PIU Edit) | Arcade | 40-190 | 190 | 190-199 | 9 | researched-proposal
+Mental Rider | Arcade | 120-140 | 140 | <150 | 8 | researched-proposal
+Neo Catharsis | Arcade | 120-300 | 210 | 210-219 | 8 | researched-proposal
+Neo Catharsis - SHORT CUT - | ShortCut | 120-300 | 210 | 210-219 | 5 | researched-proposal
+PaPa helloizing | Remix | 145-158 | 158 | 150-159 | 2 | researched-proposal
+Reincarnate in “A” | Arcade | 65-220 | 220 | 220+ | 7 | researched-proposal
+Switronic | Arcade | 120-170 | 120 | <150 | 11 | researched-proposal
+The Devil | Arcade | 130-240 | 240 | 220+ | 8 | user-directed
+Transmission | Arcade | 100-225 | 169 | 160-169 | 7 | user-directed
+Tream Vook of the war | Remix | 184-202 | 202 | 200-209 | 4 | researched-proposal
+Turkey Virus | Remix | 150-162 | 162 | 160-169 | 2 | researched-proposal
+Versailles | Arcade | 160-175 | 175 | 170-179 | 8 | researched-proposal

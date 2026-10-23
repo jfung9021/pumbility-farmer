@@ -10,9 +10,11 @@ const headers = {"Cache-Control":"no-store"};
 export async function GET(request: NextRequest) {
   if (!localAnalysisEnabled()) return NextResponse.json({error:"Local analysis mode is disabled."}, {status:404, headers});
   const playerKey = request.nextUrl.searchParams.get("playerKey")?.trim() ?? "";
+  const bpmPolicy = request.nextUrl.searchParams.get("bpmPolicy") || undefined;
+  if (bpmPolicy && bpmPolicy !== "focal-v1") return NextResponse.json({error:"Invalid BPM policy."}, {status:400, headers});
   if (!PLAYER_KEY_PATTERN.test(playerKey)) return NextResponse.json({error:"A valid playerKey is required."}, {status:400, headers});
   try {
-    return NextResponse.json(await readLocalSkillRadar(playerKey), {headers});
+    return NextResponse.json(await readLocalSkillRadar(playerKey, undefined, undefined, bpmPolicy), {headers});
   } catch (error) {
     if (error instanceof SkillRadarEligibilityError) return NextResponse.json({error:error.message}, {status:403, headers});
     const absent = (error as NodeJS.ErrnoException).code === "ENOENT";

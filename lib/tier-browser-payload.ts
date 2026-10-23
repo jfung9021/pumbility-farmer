@@ -48,7 +48,7 @@ export function compactTierPayload(payload: AnalysisPayload): AnalysisPayload {
   if (payload.tierListView?.kind === "list") return payload.schemaVersion === 60 ? validateLevel20WidthPublicPayload(payload)
     : payload.schemaVersion === 59 ? validateSssTailPublicPayload(payload) : payload;
   const source = payload as unknown as Row;
-  const result = pick(source, ["schemaVersion", "generatedAtUtc", "mix", "relativeGroups", "effectBands"]);
+  const result = pick(source, ["schemaVersion", "generatedAtUtc", "mix", "relativeGroups", "effectBands", "bpmMetadata"]);
   const summary = payload.summary;
   const method = pick(summary.method, fields.method);
   for (const key of ["sssScoring", "sssRefinement"]) if (summary.method[key]) method[key] = pick(summary.method[key] as Row, ["version", "baseSchemaVersion"]);
@@ -64,7 +64,7 @@ export function compactTierPayload(payload: AnalysisPayload): AnalysisPayload {
 /** Chart evidence retains the existing contract; only private rollback copies go. */
 export function tierChartDetails(payload: AnalysisPayload, chartId: string) {
   const row = [...payload.singles, ...payload.doubles, ...(payload.coop ?? [])].find(row => row.chartId === chartId);
-  return row ? {generatedAtUtc:payload.generatedAtUtc, chart:JSON.parse(JSON.stringify(row, (key, value) => key.endsWith("Baseline") ? undefined : value))} : null;
+  return row ? {generatedAtUtc:payload.generatedAtUtc, ...(payload.bpmMetadata ? {bpmMetadata:payload.bpmMetadata} : {}), chart:JSON.parse(JSON.stringify(row, (key, value) => key.endsWith("Baseline") ? undefined : value))} : null;
 }
 
 export function tierBrowserJson(payload: AnalysisPayload): string {

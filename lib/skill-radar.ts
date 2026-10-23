@@ -1,3 +1,5 @@
+import { focalBpm } from "./song-bpm.ts";
+
 export type RadarMode = "singles" | "doubles";
 export type RadarGroup = "weaknesses" | "strengths" | "everythingElse";
 
@@ -22,6 +24,8 @@ export interface RadarSuggestion {
   imageUrl: string | null;
   bpmMin: number | null;
   bpmMax: number | null;
+  /** Required by method 7; absent from the retained method 6 contract. */
+  bpmFocal?: number | null;
   estimatedDifficulty: number;
   personalScore: number | null;
   personalPlate: string | null;
@@ -57,7 +61,10 @@ export interface RadarBucket {
 }
 
 export interface SkillRadarResponse {
-  methodVersion: 6;
+  methodVersion: 6 | 7;
+  bpmMetadataVersion?: 1;
+  bpmPolicy?: "focal-v1";
+  bpmMetadataRevision?: string;
   reference: typeof RADAR_REFERENCE;
   player: {playerKey: string; displayName: string};
   generatedAtUtc: string;
@@ -119,9 +126,14 @@ const exact = (value: Record<string, unknown>, keys: readonly string[], optional
 const close = (a: number, b: number) => Math.abs(a - b) < 1e-8;
 
 /** Reject histories/private fields and malformed profiles rather than drawing zeros. */
-export function validateSkillRadarResponse(value: unknown, expectedPlayerKey?: string): SkillRadarResponse {
+export function validateSkillRadarResponse(value: unknown, expectedPlayerKey?: string, expectedBpmPolicy?: "focal-v1"): SkillRadarResponse {
   const invalid = () => { throw new Error("The Skill Radar data is unavailable or invalid."); };
-  if (!record(value) || !exact(value, ["methodVersion", "reference", "player", "generatedAtUtc", "tierGeneratedAtUtc", "bpmBuckets", "buckets", "groups"], ["playerSyncedAtUtc", "revision"]) || value.methodVersion !== 6 || value.revision !== undefined && typeof value.revision !== "string") return invalid();
+  if (!record(value) || (value.methodVersion !== 6 && value.methodVersion !== 7)) return invalid();
+  const focal = value.methodVersion === 7;
+  if (expectedBpmPolicy === "focal-v1" && !focal) return invalid();
+  const metadataKeys = focal ? ["bpmMetadataVersion", "bpmPolicy", "bpmMetadataRevision"] : [];
+  if (!exact(value, ["methodVersion", "reference", "player", "generatedAtUtc", "tierGeneratedAtUtc", "bpmBuckets", "buckets", "groups", ...metadataKeys], ["playerSyncedAtUtc", "revision"]) || value.revision !== undefined && typeof value.revision !== "string") return invalid();
+  if (focal && (value.bpmMetadataVersion !== 1 || value.bpmPolicy !== "focal-v1" || typeof value.bpmMetadataRevision !== "string" || !/^[a-f0-9]{64}$/.test(value.bpmMetadataRevision))) return invalid();
   if (!record(value.reference) || !exact(value.reference, ["grade", "plate", "minimumScore"]) || value.reference.grade !== RADAR_REFERENCE.grade || value.reference.plate !== RADAR_REFERENCE.plate || value.reference.minimumScore !== RADAR_REFERENCE.minimumScore) return invalid();
   if (!record(value.player) || !exact(value.player, ["playerKey", "displayName"]) || typeof value.player.playerKey !== "string" || !PLAYER_KEY_PATTERN.test(value.player.playerKey) || typeof value.player.displayName !== "string" || expectedPlayerKey && value.player.playerKey !== expectedPlayerKey) return invalid();
   for (const key of ["generatedAtUtc", "tierGeneratedAtUtc"]) if (typeof value[key] !== "string" || !Number.isFinite(Date.parse(value[key] as string))) return invalid();
@@ -160,7 +172,12 @@ export function validateSkillRadarResponse(value: unknown, expectedPlayerKey?: s
     const ids = new Set<string>();
     let prior = -Infinity;
     for (const chart of bucket.suggestions) {
-      if (!record(chart) || !exact(chart, ["chartId", "songName", "difficulty", "type", "level", "imageUrl", "bpmMin", "bpmMax", "estimatedDifficulty", "personalScore", "personalPlate"]) || typeof chart.chartId !== "string" || ids.has(chart.chartId) || typeof chart.songName !== "string" || typeof chart.difficulty !== "string" || chart.type !== (bucket.mode === "singles" ? "Single" : "Double") || !whole(chart.level) || chart.level > 30 || !(chart.imageUrl === null || typeof chart.imageUrl === "string") || !optionalNumber(chart.bpmMin) || !optionalNumber(chart.bpmMax) || !finite(chart.estimatedDifficulty) || chart.level < (bucket.suggestedLevel as number) || chart.estimatedDifficulty < prior || !(chart.personalScore === null || whole(chart.personalScore) && chart.personalScore <= 1_000_000) || !(chart.personalPlate === null || ["RG", "FG", "TG", "MG", "SG", "EG", "UG", "PG"].includes(chart.personalPlate as string))) return invalid();
+      if (!record(chart) || !exact(chart, ["chartId", "songName", "difficulty", "type", "level", "imageUrl", "bpmMin", "bpmMax", "estimatedDifficulty", "personalScore", "personalPlate", ...(focal ? ["bpmFocal"] : [])]) || typeof chart.chartId !== "string" || ids.has(chart.chartId) || typeof chart.songName !== "string" || typeof chart.difficulty !== "string" || chart.type !== (bucket.mode === "singles" ? "Single" : "Double") || !whole(chart.level) || chart.level > 30 || !(chart.imageUrl === null || typeof chart.imageUrl === "string") || !optionalNumber(chart.bpmMin) || !optionalNumber(chart.bpmMax) || !finite(chart.estimatedDifficulty) || chart.level < (bucket.suggestedLevel as number) || chart.estimatedDifficulty < prior || !(chart.personalScore === null || whole(chart.personalScore) && chart.personalScore <= 1_000_000) || !(chart.personalPlate === null || ["RG", "FG", "TG", "MG", "SG", "EG", "UG", "PG"].includes(chart.personalPlate as string))) return invalid();
+      if (focal) {
+        const bpm = focalBpm(chart as unknown as RadarSuggestion);
+        const bin = bins.get(bucket.bpmBucketId)!;
+        if (bpm === null || bin.min !== null && bpm < bin.min || bin.max !== null && bpm >= bin.max) return invalid();
+      }
       ids.add(chart.chartId); prior = chart.estimatedDifficulty;
     }
   }

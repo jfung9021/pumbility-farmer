@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   isOfficialPlayerKey,
   OFFICIAL_COMPARISON_METHOD,
+  OFFICIAL_COMPARISON_FOCAL_METHOD,
   validateOfficialComparisonIndex,
   validateOfficialComparisonPlayer,
   type OfficialComparisonIndex,
@@ -19,6 +20,26 @@ import {
 } from "../lib/local-official-comparison.ts";
 
 const playerKey = `op_${"a".repeat(64)}`;
+
+test("new official comparison groups a full-range chart by its focal BPM and pins metadata revision", () => {
+  const {index, player} = fixture();
+  assert.throws(() => validateOfficialComparisonIndex(index,"focal-v1"), /catalog is invalid/);
+  const identity = {bpmMetadataVersion:1 as const,bpmPolicy:"focal-v1" as const,bpmMetadataRevision:"a".repeat(64)};
+  Object.assign(index, identity, {schemaVersion:3, method:{version:OFFICIAL_COMPARISON_FOCAL_METHOD,bpmPolicy:"focal-v1"}});
+  Object.assign(player, identity, {schemaVersion:3});
+  for (const chart of index.charts) Object.assign(chart, {songType:"Arcade",bpmFocal:null});
+  Object.assign(index.charts[0], {bpmMin:100,bpmMax:225,bpmFocal:169});
+  player.buckets[2] = {...player.buckets[2],pg:0,radarScore:0,recordedCount:1,contributingCount:1,
+    contributors:[{chartId:"chart-1",score:0,pumbilityCents:21337,assumedPlate:"SG"}]};
+  player.radarEligibleScoreCount = 1;
+  validateOfficialComparisonIndex(index);
+  validateOfficialComparisonPlayer(player,index,playerKey);
+  assert.throws(() => validateOfficialComparisonPlayer({...player,bpmMetadataRevision:"b".repeat(64)},index,playerKey), /current comparison catalog/);
+  index.charts[0].bpmFocal = 170;
+  assert.throws(() => validateOfficialComparisonPlayer(player,index,playerKey), /does not match/);
+  index.charts[0].bpmFocal = 226;
+  assert.throws(() => validateOfficialComparisonIndex(index), /focal BPM/);
+});
 
 function fixture(recordedScores = 200): { index: OfficialComparisonIndex; player: OfficialComparisonPlayer } {
   const charts = Array.from({ length: recordedScores }, (_, i) => ({ chartId: `chart-${i + 1}`, songName: i ? `Other ${i}` : "Alpha", chartLabel: "S20", mode: "singles" as const, level: 20, bpmMin: i ? null : 150, bpmMax: i ? null : 150 }));
@@ -39,6 +60,19 @@ function fixture(recordedScores = 200): { index: OfficialComparisonIndex; player
     },
   };
 }
+
+test("an unmatched range stays in official scores while its unknown focal BPM stays out of radar buckets", () => {
+  const {index, player} = fixture();
+  const identity = {bpmMetadataVersion:1 as const,bpmPolicy:"focal-v1" as const,bpmMetadataRevision:"a".repeat(64)};
+  Object.assign(index, identity, {schemaVersion:3, method:{version:OFFICIAL_COMPARISON_FOCAL_METHOD,bpmPolicy:"focal-v1"}});
+  Object.assign(player, identity, {schemaVersion:3});
+  for (const chart of index.charts) Object.assign(chart, {songType:null,bpmFocal:null});
+  Object.assign(index.charts[0], {songName:"Future Unknown Song",bpmMin:100,bpmMax:225});
+  validateOfficialComparisonIndex(index, "focal-v1");
+  validateOfficialComparisonPlayer(player,index,playerKey);
+  assert.equal(player.scores["chart-1"], 0);
+  assert.equal(player.radarEligibleScoreCount, 0);
+});
 
 test("comparison contract keeps unknown radar buckets and valid zero scores distinct", () => {
   const { index, player } = fixture();
