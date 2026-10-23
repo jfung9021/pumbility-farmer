@@ -65,7 +65,7 @@ npm run bpm:check
 
 `bpmPolicy=focal-v1` explicitly selects the new API contract. Metadata views pin
 `bpmMetadataVersion=1` and a deterministic `bpmMetadataRevision`, separately from
-the numerical tier generation. The personal radar uses method 7/profile 12 and
+the numerical tier generation. The personal radar uses method 8/profile 13 and
 official comparison schema 3. Legacy selectors retain their existing contracts.
 The builders stage complete generations and select them only after writing all
 profiles. They reuse cached scores and tier fits without a score fetch or refit.

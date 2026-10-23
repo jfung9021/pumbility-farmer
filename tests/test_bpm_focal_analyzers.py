@@ -16,7 +16,7 @@ from official_player_comparison import (ComparisonUnavailableError, aggregate_bp
     _chart_metadata, build_official_comparison, read_comparison_profile, write_comparison_artifacts)
 from pumbility_contract import (combined_tier_blob_path, recommendation_blob_path,
     recommendation_phoenix2_shard_path)
-from skill_radar import (aggregate_bpm_progression, bpm_bucket, build_skill_radar,
+from skill_radar import (BPM_BUCKETS, aggregate_bpm_progression, bpm_bucket, build_skill_radar,
     build_suggestion_catalog)
 from skill_radar_runtime import SKILL_METADATA_PATH, _cache, _catalog_cache, read_skill_radar
 from song_bpm_metadata import bpm_metadata_identity, enrich_charts_bpm
@@ -118,7 +118,7 @@ class FocalAnalyzerTests(unittest.TestCase):
         catalog = build_suggestion_catalog(tiers(rows), rows, bpm_policy=POLICY)
         result = build_skill_radar(rows, [score()], catalog, player_key=KEY,
             display_name="PLAYER", generated_at_utc=STAMP, bpm_policy=POLICY)
-        self.assertEqual(result["methodVersion"], 7)
+        self.assertEqual(result["methodVersion"], 8)
         self.assertEqual(result["buckets"][4]["selectedCharts"], 1)
         candidate = catalog["charts"][0]
         self.assertEqual((candidate["bpmMin"], candidate["bpmMax"], candidate["bpmFocal"]), (100, 225, 169))
@@ -135,10 +135,48 @@ class FocalAnalyzerTests(unittest.TestCase):
         self.assertEqual((row["songType"], row["bpmMin"], row["bpmMax"], row["bpmFocal"]),
             ("FullSong", 156.118, 156.118, 156.118))
 
+    def test_focal_groups_select_five_weakest_and_five_strongest_without_overlap(self):
+        rows = [chart(f"{mode}-{i}", songName=f"Fixture {mode} {i}", type=mode,
+            bpmMin=bucket["min"] or 140, bpmMax=bucket["min"] or 140)
+            for i, bucket in enumerate(BPM_BUCKETS) for mode in ("Single", "Double")]
+        rows = enrich_charts_bpm(rows)
+        scores = [score(row["id"]) for row in rows]
+        aggregate = aggregate_bpm_progression(rows, scores, bpm_policy=POLICY)
+        # Give the eighteen mode/range pairs known ascending normalized ratings.
+        for i, bucket in enumerate(BPM_BUCKETS):
+            for offset, mode in enumerate(("singles", "doubles")):
+                rating = (2*i+offset+1)*5
+                ceiling = bucket["radarScale"][mode]["maximumAlignedLevel"]
+                aggregate["buckets"][i][mode]["equivalentLevel"] = 10+(ceiling-10)*rating/100+offset
+        catalog = build_suggestion_catalog({"generatedAtUtc":STAMP}, rows, bpm_policy=POLICY)
+        with patch("skill_radar.aggregate_bpm_progression", return_value=aggregate):
+            result = build_skill_radar(rows, scores, catalog, player_key=KEY,
+                display_name="PLAYER", generated_at_utc=STAMP, bpm_policy=POLICY)
+        self.assertEqual(result["groups"]["weaknesses"],
+            ["singles:0", "doubles:0", "singles:1", "doubles:1", "singles:2"])
+        self.assertEqual(result["groups"]["strengths"],
+            ["doubles:8", "singles:8", "doubles:7", "singles:7", "doubles:6"])
+        self.assertEqual(len(result["groups"]["everythingElse"]), 8)
+        members = sum(result["groups"].values(), [])
+        self.assertEqual(len(members), 18)
+        self.assertEqual(len(set(members)), 18)
+        for bucket in result["buckets"]:
+            self.assertIn(bucket["key"], result["groups"][bucket["group"]])
+
+    def test_five_range_groups_preserve_empty_and_sparse_strengths(self):
+        for rows, scores, expected_strengths in (([], [], []), ([chart()], [score()], ["singles:2"])):
+            with self.subTest(evidence=len(scores)):
+                catalog = build_suggestion_catalog(tiers(rows), rows, bpm_policy=POLICY)
+                result = build_skill_radar(rows, scores, catalog, player_key=KEY,
+                    display_name="PLAYER", generated_at_utc=STAMP, bpm_policy=POLICY)
+                self.assertEqual(len(result["groups"]["weaknesses"]), 5)
+                self.assertEqual(result["groups"]["strengths"], expected_strengths)
+                self.assertEqual(len(set(sum(result["groups"].values(), []))), 18)
+
     def test_runtime_json_and_relational_loaders_resolve_and_invalidate_focal_revision(self):
         store = Store([chart()])
         first = read_skill_radar(store, KEY, bpm_policy=POLICY)
-        self.assertEqual(first["methodVersion"], 7)
+        self.assertEqual(first["methodVersion"], 8)
         self.assertIs(first, read_skill_radar(store, KEY, bpm_policy=POLICY))
         store.read_skill_radar_metadata = lambda: store.values[SKILL_METADATA_PATH]
         self.assertEqual(read_skill_radar(store, KEY, bpm_policy=POLICY), first)
@@ -153,7 +191,7 @@ class FocalAnalyzerTests(unittest.TestCase):
         with patch("api.skill_radar.PrivateBlobStore", return_value=store):
             client = TestClient(app)
             self.assertEqual(client.get(f"/api/skill-radar?playerKey={KEY}").json()["methodVersion"], 6)
-            self.assertEqual(client.get(f"/api/skill-radar?playerKey={KEY}&bpmPolicy={POLICY}").json()["methodVersion"], 7)
+            self.assertEqual(client.get(f"/api/skill-radar?playerKey={KEY}&bpmPolicy={POLICY}").json()["methodVersion"], 8)
             self.assertEqual(client.get(f"/api/skill-radar?playerKey={KEY}&bpmPolicy=wrong").status_code, 400)
 
     def test_official_versioned_generation_changes_and_readers_reject_mixed_revision(self):
@@ -200,7 +238,7 @@ class FocalAnalyzerTests(unittest.TestCase):
                 pointer = root / "out/focal-v1/current.json"
                 previous = pointer.read_bytes()
                 generation = root / "out/focal-v1/generations" / report["generation"]
-                self.assertEqual(report["profileVersion"], 12)
+                self.assertEqual(report["profileVersion"], 13)
                 self.assertTrue((generation / "players" / (report["players"][0] + ".json")).is_file())
                 def interrupted(path, value):
                     if path.name == "players.json":
