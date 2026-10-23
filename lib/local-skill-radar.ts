@@ -10,14 +10,14 @@ export class SkillRadarEligibilityError extends Error {}
 type BpmGeneration = {generation: string; bpmMetadataVersion: 1; bpmPolicy: "focal-v1"; bpmMetadataRevision: string};
 const validIdentity = (value: Record<string, unknown>) => value.bpmMetadataVersion === 1 && value.bpmPolicy === "focal-v1" && typeof value.bpmMetadataRevision === "string" && /^[a-f0-9]{64}$/.test(value.bpmMetadataRevision);
 
-async function focalGeneration(directory: string): Promise<{directory: string; pointer: BpmGeneration; players: string[]}> {
+async function focalGeneration(directory: string): Promise<{directory: string; pointer: BpmGeneration; players: string[]; methodVersion: 7 | 8}> {
   const root = path.join(path.dirname(directory), "focal-v1");
   const pointer = JSON.parse(await readFile(path.join(root, "current.json"), "utf8"));
   if (!pointer || !validIdentity(pointer) || typeof pointer.generation !== "string" || !/^[a-f0-9]{64}$/.test(pointer.generation)) throw new Error("The Skill Radar generation is invalid.");
   const resolved = path.join(root, "generations", pointer.generation);
   const manifest = JSON.parse(await readFile(path.join(resolved, "manifest.json"), "utf8"));
-  if (!manifest || !validIdentity(manifest) || manifest.bpmMetadataRevision !== pointer.bpmMetadataRevision || manifest.generation !== pointer.generation || manifest.methodVersion !== 7 || manifest.profileVersion !== 12 || !Array.isArray(manifest.players) || !manifest.players.every((key: unknown) => typeof key === "string" && PLAYER_KEY_PATTERN.test(key)) || new Set(manifest.players).size !== manifest.players.length) throw new Error("The Skill Radar generation metadata is inconsistent.");
-  return {directory:resolved, pointer, players:manifest.players};
+  if (!manifest || !validIdentity(manifest) || manifest.bpmMetadataRevision !== pointer.bpmMetadataRevision || manifest.generation !== pointer.generation || !(manifest.methodVersion === 7 && manifest.profileVersion === 12 || manifest.methodVersion === 8 && manifest.profileVersion === 13) || !Array.isArray(manifest.players) || !manifest.players.every((key: unknown) => typeof key === "string" && PLAYER_KEY_PATTERN.test(key)) || new Set(manifest.players).size !== manifest.players.length) throw new Error("The Skill Radar generation metadata is inconsistent.");
+  return {directory:resolved, pointer, players:manifest.players, methodVersion:manifest.methodVersion};
 }
 
 function assertRosterGeneration(value: Record<string, unknown>, generation: Awaited<ReturnType<typeof focalGeneration>>) {
@@ -48,6 +48,6 @@ export async function readLocalSkillRadar(playerKey: string, directory = LOCAL_S
   if (generation) assertRosterGeneration(players as unknown as Record<string, unknown>, generation);
   if (!players.players.some(player => player.playerKey === playerKey)) throw new SkillRadarEligibilityError("Skill Radar requires at least 100 submitted Phoenix 2 scores.");
   const profile = validateSkillRadarResponse(JSON.parse(source), playerKey);
-  if (profile.methodVersion !== (generation ? 7 : 6) || generation && profile.bpmMetadataRevision !== generation.pointer.bpmMetadataRevision) throw new Error("The Skill Radar profile does not match its generation.");
+  if (profile.methodVersion !== (generation?.methodVersion ?? 6) || generation && profile.bpmMetadataRevision !== generation.pointer.bpmMetadataRevision) throw new Error("The Skill Radar profile does not match its generation.");
   return profile;
 }

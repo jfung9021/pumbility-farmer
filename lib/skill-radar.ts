@@ -24,7 +24,7 @@ export interface RadarSuggestion {
   imageUrl: string | null;
   bpmMin: number | null;
   bpmMax: number | null;
-  /** Required by method 7; absent from the retained method 6 contract. */
+  /** Required by focal methods; absent from the retained method 6 contract. */
   bpmFocal?: number | null;
   estimatedDifficulty: number;
   personalScore: number | null;
@@ -61,7 +61,7 @@ export interface RadarBucket {
 }
 
 export interface SkillRadarResponse {
-  methodVersion: 6 | 7;
+  methodVersion: 6 | 7 | 8;
   bpmMetadataVersion?: 1;
   bpmPolicy?: "focal-v1";
   bpmMetadataRevision?: string;
@@ -128,8 +128,9 @@ const close = (a: number, b: number) => Math.abs(a - b) < 1e-8;
 /** Reject histories/private fields and malformed profiles rather than drawing zeros. */
 export function validateSkillRadarResponse(value: unknown, expectedPlayerKey?: string, expectedBpmPolicy?: "focal-v1"): SkillRadarResponse {
   const invalid = () => { throw new Error("The Skill Radar data is unavailable or invalid."); };
-  if (!record(value) || (value.methodVersion !== 6 && value.methodVersion !== 7)) return invalid();
-  const focal = value.methodVersion === 7;
+  if (!record(value) || (value.methodVersion !== 6 && value.methodVersion !== 7 && value.methodVersion !== 8)) return invalid();
+  const focal = value.methodVersion !== 6;
+  const groupLimit = value.methodVersion === 8 ? 5 : 3;
   if (expectedBpmPolicy === "focal-v1" && !focal) return invalid();
   const metadataKeys = focal ? ["bpmMetadataVersion", "bpmPolicy", "bpmMetadataRevision"] : [];
   if (!exact(value, ["methodVersion", "reference", "player", "generatedAtUtc", "tierGeneratedAtUtc", "bpmBuckets", "buckets", "groups", ...metadataKeys], ["playerSyncedAtUtc", "revision"]) || value.revision !== undefined && typeof value.revision !== "string") return invalid();
@@ -185,7 +186,7 @@ export function validateSkillRadarResponse(value: unknown, expectedPlayerKey?: s
   const partition = RADAR_GROUPS.flatMap(group => {
     const members = (value.groups as Record<string, unknown>)[group.key];
     if (!Array.isArray(members) || !members.every(key => typeof key === "string" && keys.has(key))) return invalid();
-    if (group.key === "weaknesses" && members.length !== 3 || group.key === "strengths" && members.length > 3) return invalid();
+    if (group.key === "weaknesses" && members.length !== groupLimit || group.key === "strengths" && members.length > groupLimit) return invalid();
     return members as string[];
   });
   if (partition.length !== 18 || new Set(partition).size !== 18 || value.buckets.some(bucket => !(value.groups as Record<string, string[]>)[bucket.group].includes(bucket.key))) return invalid();

@@ -21,8 +21,8 @@ from song_bpm_metadata import bpm_bucket_index, bpm_metadata_identity, enrich_ch
 
 METHOD_VERSION = 6
 PROFILE_VERSION = 11
-FOCAL_METHOD_VERSION = 7
-FOCAL_PROFILE_VERSION = 12
+FOCAL_METHOD_VERSION = 8
+FOCAL_PROFILE_VERSION = 13
 BPM_POLICY = "focal-v1"
 SUGGESTION_LIMIT = 10
 REFERENCE = {"grade": "SSS+", "plate": "UG", "minimumScore": 995_000}
@@ -254,11 +254,12 @@ def build_skill_radar(charts, scores, suggestion_catalog, *, player_key, display
     order = lambda row: (int(row["bpmBucketId"]), 0 if row["mode"] == "singles" else 1)
     has_evidence = lambda row: row["selectedCharts"] > 0 and row["displayEquivalentLevel"] > 0
     normalized = lambda row: uncapped_radar_score(row["displayEquivalentLevel"], BPM_BUCKETS[int(row["bpmBucketId"])], row["mode"])
+    group_limit = 5 if focal else 3
     weaknesses = sorted(buckets, key=lambda row: (1 if has_evidence(row) else 0,
-        normalized(row) if has_evidence(row) else 0, *order(row)))[:3]
+        normalized(row) if has_evidence(row) else 0, *order(row)))[:group_limit]
     weak_keys = {row["key"] for row in weaknesses}
     strengths = sorted((row for row in buckets if row["key"] not in weak_keys
-        and has_evidence(row)), key=lambda row: (-normalized(row), *order(row)))[:3]
+        and has_evidence(row)), key=lambda row: (-normalized(row), *order(row)))[:group_limit]
     strong_keys = {row["key"] for row in strengths}
     remaining = [row for row in buckets if row["key"] not in weak_keys | strong_keys]
     groups = {"weaknesses": weaknesses, "strengths": strengths, "everythingElse": remaining}

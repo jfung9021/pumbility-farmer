@@ -15,6 +15,37 @@ function focalFixture() {
   return value;
 }
 
+function fiveRangeFixture() {
+  const value = focalFixture();
+  value.methodVersion = 8;
+  value.groups = {
+    weaknesses:value.buckets.slice(0,5).map((bucket: any) => bucket.key),
+    strengths:value.buckets.slice(-5).map((bucket: any) => bucket.key),
+    everythingElse:value.buckets.slice(5,-5).map((bucket: any) => bucket.key),
+  };
+  for (const bucket of value.buckets) {
+    bucket.group = Object.keys(value.groups).find(group => value.groups[group].includes(bucket.key));
+  }
+  return value;
+}
+
+test("five-range focal profiles keep all eighteen buckets in disjoint groups", () => {
+  const profile = validateSkillRadarResponse(fiveRangeFixture(), undefined, "focal-v1");
+  assert.equal(profile.methodVersion, 8);
+  assert.equal(profile.groups.weaknesses.length, 5);
+  assert.equal(profile.groups.strengths.length, 5);
+  assert.equal(profile.groups.everythingElse.length, 8);
+  for (const mutate of [
+    (value: any) => {value.groups.weaknesses.pop();},
+    (value: any) => {value.groups.strengths.push(value.groups.everythingElse.pop());},
+    (value: any) => {value.methodVersion = 7;},
+    (value: any) => {delete value.bpmMetadataRevision;},
+  ]) {
+    const value = fiveRangeFixture(); mutate(value);
+    assert.throws(() => validateSkillRadarResponse(value), /invalid/);
+  }
+});
+
 test("focal radar method has an explicit strict contract and preserves full-range suggestions", () => {
   const value = focalFixture();
   const bucket = value.buckets.find((bucket: any) => bucket.bpmBucketId === "2" && bucket.mode === "singles");
@@ -324,6 +355,15 @@ test("focal local reader pins pointer, manifest, roster and profile to one compl
     await writeFile(path.join(target,"players",`${key}.json`),JSON.stringify(profile));
     assert.equal((await readLocalSkillRadar(key,directory,undefined,"focal-v1")).methodVersion,7);
     assert.equal((await readLocalSkillRadarPlayers(path.join(root,"players.json"),"focal-v1")).players.length,1);
+    const expanded = fiveRangeFixture();
+    await writeFile(path.join(target,"manifest.json"),JSON.stringify({generation,...identity,methodVersion:8,profileVersion:13,players:[key]}));
+    await writeFile(path.join(target,"players",`${key}.json`),JSON.stringify(expanded));
+    assert.equal((await readLocalSkillRadar(key,directory,undefined,"focal-v1")).groups.weaknesses.length,5);
+    await writeFile(path.join(target,"players",`${key}.json`),JSON.stringify(profile));
+    await assert.rejects(readLocalSkillRadar(key,directory,undefined,"focal-v1"),/does not match/);
+    await writeFile(path.join(target,"manifest.json"),JSON.stringify({generation,...identity,methodVersion:8,profileVersion:12,players:[key]}));
+    await assert.rejects(readLocalSkillRadar(key,directory,undefined,"focal-v1"),/inconsistent/);
+    await writeFile(path.join(target,"manifest.json"),JSON.stringify({generation,...identity,methodVersion:8,profileVersion:13,players:[key]}));
     await writeFile(path.join(target,"players",`${key}.json`),JSON.stringify({...profile,bpmMetadataRevision:"c".repeat(64)}));
     await assert.rejects(readLocalSkillRadar(key,directory,undefined,"focal-v1"),/does not match/);
     await writeFile(path.join(focalRoot,"current.json"),JSON.stringify({generation:"../private",...identity}));
