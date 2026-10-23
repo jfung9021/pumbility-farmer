@@ -19,7 +19,8 @@ from phoenix2_pumbility import (GRADE_BANDS, GRADE_PENALTY_UNITS_BY_TYPE,
     PLATE_BONUS_UNITS_BY_TYPE, PLATE_CODES, normalize_plate)
 
 METHOD_VERSION = 6
-PROFILE_VERSION = 10
+PROFILE_VERSION = 11
+SUGGESTION_LIMIT = 10
 REFERENCE = {"grade": "SSS+", "plate": "UG", "minimumScore": 995_000}
 MODES = (("singles", "Single"), ("doubles", "Double"))
 BPM_BUCKETS = tuple({"id": str(index), "label": label, "min": low, "max": high,
@@ -213,7 +214,7 @@ def build_skill_radar(charts, scores, suggestion_catalog, *, player_key, display
             practice = sorted((chart for chart in suggestion_catalog["charts"]
                 if chart["type"] == mode and chart["bpmBucketId"] == bucket["id"]
                 and chart["level"] >= target_level),
-                key=lambda chart: (chart["level"], chart["estimatedDifficulty"], chart["songName"], chart["chartId"]))[:5]
+                key=lambda chart: (chart["level"], chart["estimatedDifficulty"], chart["songName"], chart["chartId"]))[:SUGGESTION_LIMIT]
             suggestions = []
             for chart in sorted(practice, key=lambda chart: (chart["estimatedDifficulty"], chart["songName"], chart["chartId"])):
                 personal = scores_by_chart.get(chart["chartId"], {})

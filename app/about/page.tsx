@@ -175,7 +175,7 @@ export default function AboutPage() {
             <h2 id="skill-radar-title">Skill Radar</h2>
             <p>View your personal Singles and Doubles BPM profile and find your next charts. Each BPM range averages up to five of your highest Phoenix 2 chart Pumbility values. Missing charts are excluded, ranges with fewer than five have an asterisk, and empty ranges show zero.</p>
             <p>UG is the equivalent level for a 995,000+ (SSS+) score with an Ultimate Game plate. Actual scores, plates, and earned Pumbility stay intact. S10 / D11 maps to zero. Singles and Doubles have independent 100-point ceilings for each BPM range; 220+ BPM keeps S25 / D26. Strengths and weaknesses use normalized ratings before clipping. Hiding a line changes only the drawing.</p>
-            <p>Suggestions start at your equivalent level +1.5, rounded down to an official folder and starting at level 16. Five charts are shown, filling from higher folders as needed, then sorted by SSS+ Pumbility difficulty. Played charts remain eligible. Songs spanning multiple BPM ranges are excluded.</p>
+            <p>Suggestions start at your equivalent level +1.5, rounded down to an official folder and starting at level 16. Up to ten charts are selected, filling from higher folders as needed, then sorted by SSS+ Pumbility difficulty. Five are shown initially; More reveals the remaining suggestions. Played charts remain eligible. Songs spanning multiple BPM ranges are excluded.</p>
             <div className={styles.sectionLinks}><Link href={profileHref("/skill-radar")}>Open Skill Radar ↗</Link></div>
           </section>
 

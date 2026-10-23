@@ -14,7 +14,7 @@ import { readJsonResponse } from "../../lib/api-response";
 import { MODEL_DELAY_THRESHOLD_MS, waitForPlayerRefresh } from "../../lib/refresh-reliability";
 import { formatEstimatedDifficulty } from "../../lib/format-difficulty";
 import { formatTierScore } from "../../lib/tier-filters";
-import { RADAR_GROUPS, RADAR_MODES, radarAxisLabelLayout, radarPoint, validateSkillRadarResponse, type RadarBucket, type RadarMode, type RadarSuggestion, type SkillRadarResponse } from "../../lib/skill-radar";
+import { RADAR_GROUPS, RADAR_MODES, RADAR_INITIAL_SUGGESTIONS, radarAxisLabelLayout, radarPoint, validateSkillRadarResponse, type RadarBucket, type RadarMode, type RadarSuggestion, type SkillRadarResponse } from "../../lib/skill-radar";
 import type { PlayerRefreshResponse } from "../../lib/types";
 import "./skill-radar.css";
 
@@ -110,6 +110,23 @@ function SuggestionRow({chart}: {chart: RadarSuggestion}) {
   </li>;
 }
 
+function SuggestionLadder({bucket}: {bucket: RadarBucket}) {
+  const [showAll, setShowAll] = useState(false);
+  const mode = RADAR_MODES[bucket.mode];
+  const visible = showAll ? bucket.suggestions : bucket.suggestions.slice(0, RADAR_INITIAL_SUGGESTIONS);
+  const listId = `${summaryId(bucket.key)}-suggestions`;
+  return <section aria-label={`${mode.label} ${bucket.label} BPM chart suggestions`} className="radar-ladder" id={`${summaryId(bucket.key)}-ladder`}>
+    <h3>Next charts <span>{mode.prefix}{bucket.suggestedLevel}{bucket.suggestions.some(chart => chart.level > bucket.suggestedLevel) ? "+" : ""}</span></h3>
+    {visible.length ? <ol id={listId}>{visible.map(chart => <SuggestionRow chart={chart} key={chart.chartId} />)}</ol> : <p>No qualifying charts.</p>}
+    {bucket.suggestions.length > RADAR_INITIAL_SUGGESTIONS ? <div className="radar-ladder-actions">
+      <span aria-live="polite">Showing {visible.length} of {bucket.suggestions.length}</span>
+      <button aria-controls={listId} aria-expanded={showAll}
+        aria-label={`${showAll ? "Show fewer" : `Show ${bucket.suggestions.length - RADAR_INITIAL_SUGGESTIONS} more`} ${mode.label} ${bucket.label} BPM chart suggestions`}
+        onClick={() => setShowAll(value => !value)} type="button">{showAll ? "Show less" : "More"}</button>
+    </div> : null}
+  </section>;
+}
+
 function BucketSummary({bucket, expanded, onSelect}: {bucket: RadarBucket; expanded: boolean; onSelect: () => void}) {
   const mode = RADAR_MODES[bucket.mode];
   return <div className={`radar-bucket radar-mode-${bucket.mode}`}>
@@ -119,10 +136,7 @@ function BucketSummary({bucket, expanded, onSelect}: {bucket: RadarBucket; expan
       {bucket.needsPlays ? <span className="radar-needs-plays">Needs plays · {bucket.selectedCharts}/5</span> : null}
       <span aria-hidden="true" className="radar-expand">{expanded ? "−" : "+"}</span>
     </button>
-    {expanded ? <section aria-label={`${mode.label} ${bucket.label} BPM chart suggestions`} className="radar-ladder" id={`${summaryId(bucket.key)}-ladder`}>
-      <h3>Next charts <span>{mode.prefix}{bucket.suggestedLevel}{bucket.suggestions.some(chart => chart.level > bucket.suggestedLevel) ? "+" : ""}</span></h3>
-      {bucket.suggestions.length ? <ol>{bucket.suggestions.map(chart => <SuggestionRow chart={chart} key={chart.chartId} />)}</ol> : <p>No qualifying charts.</p>}
-    </section> : null}
+    {expanded ? <SuggestionLadder bucket={bucket} /> : null}
   </div>;
 }
 

@@ -24,7 +24,7 @@ For a Windows worktree sharing dependencies, start Next with
 | Scaling | S10/D11 maps to 0. Singles and Doubles have independent BPM-specific 100-point ceilings. |
 | Missing scores | Average only available contributions, up to five. Empty buckets show zero. Mark mode-specific axis ratings with an asterisk when fewer than five charts contribute, with a small Insufficient data legend. |
 | Groups | Three weaknesses and three strengths total, across both modes, in any mix. |
-| Suggestions | Five charts starting at official level max(16, floor(actual UG +1.5)); fill from higher folders when needed, then sort by calculated Pumbility difficulty. Include played and already-SSS+ charts. |
+| Suggestions | Up to ten charts, initially displaying five with More to reveal the rest, starting at official level max(16, floor(actual UG +1.5)); fill from higher folders when needed, then sort by calculated Pumbility difficulty. Include played and already-SSS+ charts. |
 | Personal scores | Show scores and plates using the tier list's formatting. |
 | Rating details | Select an S/D radar rating to open its available contributing charts, including the exact selected score/plate and cent-rounded earned Pumbility. Show their average; omit missing slots. |
 
@@ -99,11 +99,11 @@ score-state merge and refresh jobs. Keep internal IDs and histories server-side.
 
 Match mode and BPM bucket, starting at the suggested official level. Use a 1e-9
 tolerance for floating-point noise at whole-level boundaries. Take the easiest
-available charts from that folder, then successive higher folders until five
-unique charts are selected. Skip empty folders. Sort the final five by
+available charts from that folder, then successive higher folders until ten
+unique charts are selected. Skip empty folders. Sort the final ten by
 full-precision calculated Pumbility rating, song name, then chart ID. Calculated
 ratings may be below or above the official folder. Existing scores never exclude
-charts. Show fewer only when fewer than five qualify across all eligible folders.
+charts. Show fewer only when fewer than ten qualify across all eligible folders.
 
 S18.0 UG selects S19 charts; S21.2 UG selects S22 charts. D19 raw UG selects
 D20 charts. Radar calibration never changes recommendation targets.
@@ -134,7 +134,7 @@ public player URL key and browser Back/Forward behavior.
 - **Desktop:** radar beside grouped bucket summaries and the selected ladder.
 - **Mobile:** radar above the same groups in one column. Wrap navigation rather
   than shrinking its labels further.
-- Keep all 18 summaries reachable. Expand one five-chart ladder at a time; open
+- Keep all 18 summaries reachable. Expand one ladder at a time, showing five suggestions initially with More to reveal the rest; open
   the first weakness initially. Avoid up to 90 expanded chart cards.
 - Summaries show mode, BPM, radar score and actual UG. Show Needs plays · 3/5 only
   when incomplete. Put the target minimum in the expanded ladder heading.
@@ -166,7 +166,7 @@ public player URL key and browser Back/Forward behavior.
 3. Add production GET /api/skill-radar?playerKey=... and a matching local Next
    route. Generate local artifacts through the same Python engine.
 4. Return public player identity, freshness/generation, 18 bucket aggregates and
-   at most five suggestion rows per bucket, including existing score/plate. Use
+   at most ten suggestion rows per bucket, showing five initially, including existing score/plate. Use
    existing visibility and no-store patterns. Never send full analysis/history.
 5. Build the responsive page, focused chart rows, selection state and navigation.
 
@@ -176,7 +176,7 @@ public player URL key and browser Back/Forward behavior.
 - All-level skill evidence works alongside the rated 16+ suggestion catalog.
 - One to five available contributions produce the expected mean-based UG values; empty buckets stay at zero.
 - D20.5 aligns with S19.5; offset applies once and never enters raw thresholds.
-- S18.0 UG starts with S19 charts, filling higher folders to five when needed,
+- S18.0 UG starts with S19 charts, filling higher folders to ten when needed,
   ordered by Pumbility rating, including existing
   SSS+ results. Personal score/plate display matches the tier list.
 - Zero/sparse buckets, ties, fewer than three established strengths, shortages
@@ -216,3 +216,7 @@ Browser verification also confirmed the mode-specific asterisk and small legend,
 three actual contribution rows with no zero placeholders, and average Pumbility.
 At mobile width 390 there is no page overflow. Hiding the only incomplete trace
 hides the legend; the normal viewport was restored afterward.
+
+## Ten-chart suggestion update
+
+The expanded suggestion set contains up to ten charts using the existing folder-first selection and final Pumbility ordering. The UI shows five initially; More reveals the rest and Show less returns to five. Closing/reopening a bucket or changing player/profile resets the display. Profile cache version is 11; numeric Method 6 and its five-score radar calculation are unchanged. See [the implementation and release plan](skill-radar-ten-suggestions-plan.md).
