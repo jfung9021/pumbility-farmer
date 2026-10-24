@@ -95,6 +95,3 @@
   .tier-list-page .chart-dialog-art-rail { width: 84px; }
   .tier-list-page .chart-dialog-jacket { height: 84px; width: 84px; }
 }
-@media (max-width: 429px) {
-  .tier-list-page .compact-chart-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}

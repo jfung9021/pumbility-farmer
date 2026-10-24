@@ -272,7 +272,7 @@ function RecommendationReadiness({
 
 function formatBpm(minimum: number | null | undefined, maximum: number | null | undefined): string | null {
   const chart = { bpmMin: minimum, bpmMax: maximum };
-  return displayBpmRange(chart) ? formatDisplayBpm(chart) : null;
+  return displayBpmRange(chart) ? formatDisplayBpm(chart, false) : null;
 }
 
 function RecommendationCard({

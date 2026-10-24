@@ -84,12 +84,12 @@ function PersonalChartScore({ chartId }: { chartId: string }) {
 
 const TierBrowseContext = createContext({ metric: "scoring" as TierMetricKey, showRating: false });
 function chartBpmLabel(chart: ChartResult) {
-  return formatDisplayBpm(chart);
+  return formatDisplayBpm(chart, false);
 }
 
 function ArtworkMetadata({ chart }: { chart: ChartResult }) {
   return <span className="tier-art-meta" aria-hidden="true">
-    <span className="tier-art-bpm">{formatDisplayBpm(chart)}</span>
+    <span className="tier-art-bpm">{formatDisplayBpm(chart, false)}</span>
     <span className={`chart-difficulty-badge chart-difficulty-${chart.type.toLowerCase()}`}>{chartCountLabel(chart)}</span>
   </span>;
 }

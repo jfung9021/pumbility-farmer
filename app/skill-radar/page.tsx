@@ -103,7 +103,7 @@ function ContributionDialog({bucket, onClose}: {bucket: RadarBucket; onClose: ()
 
 function SuggestionRow({chart}: {chart: RadarSuggestion}) {
   const prefix = chart.type === "Single" ? "S" : "D";
-  const bpm = formatDisplayBpm(chart);
+  const bpm = formatDisplayBpm(chart, false);
   return <li className="radar-chart-row">
     <div className="radar-jacket chart-art" data-chart-type={chart.type} aria-hidden="true">{chart.imageUrl ? <img alt="" loading="lazy" src={chart.imageUrl} /> : <span>{chart.difficulty}</span>}</div>
     <div className="radar-chart-copy"><strong>{chart.songName}</strong><span><b>{chart.difficulty}</b> official · {prefix}{formatEstimatedDifficulty(chart.estimatedDifficulty)} calculated</span><details className="radar-song-details"><summary>Chart details</summary><span>{bpm}</span></details></div>
