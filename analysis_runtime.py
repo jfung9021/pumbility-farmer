@@ -2484,10 +2484,12 @@ def _database_cursor_token(checkpoint: Mapping[str, Any]) -> str:
     progress = checkpoint.get("tierProgress")
     if phase == TYPED_CHECKPOINT_ANALYSIS_PHASE and progress is not None:
         progress = _validated_tier_progress(progress)
+        inner = progress.get("fitProgress")
+        suffix = f":fit:{inner['identity']}:{inner['ordinal']}" if inner is not None else ""
         if progress.get("goalProgressOrdinal"):
-            return f"{phase}:{progress['generation']}:goals:{progress['goalProgressOrdinal']}"
-        if progress["ordinal"] > 0:
-            return f"{phase}:{progress['generation']}:{progress['ordinal']}"
+            return f"{phase}:{progress['generation']}:goals:{progress['goalProgressOrdinal']}" + suffix
+        if progress["ordinal"] > 0 or inner is not None:
+            return f"{phase}:{progress['generation']}:{progress['ordinal']}" + suffix
         preparation = progress.get("preparationOrdinal", 0)
         if preparation > 0:
             return f"{phase}:{progress['generation']}:prepare:{preparation}"
@@ -2495,7 +2497,7 @@ def _database_cursor_token(checkpoint: Mapping[str, Any]) -> str:
 
 
 def _validated_tier_progress(progress: Any) -> dict[str, Any]:
-    from production_tiers import FINISH_STAGES
+    from production_tiers import FINISH_STAGES, SAMPLES
 
     if (
         not isinstance(progress, Mapping)
@@ -2519,6 +2521,15 @@ def _validated_tier_progress(progress: Any) -> dict[str, Any]:
         ))
     ):
         raise ValueError("The typed tier progress checkpoint is invalid.")
+    if "fitProgress" in progress:
+        inner = progress["fitProgress"]
+        if (not isinstance(inner, Mapping) or set(inner) != {"identity", "ordinal"}
+                or not re.fullmatch(r"[0-9a-f]{64}", str(inner.get("identity") or ""))
+                or type(inner.get("ordinal")) is not int or not 0 <= inner["ordinal"] <= SAMPLES + 2
+                or progress["stage"] not in {"target-fit", "scoring-goals"}
+                or (progress["stage"] == "target-fit" and
+                    (progress["ordinal"] >= 8 or progress.get("preparedContext") is not True))):
+            raise ValueError("The typed inner target-fit progress checkpoint is invalid.")
     return dict(progress)
 
 
@@ -2535,11 +2546,19 @@ def _reconcile_tier_progress(
         if current["ordinal"] < previous["ordinal"]:
             raise ValueError("The committed typed tier progress regressed.")
         if (current["ordinal"] == previous["ordinal"] == 0
-                and current.get("preparationOrdinal", 0) < previous.get("preparationOrdinal", 0)):
+                and current.get("preparationOrdinal", 0) < previous.get("preparationOrdinal", 0)
+                and not (previous.get("preparationOrdinal") == 12 and current.get("fitProgress") is not None)):
             raise ValueError("The committed typed tier preparation regressed.")
         if (current["ordinal"] == previous["ordinal"]
                 and current.get("goalProgressOrdinal", 0) < previous.get("goalProgressOrdinal", 0)):
             raise ValueError("The committed typed scoring-goal progress regressed.")
+        if (current["ordinal"] == previous["ordinal"]
+                and current.get("goalProgressOrdinal", 0) == previous.get("goalProgressOrdinal", 0)
+                and previous.get("fitProgress") is not None):
+            old_inner, new_inner = previous["fitProgress"], current.get("fitProgress")
+            if (new_inner is None or new_inner["identity"] != old_inner["identity"]
+                    or new_inner["ordinal"] < old_inner["ordinal"]):
+                raise ValueError("The committed inner target-fit progress regressed or changed identity.")
     return {**checkpoint, "tierProgress": current}
 
 

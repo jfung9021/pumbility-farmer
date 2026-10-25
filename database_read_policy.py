@@ -11,7 +11,7 @@ from typing import Callable, Iterator, ParamSpec, TypeVar
 
 import psycopg
 
-from analysis_budget import work_budget_remaining
+from analysis_budget import io_budget_remaining
 
 
 BACKGROUND_READ_TIMEOUT_MILLISECONDS = 30_000
@@ -44,7 +44,7 @@ def is_statement_timeout_error(error: BaseException) -> bool:
 def read_statement_timeout_milliseconds(default: int | None) -> int | None:
     if not _background_reads.get():
         return default
-    remaining = work_budget_remaining()
+    remaining = io_budget_remaining()
     limit = BACKGROUND_READ_TIMEOUT_MILLISECONDS
     if remaining is not None:
         # PostgreSQL treats zero as an unlimited deadline.
@@ -64,7 +64,7 @@ def retry_background_read(operation: str) -> Callable[[Callable[_P, _T]], Callab
                 except Exception as error:
                     if not is_statement_timeout_error(error):
                         raise
-                    remaining = work_budget_remaining()
+                    remaining = io_budget_remaining()
                     retrying = attempt < attempts and (remaining is None or remaining > 0)
                     _LOGGER.warning(json.dumps({
                         "event": "analysis_database_read_timeout",

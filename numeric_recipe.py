@@ -107,6 +107,10 @@ def producer_dependencies(roots, *, stage=None):
     def module_tree(filename):
         if filename not in parsed:
             source = (ROOT / filename).read_bytes()
+            if filename == "sss_scoring_model.py":
+                source = reviewed_target_dependency_source(source)
+            elif filename == "numeric_recipe.py":
+                source = reviewed_recipe_dependency_source(source)
             if filename == "canonical_json.py":
                 reviewed = compatible_canonical_source(source)
                 if reviewed is None:
@@ -229,7 +233,51 @@ def compatible_target_source():
     current = source_recipe("sss_scoring_model.py")
     # The sole alias below preserves every mathematical operation, draw, CV and
     # initial vector. Interrupted/full-200 parity is verified against f395.
-    return F395_TARGET_RECIPE if current in {F395_TARGET_RECIPE, BATCH_TARGET_RECIPE} else current
+    return F395_TARGET_RECIPE if current in {
+        F395_TARGET_RECIPE, BATCH_TARGET_RECIPE, BUDGET_TARGET_RECIPE} else current
+
+
+def reviewed_target_dependency_source(source):
+    """Preserve producer dependencies only for the exact reviewed deadline guard."""
+    if _ast_recipe(source) != BUDGET_TARGET_RECIPE:
+        return source
+    tree = ast.parse(source)
+    function = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "fit_target_model")
+    function.body = [node for node in function.body if not (
+        isinstance(node, ast.ImportFrom) and node.module == "analysis_budget")]
+    loop = next(node for node in function.body if isinstance(node, ast.For)
+                and isinstance(node.target, ast.Name) and node.target.id == "replicate")
+    expected = ast.parse("if _bootstrap_checkpoint is not None and not work_budget_available():\n"
+                         "    checkpoint(replicate)").body[0]
+    if ast.dump(loop.body[0], include_attributes=False) != ast.dump(expected, include_attributes=False):
+        raise ValueError("The reviewed target deadline guard differs.")
+    loop.body.pop(0)
+    restored = ast.unparse(tree).encode("utf-8")
+    if _ast_recipe(restored) != BATCH_TARGET_RECIPE:
+        raise ValueError("The reviewed target producer does not restore its exact predecessor.")
+    return restored
+
+
+def reviewed_recipe_dependency_source(source):
+    """Keep the reviewed alias addition from invalidating unchanged consumers."""
+    target = _ast_recipe((ROOT / "sss_scoring_model.py").read_bytes())
+    if target not in {F395_TARGET_RECIPE, BATCH_TARGET_RECIPE, BUDGET_TARGET_RECIPE}:
+        return source
+    tree = ast.parse(source)
+    function = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "compatible_target_source")
+    expected = ast.parse("def compatible_target_source():\n"
+        "    current = source_recipe('sss_scoring_model.py')\n"
+        "    return F395_TARGET_RECIPE if current in {F395_TARGET_RECIPE, BATCH_TARGET_RECIPE, BUDGET_TARGET_RECIPE} else current").body[0]
+    budget = next(node for node in tree.body if isinstance(node, ast.Assign)
+                  and any(isinstance(name, ast.Name) and name.id == "BUDGET_TARGET_RECIPE" for name in node.targets))
+    if (ast.dump(function, include_attributes=False) != ast.dump(expected, include_attributes=False)
+            or not isinstance(budget.value, ast.Constant) or budget.value.value != BUDGET_TARGET_RECIPE):
+        return source
+    function.body[-1] = ast.parse("return F395_TARGET_RECIPE if current in "
+                                 "{F395_TARGET_RECIPE, BATCH_TARGET_RECIPE} else current").body[0]
+    return ast.unparse(tree).encode("utf-8")
 
 
 def legacy_component_code():
@@ -246,3 +294,6 @@ def legacy_component_code():
 F395_TARGET_RECIPE = "422e031a89528f5d0260113a85003f8193ea1c6e5f3d112262f54ab20c0f7f5d"
 F395_BENCHMARK_RECIPE = "1f18807c301fc4b0abab9c19126119e6fc2ab692400c586086d24f835d1a5198"
 BATCH_TARGET_RECIPE = "2982f8d9bbef904d0c7aa9e7c2d8d34b459890f8162c043c2be4d506fee97bf8"
+# Exact additional producer: only checkpoint before the next RNG draw when a
+# worker deadline expires. Full/interrupted 200-sample parity stays mandatory.
+BUDGET_TARGET_RECIPE = "0607e9066c4f83e03e02d4fea80b1d29dbd057ac0df08e85248063a970961594"

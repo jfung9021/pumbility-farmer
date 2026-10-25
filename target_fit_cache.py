@@ -25,6 +25,19 @@ _POINT_CONTEXTS: OrderedDict[str, dict] = OrderedDict()
 _POINT_ARRAYS = ("parameters", "ability", "effect", "probability", "information")
 
 
+class TargetFitPending(RuntimeError):
+    """A verified private numerical component is ready for the next invocation."""
+    def __init__(self, identity, ordinal):
+        self.progress = {"identity": canonical_json_sha256(identity), "ordinal": ordinal}
+        super().__init__("Target fit checkpointed at its invocation work deadline.")
+
+
+def _yield_after_component(identity, ordinal):
+    from analysis_budget import work_budget_available
+    if not work_budget_available():
+        raise TargetFitPending(identity, ordinal)
+
+
 def _code_identity() -> str:
     from numeric_recipe import target_kernel_recipe
     return canonical_json_sha256(target_kernel_recipe())
@@ -134,6 +147,43 @@ class _BootstrapCheckpoint:
 
     def save(self, payload):
         _write(self.store, "bootstrap", self.identity, payload)
+        # Checkpoint zero includes CV, the point fit and sensitivity fits. Later
+        # checkpoints retain the exact next RNG state and all completed samples.
+        _yield_after_component(self.identity, payload["completed"])
+
+
+def pending_fit_progress(store, boards, *, score_target=990000,
+                         bootstrap_samples=model.DEFAULT_BOOTSTRAP_SAMPLES,
+                         seed=20261017, regularization_grid=model.REGULARIZATION_GRID,
+                         source_boards=None):
+    """Recover verified inner work before the enclosing runtime stall audit."""
+    data = model._prepare(boards, score_target)
+    identity = _identity(data, score_target=score_target, bootstrap_samples=bootstrap_samples,
+                         seed=seed, regularization_grid=regularization_grid)
+    saved = _read(store, "main", identity)
+    if saved is not None and _usable_main(saved, data, seed):
+        ordinal = bootstrap_samples + 1
+        source_identity = {"main": canonical_json_sha256(identity), "sources": {
+            name: _binary_inputs(model._prepare(source, score_target))
+            for name, source in sorted((source_boards or {}).items())}}
+        source = _read(store, "source", source_identity)
+        if (source is not None and source["policy"] == saved["fit"]["policy"]
+                and set(source["charts"]) == set(saved["fit"]["charts"])
+                and source["diagnostics"]["validation"] == saved["fit"]["diagnostics"]["validation"]):
+            ordinal += 1
+    else:
+        bootstrap = _BootstrapCheckpoint(store, identity).load()
+        if bootstrap is None:
+            return None
+        parent = canonical_json_sha256({"target": score_target, "samples": bootstrap_samples,
+            "seed": seed, "grid": identity["grid"], "charts": data["charts"],
+            "records": data["allRecords"], "players": data["players"],
+            "inputPlayers": data["inputPlayers"], "components": data["components"]})
+        ordinal = bootstrap["completed"]
+        if (bootstrap.get("parent") != parent or type(ordinal) is not int
+                or not 0 <= ordinal <= bootstrap_samples):
+            raise ValueError("The private target progress belongs to incompatible inputs or policy.")
+    return {"identity": canonical_json_sha256(identity), "ordinal": ordinal}
 
 
 def _point_key(data, penalty):
@@ -240,6 +290,7 @@ def load_or_fit_target(store, boards, *, score_target=990000,
     fit, context = saved["fit"], saved["context"]
     if not len(data["y"]):
         return fit  # The reference path returns before source/General diagnostics.
+    _yield_after_component(identity, bootstrap_samples + 1)
     _remember_point(data, fit, context)
     source_inputs = source_boards or {}
     source_identity = {"main": canonical_json_sha256(identity), "sources": {
@@ -253,6 +304,7 @@ def load_or_fit_target(store, boards, *, score_target=990000,
     if result is None:
         result = model.refresh_source_sensitivity(fit, source_inputs, score_target=score_target)
         _write(store, "source", source_identity, result)
+    _yield_after_component(identity, bootstrap_samples + 2)
     heldout = model._holdout(data["p"], data["c"], len(data["players"]), len(data["mainCharts"]), seed)
     if heldout.tolist() != context["heldout"]:
         raise ValueError("The private target validation split differs from its captured context.")
