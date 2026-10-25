@@ -378,6 +378,7 @@ ACTIVE_JOB_STALE_AFTER = timedelta(minutes=5)
 STAGING_MAX_AGE = timedelta(hours=24)
 TYPED_CHECKPOINT_SCHEMA_VERSION = 5
 LEGACY_TYPED_CHECKPOINT_SCHEMA_VERSION = 4
+MAX_DATABASE_TIMEOUT_RETRIES = 2
 TYPED_CHECKPOINT_SHARD_SCHEMA_VERSION = 1
 TYPED_CHECKPOINT_COMBINED_SCHEMA_VERSION = 3
 TYPED_CHECKPOINT_ROW_LIMIT = 5_000
@@ -1331,6 +1332,17 @@ def _analysis_terminal_event(
         "jobId": re.sub(r"[^A-Za-z0-9_-]", "", job_id)[:120],
         "stage": re.sub(r"[^A-Za-z0-9_-]", "", stage)[:80],
         "checkpointPhase": re.sub(r"[^A-Za-z0-9_-]", "", phase)[:80],
+        **_publication_error_fields(error),
+    }, separators=(",", ":"), sort_keys=True))
+
+
+def _database_timeout_event(job_id: str, error: BaseException, *, outcome: str,
+                            attempts: int = 0) -> None:
+    _PUBLICATION_LOGGER.warning(json.dumps({
+        "event": "analysis_database_timeout",
+        "jobId": re.sub(r"[^A-Za-z0-9_-]", "", job_id)[:120],
+        "outcome": outcome,
+        "attempts": attempts,
         **_publication_error_fields(error),
     }, separators=(",", ":"), sort_keys=True))
 
@@ -3455,6 +3467,88 @@ def _checkpoint_continuation(
     return result
 
 
+def _database_timeout_continuation(
+    *, blob_store: JsonBlobStore, job_store: JobStore, job_id: str,
+    checkpoint_path: str, starting_checkpoint: Mapping[str, Any] | None,
+    lease_heartbeat: Any | None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Reserve a bounded, owner-fenced retry of an existing private checkpoint."""
+    job = job_store.get(job_id)
+    if job is None:
+        return None, "job-unavailable"
+    if job.get("cancelRequested") or job.get("status") in {"completed", "failed", "cancelled"}:
+        if job.get("cancelRequested") and job.get("status") not in {"completed", "failed", "cancelled"}:
+            job = update_job(job_store, job_id, status="failed",
+                error="The analysis was cancelled.", retryAllowedAtUtc=None)
+            if job_store.active_job_id() == job_id:
+                job_store.set_active_job_id(None)
+        try:
+            _stop_job_lease(lease_heartbeat)
+        except Exception:
+            # Cancellation can invalidate the heartbeat before it is stopped.
+            pass
+        return job, "cancelled-or-terminal"
+    _pulse_job_lease(lease_heartbeat)
+    checkpoint = blob_store.get_json(checkpoint_path)
+    # Pointer promotion has a separate atomic recovery protocol. Never replay it
+    # through this prepublication timeout continuation.
+    safe_phases = {
+        TYPED_CHECKPOINT_ANALYSIS_PHASE, TYPED_CHECKPOINT_COMBINED_PHASE,
+        TYPED_CHECKPOINT_MODEL_PREPARE_PHASE, TYPED_CHECKPOINT_MODEL_FIT_SINGLES_PHASE,
+        TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE, TYPED_CHECKPOINT_MODEL_ASSEMBLE_PHASE,
+        TYPED_CHECKPOINT_MODEL_PHASE, TYPED_CHECKPOINT_SNAPSHOT_PHASE,
+        TYPED_CHECKPOINT_DATABASE_SHARDS_PHASE, TYPED_CHECKPOINT_DATABASE_ANALYSIS_PHASE,
+    }
+    if (not isinstance(checkpoint, Mapping)
+            or checkpoint.get("jobId") != job_id
+            or resolve_mix(checkpoint.get("mix")).key != resolve_mix(job.get("mix")).key
+            or checkpoint.get("schemaVersion") not in {
+                LEGACY_TYPED_CHECKPOINT_SCHEMA_VERSION, TYPED_CHECKPOINT_SCHEMA_VERSION}
+            or checkpoint.get("phase") not in safe_phases):
+        return None, "no-safe-checkpoint"
+    token = _database_cursor_token(checkpoint)
+    previous = job.get("databaseTimeoutRetry")
+    attempts = 0
+    if isinstance(previous, Mapping) and previous.get("token") == token:
+        attempts = previous.get("attempts")
+        if type(attempts) is not int or not 0 <= attempts <= MAX_DATABASE_TIMEOUT_RETRIES:
+            return None, "invalid-retry-state"
+    exhausted = attempts >= MAX_DATABASE_TIMEOUT_RETRIES
+    marker = {"token": token, "attempts": min(attempts + 1, MAX_DATABASE_TIMEOUT_RETRIES)}
+    # Job saves enforce the current owner and cancellation fence. A storage
+    # failure here cannot create an uncounted queue retry.
+    _pulse_job_lease(lease_heartbeat)
+    update_job(job_store, job_id, databaseTimeoutRetry=marker)
+    if (job_store.get(job_id) or {}).get("databaseTimeoutRetry") != marker:
+        raise RuntimeError("The database timeout retry reservation was not persisted.")
+
+    # A timeout after the resume audit must not spend a no-progress observation.
+    # Refund only this invocation's exact observation, never committed work or
+    # another invocation's audit. A changed durable token retains its audit.
+    if starting_checkpoint is not None and _database_cursor_token(starting_checkpoint) == token:
+        prior_audit = starting_checkpoint.get("resumeAudit")
+        prior_audit = dict(prior_audit) if isinstance(prior_audit, Mapping) else None
+        expected = {"token": token, "observations": (
+            int(prior_audit.get("observations") or 0) + 1
+            if prior_audit is not None and prior_audit.get("token") == token else 1)}
+        if checkpoint.get("resumeAudit") == expected:
+            checkpoint = dict(checkpoint)
+            if prior_audit is None:
+                checkpoint.pop("resumeAudit", None)
+            else:
+                checkpoint["resumeAudit"] = prior_audit
+            _pulse_job_lease(lease_heartbeat)
+            blob_store.put_json(checkpoint_path, checkpoint)
+    if exhausted:
+        return None, "exhausted"
+    sequence = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16] + "-" + str(attempts + 1)
+    return _checkpoint_continuation(job_store=job_store, job_id=job_id,
+        continuation="database-retry", sequence=sequence,
+        stage=str(job.get("stage") or "analyzing"),
+        message="A temporary database timeout interrupted analysis; resuming its saved checkpoint.",
+        lease_heartbeat=lease_heartbeat), "queued"
+
+
 def _resume_typed_analysis_checkpoint(
     checkpoint: Mapping[str, Any],
     *,
@@ -4426,6 +4520,7 @@ def execute_analysis_job(
         getattr(blob_store, "typed_persistence_enabled", False)
     )
     lease_heartbeat: Any | None = None
+    starting_checkpoint: Mapping[str, Any] | None = None
 
     try:
         lease_heartbeat = _start_job_lease_heartbeat(job_store, job_id)
@@ -4438,6 +4533,7 @@ def execute_analysis_job(
         )
         if typed_persistence_enabled:
             typed_checkpoint = blob_store.get_json(checkpoint_path)
+            starting_checkpoint = typed_checkpoint
             if typed_checkpoint is not None:
                 return _resume_typed_analysis_checkpoint(
                     typed_checkpoint,
@@ -4714,6 +4810,34 @@ def execute_analysis_job(
             lease_heartbeat=lease_heartbeat,
             phase_progress={"current": exc.progress_ordinal, "total": exc.total_stages})
     except Exception as exc:
+        from database_read_policy import is_statement_timeout_error
+        from pumbility_store import JobLeaseLostError
+
+        timeout_failure = None
+        if typed_persistence_enabled and is_statement_timeout_error(exc):
+            try:
+                retry, outcome = _database_timeout_continuation(
+                    blob_store=blob_store, job_store=job_store, job_id=job_id,
+                    checkpoint_path=checkpoint_path, starting_checkpoint=starting_checkpoint,
+                    lease_heartbeat=lease_heartbeat)
+                _database_timeout_event(job_id, exc, outcome=outcome,
+                    attempts=(retry.get("databaseTimeoutRetry", {}).get("attempts", 0)
+                        if retry is not None else MAX_DATABASE_TIMEOUT_RETRIES if outcome == "exhausted" else 0))
+                if retry is not None:
+                    return retry
+                timeout_failure = (
+                    "The analysis database timeout exhausted its automatic retries. Please retry after the cooldown."
+                    if outcome == "exhausted" else None)
+            except (JobLeaseLostError, JobLeaseHeldError):
+                _database_timeout_event(job_id, exc, outcome="ownership-changed")
+                try:
+                    _stop_job_lease(lease_heartbeat)
+                except Exception:
+                    pass
+                return job_store.get(job_id) or existing
+            except Exception:
+                _database_timeout_event(job_id, exc, outcome="retry-persistence-failed")
+                timeout_failure = "The analysis database timeout could not be recovered automatically. Please retry after the cooldown."
         _analysis_terminal_event(job_id, job_store, blob_store, checkpoint_path, exc)
         if isinstance(exc, (
             IncompatibleCombinedTierCheckpointError,
@@ -4740,7 +4864,7 @@ def execute_analysis_job(
                 )
             lease_heartbeat = None
         failed_at = now()
-        message = safe_error(exc)
+        message = timeout_failure or safe_error(exc)
         try:
             failed = update_job(
                 job_store,
