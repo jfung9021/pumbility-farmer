@@ -61,6 +61,32 @@ class AnalysisDatabaseTimeoutTests(unittest.TestCase):
         self.assertIsNotNone(original(runtime.LATEST_BLOB_PATH))
         self.assertEqual(len(self.jobs.jobs), 1)
 
+    def test_timeout_after_work_deadline_uses_checkpoint_reserve_to_requeue(self):
+        from analysis_budget import invocation_budget, work_budget_available
+        from database_read_policy import (
+            background_database_reads, read_statement_timeout_milliseconds,
+        )
+
+        original = self.blobs.get_json
+
+        def database_checkpoint_read(path):
+            # Model a read that cannot complete under the erroneous 1ms limit.
+            if read_statement_timeout_milliseconds(10_000) < 1_000:
+                raise statement_timeout()
+            return original(path)
+
+        with invocation_budget(0), background_database_reads(), \
+                patch.object(self.blobs, "get_json", side_effect=database_checkpoint_read):
+            self.assertFalse(work_budget_available())
+            result = self.audit_timeout()
+
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(result[runtime.ANALYSIS_CONTINUATION_FIELD], "database-retry")
+        self.assertEqual(result["databaseTimeoutRetry"]["attempts"], 1)
+        self.assertEqual(self.jobs.active_job_id(), self.job_id)
+        self.assertIsNotNone(original(self.path))
+        self.assertIsNone(original(runtime.LATEST_BLOB_PATH))
+
     def test_timeout_after_audit_refunds_only_its_observation_and_exhausts_two_retries(self):
         checkpoint = self.blobs.get_json(self.path)
         prior_audit = {"token": runtime._database_cursor_token(checkpoint), "observations": 1}

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import psycopg
 
-from analysis_budget import invocation_budget
+from analysis_budget import invocation_budget, work_budget_available
 from database_read_policy import (
     BACKGROUND_READ_ATTEMPTS,
     BACKGROUND_READ_TIMEOUT_MILLISECONDS,
@@ -55,11 +55,18 @@ class StatementTimeoutClassificationTests(unittest.TestCase):
                 raise ValueError("synthetic")
         self.assertEqual(read_statement_timeout_milliseconds(10_000), 10_000)
 
-    def test_background_deadline_respects_remaining_invocation_budget(self):
-        with patch("analysis_budget.time.monotonic", side_effect=[100.0, 105.0, 110.0]):
+    def test_background_deadline_respects_remaining_io_budget(self):
+        with patch("analysis_budget.time.monotonic", side_effect=[100.0, 255.0, 260.0]):
             with invocation_budget(10), background_database_reads():
                 self.assertEqual(read_statement_timeout_milliseconds(10_000), 5_000)
                 self.assertEqual(read_statement_timeout_milliseconds(10_000), 1)
+
+    def test_expired_numerical_budget_preserves_checkpoint_read_deadline(self):
+        with patch("analysis_budget.time.monotonic", return_value=100.0) as clock:
+            with invocation_budget(), background_database_reads():
+                clock.return_value = 700.0
+                self.assertFalse(work_budget_available())
+                self.assertEqual(read_statement_timeout_milliseconds(10_000), 30_000)
 
 
 class BackgroundDatabaseReadTests(unittest.TestCase):
@@ -139,12 +146,26 @@ class BackgroundDatabaseReadTests(unittest.TestCase):
                     self.store.get_json("analysis/private/synthetic.json")
                 self.assertEqual(len(self.cursors), 1)
 
-    def test_no_retry_after_invocation_work_deadline(self):
-        with self.connections([statement_timeout()]), background_database_reads(), \
-                patch("database_read_policy.work_budget_remaining", return_value=0), \
-                self.assertRaises(psycopg.errors.QueryCanceled):
-            self.store.get_json("analysis/private/synthetic.json")
+    def test_no_retry_after_invocation_io_deadline(self):
+        with patch("analysis_budget.time.monotonic", return_value=100.0) as clock:
+            with invocation_budget(), self.connections([statement_timeout()]), background_database_reads(), \
+                    self.assertRaises(psycopg.errors.QueryCanceled):
+                clock.return_value = 850.0
+                self.store.get_json("analysis/private/synthetic.json")
         self.assertEqual(len(self.cursors), 1)
+        self.cursors[0].execute.assert_any_call("set local statement_timeout = '1ms'")
+
+    def test_fresh_transaction_retry_still_works_after_numerical_work_expires(self):
+        payload = {"checkpoint": "synthetic"}
+        with patch("analysis_budget.time.monotonic", return_value=100.0) as clock:
+            with invocation_budget(), background_database_reads(), \
+                    self.connections([statement_timeout(), self.artifact(payload)]):
+                clock.return_value = 700.0
+                self.assertFalse(work_budget_available())
+                self.assertEqual(self.store.get_json("analysis/private/synthetic.json"), payload)
+        self.assertEqual(self.transactions, [(0, "enter"), (0, "exit"), (1, "enter"), (1, "exit")])
+        for cursor in self.cursors:
+            cursor.execute.assert_any_call("set local statement_timeout = '30000ms'")
 
     def test_revision_receipt_and_job_reads_use_same_policy(self):
         jobs = PumbilityJobStore(database_url="postgresql://localhost/synthetic")

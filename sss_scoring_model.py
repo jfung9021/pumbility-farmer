@@ -377,7 +377,10 @@ def fit_target_model(boards: Mapping[str, Mapping[str, float]], *, score_target:
 
     if resume is None:
         checkpoint(0)
+    from analysis_budget import work_budget_available
     for replicate in range(completed, bootstrap_samples):
+        if _bootstrap_checkpoint is not None and not work_budget_available():
+            checkpoint(replicate)
         multiplicity = np.bincount(rng.integers(0, player_count, size=player_count), minlength=player_count)
         refit = _fit(p, c, y, player_count, chart_count, selected, multiplicity=multiplicity,
                      initial=fitted["parameters"])

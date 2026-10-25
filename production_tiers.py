@@ -772,7 +772,8 @@ def _advance_preparation(store, state, *, context=None, on_stage_start=None, on_
     generation = state["generation"]
     state_path = PREFIX + "generations/" + generation + "/state.json"
     _preparation_ordinal(state)
-    if state.get("preparationVersion") and not state.get("fitReferences") and not state.get("fitsReady"):
+    if (state.get("preparationVersion") and not state.get("fitReferences")
+            and not state.get("fitsReady") and _preparation_ordinal(state) < 12):
         _preparation_progress(state, on_progress)
     phases = state.setdefault("phaseInputs", {})
     for name in PHASE_INPUT_NAMES:
@@ -839,7 +840,7 @@ def _pin_cohorts(store, generation, prepared, goals):
 def _advance_prepared_fits(store, state, *, on_stage_start=None, on_progress=None):
     from tier_pipeline_checkpoints import read_checkpoint
     from tier_computation_cache import write_index
-    from target_fit_cache import load_or_fit_target
+    from target_fit_cache import load_or_fit_target, pending_fit_progress, TargetFitPending
     if _preparation_ordinal(state) != 12:
         raise ValueError("The captured tier preparation is incomplete.")
     generation = state["generation"]
@@ -858,10 +859,23 @@ def _advance_prepared_fits(store, state, *, on_stage_start=None, on_progress=Non
             cached = _cached_fit(store, payload["boards"], identity)
         computed = cached is None
         if computed:
+            inner = pending_fit_progress(store, payload["boards"], score_target=identity["target"],
+                bootstrap_samples=SAMPLES, seed=SEED, source_boards=payload["sources"])
+            if inner is not None:
+                _report_inner_fit(on_progress, generation, len(references), inner)
             if on_stage_start: on_stage_start(f"target-fit-{goal}-{source}-{mode.lower()}")
-            fit = load_or_fit_target(store, payload["boards"], score_target=identity["target"],
-                bootstrap_samples=SAMPLES, seed=SEED, source_boards=payload["sources"],
-                general_predictor=training_predictor(identity["target"], store) if source == "official" else None)
+            try:
+                fit = load_or_fit_target(store, payload["boards"], score_target=identity["target"],
+                    bootstrap_samples=SAMPLES, seed=SEED, source_boards=payload["sources"],
+                    general_predictor=training_predictor(identity["target"], store) if source == "official" else None)
+            except TargetFitPending as pending:
+                recovered = pending_fit_progress(store, payload["boards"], score_target=identity["target"],
+                    bootstrap_samples=SAMPLES, seed=SEED, source_boards=payload["sources"])
+                if (recovered is None or recovered["identity"] != pending.progress["identity"]
+                        or recovered["ordinal"] < pending.progress["ordinal"]):
+                    raise ValueError("The pending target fit has no matching durable progress.")
+                _report_inner_fit(on_progress, generation, len(references), recovered)
+                raise _pending_inner_fit(generation, len(references), recovered) from None
             if source == "official":
                 fit["diagnostics"]["generalBenchmarkPolicy"] = {"method": "training-only-General-additive-score-cost",
                     "logisticScoreScale": 10000, "scaleSelection": "fixed-before-holdout", "heldoutRecordsUsedInFit": False}
@@ -890,6 +904,22 @@ def _advance_prepared_fits(store, state, *, on_stage_start=None, on_progress=Non
         raise TierAnalysisPending(generation[:16] + "-9", 8, stage="prepared-inputs",
                                   generation=generation, progress_ordinal=9)
     return _advance_finish(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
+
+
+def _report_inner_fit(callback, generation, ordinal, progress, *, goal_units=None):
+    if callback is not None:
+        value = {"version": 1, "generation": generation, "ordinal": ordinal,
+                 "stage": "target-fit", "preparedContext": True, "fitProgress": progress}
+        if goal_units is not None:
+            value.update(stage="scoring-goals", goalProgressOrdinal=goal_units)
+        callback(value)
+
+
+def _pending_inner_fit(generation, ordinal, progress, *, goal_units=None):
+    sequence = generation[:16] + "-inner-" + progress["identity"][:16] + "-" + str(progress["ordinal"])
+    return TierAnalysisPending(sequence, min(ordinal, 8),
+        stage="scoring-goals" if goal_units is not None else "target-fit",
+        generation=generation, progress_ordinal=ordinal)
 
 
 def _report_progress(callback, generation, ordinal, stage):
@@ -1531,6 +1561,7 @@ def _advance_required_goals(store, state, *, on_progress=None, on_stage_start=No
     from scoring_targets import BACKFILL_GOALS
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
     from tier_computation_cache import write_index
+    from target_fit_cache import pending_fit_progress, TargetFitPending
 
     artifacts = state.setdefault("goalArtifacts", {})
     jobs = state.setdefault("requiredGoalJobs", {})
@@ -1538,12 +1569,15 @@ def _advance_required_goals(store, state, *, on_progress=None, on_stage_start=No
     state_path = PREFIX + "generations/" + generation + "/state.json"
     ordinal = 9 + len(FINISH_STAGES)
 
-    def progress():
+    def progress(inner=None):
         units = sum(9 if goal in artifacts else len(jobs.get(goal, {}).get("cohorts", []))
                     + len(jobs.get(goal, {}).get("fits", [])) for goal in BACKFILL_GOALS)
         if on_progress and units:
-            on_progress({"version": 1, "generation": generation, "ordinal": ordinal,
-                "stage": "scoring-goals", "goalProgressOrdinal": units})
+            value = {"version": 1, "generation": generation, "ordinal": ordinal,
+                "stage": "scoring-goals", "goalProgressOrdinal": units}
+            if inner is not None:
+                value["fitProgress"] = inner
+            on_progress(value)
         return units
 
     def committed():
@@ -1561,10 +1595,6 @@ def _advance_required_goals(store, state, *, on_progress=None, on_stage_start=No
     for goal in BACKFILL_GOALS:
         if goal in artifacts:
             continue
-        progress()
-        if on_stage_start:
-            on_stage_start("scoring-goals")
-        _check_preparation_budget("scoring-goals")
         recipe = _goal_recipe(goal)
         job = jobs.setdefault(goal, {"recipe": recipe, "cohorts": [], "fits": []})
         if job.get("recipe") != recipe:
@@ -1576,6 +1606,29 @@ def _advance_required_goals(store, state, *, on_progress=None, on_stage_start=No
                 or [(item.get("source"), item.get("mode")) for item in cohorts] != expected[:len(cohorts)]
                 or any(item.get("goal") != goal for item in cohorts)):
             raise ValueError("The required scoring-goal cohort progress is invalid.")
+        inner = None
+        if len(cohorts) == 4 and len(fits) < 4:
+            item = cohorts[len(fits)]
+            cached = store.get_json(fit_path(item["identity"]))
+            if cached is not None:
+                if cached.get("identity") != item["identity"]:
+                    raise ValueError("The recovered scoring-goal fit has stale input identity.")
+                validate_fit(cached["fit"], item["identity"])
+                fits.append({**{key: item[key] for key in
+                    ("goal", "source", "mode", "identity", "reusedOriginal")},
+                    "path": fit_path(item["identity"]), "fitSha256": digest(cached["fit"])})
+                # Recover the fit/manifest crash gap before the runtime audits
+                # the older cohort count. No numerical solve is repeated.
+                committed()
+            payload = read_checkpoint(store, item["inputs"], stage="cohort-inputs",
+                identity=digest({"generation": fit_generation, "goal": goal,
+                    "source": item["source"], "mode": item["mode"], "identity": item["identity"]}))
+            inner = pending_fit_progress(store, payload["boards"], score_target=item["identity"]["target"],
+                bootstrap_samples=SAMPLES, seed=SEED, source_boards=payload["sources"])
+        progress(inner)
+        if on_stage_start:
+            on_stage_start("scoring-goals")
+        _check_preparation_budget("scoring-goals")
         if len(cohorts) < 4:
             prepared = phase_input("model")["prepared"]
             source, mode = expected[len(cohorts)]
@@ -1587,7 +1640,16 @@ def _advance_required_goals(store, state, *, on_progress=None, on_stage_start=No
                             "inputs": reference, "reusedOriginal": False})
             committed()
         if len(fits) < 4:
-            reference, _ = _build_goal_fit(store, cohorts[len(fits)], fit_generation)
+            try:
+                reference, _ = _build_goal_fit(store, cohorts[len(fits)], fit_generation)
+            except TargetFitPending as pending:
+                recovered = pending_fit_progress(store, payload["boards"], score_target=item["identity"]["target"],
+                    bootstrap_samples=SAMPLES, seed=SEED, source_boards=payload["sources"])
+                if (recovered is None or recovered["identity"] != pending.progress["identity"]
+                        or recovered["ordinal"] < pending.progress["ordinal"]):
+                    raise ValueError("The pending scoring-goal fit has no matching durable progress.")
+                units = progress(recovered)
+                raise _pending_inner_fit(generation, ordinal, recovered, goal_units=units) from None
             fits.append(reference)
             committed()
         prepared = phase_input("model")["prepared"]

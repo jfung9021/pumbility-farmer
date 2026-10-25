@@ -23,6 +23,7 @@ from urllib.parse import quote, urlparse
 
 import requests
 
+from analysis_budget import io_budget_remaining
 from database_read_policy import (
     read_statement_timeout_milliseconds,
     retry_background_read,
@@ -685,6 +686,44 @@ class _ContinuousLeaseHeartbeat:
         if self._thread is not threading.current_thread():
             self._thread.join()
         self._raise_if_failed()
+
+
+def _publication_io_timeouts() -> tuple[int, int]:
+    remaining = io_budget_remaining()
+    if remaining is None:
+        return PUBLICATION_LOCK_TIMEOUT_MILLISECONDS, PUBLICATION_STATEMENT_TIMEOUT_MILLISECONDS
+    if remaining <= 0:
+        raise TimeoutError("The analysis publication I/O deadline expired.")
+    milliseconds = max(1, int(remaining * 1000))
+    return (min(PUBLICATION_LOCK_TIMEOUT_MILLISECONDS, milliseconds),
+            min(PUBLICATION_STATEMENT_TIMEOUT_MILLISECONDS, milliseconds))
+
+
+class _PublicationDeadlineCursor:
+    """Reduce transaction-local limits at every publication SQL boundary."""
+
+    def __init__(self, cursor: Any) -> None:
+        self._cursor = cursor
+        self._bounded = io_budget_remaining() is not None
+        self._configured = False
+
+    def prepare(self) -> None:
+        if self._configured and not self._bounded:
+            return
+        lock_timeout, _ = _publication_io_timeouts()
+        self._cursor.execute(f"set local lock_timeout = '{lock_timeout}ms'")
+        _, statement_timeout = _publication_io_timeouts()
+        self._cursor.execute(f"set local statement_timeout = '{statement_timeout}ms'")
+        _publication_io_timeouts()
+        self._configured = True
+
+    def execute(self, query: Any, *args: Any, **kwargs: Any) -> Any:
+        self.prepare()
+        self._cursor.execute(query, *args, **kwargs)
+        return self
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._cursor, name)
 
 
 class PumbilityArtifactStore:
@@ -1907,15 +1946,11 @@ class PumbilityArtifactStore:
 
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", generation_key):
             raise ValueError("The publication generation identity is invalid.")
+        _publication_io_timeouts()
         with _connect(self.database_url) as connection:
-            with connection.transaction(), connection.cursor() as cursor:
-                cursor.execute(
-                    f"set local lock_timeout = '{PUBLICATION_LOCK_TIMEOUT_MILLISECONDS}ms'"
-                )
-                cursor.execute(
-                    "set local statement_timeout = "
-                    f"'{PUBLICATION_STATEMENT_TIMEOUT_MILLISECONDS}ms'"
-                )
+            _publication_io_timeouts()
+            with connection.transaction(), connection.cursor() as raw_cursor:
+                cursor = _PublicationDeadlineCursor(raw_cursor)
                 _assert_schema(cursor)
                 cursor.execute(
                     """
@@ -2003,6 +2038,9 @@ class PumbilityArtifactStore:
                 )
                 if cursor.rowcount != 1:
                     raise RuntimeError("The typed model generation was not promoted.")
+                # Refuse an expired transaction before commit, including time
+                # spent serializing artifact metadata after the last SQL write.
+                cursor.prepare()
 
     @retry_background_read("publication-status")
     def publication_committed(
