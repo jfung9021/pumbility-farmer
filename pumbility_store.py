@@ -23,6 +23,10 @@ from urllib.parse import quote, urlparse
 
 import requests
 
+from database_read_policy import (
+    read_statement_timeout_milliseconds,
+    retry_background_read,
+)
 from private_storage_transport import PrivateStorageTransport
 
 
@@ -539,7 +543,8 @@ def _read_cursor(database_url: str) -> Iterator[Any]:
         # Pipeline the transaction-local setting with the read to avoid another RTT.
         with connection.pipeline():
             cursor.execute(
-                f"set local statement_timeout = '{READ_STATEMENT_TIMEOUT_MILLISECONDS}ms'"
+                "set local statement_timeout = "
+                f"'{read_statement_timeout_milliseconds(READ_STATEMENT_TIMEOUT_MILLISECONDS)}ms'"
             )
             yield cursor
 
@@ -770,6 +775,7 @@ class PumbilityArtifactStore:
             raise AssertionError("A Pumbility exact JSON read omitted its evidence.")
         return result
 
+    @retry_background_read("artifact-json")
     def _read_json(
         self, pathname: str, *, exact_evidence: bool
     ) -> dict[str, Any] | None | _ExactJsonRead:
@@ -783,6 +789,9 @@ class PumbilityArtifactStore:
             with _connect(self.database_url) as connection:
                 with connection.cursor() as cursor:
                     _assert_schema(cursor)
+                    timeout = read_statement_timeout_milliseconds(None)
+                    if timeout is not None:
+                        cursor.execute(f"set local statement_timeout = '{timeout}ms'")
                 fetch_started = _read_phase_started()
                 try:
                     result = _database_snapshot(connection, snapshot_mix)
@@ -857,6 +866,9 @@ class PumbilityArtifactStore:
             prefix = f"{pathname}.players/"
             with _connect(self.database_url) as connection, connection.cursor() as cursor:
                 _assert_schema(cursor)
+                timeout = read_statement_timeout_milliseconds(None)
+                if timeout is not None:
+                    cursor.execute(f"set local statement_timeout = '{timeout}ms'")
                 fetch_started = _read_phase_started()
                 try:
                     cursor.execute(
@@ -1814,6 +1826,7 @@ class PumbilityArtifactStore:
                     raise TierPublicationConflict("The tier publication lease expired during promotion.")
                 cursor.execute("delete from pumbility.job_heads where name='active:tier-publication' and job_id=(select id from pumbility.jobs where external_key=%s)", (job_id,))
 
+    @retry_background_read("radar-score-counts")
     def read_skill_radar_score_counts(self, player_id: str | None = None) -> dict[str, int]:
         """Count current submitted P2 chart records, across all modes and levels."""
         with _read_cursor(self.database_url) as cursor:
@@ -1842,6 +1855,7 @@ class PumbilityArtifactStore:
                 ("phoenix2", player_id) if player_id is not None else ("phoenix2",))
             return {str(row[0]): int(row[1]) for row in cursor.fetchall()}
 
+    @retry_background_read("radar-metadata")
     def read_skill_radar_metadata(self) -> dict[str, Any]:
         """Read cached all-level P2 metadata without hydrating any player scores."""
         from skill_radar_runtime import skill_metadata
@@ -1858,12 +1872,14 @@ class PumbilityArtifactStore:
             charts = [dict(row[0]) for row in cursor.fetchall()]
         return skill_metadata(charts)
 
+    @retry_background_read("artifact-revision")
     def artifact_revision(self, pathname: str) -> dict[str, Any] | None:
         with _read_cursor(self.database_url) as cursor:
             cursor.execute("select sha256,byte_size,xmin::text from pumbility.artifacts where object_key=%s", (pathname,))
             row = cursor.fetchone()
         return None if row is None else {"sha256": str(row[0]), "byteSize": int(row[1]), "revision": str(row[2])}
 
+    @retry_background_read("typed-snapshot-receipt")
     def typed_snapshot_receipt(self, pathname: str) -> dict[str, Any] | None:
         """Read a private snapshot's verified envelope and row token, not its scores."""
         with _read_cursor(self.database_url) as cursor:
@@ -1988,6 +2004,7 @@ class PumbilityArtifactStore:
                 if cursor.rowcount != 1:
                     raise RuntimeError("The typed model generation was not promoted.")
 
+    @retry_background_read("publication-status")
     def publication_committed(
         self,
         *,
@@ -2020,6 +2037,7 @@ class PumbilityArtifactStore:
             and str(row[4]) == analysis_run_id
         )
 
+    @retry_background_read("artifact-bytes-metadata")
     def get_bytes(self, pathname: str) -> bytes | None:
         with _read_cursor(self.database_url) as cursor:
             fetch_started = _read_phase_started()
@@ -2596,6 +2614,7 @@ class PumbilityJobStore:
                 raise RuntimeError("The stale analysis head could not be released atomically.")
         return True
 
+    @retry_background_read("job-status")
     def get(self, job_id: str) -> dict[str, Any] | None:
         with _read_cursor(self.database_url) as cursor:
             fetch_started = _read_phase_started()

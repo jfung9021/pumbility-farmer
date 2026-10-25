@@ -152,11 +152,12 @@ def refresh_one_player(*args: Any, **kwargs: Any) -> Any:
 @app.task(queue=QUEUE_NAME, name="worker.tasks.refresh_analysis")
 def refresh_analysis(job_id: str) -> dict[str, Any]:
     from analysis_budget import invocation_budget
+    from database_read_policy import background_database_reads
     from celery.exceptions import Retry
     from pumbility_store import JobLeaseHeldError
 
     try:
-        with invocation_budget():
+        with invocation_budget(), background_database_reads():
             cold_claim = _begin_topology_worker_invocation(QUEUE_NAME)
             result = execute_analysis_job(job_id, yield_after_typed_checkpoint=True,
                                           acknowledge_terminal=True)
@@ -184,6 +185,7 @@ def refresh_analysis(job_id: str) -> dict[str, Any]:
         "database-analysis",
         "database-model",
         "publish",
+        "database-retry",
     }:
         refresh_analysis.apply_async(
             args=[job_id],

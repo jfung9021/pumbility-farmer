@@ -55,7 +55,7 @@ class AnalysisProgressTests(unittest.TestCase):
             client=WorkerClient(), now=lambda: NOW, yield_after_typed_checkpoint=True)
 
     @contextmanager
-    def hosted_pipeline(self):
+    def hosted_pipeline(self, *, required_goals=False):
         context = context_fixture()
         public = _combined_tier_payload_fixture(generated_at_utc=self.timestamp)
         fitter = Mock(side_effect=lambda boards, **kw: fit_for(boards, kw["score_target"]))
@@ -87,21 +87,36 @@ class AnalysisProgressTests(unittest.TestCase):
                 "tier_public.prepare_tier_publication": {"return_value": (public, {})},
                 "tier_public.validate_tier_publication": {},
             }
+            if required_goals:
+                from tier_pipeline_checkpoints import write_checkpoint
+
+                patches.pop("production_tiers._advance_required_goals")
+                patches["production_tiers._store_goal_artifact"] = {"side_effect":
+                    lambda store, *, goal, **kwargs: write_checkpoint(store, {"goal": goal},
+                        stage="scoring-goal", identity=goal)}
+                patches["scoring_goal_tiers.apply_goal_artifacts"] = {"side_effect":
+                    lambda full, *args, **kwargs: {**full, "schemaVersion": 58}}
             for target, options in patches.items():
                 stack.enter_context(patch(target, **options))
             yield fitter, finish, public
 
     def test_all_nested_fits_and_finishing_resumes_reach_publication(self):
-        ordinals = []
+        ordinals, preparation = [], []
         with self.hosted_pipeline() as (fitter, finish, public):
-            for _ in range(40):
+            # 12 preparation units, 8 fits, 9 finish/public steps, then at most
+            # 20 typed model, shard and pointer continuations for this fixture.
+            for _ in range(12 + 8 + 9 + 20):
                 result = self.resume()
                 self.assertNotEqual(result["status"], "failed", result.get("error"))
                 checkpoint = self.blobs.get_json(self.path)
                 if result["status"] == "completed":
                     break
                 if checkpoint["phase"] == "analysis":
-                    ordinals.append(checkpoint["tierProgress"]["ordinal"])
+                    value = checkpoint["tierProgress"]
+                    if value["ordinal"] == 0:
+                        preparation.append(value["preparationOrdinal"])
+                    else:
+                        ordinals.append(value["ordinal"])
                     self.assertEqual(result["stage"], "analyzing")
                     progress = result["progress"]
                     self.assertEqual(progress["phase"], "tier-analysis")
@@ -112,7 +127,29 @@ class AnalysisProgressTests(unittest.TestCase):
             else:
                 self.fail("nested tier continuations never reached publication")
         self.assertEqual(ordinals, list(range(1, 18)))
+        self.assertEqual(preparation, list(range(1, 13)))
         self.assertEqual(fitter.call_count, 8)
+        self.assertEqual(finish.call_count, len(FINISH_STAGES))
+        self.assertIsNotNone(self.blobs.get_json(LATEST_BLOB_PATH))
+        self.assertEqual(self.blobs.get_json(combined_tier_blob_path()), public)
+
+    def test_required_goal_continuations_reach_typed_publication_without_stalling(self):
+        units = []
+        with self.hosted_pipeline(required_goals=True) as (fitter, finish, public):
+            # Include all 18 real SS/SS+ pin/fit/artifact work units in addition
+            # to the bounded preparation, finish and typed persistence phases.
+            for _ in range(12 + 8 + 9 + 18 + 20):
+                result = self.resume()
+                self.assertNotEqual(result["status"], "failed", result.get("error"))
+                if result["status"] == "completed":
+                    break
+                progress = self.blobs.get_json(self.path).get("tierProgress", {})
+                if progress.get("stage") == "scoring-goals":
+                    units.append(progress["goalProgressOrdinal"])
+            else:
+                self.fail("SS/SS+ continuations never reached typed publication")
+        self.assertEqual(units, list(range(1, 19)))
+        self.assertEqual(fitter.call_count, 16)
         self.assertEqual(finish.call_count, len(FINISH_STAGES))
         self.assertIsNotNone(self.blobs.get_json(LATEST_BLOB_PATH))
         self.assertEqual(self.blobs.get_json(combined_tier_blob_path()), public)
@@ -124,6 +161,7 @@ class AnalysisProgressTests(unittest.TestCase):
                     self.setUp()
                 self.blobs.fail_progress_ordinal = crash_ordinal
                 with self.hosted_pipeline() as (fitter, finish, _):
+                    self.pin_preparation_inputs()
                     with self.assertLogs("pumbility.publication", level="ERROR") as captured:
                         for _ in range(12):
                             result = self.resume()
@@ -173,6 +211,7 @@ class AnalysisProgressTests(unittest.TestCase):
 
     def test_legacy_checkpoint_recovers_only_after_reconciling_committed_fits(self):
         with self.hosted_pipeline() as (fitter, _, _):
+            self.pin_preparation_inputs()
             self.assertEqual(self.resume()["status"], "running")
             checkpoint = self.blobs.get_json(self.path)
             checkpoint["schemaVersion"] = LEGACY_TYPED_CHECKPOINT_SCHEMA_VERSION
@@ -190,11 +229,18 @@ class AnalysisProgressTests(unittest.TestCase):
                 if change != "inputs":
                     self.setUp()
                 with self.hosted_pipeline() as (fitter, _, _):
-                    self.assertEqual(self.resume()["status"], "running")
+                    if change == "corrupt-fit":
+                        # A saved fit is checked when its next finish phase
+                        # consumes it; finish preparation/fitting first.
+                        self.pin_finishing_inputs()
+                    else:
+                        self.pin_preparation_inputs()
+                        self.assertEqual(self.resume()["status"], "running")
                     with ExitStack() as stack:
                         if change == "inputs":
-                            stack.enter_context(patch("official_scoring_sources.canonical_scoring_manifest_sha256",
-                                return_value="changed-manifest"))
+                            source = self.blobs.get_json("analysis/private/phoenix1.json")
+                            self.blobs.put_json("analysis/private/phoenix1.json",
+                                {**source, "generatedAtUtc": "changed-source"})
                         elif change == "code":
                             stack.enter_context(patch("production_tiers.pipeline_code_identity", return_value="changed-code"))
                         elif change == "corrupt-fit":
@@ -209,12 +255,13 @@ class AnalysisProgressTests(unittest.TestCase):
                         with self.assertLogs("pumbility.publication", level="ERROR"):
                             result = self.resume()
                     self.assertEqual(result["status"], "failed")
-                    self.assertEqual(fitter.call_count, 1)
+                    self.assertEqual(fitter.call_count, 8 if change == "corrupt-fit" else 1)
                     self.assertIsNone(self.blobs.get_json(LATEST_BLOB_PATH))
 
-    def test_only_specific_live_duplicate_is_acknowledged(self):
+    def test_live_duplicate_retains_delivery_and_database_failures_surface(self):
         with patch.object(self.jobs, "save", side_effect=JobLeaseHeldError("live owner")):
-            self.assertEqual(self.resume()["status"], "running")
+            with self.assertRaises(JobLeaseHeldError):
+                self.resume()
         with patch.object(self.jobs, "save", side_effect=RuntimeError("database unavailable")):
             with self.assertRaisesRegex(RuntimeError, "database unavailable"):
                 self.resume()
@@ -228,8 +275,16 @@ class AnalysisProgressTests(unittest.TestCase):
             {"sha256": _canonical_json_sha256(self.blobs.values[path])}
             if path in self.blobs.values else None)
 
-    def pin_finishing_inputs(self):
+    def pin_preparation_inputs(self):
         for _ in range(12):
+            result = self.resume()
+            self.assertEqual(result["status"], "running", result.get("error"))
+        checkpoint = self.blobs.get_json(self.path)
+        self.assertEqual(checkpoint["tierProgress"].get("preparationOrdinal"), 12)
+        return checkpoint
+
+    def pin_finishing_inputs(self):
+        for _ in range(12 + 8 + 1):
             result = self.resume()
             self.assertEqual(result["status"], "running", result.get("error"))
             checkpoint = self.blobs.get_json(self.path)
