@@ -122,15 +122,21 @@ Protected `/api/jonathan/tier-fits` controls inspect
 input hashes and accept completed fits only when current source identities and
 the converged 200-bootstrap policy match.
 
-To backfill SS/SS+, use authenticated
+Normal refreshes build missing SS/SS+ artifacts from their pinned observations
+before publication. Each continuation prepares one cohort, fits one cohort, or
+assembles one goal artifact. Verified matching artifacts skip this work; changed
+source inputs cannot attach stale goals.
+
+For a cache-only SS/SS+ backfill, use authenticated
 `POST /api/jonathan/refresh?mode=scoring-goal-backfill`, then inspect the same
 tier-publication status endpoint. This job uses the existing queue, global lease,
 and immutable captured inputs. Completion reports `cached` and `promoted: false`:
 it saves both goals without changing live ranking pointers. Run one normal
 stored-input reanalysis (`mode=reanalyze`) after completion to publish the matching
 goals, recommendation index, and chart details atomically. Changed sources reject
-stale goal attachments. New cold goals are not added to the recurring eight-fit
-legacy loop. Each goal has its own source/mode calibration, refinement, centering,
+stale goal attachments. The recurring eight-fit legacy loop stays unchanged;
+missing SS/SS+ goals complete in bounded continuations before publication.
+Each goal has its own source/mode calibration, refinement, centering,
 and bounded-tail policy; historical General, SSS, SSS+, and Clearing values remain
 unchanged on identical inputs.
 

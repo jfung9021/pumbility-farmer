@@ -67,10 +67,54 @@ export function tierChartDetails(payload: AnalysisPayload, chartId: string) {
   return row ? {generatedAtUtc:payload.generatedAtUtc, ...(payload.bpmMetadata ? {bpmMetadata:payload.bpmMetadata} : {}), chart:JSON.parse(JSON.stringify(row, (key, value) => key.endsWith("Baseline") ? undefined : value))} : null;
 }
 
+/** Response-only DTO; strict publication validation runs before this projection. */
+export function tierBrowserPayload(payload: AnalysisPayload): AnalysisPayload {
+  if ((payload.tierListView as unknown as Row | undefined)?.browserVersion === 1) return payload;
+  const compact = compactTierPayload(payload);
+  const source = compact as unknown as Row;
+  const result = { ...source };
+  const method = pick(compact.summary.method, fields.browserMethod);
+  for (const [key, keys] of Object.entries(fields.browserMethodFields)) {
+    if (method[key]) method[key] = pick(method[key] as Row, keys);
+  }
+  // JavaScript cannot reproduce Python's canonical numeric encoding after
+  // JSON.parse; preserve the base signature without signing a derived view.
+  const publication = method.productionTierPublication as Row | undefined;
+  if (publication && "publicPayloadSha256" in publication) {
+    method.baseProductionTierPublication = publication;
+    delete method.productionTierPublication;
+  }
+  result.summary = { ...compact.summary, method };
+  const browserMetric = (row: Row, kind: "chart" | "scoring" | "clearing" | "pumbility") =>
+    pick(row, [...fields.browserMetric, ...fields[kind]]);
+  for (const mode of ["singles", "doubles", "coop"] as const) if (compact[mode]) {
+    result[mode] = compact[mode]!.map(chart => {
+      const row = chart as unknown as Row;
+      const projected = browserMetric(row, "chart");
+      for (const [key, kind] of [["scoringVariants", "scoring"], ["pumbilityVariants", "pumbility"]] as const) {
+        if (row[key]) projected[key] = Object.fromEntries(Object.entries(row[key] as Row).map(([goal, value]) =>
+          [goal, goal === "general" ? pick(value as Row, ["estimatedDifficulty"]) : browserMetric(value as Row, kind)]));
+      }
+      if (row.tierMetrics) {
+        const tiers = row.tierMetrics as Row;
+        const metrics = Object.fromEntries((["clearing", "pumbility"] as const).filter(key => tiers[key])
+          .map(key => [key, browserMetric(tiers[key] as Row, key)]));
+        const evidence = (tiers.clearing as Row | undefined)?.clearingEvidence;
+        if (evidence) metrics.clearing.clearingEvidence = pick(evidence as Row, ["capPolicy"]);
+        projected.tierMetrics = metrics;
+      }
+      for (const key of ["officialEvidence", "officialScoringEvidence"]) if (row[key]) projected[key] = {available: true};
+      return projected;
+    });
+  }
+  result.tierListView = {...compact.tierListView, browserVersion: 1};
+  return result as unknown as AnalysisPayload;
+}
+
 export function tierBrowserJson(payload: AnalysisPayload): string {
   const cached = serialized.get(payload);
   if (cached !== undefined) return cached;
-  const json = JSON.stringify(compactTierPayload(payload));
+  const json = JSON.stringify(tierBrowserPayload(payload));
   serialized.set(payload, json);
   return json;
 }

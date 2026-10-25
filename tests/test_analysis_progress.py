@@ -79,6 +79,7 @@ class AnalysisProgressTests(unittest.TestCase):
                 "sss_scoring_model.fit_target_model": {"new": fitter},
                 "target_fit_cache.load_or_fit_target": {"new": lambda store, boards, **kwargs: fitter(boards, **kwargs)},
                 "production_tiers._finish_stage": {"new": finish},
+                "production_tiers._advance_required_goals": {},
                 "production_tiers.public_tiers": {"return_value": public},
                 "sss_tail_tiers.apply_sss_tail_tiers": {"side_effect": lambda full: {**full, "schemaVersion": 59}},
                 "level20_scoring_width.apply_level20_scoring_width": {"side_effect": lambda full: {**full, "schemaVersion": 60}},

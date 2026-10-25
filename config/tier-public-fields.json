@@ -1,4 +1,25 @@
 {
+  "browserMetric": [
+    "estimatedDifficulty",
+    "effectBandRank",
+    "evidenceStatus"
+  ],
+  "browserMethod": [
+    "sourceSelection", "scoring", "officialTiers", "officialCrossLevelScoring",
+    "crossLevelClearing", "hybridTiers", "tierMetrics", "pumbilityExperiment",
+    "ratingPostprocessing", "productionTierPublication", "baseProductionTierPublication", "scoringGoalPolicies",
+    "availableScoringGoals", "sssTailPolicy", "level20ScoringWidth", "bpmMetadata",
+    "sssScoring", "sssRefinement", "submittedSssplusCalibration"
+  ],
+  "browserMethodFields": {
+    "scoring": ["version", "calibration"],
+    "officialTiers": ["version", "enabled"],
+    "officialCrossLevelScoring": ["version"],
+    "crossLevelClearing": ["version", "skillMethod"],
+    "hybridTiers": ["version"],
+    "sssTailPolicy": ["version"],
+    "level20ScoringWidth": ["version"]
+  },
   "metric": [
     "estimatedDifficulty",
     "difficultyDelta",

@@ -551,10 +551,11 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
     goal_artifacts = matching_goal_artifacts(store, goal_inputs)
     state["goalInputIdentity"] = goal_inputs
     state["goalArtifacts"] = goal_artifacts
+    state["goalSourceHashes"] = {"phoenix1": digest(p1), "phoenix2": digest(p2)}
     if goal_artifacts:
         computation_identity["goalArtifacts"] = {goal: ref["payloadSha256"] for goal, ref in goal_artifacts.items()}
     state["computationIdentity"] = computation_identity
-    if state.get("computationGeneration"):
+    if state.get("computationGeneration") or state.get("fitsReady"):
         return _advance_finish(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
     saved = None
     pipeline_lookup_failed = False
@@ -987,7 +988,7 @@ def _validate_publication_overlay_chain(state):
         raise TierComputationCacheError("The tier archive does not reference its final publication overlay.")
 
 
-def _publication_overlays(store, state, reference):
+def _publication_overlays(store, state, reference, *, on_progress=None, on_stage_start=None):
     """Persist each additive overlay so retries never taper an output twice."""
     import gc
     from scoring_goal_tiers import apply_goal_artifacts
@@ -995,6 +996,7 @@ def _publication_overlays(store, state, reference):
     from level20_scoring_width import apply_level20_scoring_width
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
     _validate_publication_overlay_chain(state)
+    _advance_required_goals(store, state, on_progress=on_progress, on_stage_start=on_stage_start)
     state_path = PREFIX + "generations/" + state["generation"] + "/state.json"
     if state.get("goalArtifacts"):
         if "goalOverlay" not in state:
@@ -1115,7 +1117,8 @@ def _advance_completed_numeric(store, state, *, verified_computation=None,
     generation, state_path = state["generation"], PREFIX + "generations/" + state["generation"] + "/state.json"
     if "archive" not in state:
         if on_stage_start: on_stage_start("archive")
-        state["archive"] = _publication_overlays(store, state, reference)
+        state["archive"] = _publication_overlays(store, state, reference,
+            on_progress=on_progress, on_stage_start=on_stage_start)
         store.put_json(state_path, state)
         ordinal = 9 + len(FINISH_STAGES) + 1
         _report_progress(on_progress, generation, ordinal, "archive")
@@ -1161,12 +1164,14 @@ def _advance_reused_computation(store, state, *, on_stage_start=None, on_progres
         raise ValueError("The reused tier computation time differs.")
 
     def progress(value):
-        _report_progress(on_progress, state["generation"], value["ordinal"], value["stage"])
+        if on_progress:
+            on_progress({**value, "generation": state["generation"]})
 
     try:
         computed = _advance_finish(store, original, on_stage_start=on_stage_start, on_progress=progress)
     except TierAnalysisPending as pending:
-        raise TierAnalysisPending(state["generation"][:16] + "-" + str(pending.progress_ordinal),
+        sequence = state["generation"][:16] + pending.sequence[len(original["generation"][:16]):]
+        raise TierAnalysisPending(sequence,
             pending.completed, stage=pending.stage, generation=state["generation"],
             progress_ordinal=pending.progress_ordinal) from None
     original = _captured_computation(store, original["generation"], state["computationIdentity"])
@@ -1235,9 +1240,10 @@ def _advance_finish(store, state, *, on_stage_start=None, on_progress=None, veri
             raise ValueError("The tier generation checkpoint chain is stale or corrupt.")
         reference = saved
     completed_stages = len(state["stages"])
-    _report_progress(on_progress, generation,
-        9 + completed_stages + int("archive" in state),
-        "archive" if "archive" in state else (FINISH_STAGES[completed_stages-1] if completed_stages else "prepared-inputs"))
+    if not state.get("requiredGoalJobs") or "archive" in state:
+        _report_progress(on_progress, generation,
+            9 + completed_stages + int("archive" in state),
+            "archive" if "archive" in state else (FINISH_STAGES[completed_stages-1] if completed_stages else "prepared-inputs"))
     if completed_stages < len(FINISH_STAGES):
         stage = FINISH_STAGES[completed_stages]
         if on_stage_start: on_stage_start(stage)
@@ -1269,7 +1275,8 @@ def _advance_finish(store, state, *, on_stage_start=None, on_progress=None, veri
                                   generation=generation, progress_ordinal=ordinal)
     if "archive" not in state:
         if on_stage_start: on_stage_start("archive")
-        state["archive"] = _publication_overlays(store, state, reference)
+        state["archive"] = _publication_overlays(store, state, reference,
+            on_progress=on_progress, on_stage_start=on_stage_start)
         store.put_json(state_path, state)
         ordinal = 9 + len(FINISH_STAGES) + 1
         _report_progress(on_progress, generation, ordinal, "archive")
@@ -1514,13 +1521,123 @@ def matching_goal_artifacts(store, inputs):
     return result
 
 
+def _advance_required_goals(store, state, *, on_progress=None, on_stage_start=None):
+    """Complete one durable SS/SS+ work unit before allowing publication.
+
+    Reuse the generation's immutable prepared observations. Each continuation
+    pins one cohort, fits one cohort, or assembles one goal artifact; raw score
+    snapshots are never reconstructed here.
+    """
+    from scoring_targets import BACKFILL_GOALS
+    from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
+    from tier_computation_cache import write_index
+
+    artifacts = state.setdefault("goalArtifacts", {})
+    jobs = state.setdefault("requiredGoalJobs", {})
+    generation = state["generation"]
+    state_path = PREFIX + "generations/" + generation + "/state.json"
+    ordinal = 9 + len(FINISH_STAGES)
+
+    def progress():
+        units = sum(9 if goal in artifacts else len(jobs.get(goal, {}).get("cohorts", []))
+                    + len(jobs.get(goal, {}).get("fits", [])) for goal in BACKFILL_GOALS)
+        if on_progress and units:
+            on_progress({"version": 1, "generation": generation, "ordinal": ordinal,
+                "stage": "scoring-goals", "goalProgressOrdinal": units})
+        return units
+
+    def committed():
+        store.put_json(state_path, state)
+        units = progress()
+        raise TierAnalysisPending(generation[:16] + "-goals-" + str(units), 8,
+            stage="scoring-goals", generation=generation, progress_ordinal=ordinal)
+
+    def phase_input(name):
+        reference = state["phaseInputs"][name]
+        producer = state.get("computationGeneration", generation)
+        return read_checkpoint(store, reference, stage="phase-inputs-" + name,
+            identity=digest({"generation": producer, "kind": name}))
+
+    for goal in BACKFILL_GOALS:
+        if goal in artifacts:
+            continue
+        progress()
+        if on_stage_start:
+            on_stage_start("scoring-goals")
+        _check_preparation_budget("scoring-goals")
+        recipe = _goal_recipe(goal)
+        job = jobs.setdefault(goal, {"recipe": recipe, "cohorts": [], "fits": []})
+        if job.get("recipe") != recipe:
+            raise ValueError("The required scoring-goal recipe changed during analysis.")
+        fit_generation = digest({"generation": generation, "goal": goal, "recipe": recipe})
+        cohorts, fits = job["cohorts"], job["fits"]
+        expected = [(source, mode) for source in ("official", "submitted") for mode, _ in MODES]
+        if (len(cohorts) > 4 or len(fits) > len(cohorts)
+                or [(item.get("source"), item.get("mode")) for item in cohorts] != expected[:len(cohorts)]
+                or any(item.get("goal") != goal for item in cohorts)):
+            raise ValueError("The required scoring-goal cohort progress is invalid.")
+        if len(cohorts) < 4:
+            prepared = phase_input("model")["prepared"]
+            source, mode = expected[len(cohorts)]
+            boards, sources, identity = cohort(prepared, goal, source, mode)
+            reference = write_checkpoint(store, {"boards": boards, "sources": sources},
+                stage="cohort-inputs", identity=digest({"generation": fit_generation, "goal": goal,
+                    "source": source, "mode": mode, "identity": identity}))
+            cohorts.append({"goal": goal, "source": source, "mode": mode, "identity": identity,
+                            "inputs": reference, "reusedOriginal": False})
+            committed()
+        if len(fits) < 4:
+            reference, _ = _build_goal_fit(store, cohorts[len(fits)], fit_generation)
+            fits.append(reference)
+            committed()
+        prepared = phase_input("model")["prepared"]
+        provenance = phase_input("provenance")
+        reference = _store_goal_artifact(store, goal=goal, inputs=state["goalInputIdentity"],
+            prepared=prepared, policy=provenance["policy"],
+            policy_semantic_sha256=state["identity"]["sourcePolicy"],
+            source_hashes=state["goalSourceHashes"],
+            manifest_sha256=provenance["merged"]["manifestSha256"],
+            fit_references=fits, created_at_utc=state["createdAtUtc"])
+        artifacts[goal] = reference
+        state["computationIdentity"]["goalArtifacts"] = {
+            key: value["payloadSha256"] for key, value in artifacts.items()}
+        if all(key in artifacts for key in BACKFILL_GOALS):
+            write_index(store, "pipeline", state["computationIdentity"], generation=generation)
+        committed()
+
+
+def _store_goal_artifact(store, *, goal, inputs, prepared, policy, policy_semantic_sha256,
+                         source_hashes, manifest_sha256, fit_references, created_at_utc):
+    """Share the exact operator-backfill recipe with normal refreshes."""
+    from scoring_goal_tiers import build_goal_artifact
+    from target_fit_cache import hydrate_point_context
+    from tier_pipeline_checkpoints import write_checkpoint
+    fits = {"official": {}, "submitted": {}}
+    for item in fit_references:
+        cached = store.get_json(item["path"])
+        if cached is None or cached.get("identity") != item["identity"] or digest(cached.get("fit")) != item["fitSha256"]:
+            raise ValueError("A pinned scoring-goal fit changed during calibration.")
+        boards, _, _ = cohort(prepared, goal, item["source"], item["mode"])
+        hydrate_point_context(store, boards, cached["fit"], score_target=item["identity"]["target"])
+        fits[item["source"]][item["mode"]] = cached["fit"]
+    context = (None, None, None,
+        SimpleNamespace(public=lambda: policy, semantic_hash=lambda: policy_semantic_sha256),
+        {"manifestSha256": manifest_sha256}, prepared)
+    artifact = build_goal_artifact(context, fits, fit_references, created_at_utc, goal=goal,
+                                   source_hashes=source_hashes)
+    artifact["inputIdentity"] = inputs
+    recipe = _goal_recipe(goal)
+    reference = write_checkpoint(store, artifact, stage="scoring-goal", identity=digest({"inputs": inputs, "recipe": recipe}))
+    store.put_json(_goal_index_path(inputs, goal), {"version": 1, "recipe": recipe,
+                   "inputIdentity": inputs, "reference": reference})
+    return reference
+
+
 def advance_goal_backfill(store, *, pinned_inputs_reference, goal, on_progress=None, max_fit_workers=1):
     """Compute at most one missing cohort; save artifacts without moving pointers."""
     from scoring_targets import BACKFILL_GOALS
-    from scoring_goal_tiers import build_goal_artifact
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
     from official_scoring_sources import canonical_scoring_manifest_sha256
-    from target_fit_cache import load_or_fit_target, hydrate_point_context
     if goal not in BACKFILL_GOALS:
         raise ValueError("Only independent SS/SS+ goal backfills are supported.")
     if type(max_fit_workers) is not int or max_fit_workers not in (1, 2):
@@ -1572,24 +1689,10 @@ def advance_goal_backfill(store, *, pinned_inputs_reference, goal, on_progress=N
             if on_progress: on_progress(progress)
             return progress
     captured = read_checkpoint(store, state["context"], stage="goal-context", identity=digest(task_identity))
-    context = (None, None, captured["catalog"],
-               SimpleNamespace(public=lambda: captured["policy"],
-                               semantic_hash=lambda: captured["policySemanticSha256"]),
-               captured["merged"], captured["prepared"])
-    fits = {"official": {}, "submitted": {}}
-    for item in state["fits"]:
-        cached = store.get_json(item["path"])
-        if cached is None or cached.get("identity") != item["identity"] or digest(cached.get("fit")) != item["fitSha256"]:
-            raise ValueError("A pinned scoring-goal fit changed during calibration.")
-        boards, _, _ = cohort(captured["prepared"], goal, item["source"], item["mode"])
-        hydrate_point_context(store, boards, cached["fit"], score_target=item["identity"]["target"])
-        fits[item["source"]][item["mode"]] = cached["fit"]
-    artifact = build_goal_artifact(context, fits, state["fits"], state["createdAtUtc"], goal=goal,
-                                   source_hashes=captured["sourceHashes"])
-    artifact["inputIdentity"] = inputs
-    reference = write_checkpoint(store, artifact, stage="scoring-goal", identity=digest({"inputs": inputs, "recipe": recipe}))
-    store.put_json(_goal_index_path(inputs, goal), {"version": 1, "recipe": recipe,
-                   "inputIdentity": inputs, "reference": reference})
+    reference = _store_goal_artifact(store, goal=goal, inputs=inputs, prepared=captured["prepared"],
+        policy=captured["policy"], policy_semantic_sha256=captured["policySemanticSha256"],
+        source_hashes=captured["sourceHashes"], manifest_sha256=captured["merged"].get("manifestSha256"),
+        fit_references=state["fits"], created_at_utc=state["createdAtUtc"])
     return {"done": True, "goal": goal, "inputIdentity": digest(inputs), "completedTargetFits": 4,
             "artifactReference": {"path": reference["path"], "sha256": reference["payloadSha256"]}}
 

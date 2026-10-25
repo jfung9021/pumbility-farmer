@@ -131,6 +131,58 @@ def compact_tier_payload(payload: Mapping[str, Any], *, details_prefix: str | No
     return result
 
 
+def tier_browser_payload(payload: Mapping[str, Any]) -> dict:
+    """Trim a validated publication for browsing; evidence stays in its shards.
+
+    This is a response projection, never a replacement for the persisted list.
+    Replay validators continue to receive the original publication, and chart
+    details retain their immutable generation and all fitted values/intervals.
+    """
+    compact = compact_tier_payload(payload)
+    result = dict(compact)
+    method = _pick(compact.get("summary", {}).get("method", {}), FIELDS["browserMethod"])
+    for key, keys in FIELDS["browserMethodFields"].items():
+        if isinstance(method.get(key), Mapping):
+            method[key] = _pick(method[key], keys)
+    result["summary"] = {**compact.get("summary", {}), "method": method}
+
+    def metric(value: Mapping[str, Any], kind: str) -> dict:
+        # Preserve exact final points, bands and record-count labels. Ranks,
+        # intervals, deltas and replay inputs are only read by lazy details.
+        return _pick(value, FIELDS["browserMetric"] + FIELDS[kind])
+
+    def chart(row: Mapping[str, Any]) -> dict:
+        value = metric(row, "chart")
+        for key, kind in (("scoringVariants", "scoring"), ("pumbilityVariants", "pumbility")):
+            if isinstance(row.get(key), Mapping):
+                value[key] = {goal: _pick(variant, ["estimatedDifficulty"]) if goal == "general"
+                              else metric(variant, kind) for goal, variant in row[key].items()
+                              if isinstance(variant, Mapping)}
+        if isinstance(row.get("tierMetrics"), Mapping):
+            tiers = row["tierMetrics"]
+            value["tierMetrics"] = {kind: metric(tiers[kind], kind) for kind in ("clearing", "pumbility")
+                                    if isinstance(tiers.get(kind), Mapping)}
+            evidence = tiers.get("clearing", {}).get("clearingEvidence")
+            if isinstance(evidence, Mapping):
+                value["tierMetrics"]["clearing"]["clearingEvidence"] = _pick(evidence, ["capPolicy"])
+        for key in ("officialEvidence", "officialScoringEvidence"):
+            if row.get(key):
+                value[key] = {"available": True}
+        return value
+
+    for mode in MODES:
+        if mode in compact:
+            result[mode] = [chart(row) for row in compact[mode]]
+    # The existing generation/prefix pins lazy details to the full publication.
+    result["tierListView"] = {**compact["tierListView"], "browserVersion": 1}
+    publication = method.get("productionTierPublication")
+    if isinstance(publication, Mapping):
+        from production_tiers import public_digest
+        method["productionTierPublication"] = dict(publication)
+        method["productionTierPublication"]["publicPayloadSha256"] = public_digest(result)
+    return result
+
+
 def detail_shard_path(prefix: str, chart_id: str) -> str:
     if not re.fullmatch(re.escape(DETAIL_PREFIX) + r"[a-f0-9]{64}/", prefix):
         raise ValueError("Invalid tier detail prefix.")

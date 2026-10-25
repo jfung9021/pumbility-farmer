@@ -49,6 +49,7 @@ class HostedTierTests(unittest.TestCase):
         timestamp = "2026-10-18T00:00:00Z"
         args = {"official_scoring_manifest": {"_captures": {"Phoenix2": {}}}}
         with patch("production_tiers.load_context", return_value=context), \
+             patch("production_tiers._advance_required_goals"), \
              patch("official_scoring_sources.canonical_scoring_manifest_sha256", return_value="official"), \
              patch("scoring_percentile.build_production_tier_payload", return_value={"schemaVersion": 48}) as general, \
              patch("sss_scoring_model.fit_target_model", fitter), \

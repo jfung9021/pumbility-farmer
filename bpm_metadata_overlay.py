@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 
-from song_bpm_metadata import BPM_POLICY, bpm_metadata_identity, enrich_chart_bpm
+from song_bpm_metadata import BPM_POLICY, BpmMetadataView
 
 
 def validate_bpm_policy(policy):
@@ -15,7 +15,7 @@ def validate_bpm_policy(policy):
 
 def overlay_bpm_payload(payload: Mapping, *, mix="Phoenix2") -> dict:
     """Keep the numerical generation and explicitly identify its metadata view."""
-    identity = bpm_metadata_identity()
+    metadata = BpmMetadataView(mix)
 
     def visit(value):
         if isinstance(value, list):
@@ -25,13 +25,13 @@ def overlay_bpm_payload(payload: Mapping, *, mix="Phoenix2") -> dict:
         result = {key: (deepcopy(child) if key.endswith("Baseline") else visit(child))
                   for key, child in value.items()}
         if result.get("songName") and result.get("type") in ("Single", "Double", "CoOp"):
-            result = enrich_chart_bpm(result, mix=mix)
+            result = metadata.enrich_chart(result)
         return result
 
     result = visit(payload)
     previous = payload.get("bpmMetadata", {})
     result["bpmMetadata"] = {
-        **identity,
+        **metadata.identity,
         "baseGeneratedAtUtc": previous.get("baseGeneratedAtUtc", payload.get("generatedAtUtc")),
     }
     summary = result.get("summary")

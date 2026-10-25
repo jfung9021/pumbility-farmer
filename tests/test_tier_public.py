@@ -12,7 +12,7 @@ from api_service import app
 from canonical_json import canonical_json_sha256
 import production_tiers as tiers
 from pumbility_contract import combined_tier_blob_path
-from tier_public import DETAIL_PREFIX, compact_tier_payload, detail_shard_path, prepare_tier_publication, tier_chart_details, tier_detail_generated_at, validate_tier_publication
+from tier_public import DETAIL_PREFIX, compact_tier_payload, detail_shard_path, prepare_tier_publication, tier_browser_payload, tier_chart_details, tier_detail_generated_at, validate_tier_publication
 
 
 def source():
@@ -38,6 +38,48 @@ def source():
 
 
 class TierPublicTests(unittest.TestCase):
+    def test_browser_response_trims_old_list_without_changing_publication_or_details(self):
+        full = source()
+        full["schemaVersion"] = 58
+        full["summary"]["method"]["availableScoringGoals"] = ["general", "ss", "ssplus", "sss", "sssplus"]
+        full["summary"]["method"]["crossLevelClearing"] = {
+            "version": 2, "skillMethod": {"minimumScoreRecords": 100}, "calibration": {"audit": [0]*1000}}
+        full["summary"]["method"]["productionTierPublication"] = {"inputs": {"generation": "fixture"}}
+        for field in ("scoringVariants", "pumbilityVariants"):
+            for goal in ("ss", "ssplus"):
+                full["doubles"][0][field][goal] = copy.deepcopy(full["doubles"][0][field]["sssplus"])
+        full["doubles"][0]["scoringVariants"]["ss"].update(scoringMethod="target-boundary-score-gap-v1")
+        compact, shards = prepare_tier_publication(full, "browser-generation")
+        before, original_shards = copy.deepcopy(compact), copy.deepcopy(shards)
+        browser = tier_browser_payload(compact)
+        self.assertEqual(compact, before)
+        self.assertEqual(shards, original_shards)
+        self.assertEqual(browser["tierListView"], {**compact["tierListView"], "browserVersion": 1})
+        self.assertEqual(tier_detail_generated_at(browser), tier_detail_generated_at(compact))
+        self.assertEqual(browser["summary"]["method"]["availableScoringGoals"],
+                         compact["summary"]["method"]["availableScoringGoals"])
+        self.assertEqual(browser["summary"]["method"]["crossLevelClearing"],
+                         {"version": 2, "skillMethod": {"minimumScoreRecords": 100}})
+        current = browser["doubles"][0]
+        for name in ("scoringVariants", "pumbilityVariants"):
+            for goal, metric in compact["doubles"][0][name].items():
+                self.assertEqual(current[name][goal]["estimatedDifficulty"], metric["estimatedDifficulty"])
+                if goal != "general":
+                    self.assertEqual(current[name][goal]["effectBandRank"], metric["effectBandRank"])
+        self.assertEqual(current["scoringVariants"]["ss"]["scoringBoundaryRecords"], 42)
+        self.assertNotIn("difficultyCi95Low", current["scoringVariants"]["ss"])
+        detail = shards[detail_shard_path(browser["tierListView"]["detailsPrefix"], "d18")]["charts"]["d18"]
+        self.assertEqual(detail["scoringVariants"]["ss"]["difficultyCi95Low"],
+                         full["doubles"][0]["scoringVariants"]["ss"]["difficultyCi95Low"])
+        self.assertEqual(detail["scoringVariants"]["ss"]["scoringRefinement"],
+                         full["doubles"][0]["scoringVariants"]["ss"]["scoringRefinement"])
+        publication = browser["summary"]["method"]["productionTierPublication"]
+        self.assertEqual(publication["publicPayloadSha256"], tiers.public_digest(browser))
+        self.assertEqual(tier_browser_payload(browser), browser)
+        size = lambda value: len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
+        self.assertLess(size(browser), size(compact)*.7)
+        validate_tier_publication(full, compact)
+
     def test_five_goal_budget_preserves_legacy_limit_and_bounds_compressed_output(self):
         legacy = source()
         expanded = copy.deepcopy(legacy)

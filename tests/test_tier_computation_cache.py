@@ -86,6 +86,7 @@ class CrossRunTierCacheTests(TestCase):
             return_value={"schemaVersion": 48, "values": [20.5], "generatedAtUtc": self.first_time}))
         self.fitter = self.stack.enter_context(patch("sss_scoring_model.fit_target_model"))
         self.transition = self.stack.enter_context(patch("production_tiers._finish_stage", side_effect=self.finish))
+        self.stack.enter_context(patch("production_tiers._advance_required_goals"))
         # This harness verifies transport/cache reuse with synthetic numeric rows;
         # the real reversible SSS transformation has dedicated publication tests.
         self.stack.enter_context(patch("sss_tail_tiers.apply_sss_tail_tiers",
@@ -226,7 +227,7 @@ class CrossRunTierCacheTests(TestCase):
     def test_new_terminal_width_overlay_reuses_completed_numeric_chain_once(self):
         # Simulate the preceding schema-59 publisher: all numerical stages and
         # their independently versioned index are already complete.
-        def no_width(store, state, reference):
+        def no_width(store, state, reference, **kwargs):
             from tier_pipeline_checkpoints import write_checkpoint
             from sss_tail_tiers import apply_sss_tail_tiers
             full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])

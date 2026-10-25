@@ -88,6 +88,9 @@ class GoalPublicationTests(unittest.TestCase):
                 "schemaVersion": 48, "generatedAtUtc": first_time}))
             fitter = stack.enter_context(patch("sss_scoring_model.fit_target_model", side_effect=AssertionError("Unnecessary refit")))
             transition = stack.enter_context(patch("production_tiers._finish_stage", side_effect=finish))
+            # Preserve the historical cache-only migration boundary here;
+            # automatic cold-goal generation has dedicated runtime coverage.
+            stack.enter_context(patch("production_tiers._advance_required_goals"))
             before = complete(first_time)
             self.assertEqual(before["schemaVersion"], 60)
             self.assertEqual(before["summary"]["method"]["sssTailPolicy"]["baseSchemaVersion"], 57)

@@ -6,7 +6,7 @@ import unittest
 
 from scripts.build_song_bpm_runtime import build, main, render, write_preview
 from song_bpm_metadata import (
-    BPM_POLICY, BpmMetadataError, ROOT, bpm_bucket_index, bpm_metadata_identity,
+    BPM_POLICY, BpmMetadataError, BpmMetadataView, ROOT, bpm_bucket_index, bpm_metadata_identity,
     compile_runtime_catalog, enrich_chart_bpm, enrich_charts_bpm,
     load_runtime_catalog, resolve_song_bpm, validate_runtime_catalog,
 )
@@ -90,6 +90,31 @@ class SongBpmMetadataTests(unittest.TestCase):
         with self.assertRaisesRegex(BpmMetadataError, "Ambiguous"):
             enrich_chart_bpm({"songName": "Fictional Fixed", "type": "Single"}, catalog=runtime)
         self.assertEqual(resolve_song_bpm("Fictional Fixed", "Remix", catalog=runtime)["bpmFocal"], 150)
+
+    def test_reused_metadata_view_keeps_exact_variants_and_unknown_chart_fallbacks(self):
+        documents = deepcopy(self.documents)
+        documents[0]["songs"].append({"name": "Fictional Fixed", "type": "Remix", "bpm": {"min": 150, "max": 150}})
+        runtime = compile_runtime_catalog(*documents)
+        view = BpmMetadataView(catalog=runtime)
+        rows = [
+            {"songName": "Fictional Fixed", "songType": "Arcade", "type": "Single"},
+            {"songName": "Fictional Fixed", "songType": "Remix", "type": "Double"},
+            {"songName": "Fictional Fixed", "songType": "Arcade", "type": "CoOp"},
+            {"songName": "Future Song", "bpmMin": 100, "bpmMax": 225},
+            {"songName": "Future Song", "bpmMin": 156.118, "bpmMax": 156.118},
+        ]
+        actual = [view.enrich_chart(row) for row in rows]
+        self.assertEqual(actual, [enrich_chart_bpm(row, catalog=runtime) for row in rows])
+        self.assertEqual([row["bpmFocal"] for row in actual], [81.5, 150, 81.5, None, 156.118])
+        self.assertEqual(view.identity["bpmMetadataRevision"], runtime["bpmMetadataRevision"])
+        with self.assertRaisesRegex(BpmMetadataError, "Ambiguous"):
+            view.enrich_chart({"songName": "Fictional Fixed", "type": "Single"})
+        with self.assertRaisesRegex(BpmMetadataError, "mismatches"):
+            view.enrich_chart({"songName": "Fictional Fixed", "songType": "FullSong", "type": "Single"})
+        corrupt = deepcopy(runtime)
+        corrupt["songs"][0]["bpmFocal"] += 1
+        with self.assertRaises(BpmMetadataError):
+            BpmMetadataView(catalog=corrupt)
 
     def test_source_schema_identity_interval_and_focal_validation(self):
         mutations = [

@@ -542,10 +542,10 @@ export default function TierListPage() {
     scores: new Map(activePlayerScores?.scores.map((score) => [score.chartId, score]) || []),
   }), [activePlayerScores, loadingScores, scoresError, selectedPlayerKey]);
 
-  const loadLatest = useCallback(async (showLoading = false) => {
+  const loadLatest = useCallback(async (showLoading = false, fresh = false) => {
     if (showLoading) setLoading(true);
     try {
-      const response = await fetch("/api/tier-list?bpmPolicy=focal-v1", { cache: "no-store" });
+      const response = await fetch(`/api/tier-list?bpmPolicy=focal-v1${fresh ? "&fresh=1" : ""}`, { cache: fresh ? "no-store" : "default" });
       if (response.status === 404) {
         setPayload(null);
         setMessage("No stored combined analysis is available yet.");
@@ -568,7 +568,7 @@ export default function TierListPage() {
   }, []);
 
   const reloadSelectedChart = useCallback(async (chartId: string) => {
-    const latest = await loadLatest();
+    const latest = await loadLatest(false, true);
     if (!latest) throw new Error("The latest tier list could not be loaded. Reload the page to try again.");
     const chart = [...latest.singles, ...latest.doubles, ...(latest.coop ?? [])].find(row => row.chartId === chartId);
     if (!chart) {

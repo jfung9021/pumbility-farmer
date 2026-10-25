@@ -2472,6 +2472,8 @@ def _database_cursor_token(checkpoint: Mapping[str, Any]) -> str:
     progress = checkpoint.get("tierProgress")
     if phase == TYPED_CHECKPOINT_ANALYSIS_PHASE and progress is not None:
         progress = _validated_tier_progress(progress)
+        if progress.get("goalProgressOrdinal"):
+            return f"{phase}:{progress['generation']}:goals:{progress['goalProgressOrdinal']}"
         if progress["ordinal"] > 0:
             return f"{phase}:{progress['generation']}:{progress['ordinal']}"
         preparation = progress.get("preparationOrdinal", 0)
@@ -2489,12 +2491,19 @@ def _validated_tier_progress(progress: Any) -> dict[str, Any]:
         or not re.fullmatch(r"[0-9a-f]{64}", str(progress.get("generation") or ""))
         or type(progress.get("ordinal")) is not int
         or not 0 <= progress["ordinal"] <= 9 + len(FINISH_STAGES) + 2
-        or progress.get("stage") not in {"general", "target-fit", "prepared-inputs", "archive", "public", *FINISH_STAGES}
+        or progress.get("stage") not in {"general", "target-fit", "prepared-inputs", "scoring-goals", "archive", "public", *FINISH_STAGES}
         or ("preparationOrdinal" in progress and (
             type(progress["preparationOrdinal"]) is not int
             or not 1 <= progress["preparationOrdinal"] <= 12
             or progress["ordinal"] != 0
             or progress["stage"] != "general"
+        ))
+        or (progress.get("stage") == "scoring-goals" and "goalProgressOrdinal" not in progress)
+        or ("goalProgressOrdinal" in progress and (
+            type(progress["goalProgressOrdinal"]) is not int
+            or not 1 <= progress["goalProgressOrdinal"] <= 18
+            or progress["ordinal"] != 9 + len(FINISH_STAGES)
+            or progress["stage"] != "scoring-goals"
         ))
     ):
         raise ValueError("The typed tier progress checkpoint is invalid.")
@@ -2516,6 +2525,9 @@ def _reconcile_tier_progress(
         if (current["ordinal"] == previous["ordinal"] == 0
                 and current.get("preparationOrdinal", 0) < previous.get("preparationOrdinal", 0)):
             raise ValueError("The committed typed tier preparation regressed.")
+        if (current["ordinal"] == previous["ordinal"]
+                and current.get("goalProgressOrdinal", 0) < previous.get("goalProgressOrdinal", 0)):
+            raise ValueError("The committed typed scoring-goal progress regressed.")
     return {**checkpoint, "tierProgress": current}
 
 

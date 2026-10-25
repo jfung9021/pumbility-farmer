@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import song_bpm_metadata
 from bpm_metadata_overlay import overlay_bpm_payload, select_bpm_payload
 from production_tiers import public_digest
 from song_bpm_metadata import bpm_metadata_identity
@@ -28,6 +29,23 @@ class BpmMetadataOverlayTests(unittest.TestCase):
         self.assertEqual(source, saved)
         self.assertEqual(result, overlay_bpm_payload(result))
         self.assertEqual(result["bpmMetadata"]["bpmMetadataRevision"], bpm_metadata_identity()["bpmMetadataRevision"])
+
+    def test_one_catalog_snapshot_and_index_are_shared_across_modes_and_details(self):
+        source = self.payload()
+        source["doubles"] = [{**source["singles"][0], "chartId": "trans-double", "type": "Double"}]
+        source["detail"] = {"chart": {**source["singles"][0], "chartId": "trans-detail"}}
+        saved = copy.deepcopy(source)
+        with patch("song_bpm_metadata._runtime", wraps=song_bpm_metadata._runtime) as runtime, \
+                patch("song_bpm_metadata._indexes", wraps=song_bpm_metadata._indexes) as indexes:
+            result = overlay_bpm_payload(source)
+        runtime.assert_called_once_with()
+        indexes.assert_called_once()
+        pairs = [(source["singles"][0], result["singles"][0]),
+                 (source["doubles"][0], result["doubles"][0]),
+                 (source["detail"]["chart"], result["detail"]["chart"])]
+        for original, actual in pairs:
+            self.assertEqual(actual, song_bpm_metadata.enrich_chart_bpm(original))
+        self.assertEqual(source, saved)
 
     def test_preserves_exact_variants_fixed_corrections_and_fractional_precision(self):
         source = self.payload()
@@ -95,7 +113,7 @@ class BpmMetadataOverlayTests(unittest.TestCase):
         from api.tier_list import router
         from analysis_runtime import MemoryBlobStore
         from pumbility_contract import combined_tier_blob_path
-        from tier_public import compact_tier_payload
+        from tier_public import tier_browser_payload
 
         app = FastAPI()
         app.include_router(router)
@@ -105,7 +123,7 @@ class BpmMetadataOverlayTests(unittest.TestCase):
         blobs.put_json(combined_tier_blob_path(), base)
         with patch("api.tier_list.PrivateBlobStore", return_value=blobs):
             legacy = client.get("/api/tier-list")
-            self.assertEqual(legacy.json(), compact_tier_payload(base))
+            self.assertEqual(legacy.json(), tier_browser_payload(base))
             focal = client.get("/api/tier-list?bpmPolicy=focal-v1")
             self.assertEqual(focal.status_code, 200)
             row = focal.json()["singles"][0]

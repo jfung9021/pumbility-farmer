@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from analysis_runtime import PrivateBlobStore
 from pumbility_contract import combined_tier_blob_path
 from tier_scores import TIER_SCORE_MODES, TierScoresNotFoundError, read_tier_player_scores
-from tier_public import compact_tier_payload, detail_shard_path, tier_chart_details, tier_detail_generated_at
+from tier_public import detail_shard_path, tier_browser_payload, tier_chart_details, tier_detail_generated_at
 from bpm_metadata_overlay import select_bpm_payload, validate_bpm_policy
 from song_bpm_metadata import bpm_metadata_identity
 
@@ -87,7 +87,10 @@ def get_tier_player_scores(
 
 
 @router.get("/api/tier-list")
-def get_combined_tier_list(bpm_policy: Annotated[str, Query(alias="bpmPolicy")] = ""):
+def get_combined_tier_list(
+    bpm_policy: Annotated[str, Query(alias="bpmPolicy")] = "",
+    fresh: Annotated[bool, Query()] = False,
+):
     try:
         focal = validate_bpm_policy(bpm_policy)
     except ValueError as error:
@@ -100,16 +103,25 @@ def get_combined_tier_list(bpm_policy: Annotated[str, Query(alias="bpmPolicy")] 
             return JSONResponse(
                 status_code=404,
                 content={"error": "The combined tier list has not been generated yet."},
+                headers={"Cache-Control": "no-store"},
             )
         selected = select_bpm_payload(payload, bpm_policy)
-        return JSONResponse(content=compact_tier_payload(selected), headers={"Cache-Control": "no-store"})
+        # This endpoint contains only the shared public list. Player scores and
+        # chart-detail recovery remain uncached; fresh=1 bypasses both caches.
+        headers = {"Cache-Control": "no-store"} if fresh else {
+            "Cache-Control": "public, max-age=30",
+            "Vercel-CDN-Cache-Control": "public, max-age=60, stale-while-revalidate=60",
+        }
+        return JSONResponse(content=tier_browser_payload(selected), headers=headers)
     except (RuntimeError, ValueError, json.JSONDecodeError):
         return JSONResponse(
             status_code=503,
             content={"error": "The combined tier-list service is temporarily unavailable."},
+            headers={"Cache-Control": "no-store"},
         )
     except Exception:
         return JSONResponse(
             status_code=500,
             content={"error": "The combined tier list could not be read."},
+            headers={"Cache-Control": "no-store"},
         )

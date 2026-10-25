@@ -318,6 +318,19 @@ def _enrich_chart(chart: Mapping, indexes: tuple[dict, dict]) -> dict:
     return result
 
 
+class BpmMetadataView:
+    """One validated catalog and exact-variant lookup for an entire payload."""
+
+    def __init__(self, mix: Any = "Phoenix2", *, catalog: Mapping | None = None):
+        document = _runtime() if catalog is None else validate_runtime_catalog(catalog)
+        self.identity = {key: document[key] for key in (
+            "bpmMetadataVersion", "bpmPolicy", "bpmMetadataRevision")}
+        self._indexes = _indexes(document) if resolve_mix(mix).api_value == "Phoenix2" else None
+
+    def enrich_chart(self, chart: Mapping) -> dict:
+        return _enrich_chart(chart, self._indexes) if self._indexes is not None else dict(chart)
+
+
 def enrich_chart_bpm(chart: Mapping, mix: Any = "Phoenix2", *, catalog: Mapping | None = None) -> dict:
     return enrich_charts_bpm([chart], mix=mix, catalog=catalog)[0]
 
@@ -326,9 +339,8 @@ def enrich_charts_bpm(charts: Iterable[Mapping], mix: Any = "Phoenix2", *, catal
     """Copy rows with full display ranges plus focal values, without rekeying IDs."""
     if resolve_mix(mix).api_value != "Phoenix2":
         return [dict(chart) for chart in charts]
-    document = _runtime() if catalog is None else validate_runtime_catalog(catalog)
-    indexes = _indexes(document)
-    return [_enrich_chart(chart, indexes) for chart in charts]
+    view = BpmMetadataView(mix, catalog=catalog)
+    return [view.enrich_chart(chart) for chart in charts]
 
 
 def bpm_bucket_index(value: Any) -> int | None:
