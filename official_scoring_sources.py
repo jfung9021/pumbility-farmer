@@ -27,7 +27,8 @@ SOURCE = "piuscores-official"
 DEFAULT_OFFICIAL_SCORING_MANIFEST_PATH = (
     Path(__file__).resolve().parent / ".local-data/piu-scores/official/scoring/manifest.json"
 )
-_STATES = {"available", "empty", "absent-from-catalog", "not-mirrored"}
+_STATES = {"available", "empty", "absent-from-catalog", "not-mirrored", "not-captured"}
+PHOENIX_ARCHIVE_NAME = "phoenix-static.json"
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -168,6 +169,8 @@ def _validate_capture(capture: Mapping[str, Any], current: Mapping[str, Any], *,
             raise ValueError("Official scoring chart mode changed across catalogs.")
         if (board["status"] == "absent-from-catalog") != (not present):
             raise ValueError("Official scoring board catalog membership is inconsistent.")
+        if board["status"] == "not-captured" and mix != "Phoenix":
+            raise ValueError("Only frozen Phoenix evidence may be outside captured scope.")
         if board["status"] in ("available", "empty"):
             if board.get("asOf") != capture["asOf"]:
                 raise ValueError("Official scoring capture mixes source dates.")
@@ -195,6 +198,59 @@ def _capture_object(mix: str, catalog: list, current: Mapping[str, Any], boards:
     return {"schemaVersion": SCORING_SOURCE_SCHEMA_VERSION, "source": SOURCE, "mix": mix,
             "catalog": catalog, "catalogSha256": _sha(catalog), "targetChartIds": sorted(current),
             "asOf": as_of, "fetchedAtUtc": fetched_at, "boards": boards}
+
+
+def validate_phoenix_archive(archive: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the private, permanent original source independently of today's scope."""
+    if not isinstance(archive, Mapping) or archive.get("schemaVersion") != 1:
+        raise ValueError("Invalid frozen Phoenix archive.")
+    capture = archive.get("capture")
+    if (not isinstance(capture, Mapping) or capture.get("mix") != "Phoenix"
+            or archive.get("sha256") != _sha(capture)):
+        raise ValueError("Frozen Phoenix archive content hash differs.")
+    ids = capture.get("targetChartIds")
+    if not isinstance(ids, list) or ids != sorted({_uuid(cid) for cid in ids}):
+        raise ValueError("Invalid frozen Phoenix archive scope.")
+    catalog = _catalog(capture.get("catalog"), "Phoenix")
+    return _validate_capture(capture, {cid: catalog.get(cid, {}) for cid in ids})
+
+
+def _freeze_phoenix(path: Path, capture: Mapping[str, Any]) -> dict[str, Any]:
+    archive = {"schemaVersion": 1, "sha256": _sha(capture), "capture": dict(capture)}
+    validated = validate_phoenix_archive(archive)
+    _atomic_json(path.parent / PHOENIX_ARCHIVE_NAME, archive)
+    return validated
+
+
+def frozen_phoenix_source(path: Path) -> dict[str, Any] | None:
+    """Adopt a complete existing capture once; never probe or replace an archive."""
+    path = Path(path)
+    archive_path = path.parent / PHOENIX_ARCHIVE_NAME
+    if archive_path.exists():
+        return validate_phoenix_archive(json.loads(archive_path.read_bytes()))
+    if path.exists():
+        return _freeze_phoenix(path, load_official_scoring_manifest(path)["_captures"]["Phoenix"])
+    return None
+
+
+def fetch_official_scoring_catalogs(client: Any, path: Path) -> dict[str, list]:
+    frozen = frozen_phoenix_source(path)
+    return {
+        "Phoenix": frozen["catalog"] if frozen is not None else client.fetch_page_collection("api/v2/charts?mix=Phoenix&limit=500"),
+        "Phoenix2": client.fetch_page_collection("api/v2/charts?mix=Phoenix2&limit=500"),
+    }
+
+
+def _project_frozen_phoenix(frozen: Mapping[str, Any], current: Mapping[str, Any]) -> dict[str, Any]:
+    if frozen["targetChartIds"] == sorted(current):
+        return _validate_capture(frozen, current)
+    catalog = _catalog(frozen["catalog"], "Phoenix")
+    boards = {cid: frozen["boards"].get(cid) or _state(
+        cid, "Phoenix", "not-captured" if cid in catalog else "absent-from-catalog", frozen["fetchedAtUtc"])
+        for cid in current}
+    projected = {**frozen, "targetChartIds": sorted(current), "boards": boards,
+                 "frozenSourceSha256": _sha(frozen)}
+    return _validate_capture(projected, current)
 
 
 def publish_official_scoring_manifest(captures: Mapping[str, Mapping[str, Any]], path: Path = DEFAULT_OFFICIAL_SCORING_MANIFEST_PATH) -> dict[str, Any]:
@@ -242,11 +298,12 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boar
     Write immutable captures before advancing the private manifest. A failed
     fetch or storage validation leaves the last complete manifest available.
     """
-    from pumbility_contract import official_scoring_manifest_path
+    from pumbility_contract import official_scoring_manifest_path, phoenix_scoring_archive_path
 
     key = official_scoring_manifest_path()
     prefix = key.rsplit("/", 1)[0]
     pending_key = f"{prefix}/refresh-pending.json"
+    archive_key = phoenix_scoring_archive_path()
     class BatchComplete(Exception):
         pass
     class BoundedClient:
@@ -268,11 +325,27 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boar
                 previous, lambda relative: store.get_json(f"{prefix}/{relative}"),
             )
             publish_official_scoring_manifest(loaded["_captures"], path)
+        archive = store.get_json(archive_key)
+        if archive is not None:
+            validate_phoenix_archive(archive)
+            _atomic_json(path.parent / PHOENIX_ARCHIVE_NAME, archive)
+        def persist_archive():
+            nonlocal archive
+            # Existing archives are never overwritten, including partial/restart paths.
+            local_archive = path.parent / PHOENIX_ARCHIVE_NAME
+            if archive is None and local_archive.exists():
+                payload = json.loads(local_archive.read_bytes())
+                validate_phoenix_archive(payload)
+                store.put_json(archive_key, payload)
+                archive = payload
+        # Adopt the complete published Phoenix capture before any upstream call.
+        frozen_phoenix_source(path)
+        persist_archive()
         pending = store.get_json(pending_key) or {}
         for mix in MIXES:
             if mix in pending:
                 _atomic_json(path.parent / f"{mix}.pending.json", pending[mix])
-        catalogs = {mix: client.fetch_page_collection(f"api/v2/charts?mix={mix}&limit=500") for mix in MIXES}
+        catalogs = fetch_official_scoring_catalogs(client, path)
         try:
             loaded = capture_official_scoring_sources(
                 BoundedClient(), catalogs, path, checkpoint_interval=min(25, max_boards),
@@ -288,6 +361,8 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boar
                         "asOf": cap["asOf"], "catalogSha256": cap["catalogSha256"],
                         "targetChartIds": cap["targetChartIds"], "completed": len(cap["boards"]),
                     } for mix, cap in pending.items()})}
+        finally:
+            persist_archive()
         manifest = {k: v for k, v in loaded.items() if not k.startswith("_")}
         for mix, ref in manifest["captures"].items():
             store.put_json(f"{prefix}/{ref['path']}", loaded["_captures"][mix])
@@ -394,21 +469,24 @@ def capture_official_scoring_sources(client: Any, catalogs: Mapping[str, list], 
                                      *, restart: bool = False, now: Callable[[], datetime] = _utc_now,
                                      progress: Callable[[str, int, int], None] | None = None,
                                      checkpoint_interval: int = 1) -> dict[str, Any]:
-    """Resume source checkpoints only after probing that mix's live snapshot date.
+    """Freeze Phoenix once; probe/resume only the live Phoenix2 snapshot thereafter.
 
-    Phoenix is reused when its date/catalog/scope match the live probe. Phoenix2
-    is refreshed, or resumed from its independently pinned partial checkpoint.
-    Failed fetches never become empty boards and cannot replace current.json.
+    Restart discards partial live work but cannot bypass the permanent archive.
+    Failed fetches never become empty boards or replace the complete manifest.
     """
     path = Path(path)
     current = scoring_target_charts(catalogs["Phoenix2"])
     if not current:
         raise ValueError("No eligible official scoring charts.")
-    existing = None
-    if path.exists() and not restart:
-        existing = load_official_scoring_manifest(path)
+    frozen = frozen_phoenix_source(path)
     captures = {}
     for mix in MIXES:
+        if mix == "Phoenix" and frozen is not None:
+            captures[mix] = _project_frozen_phoenix(frozen, current)
+            _atomic_json(path.parent / f"{mix}.pending.json", captures[mix])
+            if progress:
+                progress(mix, len(current), len(current))
+            continue
         source_catalog = _catalog(catalogs[mix], mix)
         pending_path = path.parent / f"{mix}.pending.json"
         prior = None
@@ -416,10 +494,6 @@ def capture_official_scoring_sources(client: Any, catalogs: Mapping[str, list], 
             candidate = json.loads(pending_path.read_text(encoding="utf-8"))
             if candidate.get("catalogSha256") == _sha(catalogs[mix]) and candidate.get("targetChartIds") == sorted(current):
                 prior = _validate_capture(candidate, current, complete=False)
-        if prior is None and mix == "Phoenix" and existing:
-            candidate = existing["_captures"][mix]
-            if candidate["catalogSha256"] == _sha(catalogs[mix]) and candidate["targetChartIds"] == sorted(current):
-                prior = candidate
         boards = {}
         as_of = None
         # A date-bearing live board is necessary before reusing any cached state.
@@ -458,6 +532,8 @@ def capture_official_scoring_sources(client: Any, catalogs: Mapping[str, list], 
         captures[mix] = _capture_object(mix, catalogs[mix], current, boards, as_of, _iso(now()))
         captures[mix]["captureProvenance"] = {"method": "authenticated-api"}
         _validate_capture(captures[mix], current)
+        if mix == "Phoenix":
+            _freeze_phoenix(path, captures[mix])
     loaded = publish_official_scoring_manifest(captures, path)
     for mix in MIXES:
         (path.parent / f"{mix}.pending.json").unlink(missing_ok=True)

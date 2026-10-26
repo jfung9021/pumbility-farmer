@@ -75,6 +75,11 @@ def official_scoring_manifest_path() -> str:
     return "analysis/private/official/scoring/manifest.json"
 
 
+def phoenix_scoring_archive_path() -> str:
+    """Permanent private Phoenix 1 official evidence, never refreshed upstream."""
+    return "analysis/private/official/scoring/phoenix-static.json"
+
+
 def scoring_method_identity() -> dict[str, Any]:
     return {
         "version": 1,

@@ -77,12 +77,12 @@ class OfficialScoringSourcesTests(unittest.TestCase):
         result = refresh_hosted_official_scoring_sources(first, store, max_boards=2)
         self.assertEqual(result["outcome"], "official-sources-progress")
         self.assertIsNone(store.get_json(official_scoring_manifest_path()))
-        second = Client([api_board([row()], OLD), api_board([row(99)], NEW)])
-        result = refresh_hosted_official_scoring_sources(second, store, max_boards=2)
+        second = Client([api_board([row(99)], NEW)])
+        result = refresh_hosted_official_scoring_sources(second, store, max_boards=1)
         self.assertEqual(result["outcome"], "official-sources-progress")
         self.assertIsNone(store.get_json(official_scoring_manifest_path()))
-        third = Client([api_board([row()], OLD), api_board([row(99)], NEW), api_board([row(99)], NEW)])
-        result = refresh_hosted_official_scoring_sources(third, store, max_boards=3)
+        third = Client([api_board([row(99)], NEW), api_board([row(99)], NEW)])
+        result = refresh_hosted_official_scoring_sources(third, store, max_boards=2)
         self.assertEqual(result["sourceDates"], {"Phoenix": OLD, "Phoenix2": NEW})
         self.assertIsNotNone(store.get_json(official_scoring_manifest_path()))
         pending_key = official_scoring_manifest_path().rsplit("/", 1)[0] + "/refresh-pending.json"
@@ -100,14 +100,14 @@ class OfficialScoringSourcesTests(unittest.TestCase):
         result = refresh_hosted_official_scoring_sources(first, store)
         self.assertEqual(result["boardCounts"], {"Phoenix": 2, "Phoenix2": 2})
         self.assertNotIn("PLAYER#1234", json.dumps(result))
-        second = Client([api_board([row()], OLD), api_board([row(99)], LATER), api_board([row(99)], LATER)])
+        second = Client([api_board([row(99)], LATER), api_board([row(99)], LATER)])
         result = refresh_hosted_official_scoring_sources(second, store)
-        self.assertEqual(len(second.paths), 3)
+        self.assertEqual(len(second.paths), 2)
         self.assertEqual(result["sourceDates"]["Phoenix2"], LATER)
         manifest = store.get_json(official_scoring_manifest_path())
         self.assertEqual(canonical_scoring_manifest_sha256(manifest), result["manifestSha256"])
         before = copy.deepcopy(store.values)
-        failed = Client([api_board([row()], OLD), RuntimeError("upstream unavailable")])
+        failed = Client([RuntimeError("upstream unavailable")])
         with self.assertRaisesRegex(RuntimeError, "upstream unavailable"):
             refresh_hosted_official_scoring_sources(failed, store)
         self.assertEqual(before, store.values)
@@ -231,13 +231,13 @@ class OfficialScoringSourcesTests(unittest.TestCase):
             capture_official_scoring_sources(first, catalogs, output, now=lambda: NOW)
             self.assertTrue(all("supplemented=false" in p and "mix=" in p for p in first.paths))
             before = output.read_bytes()
-            interrupted = FakeClient([api_board([row()], OLD), api_board([row(99)], LATER), RuntimeError("transport")])
+            interrupted = FakeClient([api_board([row(99)], LATER), RuntimeError("transport")])
             with self.assertRaisesRegex(RuntimeError, "transport"):
                 capture_official_scoring_sources(interrupted, catalogs, output, now=lambda: NOW)
             self.assertEqual(output.read_bytes(), before)
-            resumed = FakeClient([api_board([row()], OLD), api_board([row(99)], LATER), api_board([row(99)], LATER)])
+            resumed = FakeClient([api_board([row(99)], LATER), api_board([row(99)], LATER)])
             loaded = capture_official_scoring_sources(resumed, catalogs, output, now=lambda: NOW)
-            self.assertEqual(len(resumed.paths), 3)  # one old-source probe and two current-source boards
+            self.assertEqual(len(resumed.paths), 2)  # only the two current-source boards
             self.assertEqual(loaded["_captures"]["Phoenix2"]["asOf"], LATER)
 
     def test_intra_mix_date_change_supplemented_and_catalog_drift_rejected(self):

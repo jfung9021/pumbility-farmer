@@ -97,13 +97,21 @@ def refresh_from_jonathan(
             return _response(status, payload)
         if mode == "official-status":
             from analysis_runtime import PrivateBlobStore
-            from pumbility_contract import official_scoring_manifest_path
+            from pumbility_contract import official_scoring_manifest_path, phoenix_scoring_archive_path
+            from official_scoring_sources import validate_phoenix_archive
 
-            manifest = PrivateBlobStore().get_json(official_scoring_manifest_path())
+            store = PrivateBlobStore()
+            manifest = store.get_json(official_scoring_manifest_path())
             if manifest is None:
                 return _response(200, {"outcome": "official-sources-missing"})
+            archive = store.get_json(phoenix_scoring_archive_path())
+            frozen = validate_phoenix_archive(archive) if archive is not None else None
             return _response(200, {
                 "outcome": "official-sources-ready",
+                "frozenPhoenix": None if frozen is None else {
+                    "sha256": archive["sha256"], "asOf": frozen["asOf"],
+                    "fetchedAtUtc": frozen["fetchedAtUtc"], "boardCount": len(frozen["boards"]),
+                },
                 "sources": {mix: {key: ref[key] for key in ("asOf", "fetchedAtUtc")}
                             for mix, ref in manifest["captures"].items()},
             })

@@ -469,7 +469,8 @@ function hasValidCrossLevelScoring(payload: Partial<AnalysisPayload>, hybrid = f
             && evidence.comparability === "no-evidence" && Object.values(evidence.sourceCounts).every((count) => count === 0)))
         || (Object.keys(evidence.sourceStates).length > 0 && Object.keys(method.sourceDates).some((mix) => {
           const state = evidence.sourceStates[mix];
-          return !state || !["available", "empty", "absent-from-catalog", "not-mirrored"].includes(state.status)
+          return !state || !["available", "empty", "absent-from-catalog", "not-mirrored", "not-captured"].includes(state.status)
+            || (state.status === "not-captured" && mix !== "Phoenix")
             || (state.asOf !== null && (typeof state.asOf !== "string" || !Number.isFinite(Date.parse(state.asOf))))
             || !Number.isInteger(state.rawRowCount) || state.rawRowCount < 0
             || state.rawRowCount !== evidence.sourceCounts[mix]
