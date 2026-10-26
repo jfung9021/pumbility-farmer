@@ -89,7 +89,7 @@ def build_combined_tier_payload(
     # Keep operational progress plumbing outside scoring_percentile.py: that
     # module's code identity also keys the expensive, reusable General fit.
     if on_tier_progress is not None and kwargs.get("source_aware_store") is not None:
-        from production_tiers import build_hosted_tiers
+        from production_tiers import build_retained_hosted_tiers
 
         if not (
             all(kwargs.get(name) for name in (
@@ -98,7 +98,7 @@ def build_combined_tier_payload(
             )) and kwargs.get("official_scoring_manifest") is not None
         ):
             raise ValueError("Source-aware tiers require the enabled hybrid average source policy.")
-        return build_hosted_tiers(
+        return build_retained_hosted_tiers(
             *args, store=kwargs["source_aware_store"],
             generated_at_utc=kwargs.get("generated_at_utc"),
             on_progress=on_tier_progress,
@@ -1017,6 +1017,9 @@ def request_refresh(
             "archiveUrl": mix_spec.archive_url,
         }
     effective_now = now or utc_now()
+    admission = getattr(jobs, "captured_recovery_admission", None)
+    if callable(admission) and (blocked := admission()) is not None:
+        return 409, {"outcome": "busy", "error": "A captured-input recovery owns analysis admission.", "recovery": blocked}
     recovered_job_id = None
     active_id = jobs.active_job_id()
     active = jobs.get(active_id) if active_id else None
@@ -2503,24 +2506,33 @@ def _database_cursor_token(checkpoint: Mapping[str, Any]) -> str:
 
 
 def _validated_tier_progress(progress: Any) -> dict[str, Any]:
-    from production_tiers import FINISH_STAGES, SAMPLES
+    from production_tiers import FINISH_STAGES, RETAINED_FINISH_STAGES, SAMPLES
+
+    if not isinstance(progress, Mapping) or progress.get("producer") not in (None, "retained-goals-v1"):
+        raise ValueError("The typed tier progress producer is invalid.")
+    retained = progress.get("producer") == "retained-goals-v1"
+    fits, preparation = (4, 8) if retained else (8, 12)
+    stages = RETAINED_FINISH_STAGES if retained else FINISH_STAGES
+    accepted = {"general", "target-fit", "prepared-inputs", "archive", "public", *stages}
+    if not retained:
+        accepted.add("scoring-goals")
 
     if (
         not isinstance(progress, Mapping)
         or progress.get("version") != 1
         or not re.fullmatch(r"[0-9a-f]{64}", str(progress.get("generation") or ""))
         or type(progress.get("ordinal")) is not int
-        or not 0 <= progress["ordinal"] <= 9 + len(FINISH_STAGES) + 2
-        or progress.get("stage") not in {"general", "target-fit", "prepared-inputs", "scoring-goals", "archive", "public", *FINISH_STAGES}
+        or not 0 <= progress["ordinal"] <= fits + 1 + len(stages) + 2
+        or progress.get("stage") not in accepted
         or ("preparationOrdinal" in progress and (
             type(progress["preparationOrdinal"]) is not int
-            or not 1 <= progress["preparationOrdinal"] <= 12
+            or not 1 <= progress["preparationOrdinal"] <= preparation
             or progress["ordinal"] != 0
             or progress["stage"] != "general"
         ))
         or (progress.get("stage") == "scoring-goals" and "goalProgressOrdinal" not in progress)
         or ("goalProgressOrdinal" in progress and (
-            type(progress["goalProgressOrdinal"]) is not int
+            retained or type(progress["goalProgressOrdinal"]) is not int
             or not 1 <= progress["goalProgressOrdinal"] <= 18
             or progress["ordinal"] != 9 + len(FINISH_STAGES)
             or progress["stage"] != "scoring-goals"
@@ -2531,10 +2543,10 @@ def _validated_tier_progress(progress: Any) -> dict[str, Any]:
         inner = progress["fitProgress"]
         if (not isinstance(inner, Mapping) or set(inner) != {"identity", "ordinal"}
                 or not re.fullmatch(r"[0-9a-f]{64}", str(inner.get("identity") or ""))
-                or type(inner.get("ordinal")) is not int or not 0 <= inner["ordinal"] <= SAMPLES + 2
+                or type(inner.get("ordinal")) is not int or not 0 <= inner["ordinal"] <= SAMPLES + (1 if retained else 2)
                 or progress["stage"] not in {"target-fit", "scoring-goals"}
                 or (progress["stage"] == "target-fit" and
-                    (progress["ordinal"] >= 8 or progress.get("preparedContext") is not True))):
+                    (progress["ordinal"] >= fits or progress.get("preparedContext") is not True))):
             raise ValueError("The typed inner target-fit progress checkpoint is invalid.")
     return dict(progress)
 
@@ -2547,13 +2559,16 @@ def _reconcile_tier_progress(
     previous = checkpoint.get("tierProgress")
     if previous is not None:
         previous = _validated_tier_progress(previous)
-        if current["generation"] != previous["generation"]:
+        if (current["generation"] != previous["generation"]
+                or current.get("producer") != previous.get("producer")):
             raise ValueError("The typed tier progress belongs to a different generation.")
         if current["ordinal"] < previous["ordinal"]:
             raise ValueError("The committed typed tier progress regressed.")
         if (current["ordinal"] == previous["ordinal"] == 0
                 and current.get("preparationOrdinal", 0) < previous.get("preparationOrdinal", 0)
-                and not (previous.get("preparationOrdinal") == 12 and current.get("fitProgress") is not None)):
+                and not (previous.get("preparationOrdinal") ==
+                         (8 if current.get("producer") == "retained-goals-v1" else 12)
+                         and current.get("fitProgress") is not None)):
             raise ValueError("The committed typed tier preparation regressed.")
         if (current["ordinal"] == previous["ordinal"]
                 and current.get("goalProgressOrdinal", 0) < previous.get("goalProgressOrdinal", 0)):
@@ -3609,6 +3624,13 @@ def _resume_typed_analysis_checkpoint(
     raw_model_parts = checkpoint.get("modelParts")
     checkpoint_phase = str(checkpoint.get("phase") or "")
     eligible_player_count = checkpoint.get("eligiblePlayerCount")
+    if getattr(blob_store, "captured_bundle", None) is not None:
+        captured_sources = checkpoint.get("capturedPublicationSources")
+        if captured_sources is not None:
+            if (not isinstance(captured_sources, Mapping)
+                    or "analysis/private/source-revisions/phoenix2.json" not in captured_sources):
+                raise ValueError("The captured publication source revisions are invalid.")
+            blob_store.captured_publication_sources = dict(captured_sources)
     checkpoint_phases = {
         TYPED_CHECKPOINT_ANALYSIS_PHASE,
         TYPED_CHECKPOINT_COMBINED_PHASE,
@@ -4073,6 +4095,10 @@ def _resume_typed_analysis_checkpoint(
         )
         if not bool(checkpoint.get("reanalyzeOnly")):
             blob_store.put_json(current_snapshot_path(mix_spec), snapshot)
+        if getattr(blob_store, "captured_bundle", None) is not None:
+            from captured_run_runtime import capture_publication_sources
+            checkpoint = {**checkpoint, "capturedPublicationSources": capture_publication_sources(blob_store)}
+            blob_store.captured_publication_sources = checkpoint["capturedPublicationSources"]
         checkpoint = {
             **checkpoint,
             "phase": TYPED_CHECKPOINT_SNAPSHOT_PHASE,
@@ -4478,7 +4504,8 @@ def _advance_job_official_sources(
             raise ApiError("PIU_SCORES_API_KEY is not configured as a server-side environment variable.")
         client = PiuScoresClient(api_key=key)
     _pulse_job_lease(lease_heartbeat)
-    result = refresh_hosted_official_scoring_sources(client, blob_store, max_boards=100)
+    result = refresh_hosted_official_scoring_sources(client, blob_store, max_boards=100,
+                                                    refresh_id=job_id)
     _pulse_job_lease(lease_heartbeat)
     if result.get("outcome") == "official-sources-progress":
         identity = result.get("progressIdentity")
@@ -4512,6 +4539,24 @@ def _advance_job_official_sources(
         lease_heartbeat=lease_heartbeat)
 
 
+def captured_run_recovery_context(store, checkpoint):
+    from captured_run_runtime import captured_run_recovery_context as implementation
+    return implementation(store, checkpoint)
+
+
+def _adopt_captured_run_checkpoint(**kwargs):
+    from captured_run_runtime import adopt_captured_run_checkpoint
+    return adopt_captured_run_checkpoint(**kwargs)
+
+
+def load_captured_recovery_inputs(store, bundle_id):
+    from captured_run_inputs import load_captured_run_inputs
+    from captured_run_runtime import validate_captured_context
+    bundle = load_captured_run_inputs(store, bundle_id)
+    validate_captured_context(store, bundle["context"])
+    return bundle
+
+
 def execute_analysis_job(
     job_id: str,
     *,
@@ -4525,6 +4570,7 @@ def execute_analysis_job(
     """Run one idempotent, checkpointed refresh in a queue worker."""
     from piu_misgrade_analyzer import AnalysisConfig, ApiError
     from pumbility_store import JobLeaseHeldError
+    from captured_run_runtime import CapturedAdoptionPending
 
     blob_store = blobs or PrivateBlobStore()
     job_store = jobs or RuntimeJobStore()
@@ -4533,6 +4579,9 @@ def execute_analysis_job(
         raise RuntimeError("The queued analysis job status was not found.")
     if (existing.get("status") == "completed" or existing.get("cancelRequested")
             or (acknowledge_terminal and existing.get("status") in {"failed", "cancelled"})):
+        return existing
+    admission = getattr(job_store, "captured_recovery_admission", None)
+    if callable(admission) and admission(job_id) is not None:
         return existing
     mix_spec = resolve_mix(existing.get("mix"))
     if mix_spec.archived:
@@ -4610,6 +4659,16 @@ def execute_analysis_job(
     try:
         lease_heartbeat = _start_job_lease_heartbeat(job_store, job_id)
         _pulse_job_lease(lease_heartbeat)
+        captured_bundle = None
+        if existing.get("capturedRunBundleId"):
+            if not typed_persistence_enabled:
+                raise ValueError("Captured-input recovery requires typed persistence.")
+            from captured_run_runtime import CapturedInputStore
+            captured_bundle = load_captured_recovery_inputs(blob_store, existing["capturedRunBundleId"])
+            if captured_bundle["sourceJobId"] != existing.get("capturedSourceJobId"):
+                raise ValueError("The captured recovery source job differs.")
+            blob_store = CapturedInputStore(blob_store, captured_bundle,
+                job_id=job_id, lease_owner=getattr(job_store, "lease_owner", None))
         cleanup_abandoned_staging(
             blob_store, now=now(), keep_path=staging_path, mix=mix_spec
         )
@@ -4618,6 +4677,10 @@ def execute_analysis_job(
         )
         if typed_persistence_enabled:
             typed_checkpoint = blob_store.get_json(checkpoint_path)
+            if typed_checkpoint is None and captured_bundle is not None:
+                typed_checkpoint = _adopt_captured_run_checkpoint(blob_store=blob_store, job_store=job_store,
+                    job_id=job_id, mix_spec=mix_spec, bundle=captured_bundle,
+                    checkpoint_path=checkpoint_path, lease_heartbeat=lease_heartbeat, now=now)
             starting_checkpoint = typed_checkpoint
             if typed_checkpoint is not None:
                 return _resume_typed_analysis_checkpoint(
@@ -4892,10 +4955,16 @@ def execute_analysis_job(
             checkpoint_paths=[staging_path, checkpoint_path],
         )
         return completed
+    except CapturedAdoptionPending as exc:
+        return _checkpoint_continuation(job_store=job_store, job_id=job_id,
+            continuation="captured-adoption", sequence=exc.sequence, stage="analyzing",
+            message="Saved input rows checkpointed; continuing adoption without upstream fetching.",
+            lease_heartbeat=lease_heartbeat,
+            phase_progress={"current": exc.completed, "total": exc.total})
     except TierAnalysisPending as exc:
         return _checkpoint_continuation(job_store=job_store, job_id=job_id,
             continuation="combined", sequence=exc.sequence, stage="analyzing",
-            message=(f"Tier analysis: {exc.completed} of 8 scoring fits saved. {exc}"
+            message=(f"Tier analysis: {exc.completed} of {getattr(exc, 'fit_count', 8)} scoring fits saved. {exc}"
                      if exc.stage == "target-fit" else str(exc)),
             lease_heartbeat=lease_heartbeat,
             phase_progress={"current": exc.progress_ordinal, "total": exc.total_stages})

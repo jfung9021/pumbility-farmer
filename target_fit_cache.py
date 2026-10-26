@@ -155,22 +155,24 @@ class _BootstrapCheckpoint:
 def pending_fit_progress(store, boards, *, score_target=990000,
                          bootstrap_samples=model.DEFAULT_BOOTSTRAP_SAMPLES,
                          seed=20261017, regularization_grid=model.REGULARIZATION_GRID,
-                         source_boards=None):
+                         source_boards=None, diagnostics_policy="full"):
     """Recover verified inner work before the enclosing runtime stall audit."""
+    _validate_diagnostics_policy(diagnostics_policy)
     data = model._prepare(boards, score_target)
     identity = _identity(data, score_target=score_target, bootstrap_samples=bootstrap_samples,
                          seed=seed, regularization_grid=regularization_grid)
     saved = _read(store, "main", identity)
     if saved is not None and _usable_main(saved, data, seed):
         ordinal = bootstrap_samples + 1
-        source_identity = {"main": canonical_json_sha256(identity), "sources": {
-            name: _binary_inputs(model._prepare(source, score_target))
-            for name, source in sorted((source_boards or {}).items())}}
-        source = _read(store, "source", source_identity)
-        if (source is not None and source["policy"] == saved["fit"]["policy"]
-                and set(source["charts"]) == set(saved["fit"]["charts"])
-                and source["diagnostics"]["validation"] == saved["fit"]["diagnostics"]["validation"]):
-            ordinal += 1
+        if diagnostics_policy == "full":
+            source_identity = {"main": canonical_json_sha256(identity), "sources": {
+                name: _binary_inputs(model._prepare(source, score_target))
+                for name, source in sorted((source_boards or {}).items())}}
+            source = _read(store, "source", source_identity)
+            if (source is not None and source["policy"] == saved["fit"]["policy"]
+                    and set(source["charts"]) == set(saved["fit"]["charts"])
+                    and source["diagnostics"]["validation"] == saved["fit"]["diagnostics"]["validation"]):
+                ordinal += 1
     else:
         bootstrap = _BootstrapCheckpoint(store, identity).load()
         if bootstrap is None:
@@ -268,14 +270,197 @@ def hydrate_point_context(store, boards, fit, *, score_target=990000):
         return False
 
 
+def validated_point_context(data, fit, context, seed):
+    """Check private cold-solve dimensions without registering it or solving."""
+    if not len(data["y"]):
+        return not context
+    try:
+        point = context["pointFit"]
+        if not {*_POINT_ARRAYS, "converged", "iterations", "gradientMaximum", "objective", "message"} <= point.keys():
+            return False
+        sizes = (len(data["players"]) + len(data["mainCharts"]), len(data["players"]),
+                 len(data["mainCharts"]), len(data["y"]), len(data["mainCharts"]))
+        for key, size in zip(_POINT_ARRAYS, sizes):
+            values = np.asarray(point[key], dtype=float)
+            if values.shape != (size,) or not np.all(np.isfinite(values)):
+                return False
+        if any(float(point["effect"][i]) != fit["charts"][cid].get("effect")
+               for i, cid in enumerate(data["mainCharts"])):
+            return False
+        heldout = model._holdout(data["p"], data["c"], len(data["players"]), len(data["mainCharts"]), seed)
+        if heldout.tolist() != context["heldout"]:
+            return False
+        for key in ("validationProbability", "validationBaseline"):
+            values = np.asarray(context[key], dtype=float)
+            if values.shape != (int(np.sum(heldout)),) or not np.all(np.isfinite(values)):
+                return False
+        return True
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+
+
+def validated_bootstrap_checkpoint(data, identity, saved):
+    """Validate the exact parent, accumulated effects and next RNG state."""
+    try:
+        parent = canonical_json_sha256({"target": identity["target"], "samples": identity["samples"],
+            "seed": identity["seed"], "grid": identity["grid"], "charts": data["charts"],
+            "records": data["allRecords"], "players": data["players"],
+            "inputPlayers": data["inputPlayers"], "components": data["components"]})
+        completed, converged = saved["completed"], saved["converged"]
+        if (saved["parent"] != parent or type(completed) is not int or not 0 <= completed <= identity["samples"]
+                or type(converged) is not int or not 0 <= converged <= completed):
+            return False
+        policy = saved["result"]["policy"]
+        if (policy["scoreTarget"] != identity["target"] or policy["bootstrapSamples"] != identity["samples"]
+                or policy["regularizationGrid"] != identity["grid"]
+                or policy["selectedRegularization"] not in identity["grid"]
+                or saved["result"]["diagnostics"]["validation"]["seed"] != identity["seed"]
+                or set(saved["result"]["charts"]) != set(data["charts"])):
+            return False
+        counts = {cid: [0, 0] for cid in data["charts"]}
+        for cid, _, outcome in data["allRecords"]:
+            counts[cid][int(outcome)] += 1
+        alignment = [i for i, cid in enumerate(data["mainCharts"]) if min(counts[cid]) >= 5]
+        if not alignment:
+            alignment = [i for i, cid in enumerate(data["mainCharts"])
+                         if min(counts[cid]) > 0 and sum(counts[cid]) >= 5]
+        alignment = alignment or list(range(len(data["mainCharts"])))
+        if saved["alignment"] != alignment or len(saved["effects"]) != len(data["mainCharts"]):
+            return False
+        for values in saved["effects"]:
+            if len(values) > converged or not np.all(np.isfinite(np.asarray(values, dtype=float))):
+                return False
+        rng = np.random.default_rng()
+        rng.bit_generator.state = saved["rngState"]  # Validate without drawing.
+        expected_rng = np.random.default_rng(identity["seed"] + 1)
+        for _ in range(completed):
+            expected_rng.integers(0, len(data["players"]), size=len(data["players"]))
+        if canonical_json_sha256(expected_rng.bit_generator.state) != canonical_json_sha256(saved["rngState"]):
+            return False
+        sizes = (len(data["players"]) + len(data["mainCharts"]), len(data["players"]),
+                 len(data["mainCharts"]), len(data["y"]), len(data["mainCharts"]))
+        for key, size in zip(_POINT_ARRAYS, sizes):
+            values = np.asarray(saved["fitted"][key], dtype=float)
+            if (values.shape != (size,) or not np.all(np.isfinite(values))
+                    or not np.array_equal(values, np.asarray(saved["context"]["pointFit"][key], dtype=float))):
+                return False
+        point_fit = copy.deepcopy(saved["result"])
+        for i, cid in enumerate(data["mainCharts"]):
+            point_fit["charts"][cid]["effect"] = saved["fitted"]["effect"][i]
+        if not validated_point_context(data, point_fit, saved["context"], identity["seed"]):
+            return False
+        if set(saved["sensitivity"]) != {str(value) for value in identity["grid"]}:
+            return False
+        return all(np.asarray(value["effect"]).shape == (len(data["mainCharts"]),)
+                   and np.all(np.isfinite(np.asarray(value["effect"], dtype=float)))
+                   for value in saved["sensitivity"].values())
+    except (AttributeError, KeyError, IndexError, TypeError, ValueError):
+        return False
+
+
+def _validate_diagnostics_policy(policy):
+    if policy not in {"full", "product-only"}:
+        raise ValueError("Unknown target diagnostics policy.")
+
+
+def compatible_legacy_components(store, data, identity, *, legacy_producer_identity=None):
+    """Inspect only the reviewed old producer at identical binary inputs/runtime.
+
+    This is a read-only compatibility check. The full identity retains ordered
+    observations, graph, target, samples, seed and regularization grid. An unknown
+    source/kernel/runtime is a cache miss, never a general rekey permission.
+    """
+    from numeric_recipe import legacy_component_code, legacy_outer_identities
+    # The original inner key did not encode Python. Its verified generation's
+    # outer producer receipt supplies that missing numerical-runtime binding.
+    if (identity.get("target") != 995000 or identity.get("samples") != 200
+            or identity.get("seed") != 20261018 or identity.get("grid") != [.01, .05, .2, 1.]
+            or legacy_producer_identity not in legacy_outer_identities()):
+        return None
+    code = legacy_component_code()
+    if code is None or code == identity["code"]:
+        return None
+    candidate = {**identity, "code": code}
+    main = _read(store, "main", candidate)
+    if main is not None:
+        fit = main["fit"]
+        bootstrap = fit["diagnostics"].get("bootstrap", {})
+        if (fit["policy"].get("modelVersion") == model.MODEL_VERSION
+                and fit["policy"].get("minimumPlayerCharts") == model.MINIMUM_PLAYER_CHARTS
+                and fit["policy"].get("weighting") == model.WEIGHTING
+                and fit["diagnostics"].get("validation", {}).get("seed") == identity["seed"]
+                and (not len(data["y"]) or (fit["diagnostics"].get("converged")
+                     and bootstrap.get("completed") == identity["samples"] and bootstrap.get("failed") == 0))
+                and validated_point_context(data, fit, main["context"], identity["seed"])):
+            return {"kind": "main", "identity": candidate, "payload": main}
+    bootstrap = _BootstrapCheckpoint(store, candidate).load()
+    if bootstrap is not None and validated_bootstrap_checkpoint(data, candidate, bootstrap):
+        return {"kind": "bootstrap", "identity": candidate, "payload": bootstrap}
+    return None
+
+
+def adopt_reviewed_retained_components(store, boards, *, score_target=995000,
+                                       bootstrap_samples=200, seed=20261018,
+                                       regularization_grid=model.REGULARIZATION_GRID,
+                                       legacy_producer_identity=None):
+    """Copy verified legacy retained work to its current key; keep originals."""
+    grid = sorted(set(float(value) for value in regularization_grid))
+    if (score_target != 995000 or bootstrap_samples != 200 or seed != 20261018
+            or grid != [.01, .05, .2, 1.]):
+        return False
+    data = model._prepare(boards, score_target)
+    identity = _identity(data, score_target=score_target, bootstrap_samples=bootstrap_samples,
+                         seed=seed, regularization_grid=grid)
+    main = _read(store, "main", identity)
+    if main is not None and _usable_main(main, data, seed):
+        return False
+    saved = compatible_legacy_components(store, data, identity,
+                                         legacy_producer_identity=legacy_producer_identity)
+    if saved is None:
+        return False
+    if saved["kind"] == "bootstrap":
+        existing = _BootstrapCheckpoint(store, identity).load()
+        if (existing is not None and validated_bootstrap_checkpoint(data, identity, existing)
+                and existing["completed"] >= saved["payload"]["completed"]):
+            return False
+    _write(store, saved["kind"], identity, saved["payload"])
+    return True
+
+
+def _product_fit(fit):
+    """Keep numerical results while declaring omitted research diagnostics."""
+    result = copy.deepcopy(fit)
+    diagnostics = result["diagnostics"]
+    diagnostics.pop("sourceRemovalVersion", None)
+    diagnostics.pop("generalBenchmarkPolicy", None)
+    diagnostics["sourceRemoval"] = {}
+    diagnostics["optionalDiagnostics"] = {
+        "version": 1, "policy": "product-only", "sourceRemoval": "not-computed",
+        "generalTargetBenchmark": "not-computed",
+    }
+    validation = diagnostics["validation"]
+    validation["generalTargetBenchmark"] = None
+    validation["generalTargetBenchmarkReason"] = "Not computed by the routine product-only diagnostics policy."
+    validation.pop("externalGeneralPredictionDiagnostic", None)
+    for chart in result["charts"].values():
+        chart.get("sensitivity", {}).pop("sourceRemovalEffects", None)
+    return result
+
+
 def load_or_fit_target(store, boards, *, score_target=990000,
                        bootstrap_samples=model.DEFAULT_BOOTSTRAP_SAMPLES, seed=20261017,
                        regularization_grid=model.REGULARIZATION_GRID,
-                       general_predictor=None, general_predictions=None, source_boards=None):
+                       general_predictor=None, general_predictions=None, source_boards=None,
+                       diagnostics_policy="full", legacy_producer_identity=None):
     """Return the unchanged fit schema, reusing only mathematically identical work."""
+    _validate_diagnostics_policy(diagnostics_policy)
     data = model._prepare(boards, score_target)
     identity = _identity(data, score_target=score_target, bootstrap_samples=bootstrap_samples,
                          seed=seed, regularization_grid=regularization_grid)
+    if diagnostics_policy == "product-only" and legacy_producer_identity is not None:
+        adopt_reviewed_retained_components(store, boards, score_target=score_target,
+            bootstrap_samples=bootstrap_samples, seed=seed, regularization_grid=regularization_grid,
+            legacy_producer_identity=legacy_producer_identity)
     saved = _read(store, "main", identity)
     if saved is not None and not _usable_main(saved, data, seed):
         saved = None
@@ -289,9 +474,11 @@ def load_or_fit_target(store, boards, *, score_target=990000,
         _write(store, "main", identity, saved)
     fit, context = saved["fit"], saved["context"]
     if not len(data["y"]):
-        return fit  # The reference path returns before source/General diagnostics.
+        return _product_fit(fit) if diagnostics_policy == "product-only" else fit
     _yield_after_component(identity, bootstrap_samples + 1)
     _remember_point(data, fit, context)
+    if diagnostics_policy == "product-only":
+        return _product_fit(fit)
     source_inputs = source_boards or {}
     source_identity = {"main": canonical_json_sha256(identity), "sources": {
         name: _binary_inputs(model._prepare(source, score_target))

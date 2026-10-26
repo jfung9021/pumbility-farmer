@@ -29,6 +29,8 @@ def _update(metric:dict,level:int):
 
 
 def apply_source_aware_tiers(original:Mapping[str,Any],corrected:Mapping[str,Any],provenance:Mapping[str,Any]) -> dict:
+    from retained_tiers import scoring_goals
+    goals=scoring_goals(corrected)
     if original.get('schemaVersion')!=55 or corrected.get('schemaVersion')!=55:
         raise ValueError('Source-aware tiers require original and corrected schema-55 generations.')
     # Completed historical stages are immutable. Copy the active components below
@@ -96,11 +98,11 @@ def apply_source_aware_tiers(original:Mapping[str,Any],corrected:Mapping[str,Any
                     for row in rows:component(row)['scoringTailPolicy']['finalFolderRange']={'lower':min(vals),'upper':max(vals)}
         for row in result[key]:
             _refresh_general(row)
-            for goal in ['sss','sssplus']:
+            for goal in goals[1:]:
                 row['pumbilityVariants'][goal]=_composite(row,row['scoringVariants'][goal])
                 row['pumbilityVariants'][goal]['intervalMethod']='conditional-fixed-source-aware-components-and-width-v1'
-        for goal in ['sss','sssplus']:rank_variants(result[key],goal=goal)
-        for goal in ['general','sss','sssplus']:_rank_pumbility(result[key],goal)
+        for goal in goals[1:]:rank_variants(result[key],goal=goal)
+        for goal in goals:_rank_pumbility(result[key],goal)
         _rank_secondary(result[key],'clearing')
         for row in result[key]:row['tierMetrics']['pumbility']=copy.deepcopy(row['pumbilityVariants']['general'])
     scored=[r for _,key in MODES for r in result[key] if r['level']>=20 and r['scoringVariants']['sssplus']['estimatedDifficulty'] is not None]
@@ -147,6 +149,8 @@ def recover_source_aware_tiers(payload:Mapping[str,Any]) -> dict:
 
 
 def validate_source_aware_tiers(payload:Mapping[str,Any],original:Mapping[str,Any]|None=None):
+    from retained_tiers import scoring_goals
+    goals=scoring_goals(payload)
     base=_recovery_view(payload);method=payload['summary']['method'][NAMESPACE]
     if method['widthPolicy']!=POLICY or method['compressionApplications']!=1 or method['dataFetches']!=0:
         raise ValueError('Source-aware width policy differs.')
@@ -163,7 +167,7 @@ def validate_source_aware_tiers(payload:Mapping[str,Any],original:Mapping[str,An
                     if ':sssplus:' in w['group'] and not w['exceptionPreserved']:expected=tail_value(expected,row['level'])
                     actual=metric.get(field)
                     if actual!=expected:raise ValueError('Final width points or intervals differ.')
-            for goal in ['general','sss','sssplus']:
+            for goal in goals:
                 s=row['scoringVariants'][goal]['estimatedDifficulty'];c=row['tierMetrics']['clearing']['estimatedDifficulty']
                 if row['pumbilityVariants'][goal]['estimatedDifficulty']!=(None if s is None or c is None else (s+c)/2):
                     raise ValueError('Source-aware Pumbility is not the full-precision mean.')

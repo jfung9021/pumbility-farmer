@@ -43,12 +43,32 @@ def input_identity(first, second, *, records, metadata, catalog, manifest_sha256
             "sourcePolicy": canonical_json_sha256(policy), "modelCode": model_code}
 
 
+def preparation_descriptor(first, second, *, records, metadata, catalog, policy,
+                           general_arguments, source_numeric_hash, model_code,
+                           pipeline_code, producer):
+    """Small dependency key usable before merged observations are prepared.
+
+    ``source_numeric_hash`` comes from scoring_source_numeric_identity, whose
+    validation retains the source epoch and every actual official observation.
+    Original snapshots/manifests remain in the new run's immutable provenance.
+    """
+    return {"version": 1, "producer": producer,
+            "phoenix1": snapshot_identity(first), "phoenix2": snapshot_identity(second),
+            "records": canonical_json_sha256(records),
+            "metadata": canonical_json_sha256(metadata),
+            "catalog": canonical_json_sha256(catalog),
+            "sourcePolicy": canonical_json_sha256(policy),
+            "generalArguments": canonical_json_sha256(general_arguments),
+            "officialSourceNumeric": source_numeric_hash,
+            "modelCode": model_code, "pipelineCode": pipeline_code}
+
+
 def identity_key(identity):
     return canonical_json_sha256(identity)
 
 
 def index_path(kind: str, identity):
-    if kind not in {"general", "pipeline", "numeric-pipeline"}:
+    if kind not in {"general", "pipeline", "numeric-pipeline", "preparation"}:
         raise ValueError("Unknown tier computation cache kind.")
     return PREFIX + kind + "/" + identity_key(identity) + ".json"
 

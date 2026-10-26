@@ -47,12 +47,13 @@ class OfficialRefreshWorkflowTests(unittest.TestCase):
             CatalogClient([api_board([row(99)], NEW)]),
             CatalogClient([api_board([row(99)], NEW), api_board([row(99)], NEW)]),
         ])
-        def batch(client, store, *, max_boards):
+        def batch(client, store, *, max_boards, refresh_id=None):
             self.assertEqual(max_boards, 100)
             # Small real captures force two partial continuations and a complete
             # promotion through the production worker's existing queue handoff.
             size = len(client.responses)
-            return refresh_hosted_official_scoring_sources(client, store, max_boards=size)
+            return refresh_hosted_official_scoring_sources(client, store, max_boards=size,
+                                                           refresh_id=refresh_id)
         def execute(job_id, **kwargs):
             self.assertEqual(job_id, self.job_id)
             return self.run_job(next(clients))

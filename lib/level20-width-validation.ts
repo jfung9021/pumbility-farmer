@@ -81,11 +81,13 @@ function expectedKnots(values: number[]) {
 }
 function allRows(payload: AnalysisPayload) { return [...payload.singles,...payload.doubles]; }
 function namespace(payload: AnalysisPayload): Obj {
-  need(payload.schemaVersion===60 && payload.summary.scriptVersion===SCRIPT,"Incorrect level-20 width generation.");
+  const retained=payload.schemaVersion===61;
+  need((retained || payload.schemaVersion===60) && payload.summary.scriptVersion===(retained?"6.25.0-retained-goals":SCRIPT),"Incorrect level-20 width generation.");
+  if(retained) validateRetainedProducer(payload);
   const n=obj(payload.summary.method[NS]);
-  need(n.version===1 && n.method===METHOD && n.baseSchemaVersion===59
+  need(n.version===1 && n.method===METHOD && n.baseSchemaVersion===(retained?57:59)
     && /^[a-f0-9]{64}$/.test(n.basePayloadSha256) && (n.baseScriptVersion===null || typeof n.baseScriptVersion==="string")
-    && same(n.policy,LEVEL20_WIDTH_POLICY) && n.dataFetches===0 && n.modelRefits===0,"Incorrect level-20 width policy.");
+    && same(n.policy,retained?{...LEVEL20_WIDTH_POLICY,goals:["sssplus"]}:LEVEL20_WIDTH_POLICY) && n.dataFetches===0 && n.modelRefits===0,"Incorrect level-20 width policy.");
   const available=GOALS.filter(goal=>allRows(payload).some(row=>row.scoringVariants?.[goal]));
   need(same(n.goals,available),"Incorrect level-20 target population.");
   need(same(Object.keys(obj(n.folders)).sort(),["Single","Double"].flatMap(mode=>available.map(goal=>`${mode}:${goal}:20`)).sort()),"Missing level-20 folder population.");
@@ -296,6 +298,56 @@ function previousSssPublic(payload:AnalysisPayload):AnalysisPayload {
 }
 export function validateLevel20WidthPublicPayload(payload:AnalysisPayload):AnalysisPayload {
   validateProjection(payload,false);
-  validateSssTailPublicPayload(previousSssPublic(payload));
+  if(payload.schemaVersion===61) validateRetainedMetrics(payload);
+  else validateSssTailPublicPayload(previousSssPublic(payload));
+  return payload;
+}
+
+/** The current producer has no retired SSS baseline to synthesize or replay. */
+function validateRetainedProducer(payload:AnalysisPayload) {
+  const m=obj(payload.summary.method.retainedGoalProducer);
+  need(m.version===1 && m.producer==="retained-goals-v1" && same(m.goals,["general","sssplus"])
+    && m.targetCohorts===4 && m.targetBootstrapSamples===200 && m.retiredTargetFits===0
+    && m.baseSchemaVersion===48 && /^[a-f0-9]{64}$/.test(m.basePayloadSha256)
+    && m.clearingBootstrapSamples===1000,"Incorrect retained-goal producer policy.");
+  need(same(payload.summary.method.availableScoringGoals,["general","sssplus"]),"Incorrect retained public goals.");
+  for(const row of allRows(payload)) for(const key of ["scoringVariants","pumbilityVariants"] as const) {
+    const goals=Object.keys(obj(row[key]));
+    need(same(goals.toSorted(),["general","sssplus"]),"Retired or missing target in retained publication.");
+  }
+}
+
+function validateRetainedMetrics(payload:AnalysisPayload) {
+  const close=(a:any,b:any)=>a===b || typeof a==="number" && typeof b==="number" && Math.abs(a-b)<1e-8;
+  const baseMetric=(metric:Obj,level:number)=>{
+    const value=metric.estimatedDifficulty;
+    need(value===null || finite(value),"Nonfinite retained difficulty.");
+    if("difficultyDelta" in metric) need(close(metric.difficultyDelta,value===null?null:value-level-.5),"Incorrect retained difficulty delta.");
+    if("difficultyCi95Low" in metric || "difficultyCi95High" in metric) {
+      const low=metric.difficultyCi95Low,high=metric.difficultyCi95High;
+      need(low===null&&high===null || finite(low)&&finite(high)&&low<=high&&value!==null,"Incorrect retained interval.");
+      for(const side of ["Low","High"]) if(`difficultyDeltaCi95${side}` in metric)
+        need(close(metric[`difficultyDeltaCi95${side}`],metric[`difficultyCi95${side}`]===null?null:metric[`difficultyCi95${side}`]-level-.5),"Incorrect retained interval delta.");
+    }
+  };
+  for(const row of allRows(payload)) {
+    const clearing=obj(row.tierMetrics?.clearing),general=obj(row.tierMetrics?.pumbility);
+    baseMetric(row as unknown as Obj,row.level);baseMetric(clearing,row.level);baseMetric(general,row.level);
+    need(close(obj(row.scoringVariants?.general).estimatedDifficulty,row.estimatedDifficulty),"Incorrect retained General Scoring variant.");
+    const point=row.estimatedDifficulty===null || clearing.estimatedDifficulty===null?null:(row.estimatedDifficulty+clearing.estimatedDifficulty)/2;
+    need(close(general.estimatedDifficulty,point),"Incorrect retained General Pumbility mean.");
+    need(close(obj(row.pumbilityVariants?.general).estimatedDifficulty,general.estimatedDifficulty),"Incorrect retained General variant.");
+    const s=obj(row.scoringVariants?.sssplus),p=obj(row.pumbilityVariants?.sssplus);
+    checkFit(s,row.level);checkFit(p,row.level);
+    need(s.scoringTarget===995000 && s.scoringSource===(row.level>=20?"official":"submitted"),"Incorrect retained SSS+ target or source.");
+    need(Number.isInteger(s.nContributors) && s.nContributors>=0 && s.nContributors===s.scoringTargetSuccesses+s.scoringBelowTarget,"Incorrect retained target support.");
+    need(close(p.estimatedDifficulty,s.estimatedDifficulty===null || clearing.estimatedDifficulty===null?null:(s.estimatedDifficulty+clearing.estimatedDifficulty)/2),"Incorrect retained SSS+ Pumbility mean.");
+  }
+}
+
+export function validateRetainedAnalysisPayload(payload:AnalysisPayload):AnalysisPayload {
+  need(payload.schemaVersion===61,"Incorrect retained schema.");
+  validateProjection(payload,true);
+  validateRetainedMetrics(payload);
   return payload;
 }

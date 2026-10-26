@@ -262,6 +262,8 @@ def _patch(before, after):
 
 
 def _apply(base: Mapping[str, Any]) -> dict:
+    from retained_tiers import is_retained, PUBLIC_SCHEMA_VERSION, VERSION
+    retained = is_retained(base)
     result = _copy_active(base)
     folders = {}
     available = [goal for goal in GOALS if any(goal in row.get("scoringVariants", {}) for row in _rows(base))]
@@ -321,11 +323,11 @@ def _apply(base: Mapping[str, Any]) -> dict:
                     stage[name] = changed
             if stage:
                 row[STAGE] = stage
-    result["schemaVersion"] = SCHEMA_VERSION
-    result["summary"]["scriptVersion"] = SCRIPT_VERSION
+    result["schemaVersion"] = PUBLIC_SCHEMA_VERSION if retained else SCHEMA_VERSION
+    result["summary"]["scriptVersion"] = VERSION if retained else SCRIPT_VERSION
     result["summary"]["method"][NAMESPACE] = {"version": 1, "method": METHOD,
-        "baseSchemaVersion": 59, "baseScriptVersion": base["summary"].get("scriptVersion"),
-        "basePayloadSha256": digest(base), "policy": copy.deepcopy(POLICY), "goals": available,
+        "baseSchemaVersion": base["schemaVersion"], "baseScriptVersion": base["summary"].get("scriptVersion"),
+        "basePayloadSha256": digest(base), "policy": {**copy.deepcopy(POLICY), **({"goals": available} if retained else {})}, "goals": available,
         "folders": folders, "dataFetches": 0, "modelRefits": 0,
         "stageOrder": ["stored-final-tail-input", "fixed-folder-quantile-width",
                        "conditional-interval-projection", "affected-component-means", "target-ranks"]}
@@ -344,13 +346,29 @@ def apply_level20_scoring_width(payload: Mapping[str, Any]) -> dict:
     return result
 
 
+def apply_retained_level20_scoring_width(payload: Mapping[str, Any]) -> dict:
+    """Apply the same SSS+ width without executing the retired SSS tail branch."""
+    from retained_tiers import is_retained, validate_marker
+    _need(payload.get("schemaVersion") == 57 and is_retained(payload),
+          "Retained level-20 width requires its schema-57 predecessor.")
+    validate_marker(payload)
+    _need(not payload.get("tierListView") and NAMESPACE not in payload["summary"]["method"]
+          and all(STAGE not in row for row in _rows(payload)), "Retained width cannot be applied twice.")
+    _need(len({str(row["chartId"]) for row in _rows(payload)}) == len(_rows(payload)), "Duplicate level-20 chart identity.")
+    result = _apply(payload)
+    validate_level20_scoring_width(result, full=False)
+    return result
+
+
 def recover_level20_scoring_width(payload: Mapping[str, Any]) -> dict:
-    _need(payload.get("schemaVersion") == SCHEMA_VERSION, "Level-20 recovery requires schema 60.")
+    from retained_tiers import is_retained, PUBLIC_SCHEMA_VERSION
+    retained = is_retained(payload)
+    _need(payload.get("schemaVersion") == (PUBLIC_SCHEMA_VERSION if retained else SCHEMA_VERSION), "Level-20 recovery schema differs.")
     namespace = payload.get("summary", {}).get("method", {}).get(NAMESPACE, {})
-    _need(namespace.get("version") == 1 and namespace.get("baseSchemaVersion") == 59,
+    _need(namespace.get("version") == 1 and namespace.get("baseSchemaVersion") == (57 if retained else 59),
           "Missing level-20 predecessor identity.")
     result = _copy_active(payload)
-    result["schemaVersion"] = 59
+    result["schemaVersion"] = namespace["baseSchemaVersion"]
     result["summary"]["method"].pop(NAMESPACE)
     prior = namespace.get("baseScriptVersion")
     if prior is None:
@@ -369,10 +387,15 @@ def recover_level20_scoring_width(payload: Mapping[str, Any]) -> dict:
 
 
 def validate_public_level20_scoring_width(payload: Mapping[str, Any]) -> None:
-    _need(payload.get("schemaVersion") == SCHEMA_VERSION, "Incorrect level-20 public schema.")
+    from retained_tiers import is_retained, PUBLIC_SCHEMA_VERSION, validate_marker
+    retained = is_retained(payload)
+    if retained:
+        validate_marker(payload)
+    _need(payload.get("schemaVersion") == (PUBLIC_SCHEMA_VERSION if retained else SCHEMA_VERSION), "Incorrect level-20 public schema.")
     namespace = payload.get("summary", {}).get("method", {}).get(NAMESPACE, {})
-    _need(namespace.get("version") == 1 and namespace.get("method") == METHOD and namespace.get("policy") == POLICY
-          and namespace.get("baseSchemaVersion") == 59, "Incorrect level-20 public policy.")
+    expected_policy = {**POLICY, **({"goals": ["sssplus"]} if retained else {})}
+    _need(namespace.get("version") == 1 and namespace.get("method") == METHOD and namespace.get("policy") == expected_policy
+          and namespace.get("baseSchemaVersion") == (57 if retained else 59), "Incorrect level-20 public policy.")
     rows = _rows(payload)
     available = [goal for goal in GOALS if any(goal in row.get("scoringVariants", {}) for row in rows)]
     _need(namespace.get("goals") == available, "Incorrect level-20 target availability.")
@@ -423,13 +446,19 @@ def validate_public_level20_scoring_width(payload: Mapping[str, Any]) -> None:
 
 
 def validate_level20_scoring_width(payload: Mapping[str, Any], *, full: bool = True) -> dict:
+    from retained_tiers import is_retained, VERSION
     base = recover_level20_scoring_width(payload)
     namespace = payload["summary"]["method"][NAMESPACE]
-    _need(payload["summary"].get("scriptVersion") == SCRIPT_VERSION
+    _need(payload["summary"].get("scriptVersion") == (VERSION if is_retained(payload) else SCRIPT_VERSION)
           and digest(base) == namespace.get("basePayloadSha256"), "Level-20 predecessor recovery differs.")
     _need(payload == _apply(base), "Level-20 points, evidence, intervals, composites, ranks or preserved fields differ.")
     validate_public_level20_scoring_width(payload)
     if full:
-        from sss_tail_tiers import validate_sss_tail_tiers
-        validate_sss_tail_tiers(base)
+        if is_retained(payload):
+            from submitted_sssplus_calibration import validate_submitted_sssplus_calibration
+            from source_aware_tiers import validate_source_aware_tiers
+            validate_source_aware_tiers(validate_submitted_sssplus_calibration(base))
+        else:
+            from sss_tail_tiers import validate_sss_tail_tiers
+            validate_sss_tail_tiers(base)
     return base

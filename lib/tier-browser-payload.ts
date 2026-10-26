@@ -80,7 +80,7 @@ function chart(row: Row): Row {
 
 /** Project only display/filter/order fields after the full local validator passes. */
 export function compactTierPayload(payload: AnalysisPayload): AnalysisPayload {
-  if (payload.tierListView?.kind === "list") return payload.schemaVersion === 60 ? validateLevel20WidthPublicPayload(payload)
+  if (payload.tierListView?.kind === "list") return [60,61].includes(payload.schemaVersion ?? 0) ? validateLevel20WidthPublicPayload(payload)
     : payload.schemaVersion === 59 ? validateSssTailPublicPayload(payload) : payload;
   const source = payload as unknown as Row;
   const result = pick(source, ["schemaVersion", "generatedAtUtc", "mix", "relativeGroups", "effectBands", "bpmMetadata"]);
@@ -92,7 +92,7 @@ export function compactTierPayload(payload: AnalysisPayload): AnalysisPayload {
   for (const mode of ["singles", "doubles", "coop"] as const) if (payload[mode]) result[mode] = payload[mode]!.map(row => chart(row as unknown as Row));
   result.tierListView = {version:1, kind:"list", detailsAvailable:true};
   const compact = result as unknown as AnalysisPayload;
-  return compact.schemaVersion === 60 ? validateLevel20WidthPublicPayload(compact)
+  return [60,61].includes(compact.schemaVersion ?? 0) ? validateLevel20WidthPublicPayload(compact)
     : compact.schemaVersion === 59 ? validateSssTailPublicPayload(compact) : compact;
 }
 

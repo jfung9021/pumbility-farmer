@@ -100,7 +100,7 @@ def producer_dependencies(roots, *, stage=None):
     the returned mathematical payload. Imported local symbols are followed even
     when the import is inside a producer function.
     """
-    ignored = {("production_tiers", "build_hosted_tiers"), ("tier_diagnostics", "event"),
+    ignored = {("production_tiers", "build_hosted_tiers"), ("production_tiers", "build_retained_hosted_tiers"), ("tier_diagnostics", "event"),
                ("tier_diagnostics", "phase")}
     parsed, selected, imports_used, unapproved_modules = {}, {}, {}, {}
 
