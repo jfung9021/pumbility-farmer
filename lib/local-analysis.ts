@@ -19,7 +19,7 @@ import { validateSourceAwarePayload } from "./source-aware-validation.ts";
 import { validateSubmittedSssplusCalibrationPayload } from "./submitted-sssplus-calibration-validation.ts";
 import { validateScoringGoalsPayload } from "./scoring-goals-validation.ts";
 import { validateSssTailAnalysisPayload } from "./sss-tail-validation.ts";
-import { validateLevel20WidthAnalysisPayload } from "./level20-width-validation.ts";
+import { validateLevel20WidthAnalysisPayload, validateRetainedAnalysisPayload } from "./level20-width-validation.ts";
 
 
 const SECRET_PATTERN = /(?:piu_scores_live_|pst_live_)[0-9a-f]{16,}/i;
@@ -727,6 +727,14 @@ export function validateLocalAnalysisPayload(
     throw new LocalAnalysisValidationError("The local analysis payload must be an object.");
   }
   const payload = value as Partial<AnalysisPayload>;
+  if (expectedMix === "combined" && payload.schemaVersion === 61) {
+    try {
+      if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The retained aggregate contains private fields or a credential-shaped value.");
+      return validateRetainedAnalysisPayload(payload as AnalysisPayload);
+    } catch (error) {
+      throw new LocalAnalysisValidationError(`The retained aggregate is incompatible: ${error instanceof Error ? error.message : "invalid contract"}`);
+    }
+  }
   if (expectedMix === "combined" && payload.schemaVersion === 60) {
     try {
       if (containsForbiddenKey(payload) || SECRET_PATTERN.test(JSON.stringify(payload))) throw new Error("The level-20 aggregate contains private fields or a credential-shaped value.");

@@ -60,6 +60,8 @@ def apply_combined_official_clearing(base: Mapping[str, Any], merged: Mapping[st
     if reference is not None and reference != merged.get("manifestSha256"):
         raise ValueError("Combined official Clearing must use the same pinned manifest as Scoring.")
     result = copy.deepcopy(base)
+    from retained_tiers import scoring_goals
+    goals = scoring_goals(base)
     previous = result["summary"]["method"].get("officialHighLevelClearing")
     for _, key in MODES:
         for row in result[key]:
@@ -72,12 +74,12 @@ def apply_combined_official_clearing(base: Mapping[str, Any], merged: Mapping[st
     targets = [r for r in result["doubles"] if r["level"] >= 26]
     for row in targets:
         _refresh_general(row)
-        for goal in ("sss", "sssplus"):
+        for goal in goals[1:]:
             composite = _composite(row, row["scoringVariants"][goal])
             composite["intervalMethod"] = "conditional-fixed-combined-official-clearing-v1"
             row["pumbilityVariants"][goal] = composite
     # Only D26+ folders changed. Ranking these groups does not touch Scoring ranks.
-    for goal in ("general", "sss", "sssplus"):
+    for goal in goals:
         _rank_pumbility(targets, goal)
     for row in targets:
         row["tierMetrics"]["pumbility"] = copy.deepcopy(row["pumbilityVariants"]["general"])
@@ -95,7 +97,7 @@ def apply_combined_official_clearing(base: Mapping[str, Any], merged: Mapping[st
         "comparabilityPolicy": "current-chart-id-and-mode",
         "capPolicy": cap_policy, "compressionApplications": 1,
         "pumbility": {"aggregation": "average", "requiresBoth": True,
-            "variants": ["general", "sss", "sssplus"], "componentValues": "unchanged-final-scoring-and-new-final-clearing",
+            "variants": list(goals), "componentValues": "unchanged-final-scoring-and-new-final-clearing",
             "intervals": "existing-scoring-intervals-conditional-on-fixed-new-clearing"},
         "modelRefits": 0, "dataFetches": 0}
     report = validate_combined_official_clearing(result, base)
@@ -121,6 +123,8 @@ def recover_combined_official_clearing(payload: Mapping[str, Any]) -> dict:
 
 
 def validate_combined_official_clearing(payload: Mapping[str, Any], base: Mapping[str, Any] | None = None) -> dict:
+    from retained_tiers import scoring_goals
+    goals = scoring_goals(payload)
     if payload.get("schemaVersion") != SCHEMA_VERSION:
         raise ValueError("Combined official Clearing requires schema 55.")
     marker = payload.get("summary", {}).get("method", {}).get(NAMESPACE, {})
@@ -169,7 +173,7 @@ def validate_combined_official_clearing(payload: Mapping[str, Any], base: Mappin
                 if not math.isfinite(value) or abs(value-(row["level"]+.5+.5*(clearing["initialFit"]["estimatedDifficulty"]-row["level"]-.5))) > 1e-8:
                     raise ValueError("Combined official Clearing must compress exactly once.")
                 folders[row["level"]].append(value)
-            for goal in ("general", "sss", "sssplus"):
+            for goal in goals:
                 scoring, composite = row["scoringVariants"][goal], row["pumbilityVariants"][goal]
                 expected = average_difficulties(scoring["estimatedDifficulty"], value)
                 if composite["estimatedDifficulty"] != expected or composite.get("aggregation") != "average":

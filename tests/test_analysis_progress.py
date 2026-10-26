@@ -5,6 +5,7 @@ from datetime import timedelta
 import json
 import unittest
 from unittest.mock import Mock, patch
+import production_tiers as tiers
 
 from analysis_runtime import (
     ANALYSIS_CONTINUATION_FIELD, LEGACY_TYPED_CHECKPOINT_SCHEMA_VERSION,
@@ -66,6 +67,9 @@ class AnalysisProgressTests(unittest.TestCase):
             "official_scoring_manifest": {"_captures": {"Phoenix2": {}}}}
         with ExitStack() as stack:
             patches = {
+                # This fixture intentionally exercises the historical eight-fit
+                # continuation contract; retained runtime has separate coverage.
+                "production_tiers.build_retained_hosted_tiers": {"new": lambda *a, **kw: tiers.build_hosted_tiers(*a, **kw)},
                 "analysis_runtime._official_tier_arguments": {"return_value": arguments},
                 "analysis_runtime.build_combined_chart_results": {"return_value": ([], {}, {})},
                 "analysis_runtime.analyze_snapshot": {"side_effect": AssertionError("base analysis repeated")},

@@ -536,8 +536,8 @@ def build_production_tier_payload(
         if not (hybrid_lower_tiers and average_pumbility and midpoint_compression
                 and cross_level_clearing and official_scoring_manifest is not None):
             raise ValueError('Source-aware tiers require the enabled hybrid average source policy.')
-        from production_tiers import build_hosted_tiers
-        return build_hosted_tiers(base_records, metadata, phoenix1, phoenix2, store=source_aware_store,
+        from production_tiers import build_retained_hosted_tiers
+        return build_retained_hosted_tiers(base_records, metadata, phoenix1, phoenix2, store=source_aware_store,
             generated_at_utc=generated_at_utc, arguments={
                 'official_snapshot': official_snapshot, 'official_scoring_manifest': official_scoring_manifest,
                 'cross_level_clearing': cross_level_clearing, 'midpoint_compression': midpoint_compression,

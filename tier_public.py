@@ -250,8 +250,8 @@ def validate_tier_publication(full: Mapping[str, Any], compact: Mapping[str, Any
     if compact != expected:
         raise ValueError("The compact list differs from its validated tier source.")
     body = json.dumps(compact, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    expanded = compact.get("schemaVersion") in (58, 59, 60)
-    limit = (MAX_WIDTH_LIST_BYTES if compact.get("schemaVersion") == 60
+    expanded = compact.get("schemaVersion") in (58, 59, 60, 61)
+    limit = (MAX_WIDTH_LIST_BYTES if compact.get("schemaVersion") in (60, 61)
              else MAX_EXPANDED_LIST_BYTES if expanded else MAX_LIST_BYTES)
     if len(body) > limit:
         raise ValueError("The tier list exceeds its decoded publication size budget.")

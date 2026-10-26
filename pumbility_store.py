@@ -126,6 +126,127 @@ def _tier_publication_revisions(cursor: Any) -> dict[str, dict[str, Any]]:
             for row in cursor.fetchall()}
 
 
+def _validate_captured_publication_guard(cursor: Any, guard: Mapping[str, Any]) -> None:
+    """Fence only explicit recovery publications in the pointer transaction."""
+    from pumbility_contract import official_tier_snapshot_path
+    if (not isinstance(guard, Mapping) or set(guard) != {"jobId", "leaseOwner", "sourceRevisions"}
+            or not isinstance(guard.get("jobId"), str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", guard["jobId"])
+            or not isinstance(guard.get("leaseOwner"), str) or not guard["leaseOwner"]
+            or not isinstance(guard.get("sourceRevisions"), Mapping)):
+        raise ValueError("The captured recovery publication guard is invalid.")
+    expected = dict(guard["sourceRevisions"])
+    allowed = {_source_revision_path("phoenix1"), _source_revision_path("phoenix2"), official_tier_snapshot_path()}
+    if any(not isinstance(key, str) or (key not in allowed and not key.startswith("analysis/private/official/scoring/"))
+           for key in expected):
+        raise ValueError("The captured recovery source revision scope is invalid.")
+    cursor.execute("""select job.id from pumbility.jobs job
+        join pumbility.job_heads head on head.job_id=job.id and head.name='active:analysis'
+        where job.external_key=%s and job.status='running' and job.lease_owner=%s
+          and job.lease_expires_at >= clock_timestamp() and job.cancellation_requested_at is null
+        for update of job,head""", (guard["jobId"], guard["leaseOwner"]))
+    if cursor.fetchone() is None:
+        raise JobLeaseLostError("The captured recovery publication owner changed or was cancelled.")
+    # The relational Phoenix 1 import uses the same advisory source lock.
+    cursor.execute("select pg_advisory_xact_lock(hashtextextended(%s,0))", (TIER_PUBLICATION_LOCK,))
+    revisions = _tier_publication_revisions(cursor)
+    actual = {key: value for key, value in revisions.items()
+              if key == _source_revision_path("phoenix1") or key.startswith("analysis/private/official/scoring/")
+              or key == _source_revision_path("phoenix2") and key in expected}
+    extra = [key for key in expected if key not in actual and not key.startswith("analysis/private/official/scoring/")]
+    if extra:
+        cursor.execute("select object_key,sha256,byte_size,xmin::text from pumbility.artifacts where object_key=any(%s) order by object_key for update", (extra,))
+        actual.update({str(row[0]): {"sha256": str(row[1]), "byteSize": int(row[2]), "revision": str(row[3])}
+                       for row in cursor.fetchall()})
+        for key in extra:
+            actual.setdefault(key, None)
+    if actual != expected:
+        raise JobLeaseLostError("The captured recovery source revisions changed before publication.")
+
+
+def _captured_snapshot_consent_guard(cursor: Any, captured_at_utc: str,
+                                     expected_revision: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Never re-import saved players across a later local consent revocation."""
+    try:
+        cutoff = datetime.fromisoformat(captured_at_utc.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("The captured snapshot consent cutoff is invalid.") from None
+    if cutoff.tzinfo is None:
+        raise ValueError("The captured snapshot consent cutoff requires a timezone.")
+    cursor.execute("set local lock_timeout = '5000ms'")
+    cursor.execute("set local statement_timeout = '30000ms'")
+    cursor.execute("select pg_advisory_xact_lock(hashtextextended(%s,0))", (TIER_PUBLICATION_LOCK,))
+    cursor.execute("""select exists(select 1 from pumbility.player_consents consent
+        join pumbility.mixes mix on mix.id=consent.mix_id
+        join pumbility.consent_scopes scope on scope.id=consent.consent_scope_id
+        where mix.mix_key='phoenix2' and scope.scope_key='analysis'
+          and consent.valid_to >= %s::timestamptz),clock_timestamp()""", (cutoff,))
+    consent = cursor.fetchone()
+    if consent is None or consent[0] is not False or not isinstance(consent[1], datetime) or cutoff > consent[1]:
+        raise JobLeaseLostError("Saved snapshot adoption conflicts with local analysis consent or its capture time.")
+    cursor.execute("select sha256,byte_size,xmin::text from pumbility.artifacts where object_key=%s for update",
+                   (_source_revision_path("phoenix2"),))
+    row = cursor.fetchone()
+    if row is None:
+        raise JobLeaseLostError("The canonical Phoenix 2 source revision is unavailable.")
+    revision = {"sha256": str(row[0]), "byteSize": int(row[1]), "revision": str(row[2])}
+    if expected_revision is not None and revision != expected_revision:
+        raise JobLeaseLostError("The canonical Phoenix 2 source changed before saved snapshot adoption.")
+    return {"capturedAtUtc": cutoff.astimezone(timezone.utc).isoformat(), "sourceRevision": revision}
+
+
+def _begin_captured_snapshot_adoption(cursor: Any, payload: Mapping[str, Any],
+                                      guard: Mapping[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """Return a pending receipt, or confirm this exact adoption already committed."""
+    from canonical_json import canonical_json_sha256
+    if (not isinstance(guard, Mapping) or set(guard) != {"capturedAtUtc", "sourceRevision", "jobId", "bundleId"}
+            or not isinstance(guard["sourceRevision"], Mapping)
+            or not isinstance(guard["jobId"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", guard["jobId"])
+            or not isinstance(guard["bundleId"], str) or not re.fullmatch(r"[a-f0-9]{64}", guard["bundleId"])):
+        raise ValueError("The captured snapshot adoption guard is invalid.")
+    identity = {"jobId": guard["jobId"], "bundleId": guard["bundleId"]}
+    path = "analysis/private/captured-run-recovery/adoptions/" + canonical_json_sha256(identity) + ".json"
+    binding = {"version": 1, **identity, "snapshotSha256": canonical_json_sha256(payload), "originalGuard": dict(guard)}
+    cursor.execute("set local lock_timeout = '5000ms'")
+    cursor.execute("set local statement_timeout = '30000ms'")
+    cursor.execute("select pg_advisory_xact_lock(hashtextextended(%s,0))", (TIER_PUBLICATION_LOCK,))
+    cursor.execute("select payload_json from pumbility.artifacts where object_key=%s for update", (path,))
+    row = cursor.fetchone()
+    if row is not None:
+        receipt = row[0]
+        if (not isinstance(receipt, Mapping) or any(receipt.get(key) != value for key, value in binding.items())
+                or not isinstance(receipt.get("resultingSourceRevision"), Mapping)
+                or not isinstance(receipt.get("importedAtUtc"), str)):
+            raise JobLeaseLostError("The canonical snapshot adoption receipt belongs to different inputs.")
+        # Our committed import may itself close consent rows. Only closures
+        # after its receipt time are external changes; never reapply the old
+        # cutoff to reject our own successfully committed adoption.
+        _captured_snapshot_consent_guard(cursor, receipt["importedAtUtc"],
+            expected_revision=receipt["resultingSourceRevision"])
+        return None
+    expected = {key: guard[key] for key in ("capturedAtUtc", "sourceRevision")}
+    actual = _captured_snapshot_consent_guard(cursor, str(payload.get("generatedAtUtc") or ""),
+        expected_revision=guard["sourceRevision"])
+    if actual != expected:
+        raise JobLeaseLostError("The saved snapshot capture cutoff changed before adoption.")
+    return path, binding
+
+
+def _finish_captured_snapshot_adoption(cursor: Any, pending: tuple[str, dict[str, Any]]) -> None:
+    path, binding = pending
+    cursor.execute("select sha256,byte_size,xmin::text from pumbility.artifacts where object_key=%s for update",
+                   (_source_revision_path("phoenix2"),))
+    row = cursor.fetchone()
+    if row is None:
+        raise JobLeaseLostError("The adopted canonical Phoenix 2 source revision is unavailable.")
+    revision = {"sha256": str(row[0]), "byteSize": int(row[1]), "revision": str(row[2])}
+    cursor.execute("select clock_timestamp()")
+    stamp = cursor.fetchone()[0]
+    if not isinstance(stamp, datetime) or stamp.tzinfo is None:
+        raise JobLeaseLostError("The canonical adoption receipt time is unavailable.")
+    PumbilityArtifactStore._put_json_row(cursor, path, {**binding,
+        "resultingSourceRevision": revision, "importedAtUtc": stamp.astimezone(timezone.utc).isoformat()})
+
+
 def _enabled(value: str | None) -> bool:
     return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
 
@@ -987,7 +1108,10 @@ class PumbilityArtifactStore:
                 _record_read_phase("integrity", integrity_started)
         return _ExactJsonRead(result, body)
 
-    def put_json(self, pathname: str, payload: Mapping[str, Any]) -> None:
+    def put_json(self, pathname: str, payload: Mapping[str, Any], *,
+                 captured_recovery_source: Mapping[str, Any] | None = None) -> None:
+        if captured_recovery_source is not None and pathname != "analysis/private/phoenix2-current.json":
+            raise ValueError("A captured consent guard is only valid for canonical Phoenix 2 adoption.")
         snapshot_match = CURRENT_SNAPSHOT_RE.fullmatch(pathname)
         canonical_mix = (
             snapshot_match.group(1)
@@ -1013,9 +1137,17 @@ class PumbilityArtifactStore:
             }
             with _connect(self.database_url) as connection:
                 with connection.transaction():
+                    adoption = None
                     with connection.cursor() as cursor:
                         _assert_schema(cursor)
+                        if captured_recovery_source is not None:
+                            adoption = _begin_captured_snapshot_adoption(cursor, payload, captured_recovery_source)
+                            if adoption is None:
+                                return
                     _import_mix(connection, mix_key, manifest, payload)
+                    if adoption is not None:
+                        with connection.cursor() as cursor:
+                            _finish_captured_snapshot_adoption(cursor, adoption)
             return
         stored_payload = (
             _compact_staging_payload(payload)
@@ -1025,6 +1157,12 @@ class PumbilityArtifactStore:
         with _connect(self.database_url) as connection, connection.cursor() as cursor:
             _assert_schema(cursor)
             self._put_json_row(cursor, pathname, stored_payload)
+
+    def captured_snapshot_consent_guard(self, captured_at_utc: str) -> dict[str, Any]:
+        """Read a conservative saved-input adoption guard without changing consent."""
+        with _connect(self.database_url) as connection, connection.transaction(), connection.cursor() as cursor:
+            _assert_schema(cursor)
+            return _captured_snapshot_consent_guard(cursor, captured_at_utc)
 
     def put_sync_checkpoint_players(
         self,
@@ -1940,6 +2078,7 @@ class PumbilityArtifactStore:
         generation_key: str,
         analysis_run_id: str,
         model_generation_id: str,
+        captured_recovery: Mapping[str, Any] | None = None,
     ) -> None:
         """Atomically promote compatibility pointers and their typed generation."""
         from pumbility_contract import recommendation_blob_path, recommendation_index_path
@@ -1974,6 +2113,9 @@ class PumbilityArtifactStore:
                     raise RuntimeError(
                         "The validated typed generation is unavailable for publication."
                     )
+
+                if captured_recovery is not None:
+                    _validate_captured_publication_guard(cursor, captured_recovery)
 
                 latest_path = recommendation_blob_path()
                 cursor.execute(
@@ -2366,6 +2508,36 @@ class PumbilityJobStore:
     def __init__(self, *, database_url: str | None = None) -> None:
         self.database_url = _database_url(database_url)
         self.lease_owner = f"compat-{uuid.uuid4().hex}"
+
+    def captured_recovery_status(self, intent_id: str) -> dict[str, Any] | None:
+        from captured_run_handoff import store_status
+        return store_status(self, intent_id)
+
+    def captured_recovery_serving_revision(self) -> str:
+        from captured_run_handoff import _revision, _transaction
+        return _transaction(self, _revision)
+
+    def captured_recovery_prepare(self, intent: Mapping[str, Any]) -> dict[str, Any]:
+        from captured_run_handoff import store_prepare
+        return store_prepare(self, intent)
+
+    def captured_recovery_begin(self, intent_id: str) -> dict[str, Any]:
+        from captured_run_handoff import store_begin
+        return store_begin(self, intent_id)
+
+    def captured_recovery_admit(self, intent_id: str) -> dict[str, Any]:
+        from captured_run_handoff import store_admit
+        return store_admit(self, intent_id)
+
+    def captured_recovery_abort(self, intent_id: str, expected_revision: str) -> dict[str, Any]:
+        from captured_run_handoff import IDENTIFIER, store_admit
+        if not isinstance(expected_revision, str) or not IDENTIFIER.fullmatch(expected_revision):
+            raise ValueError("A final serving revision is required for safe abort.")
+        return store_admit(self, intent_id, abort_revision=expected_revision)
+
+    def captured_recovery_admission(self, job_id: str | None = None) -> dict[str, Any] | None:
+        from captured_run_handoff import store_admission
+        return store_admission(self, job_id)
 
     def request_tier_publication(self, payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
         """Serialize duplicate operator triggers without loading any score inputs."""
@@ -2880,6 +3052,8 @@ class PumbilityJobStore:
     def _set_head(self, name: str, job_id: str | None) -> None:
         with _connect(self.database_url) as connection, connection.cursor() as cursor:
             _assert_schema(cursor)
+            from captured_run_handoff import guard_head
+            guard_head(cursor, name, job_id)
             if job_id is None:
                 cursor.execute("delete from pumbility.job_heads where name = %s", (name,))
                 return

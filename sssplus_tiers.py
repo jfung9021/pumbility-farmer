@@ -61,7 +61,7 @@ def apply_first_pass(base: Mapping[str, Any], prepared: Mapping[str, Any], fits:
     result["summary"]["method"]["sssplusScoring"] = {
         "version": 1, "method": SSSPLUS.model_method, "target": SSSPLUS.score,
         "targetConfig": SSSPLUS.public(), "meaning": "conditional-target-attainment-among-observed-best-scores",
-        "baseSchemaVersion": 51, "basePayloadSha256": payload_sha256(base), "sourceHashes": dict(source_hashes),
+        "baseSchemaVersion": base["schemaVersion"], "basePayloadSha256": payload_sha256(base), "sourceHashes": dict(source_hashes),
         "sourceDates": copy.deepcopy(prepared.get("sourceDates", {})), "officialManifestSha256": prepared.get("manifestSha256"),
         "minimumPlayerCharts": 4, "minimumContributors": 5, "minimumReferenceContributors": 20,
         "minimumReferencePerOutcome": 5, "minimumReferenceCharts": 5,
@@ -121,7 +121,7 @@ def recover_sssplus_baseline(payload: Mapping[str, Any]) -> dict:
     if payload.get("schemaVersion") != SCHEMA_VERSION:
         raise ValueError("SSS+ recovery requires schema 52.")
     result = copy.deepcopy(payload)
-    result["schemaVersion"] = 51
+    result["schemaVersion"] = payload["summary"]["method"]["sssplusTiers"]["baseSchemaVersion"]
     for name in NAMESPACES:
         result["summary"]["method"].pop(name, None)
     for _, key in MODES:
@@ -136,9 +136,11 @@ def recover_sssplus_baseline(payload: Mapping[str, Any]) -> dict:
 def apply_sssplus_tiers(base: Mapping[str, Any], prepared: Mapping[str, Any], fits: Mapping[str, Any], *,
                         source_hashes: Mapping[str, str], bootstrap_samples: int = 200,
                         seed: int = 20261018) -> tuple[dict, dict]:
-    if base.get("schemaVersion") != 51:
+    from retained_tiers import BASE_SCHEMA_VERSION, is_retained, validate_retained_baseline
+    retained = is_retained(base)
+    if base.get("schemaVersion") != (BASE_SCHEMA_VERSION if retained else 51):
         raise ValueError("SSS+ requires the frozen current centered schema-51 baseline.")
-    validate_folder_centering(base)
+    (validate_retained_baseline if retained else validate_folder_centering)(base)
     first = apply_first_pass(base, prepared, fits, source_hashes=source_hashes, bootstrap_samples=bootstrap_samples, seed=seed)
     refined, refinement_audit = apply_sss_refinement(first, prepared, fits, seed=seed, target=SSSPLUS)
     for _, key in MODES:
@@ -148,7 +150,7 @@ def apply_sssplus_tiers(base: Mapping[str, Any], prepared: Mapping[str, Any], fi
     candidate = apply_centering(refined)
     tail_policy = apply_tail_policy(candidate)
     candidate["summary"]["method"]["sssplusTailPolicy"] = tail_policy
-    candidate["summary"]["method"]["sssplusTiers"] = {"version": 1, "method": METHOD, "baseSchemaVersion": 51,
+    candidate["summary"]["method"]["sssplusTiers"] = {"version": 1, "method": METHOD, "baseSchemaVersion": base["schemaVersion"],
         "basePayloadSha256": payload_sha256(base), "localOnly": True, "targetConfig": SSSPLUS.public(),
         "stageOrder": ["target-fit", "median-anchors", "frozen-range-refinement", "folder-centering", "single-midpoint-compression", "target-tail-policy", "component-mean-and-ranks"],
         "compressionApplications": 1, "tailPolicyMethod": tail_policy["method"]}
@@ -171,11 +173,14 @@ def validate_sssplus_tiers(payload: Mapping[str, Any], frozen: Mapping[str, Any]
     base = recover_sssplus_baseline(payload)
     if frozen is not None and base != frozen:
         raise ValueError("SSS+ overlay changed a frozen schema-51 field.")
-    validate_folder_centering(base)
+    from retained_tiers import BASE_SCHEMA_VERSION, is_retained, validate_retained_baseline
+    retained = is_retained(base)
+    (validate_retained_baseline if retained else validate_folder_centering)(base)
     method = payload["summary"]["method"]
     scoring = method["sssplusScoring"]
     if (scoring.get("targetConfig") != SSSPLUS.public() or scoring.get("target") != 995000
-            or scoring.get("method") != SSSPLUS.model_method or scoring.get("baseSchemaVersion") != 51
+            or scoring.get("method") != SSSPLUS.model_method
+            or scoring.get("baseSchemaVersion") != (BASE_SCHEMA_VERSION if retained else 51)
             or scoring.get("basePayloadSha256") != payload_sha256(base)
             or method["sssplusTiers"].get("basePayloadSha256") != payload_sha256(base)):
         raise ValueError("SSS+ target identity or baseline differs.")

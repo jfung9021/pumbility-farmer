@@ -117,6 +117,11 @@ def _state(cid: str, mix: str, status: str, fetched_at: str) -> dict[str, Any]:
             "possiblyTruncated": False, "entries": []}
 
 
+def _board_values(board: Mapping[str, Any]) -> dict[str, Any]:
+    """Exact captured values; a new probe time is only a check envelope."""
+    return {key: value for key, value in board.items() if key != "fetchedAtUtc"}
+
+
 def normalize_scoring_board(cid: str, mix: str, payload: Mapping[str, Any], fetched_at: str) -> dict[str, Any]:
     if mix not in MIXES or not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
         raise ValueError("Invalid official scoring board payload.")
@@ -292,7 +297,8 @@ def load_official_scoring_manifest(path: Path = DEFAULT_OFFICIAL_SCORING_MANIFES
     return hydrate_official_scoring_manifest(manifest, loader, current_charts)
 
 
-def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boards: int = 100) -> dict[str, Any]:
+def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boards: int = 100,
+                                           force: bool = False, refresh_id: str | None = None) -> dict[str, Any]:
     """Capture live official boards inside the protected hosted environment.
 
     Write immutable captures before advancing the private manifest. A failed
@@ -304,6 +310,14 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boar
     prefix = key.rsplit("/", 1)[0]
     pending_key = f"{prefix}/refresh-pending.json"
     archive_key = phoenix_scoring_archive_path()
+    descriptor_key = None if refresh_id is None else f"{prefix}/refreshes/{_sha(refresh_id)}.json"
+    descriptor = store.get_json(descriptor_key) if descriptor_key else None
+    if descriptor is not None and (
+            not isinstance(descriptor, Mapping)
+            or descriptor.get("version") != 1 or descriptor.get("refreshId") != refresh_id
+            or descriptor.get("force") is not force
+            or descriptor.get("catalogSha256") != _sha(descriptor.get("catalogs"))):
+        raise ValueError("The pinned official capture descriptor differs.")
     class BatchComplete(Exception):
         pass
     class BoundedClient:
@@ -319,7 +333,7 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boar
         raise ValueError("Official capture batch size must be positive.")
     with tempfile.TemporaryDirectory(prefix="piu-official-scoring-") as directory:
         path = Path(directory) / "manifest.json"
-        previous = store.get_json(key)
+        previous = descriptor["manifest"] if descriptor is not None else store.get_json(key)
         if previous is not None:
             loaded = hydrate_official_scoring_manifest(
                 previous, lambda relative: store.get_json(f"{prefix}/{relative}"),
@@ -341,19 +355,34 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boar
         # Adopt the complete published Phoenix capture before any upstream call.
         frozen_phoenix_source(path)
         persist_archive()
-        pending = store.get_json(pending_key) or {}
+        saved_pending = store.get_json(pending_key) or {}
+        # Legacy callers retain their pending contract. Owning jobs never adopt
+        # another refresh's partial observations or retry-completion markers.
+        if refresh_id is None and not force:
+            pending = saved_pending if "refreshId" not in saved_pending else {}
+        else:
+            pending = saved_pending.get("captures", {}) if (
+                saved_pending.get("refreshId") == refresh_id and saved_pending.get("force", False) == force) else {}
         for mix in MIXES:
             if mix in pending:
                 _atomic_json(path.parent / f"{mix}.pending.json", pending[mix])
-        catalogs = fetch_official_scoring_catalogs(client, path)
+        catalogs = descriptor["catalogs"] if descriptor is not None else fetch_official_scoring_catalogs(client, path)
+        for mix in MIXES:
+            _catalog(catalogs[mix], mix)
+        if descriptor_key and descriptor is None:
+            descriptor = {"version": 1, "refreshId": refresh_id, "force": force,
+                          "catalogs": catalogs, "catalogSha256": _sha(catalogs), "manifest": previous}
+            store.put_json(descriptor_key, descriptor)
         try:
             loaded = capture_official_scoring_sources(
                 BoundedClient(), catalogs, path, checkpoint_interval=min(25, max_boards),
+                reuse_complete=not force,
             )
         except BatchComplete:
             pending = {mix: json.loads((path.parent / f"{mix}.pending.json").read_bytes())
                        for mix in MIXES if (path.parent / f"{mix}.pending.json").exists()}
-            store.put_json(pending_key, pending)
+            store.put_json(pending_key, pending if refresh_id is None and not force else {
+                "refreshId": refresh_id, "force": force, "captures": pending})
             return {"outcome": "official-sources-progress",
                     "capturedBoards": {mix: len(cap["boards"]) for mix, cap in pending.items()},
                     "targetCharts": len(scoring_target_charts(catalogs["Phoenix2"])),
@@ -365,7 +394,8 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boar
             persist_archive()
         manifest = {k: v for k, v in loaded.items() if not k.startswith("_")}
         for mix, ref in manifest["captures"].items():
-            store.put_json(f"{prefix}/{ref['path']}", loaded["_captures"][mix])
+            if previous is None or previous["captures"][mix] != ref:
+                store.put_json(f"{prefix}/{ref['path']}", loaded["_captures"][mix])
         hydrate_official_scoring_manifest(
             manifest, lambda relative: store.get_json(f"{prefix}/{relative}"),
         )
@@ -374,6 +404,7 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boar
         "sourceDates": {mix: ref["asOf"] for mix, ref in manifest["captures"].items()},
         "boardCounts": {mix: len(loaded["_captures"][mix]["boards"]) for mix in MIXES},
         "manifestSha256": canonical_scoring_manifest_sha256(manifest),
+        "sourceCheckedAtUtc": _iso(_utc_now()),
     }
 
 
@@ -468,7 +499,7 @@ def import_research_scoring_sources(directory: Path, path: Path = DEFAULT_OFFICI
 def capture_official_scoring_sources(client: Any, catalogs: Mapping[str, list], path: Path = DEFAULT_OFFICIAL_SCORING_MANIFEST_PATH,
                                      *, restart: bool = False, now: Callable[[], datetime] = _utc_now,
                                      progress: Callable[[str, int, int], None] | None = None,
-                                     checkpoint_interval: int = 1) -> dict[str, Any]:
+                                     checkpoint_interval: int = 1, reuse_complete: bool = True) -> dict[str, Any]:
     """Freeze Phoenix once; probe/resume only the live Phoenix2 snapshot thereafter.
 
     Restart discards partial live work but cannot bypass the permanent archive.
@@ -479,6 +510,7 @@ def capture_official_scoring_sources(client: Any, catalogs: Mapping[str, list], 
     if not current:
         raise ValueError("No eligible official scoring charts.")
     frozen = frozen_phoenix_source(path)
+    complete = load_official_scoring_manifest(path)["_captures"] if path.exists() and not restart and reuse_complete else {}
     captures = {}
     for mix in MIXES:
         if mix == "Phoenix" and frozen is not None:
@@ -490,18 +522,34 @@ def capture_official_scoring_sources(client: Any, catalogs: Mapping[str, list], 
         source_catalog = _catalog(catalogs[mix], mix)
         pending_path = path.parent / f"{mix}.pending.json"
         prior = None
+        prior_complete = False
         if not restart and pending_path.exists():
             candidate = json.loads(pending_path.read_text(encoding="utf-8"))
             if candidate.get("catalogSha256") == _sha(catalogs[mix]) and candidate.get("targetChartIds") == sorted(current):
                 prior = _validate_capture(candidate, current, complete=False)
+        if prior is None and mix in complete:
+            candidate = complete[mix]
+            if candidate["catalogSha256"] == _sha(catalogs[mix]) and candidate["targetChartIds"] == sorted(current):
+                prior = _validate_capture(candidate, current)
+                prior_complete = True
         boards = {}
         as_of = None
+        changed_since_checkpoint = False
         # A date-bearing live board is necessary before reusing any cached state.
-        for cid in current:
+        chart_ids = list(current)
+        if prior is not None:
+            # Probe a known date-bearing board before retrying coverage gaps.
+            # This keeps progress bounded even when many early charts are 404s.
+            probe = next((cid for status in ("available", "empty") for cid in chart_ids
+                          if prior["boards"].get(cid, {}).get("status") == status), None)
+            if probe is not None:
+                chart_ids = [probe] + [cid for cid in chart_ids if cid != probe]
+        for cid in chart_ids:
             if cid not in source_catalog:
                 boards[cid] = _state(cid, mix, "absent-from-catalog", _iso(now()))
                 continue
-            if as_of is not None and prior and cid in prior["boards"]:
+            if (as_of is not None and prior and cid in prior["boards"]
+                    and (not prior_complete or prior["boards"][cid]["status"] == "available")):
                 board = prior["boards"][cid]
             else:
                 query = urlencode({"mix": mix, "supplemented": "false"})
@@ -511,26 +559,49 @@ def capture_official_scoring_sources(client: Any, catalogs: Mapping[str, list], 
                 except Exception as exc:
                     # The existing client's safe ApiError reports "HTTP 404".
                     if not re.search(r"\bHTTP 404\b", str(exc)):
+                        # The bounded client can yield before the next request,
+                        # between regular 25-board checkpoints. Commit the small
+                        # remainder locally so the hosted handoff retains it.
+                        if as_of is not None and boards:
+                            partial = _capture_object(mix, catalogs[mix], current, dict(boards), as_of, _iso(now()))
+                            partial["captureProvenance"] = {"method": "authenticated-api"}
+                            _atomic_json(pending_path, partial)
                         raise
                     board = _state(cid, mix, "not-mirrored", _iso(now()))
+                changed_since_checkpoint = True
             if board["status"] in ("available", "empty"):
                 if as_of is None:
                     as_of = board["asOf"]
                     if prior and prior["asOf"] != as_of:
                         prior = None
+                    elif prior_complete and prior is not None:
+                        old = prior["boards"][cid]
+                        # Same-epoch corrections to a populated probe invalidate
+                        # complete reuse. Missing/empty coverage is retried on
+                        # every new refresh instead of being frozen forever.
+                        if (old["status"] == "available"
+                                and _board_values(old) != _board_values(board)):
+                            prior = None
                 elif board["asOf"] != as_of:
                     raise ValueError("Official scoring boards changed source dates during capture.")
             boards[cid] = board
-            if as_of is not None and (len(boards) % checkpoint_interval == 0 or len(boards) == len(current)):
+            if (as_of is not None and changed_since_checkpoint
+                    and (len(boards) % checkpoint_interval == 0 or len(boards) == len(current))):
                 capture = _capture_object(mix, catalogs[mix], current, dict(boards), as_of, _iso(now()))
                 capture["captureProvenance"] = {"method": "authenticated-api"}
                 _atomic_json(pending_path, capture)
+                changed_since_checkpoint = False
             if progress:
                 progress(mix, len(boards), len(current))
         if as_of is None:
             raise ValueError("Cannot pin an official scoring source date without a date-bearing board.")
         captures[mix] = _capture_object(mix, catalogs[mix], current, boards, as_of, _iso(now()))
         captures[mix]["captureProvenance"] = {"method": "authenticated-api"}
+        if prior_complete and prior is not None and all(
+                _board_values(board) == _board_values(prior["boards"][cid])
+                for cid, board in boards.items()):
+            # A successful check does not make historical evidence newly fetched.
+            captures[mix] = prior
         _validate_capture(captures[mix], current)
         if mix == "Phoenix":
             _freeze_phoenix(path, captures[mix])

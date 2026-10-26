@@ -9,7 +9,7 @@
     "crossLevelClearing", "hybridTiers", "tierMetrics", "pumbilityExperiment",
     "ratingPostprocessing", "productionTierPublication", "baseProductionTierPublication", "scoringGoalPolicies",
     "availableScoringGoals", "sssTailPolicy", "level20ScoringWidth", "bpmMetadata",
-    "sssScoring", "sssRefinement", "submittedSssplusCalibration"
+    "sssScoring", "sssRefinement", "submittedSssplusCalibration", "retainedGoalProducer"
   ],
   "browserMethodFields": {
     "scoring": ["version", "calibration"],
@@ -115,6 +115,7 @@
     "availableScoringGoals",
     "sssTailPolicy",
     "level20ScoringWidth",
-    "bpmMetadata"
+    "bpmMetadata",
+    "retainedGoalProducer"
   ]
 }
