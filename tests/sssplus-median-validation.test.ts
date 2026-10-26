@@ -21,7 +21,7 @@ test("schema 53 recovers the exact historical candidate and validates every stag
 test("schema 53 stays local, defaults to SSS+ and keeps General/Clearing projections",()=>{
   assert.equal(localCombinedResultsPath({PIU_LOCAL_ANALYSIS:"1",PIU_LOCAL_SCORING_VARIANT_EXPERIMENT:"sssplus-median"}),SSSPLUS_MEDIAN_LOCAL_RESULTS_PATH);
   assert.deepEqual(scoringTargetForPayload(candidate),{goal:"sssplus",label:"SSS+",score:995000});
-  assert.equal(scoringGoalFromSearchParams(new URLSearchParams("scoring=sss"),candidate),"sss");
+  assert.equal(scoringGoalFromSearchParams(new URLSearchParams("scoring=sss"),candidate),"sssplus");
   const row=candidate.doubles.find(r=>r.level===22)!;
   assert.equal(projectScoringGoal(row,"sssplus").scoringMedianCalibration?.method,"sssplus-refined-median-calibration-v1");
   assert.equal(projectScoringGoal(row,"general"),row);

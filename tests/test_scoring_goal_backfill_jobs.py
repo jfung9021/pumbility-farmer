@@ -136,7 +136,7 @@ class ScoringGoalBackfillJobTests(unittest.TestCase):
         self.assertNotIn(CONTINUATION_FIELD, failed)
         self.assertEqual(self.store.promotions, 0)
 
-    def test_operator_route_authenticates_and_only_enqueues_backfill(self):
+    def test_operator_route_authenticates_and_rejects_retired_backfill_without_enqueue(self):
         app = FastAPI(); app.include_router(router)
         client = TestClient(app)
         with patch.dict(os.environ, {"JONATHAN_PASSWORD": "operator"}), \
@@ -145,6 +145,6 @@ class ScoringGoalBackfillJobTests(unittest.TestCase):
             self.assertEqual(client.post("/api/jonathan/refresh?mode=scoring-goal-backfill").status_code, 401)
             request.assert_not_called()
             response = client.post("/api/jonathan/refresh?mode=scoring-goal-backfill", headers={"X-Jonathan-Password": "operator"})
-            self.assertEqual(response.status_code, 202)
-            self.assertEqual(response.json(), {"status": "queued"})
-            request.assert_called_once()
+            self.assertEqual(response.status_code, 410)
+            self.assertIn("retired", response.json()["error"])
+            request.assert_not_called()

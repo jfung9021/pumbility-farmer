@@ -76,7 +76,7 @@ test("schema57 remains local, defaults to SSS+ and projects restored submitted c
   assert.notEqual(localCombinedResultsPath({ ...env, PIU_LOCAL_ANALYSIS: undefined }), SUBMITTED_SSSPLUS_CALIBRATION_LOCAL_RESULTS_PATH);
   assert.equal(scoringTargetForPayload(candidate).goal, "sssplus");
   assert.equal(scoringGoalFromSearchParams(new URLSearchParams(), candidate), "sssplus");
-  assert.equal(scoringGoalFromSearchParams(new URLSearchParams("scoring=sss"), candidate), "sss");
+  assert.equal(scoringGoalFromSearchParams(new URLSearchParams("scoring=sss"), candidate), "sssplus");
   const row = restored(candidate), projected = projectScoringGoal(row, "sssplus", "pumbility");
   assert.ok(Number.isFinite(projected.estimatedDifficulty));
   assert.equal(projected.scoringSubmittedCalibration?.method, "submitted-folder-centered-shared-q90-v1");

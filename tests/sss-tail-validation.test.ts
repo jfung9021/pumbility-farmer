@@ -103,7 +103,7 @@ test("SSS tail rejects changed points, intervals, selection, evidence, ranks and
   assert.throws(() => validateSssTailAnalysisPayload(candidate, () => { throw new Error("historical failure"); }), /historical failure/);
 });
 
-test("SSS tail compact lists replay points and intervals and agree with chart details", () => {
+test("historical SSS tail lists replay while lazy details retain only current public goals", () => {
   for (const schema of [57, 58] as const) {
     const { candidate } = fixture(schema), compact = compactTierPayload(candidate);
     assert.equal(validateSssTailPublicPayload(compact), compact);
@@ -114,10 +114,15 @@ test("SSS tail compact lists replay points and intervals and agree with chart de
       assert.equal(row.sssTailBaseline, undefined);
       assert.deepEqual(Object.keys(row.scoringVariants!.sss!.scoringTailPolicy!).sort(),
         ["preTailDifficulty", "preTailDifficultyCi95Low", "preTailDifficultyCi95High"].sort());
-      assert.equal(row.scoringVariants!.sss!.estimatedDifficulty, details.scoringVariants.sss.estimatedDifficulty);
-      assert.equal(row.pumbilityVariants!.sss!.estimatedDifficulty, details.pumbilityVariants.sss.estimatedDifficulty);
-      assert.equal(row.scoringVariants!.sss!.difficultyCi95Low, details.scoringVariants.sss.difficultyCi95Low);
-      assert.equal(row.scoringVariants!.sss!.difficultyCi95High, details.scoringVariants.sss.difficultyCi95High);
+      const historical = candidate[key].find(chart => chart.chartId === row.chartId)!;
+      assert.equal(row.scoringVariants!.sss!.estimatedDifficulty, historical.scoringVariants!.sss!.estimatedDifficulty);
+      assert.equal(row.pumbilityVariants!.sss!.estimatedDifficulty, historical.pumbilityVariants!.sss!.estimatedDifficulty);
+      assert.equal(row.scoringVariants!.sss!.difficultyCi95Low, historical.scoringVariants!.sss!.difficultyCi95Low);
+      assert.equal(row.scoringVariants!.sss!.difficultyCi95High, historical.scoringVariants!.sss!.difficultyCi95High);
+      assert.equal(details.scoringVariants.sss, undefined);
+      assert.equal(details.pumbilityVariants.sss, undefined);
+      assert.equal(row.scoringVariants!.sssplus!.estimatedDifficulty, details.scoringVariants.sssplus.estimatedDifficulty);
+      assert.equal(row.pumbilityVariants!.sssplus!.estimatedDifficulty, details.pumbilityVariants.sssplus.estimatedDifficulty);
     }
     for (const edit of [
       (p: AnalysisPayload) => { p.singles[0].scoringVariants!.sss!.estimatedDifficulty! += .1; },

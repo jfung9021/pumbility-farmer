@@ -598,6 +598,9 @@ export default function TierListPage() {
       setActiveMode(tierModeFromSearchParams(params));
       setActiveMetric(tierMetricFromSearchParams(params));
       const selectedGoal = scoringGoalFromSearchParams(params);
+      if (params.has("scoring") && params.get("scoring") !== selectedGoal) {
+        window.history.replaceState(window.history.state, "", scoringGoalUrl(window.location.href, selectedGoal));
+      }
       setScoringGoal(selectedGoal);
       setSelectedChart(null);
     };

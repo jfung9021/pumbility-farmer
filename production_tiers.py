@@ -24,6 +24,9 @@ PREFIX = "analysis/private/source-aware-tiers/"
 SEED = 20261018
 SAMPLES = 200
 MODES = (("Single", "singles"), ("Double", "doubles"))
+# Independent SS/SS+ work is retired. Keep its historical builders/validators
+# for existing private artifacts without scheduling or attaching them to refreshes.
+REQUIRED_REFRESH_GOALS = ()
 
 
 class TierAnalysisPending(RuntimeError):
@@ -546,14 +549,15 @@ def build_hosted_tiers(records, metadata, first, second, *, store, arguments, ge
                             "targetSamples": SAMPLES, "targetSeed": SEED}
     state["numericIdentity"] = {**{key: value for key, value in semantic_inputs.items() if key != "modelCode"},
                                 "numericalRecipe": numerical_pipeline_recipe()}
-    goal_inputs = goal_input_identity(first, second, catalog=catalog,
-        manifest_sha256=identity["officialManifest"], policy=policy.public())
-    goal_artifacts = matching_goal_artifacts(store, goal_inputs)
-    state["goalInputIdentity"] = goal_inputs
-    state["goalArtifacts"] = goal_artifacts
-    state["goalSourceHashes"] = {"phoenix1": digest(p1), "phoenix2": digest(p2)}
-    if goal_artifacts:
-        computation_identity["goalArtifacts"] = {goal: ref["payloadSha256"] for goal, ref in goal_artifacts.items()}
+    if REQUIRED_REFRESH_GOALS:
+        goal_inputs = goal_input_identity(first, second, catalog=catalog,
+            manifest_sha256=identity["officialManifest"], policy=policy.public())
+        goal_artifacts = matching_goal_artifacts(store, goal_inputs)
+        state["goalInputIdentity"] = goal_inputs
+        state["goalArtifacts"] = goal_artifacts
+        state["goalSourceHashes"] = {"phoenix1": digest(p1), "phoenix2": digest(p2)}
+        if goal_artifacts:
+            computation_identity["goalArtifacts"] = {goal: ref["payloadSha256"] for goal, ref in goal_artifacts.items()}
     state["computationIdentity"] = computation_identity
     if state.get("computationGeneration") or state.get("fitsReady"):
         return _advance_finish(store, state, on_stage_start=on_stage_start, on_progress=on_progress)
@@ -1028,7 +1032,7 @@ def _publication_overlays(store, state, reference, *, on_progress=None, on_stage
     _validate_publication_overlay_chain(state)
     _advance_required_goals(store, state, on_progress=on_progress, on_stage_start=on_stage_start)
     state_path = PREFIX + "generations/" + state["generation"] + "/state.json"
-    if state.get("goalArtifacts"):
+    if REQUIRED_REFRESH_GOALS and state.get("goalArtifacts"):
         if "goalOverlay" not in state:
             full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
             artifacts = {goal: read_checkpoint(store, ref, stage="scoring-goal", identity=ref["identity"])
@@ -1558,7 +1562,8 @@ def _advance_required_goals(store, state, *, on_progress=None, on_stage_start=No
     pins one cohort, fits one cohort, or assembles one goal artifact; raw score
     snapshots are never reconstructed here.
     """
-    from scoring_targets import BACKFILL_GOALS
+    if not REQUIRED_REFRESH_GOALS:
+        return
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
     from tier_computation_cache import write_index
     from target_fit_cache import pending_fit_progress, TargetFitPending
@@ -1571,7 +1576,7 @@ def _advance_required_goals(store, state, *, on_progress=None, on_stage_start=No
 
     def progress(inner=None):
         units = sum(9 if goal in artifacts else len(jobs.get(goal, {}).get("cohorts", []))
-                    + len(jobs.get(goal, {}).get("fits", [])) for goal in BACKFILL_GOALS)
+                    + len(jobs.get(goal, {}).get("fits", [])) for goal in REQUIRED_REFRESH_GOALS)
         if on_progress and units:
             value = {"version": 1, "generation": generation, "ordinal": ordinal,
                 "stage": "scoring-goals", "goalProgressOrdinal": units}
@@ -1592,7 +1597,7 @@ def _advance_required_goals(store, state, *, on_progress=None, on_stage_start=No
         return read_checkpoint(store, reference, stage="phase-inputs-" + name,
             identity=digest({"generation": producer, "kind": name}))
 
-    for goal in BACKFILL_GOALS:
+    for goal in REQUIRED_REFRESH_GOALS:
         if goal in artifacts:
             continue
         recipe = _goal_recipe(goal)
@@ -1663,7 +1668,7 @@ def _advance_required_goals(store, state, *, on_progress=None, on_stage_start=No
         artifacts[goal] = reference
         state["computationIdentity"]["goalArtifacts"] = {
             key: value["payloadSha256"] for key, value in artifacts.items()}
-        if all(key in artifacts for key in BACKFILL_GOALS):
+        if all(key in artifacts for key in REQUIRED_REFRESH_GOALS):
             write_index(store, "pipeline", state["computationIdentity"], generation=generation)
         committed()
 

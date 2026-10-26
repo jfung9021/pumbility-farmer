@@ -2,12 +2,47 @@ import type { AnalysisPayload } from "./types";
 import fields from "../config/tier-public-fields.json" with { type: "json" };
 import { validateSssTailPublicPayload } from "./sss-tail-validation.ts";
 import { validateLevel20WidthPublicPayload } from "./level20-width-validation.ts";
+import { SCORING_GOALS } from "./scoring-variants.ts";
 
 const serialized = new WeakMap<AnalysisPayload, string>();
 
 type Row = Record<string, unknown>;
 function pick(row: Row, keys: readonly string[]): Row {
   return Object.fromEntries(keys.filter(key => key in row).map(key => [key, row[key]]));
+}
+function publicGoalVariants(row: Row): Row {
+  let result = row;
+  for (const key of ["scoringVariants", "pumbilityVariants"]) {
+    const variants = row[key] as Row | undefined;
+    if (!variants) continue;
+    const retained = Object.entries(variants).filter(([goal]) => SCORING_GOALS.some(candidate => candidate === goal));
+    if (retained.length !== Object.keys(variants).length) result = {...result, [key]:Object.fromEntries(retained)};
+  }
+  return result;
+}
+
+/** Retire public lists only after immutable historical validation has completed. */
+function publicTierGoals(payload: AnalysisPayload): AnalysisPayload {
+  let result = payload;
+  for (const mode of ["singles", "doubles", "coop"] as const) if (payload[mode]) {
+    const rows = payload[mode]!;
+    const retained = rows.map(row => publicGoalVariants(row as unknown as Row));
+    if (retained.some((row, index) => row !== rows[index] as unknown as Row)) {
+      result = {...result, [mode]:retained};
+    }
+  }
+  const method = payload.summary.method;
+  const available = method.availableScoringGoals;
+  const policies = method.scoringGoalPolicies;
+  const retainedGoals = available?.filter(goal => SCORING_GOALS.some(candidate => candidate === goal));
+  const retainedPolicies = policies?.goals.filter(policy => SCORING_GOALS.some(candidate => candidate === policy.key));
+  if (retainedGoals?.length !== available?.length || retainedPolicies?.length !== policies?.goals.length) {
+    result = {...result, summary:{...result.summary, method:{...method,
+      ...(retainedGoals ? {availableScoringGoals:retainedGoals} : {}),
+      ...(retainedPolicies ? {scoringGoalPolicies:{...policies!, goals:retainedPolicies}} : {}),
+    }}};
+  }
+  return result;
 }
 function metric(row: Row, kind: "chart" | "scoring" | "clearing" | "pumbility") {
   const result = pick(row, [...fields.metric, ...fields[kind]]);
@@ -64,12 +99,12 @@ export function compactTierPayload(payload: AnalysisPayload): AnalysisPayload {
 /** Chart evidence retains the existing contract; only private rollback copies go. */
 export function tierChartDetails(payload: AnalysisPayload, chartId: string) {
   const row = [...payload.singles, ...payload.doubles, ...(payload.coop ?? [])].find(row => row.chartId === chartId);
-  return row ? {generatedAtUtc:payload.generatedAtUtc, ...(payload.bpmMetadata ? {bpmMetadata:payload.bpmMetadata} : {}), chart:JSON.parse(JSON.stringify(row, (key, value) => key.endsWith("Baseline") ? undefined : value))} : null;
+  return row ? {generatedAtUtc:payload.generatedAtUtc, ...(payload.bpmMetadata ? {bpmMetadata:payload.bpmMetadata} : {}), chart:JSON.parse(JSON.stringify(publicGoalVariants(row as unknown as Row), (key, value) => key.endsWith("Baseline") ? undefined : value))} : null;
 }
 
 /** Response-only DTO; strict publication validation runs before this projection. */
 export function tierBrowserPayload(payload: AnalysisPayload): AnalysisPayload {
-  if ((payload.tierListView as unknown as Row | undefined)?.browserVersion === 1) return payload;
+  if ((payload.tierListView as unknown as Row | undefined)?.browserVersion === 1) return publicTierGoals(payload);
   const compact = compactTierPayload(payload);
   const source = compact as unknown as Row;
   const result = { ...source };
@@ -108,7 +143,7 @@ export function tierBrowserPayload(payload: AnalysisPayload): AnalysisPayload {
     });
   }
   result.tierListView = {...compact.tierListView, browserVersion: 1};
-  return result as unknown as AnalysisPayload;
+  return publicTierGoals(result as unknown as AnalysisPayload);
 }
 
 export function tierBrowserJson(payload: AnalysisPayload): string {

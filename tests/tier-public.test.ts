@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { compactTierPayload, tierBrowserPayload, tierBrowserJson, tierChartDetails } from "../lib/tier-browser-payload.ts";
 import { createTierChartDetailLoader } from "../lib/tier-chart-details.ts";
-import { hasScoringGoalVariants, projectScoringGoal, SCORING_GOALS } from "../lib/scoring-variants.ts";
+import { hasScoringGoalVariants, projectScoringGoal, SCORING_GOALS, SCORING_TARGET_POLICIES } from "../lib/scoring-variants.ts";
 import { clearingMinimumScoreRecords, clearingPercentileRange, clearingSkillPercentile, estimatedTierGroups, hasLimitedTierData, selectedTierMetric, sortTierCharts, tierBandCharts, tierSupportLabel } from "../lib/tier-metrics.ts";
 import { matchesTierBpm, matchesTierLevel, tierBpmBounds } from "../lib/tier-filters.ts";
 import { formatDisplayBpm } from "../lib/song-bpm.ts";
@@ -14,10 +14,11 @@ import type { AnalysisPayload } from "../lib/types";
 const source = JSON.parse(readFileSync(new URL("./fixtures/tier-public-source.json", import.meta.url), "utf8")) as AnalysisPayload;
 const expected = JSON.parse(readFileSync(new URL("./fixtures/tier-public-list.json", import.meta.url), "utf8"));
 
-test("browser DTO preserves all five goal/metric browse results while lazy details retain intervals and evidence", () => {
+test("browser and lazy detail DTOs retire SS, SS+ and SSS while retaining General and SSS+ results", () => {
   const payload = structuredClone(source);
   payload.schemaVersion = 58;
-  payload.summary.method.availableScoringGoals = [...SCORING_GOALS];
+  payload.summary.method.availableScoringGoals = ["general", "ss", "ssplus", "sss", "sssplus"];
+  payload.summary.method.scoringGoalPolicies = {version:1, goals:structuredClone([...SCORING_TARGET_POLICIES])};
   payload.summary.method.crossLevelClearing = {version: 2, skillMethod: {minimumScoreRecords: 100},
     calibration: {audit: Array(1000).fill(0)}} as unknown as AnalysisPayload["summary"]["method"]["crossLevelClearing"];
   for (const row of payload.doubles) {
@@ -60,15 +61,35 @@ test("browser DTO preserves all five goal/metric browse results while lazy detai
   assert.equal(hasMidpointCompression(browser), hasMidpointCompression(old));
   assert.deepEqual(browser.tierListView, {...old.tierListView, browserVersion:1});
   assert.deepEqual(browser.summary.method.crossLevelClearing, {version:2,skillMethod:{minimumScoreRecords:100}});
-  assert.equal(browser.doubles[0].scoringVariants!.ss!.difficultyCi95Low, undefined);
-  assert.deepEqual(tierChartDetails(payload, "d18")?.chart.scoringVariants.ss.scoringRefinement,
-    payload.doubles[0].scoringVariants!.ss!.scoringRefinement);
-  assert.equal(tierChartDetails(payload, "d18")?.chart.scoringVariants.ss.difficultyCi95Low,
-    payload.doubles[0].scoringVariants!.ss!.difficultyCi95Low);
+  assert.deepEqual(browser.summary.method.availableScoringGoals, ["general", "sssplus"]);
+  assert.deepEqual(browser.summary.method.scoringGoalPolicies?.goals.map(policy => policy.key), ["sssplus"]);
+  const details = tierChartDetails(payload, "d18")!;
+  for (const row of [browser.doubles[0], details.chart]) {
+    for (const key of ["scoringVariants", "pumbilityVariants"] as const) {
+      assert.deepEqual(Object.keys(row[key]), ["general", "sssplus"]);
+    }
+  }
+  assert.deepEqual(details.chart.scoringVariants.sssplus.scoringRefinement,
+    payload.doubles[0].scoringVariants!.sssplus!.scoringRefinement);
+  assert.equal(details.chart.scoringVariants.sssplus.difficultyCi95Low,
+    payload.doubles[0].scoringVariants!.sssplus!.difficultyCi95Low);
   assert.ok(Buffer.byteLength(tierBrowserJson(payload)) < Buffer.byteLength(JSON.stringify(old))*.7);
   assert.equal(tierBrowserPayload(browser), browser);
   assert.deepEqual(payload, sourceBefore);
   assert.deepEqual(old, oldBefore);
+});
+
+test("already compact browser generations cannot bypass public goal retirement", () => {
+  const payload = structuredClone(source);
+  payload.tierListView = {version:1, kind:"list", detailsAvailable:true, browserVersion:1} as AnalysisPayload["tierListView"];
+  payload.summary.method.availableScoringGoals = ["general", "ss", "ssplus", "sss", "sssplus"];
+  const browser = tierBrowserPayload(payload);
+  assert.equal(browser.doubles[0].scoringVariants?.sss, undefined);
+  assert.equal(browser.doubles[0].pumbilityVariants?.sss, undefined);
+  assert.deepEqual(browser.summary.method.availableScoringGoals, ["general", "sssplus"]);
+  assert.deepEqual(browser.doubles[0].scoringVariants?.sssplus, payload.doubles[0].scoringVariants?.sssplus);
+  assert.equal(tierBrowserPayload(browser), browser);
+  assert.ok(payload.doubles[0].scoringVariants?.sss);
 });
 
 test("local list projection matches Python publication DTO and preserves full-precision grouping", () => {

@@ -1,4 +1,4 @@
-import { SCORING_GOALS, SCORING_TARGET_POLICIES, scoringTargetForGoal } from "./scoring-variants.ts";
+import { HISTORICAL_SCORING_GOALS, SCORING_TARGET_POLICIES, scoringTargetForGoal } from "./scoring-variants.ts";
 import { validateRanks } from "./sss-analysis-validation.ts";
 import type { AnalysisPayload, ChartResult, ScoringGoal, ScoringVariant } from "./types";
 
@@ -85,7 +85,7 @@ export function validateScoringGoalsPayload(payload: AnalysisPayload, validateBa
   obj(overlay.inputIdentity);
   const added = NEW_GOALS.filter(goal => Object.hasOwn(goals, goal));
   need(added.length > 0 && Object.keys(goals).every(goal => (NEW_GOALS as readonly string[]).includes(goal)), "Unexpected scoring-goal overlay.");
-  const available: ScoringGoal[] = SCORING_GOALS.filter(goal => goal !== "ss" && goal !== "ssplus" || added.includes(goal));
+  const available: ScoringGoal[] = HISTORICAL_SCORING_GOALS.filter(goal => goal !== "ss" && goal !== "ssplus" || added.includes(goal));
   need(exact(method.availableScoringGoals, available), "Advertised scoring goals differ.");
   const expectedKeys = [...available].sort();
   for (const row of [...payload.singles, ...payload.doubles]) {

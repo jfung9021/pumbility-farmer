@@ -33,7 +33,7 @@ test("SSS+ default and explicit URL goals stay stable before and after every sup
   for (const schemaVersion of [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58]) {
     for (const [query, expected] of [
       ["", "sssplus"], ["mode=doubles&metric=pumbility", "sssplus"], ["scoring=bad", "sssplus"],
-      ["scoring=general", "general"], ["scoring=ss", "ss"], ["scoring=ssplus", "ssplus"], ["scoring=sss", "sss"], ["scoring=sssplus", "sssplus"],
+      ["scoring=general", "general"], ["scoring=ss", "sssplus"], ["scoring=ssplus", "sssplus"], ["scoring=sss", "sssplus"], ["scoring=sssplus", "sssplus"],
     ] as const) {
       const params = new URLSearchParams(query);
       assert.equal(scoringGoalFromSearchParams(params), expected);
@@ -49,20 +49,22 @@ test("SSS+ default and explicit URL goals stay stable before and after every sup
   assert.equal(general.searchParams.get("metric"), "pumbility");
   assert.equal(general.searchParams.get("player"), "abc");
   assert.equal(general.hash, original.hash);
-  const sss = scoringGoalUrl(general.href, "sss");
-  assert.equal(scoringGoalFromSearchParams(sss.searchParams, historical), "sss");
-  const canonical = scoringGoalUrl(sss.href, scoringGoalFromSearchParams(sss.searchParams, current));
-  assert.equal(canonical.searchParams.get("scoring"), "sss");
-  assert.equal(canonical.searchParams.get("player"), "abc");
-  assert.equal(canonical.hash, original.hash);
+  for (const goal of ["ss", "ssplus", "sss"] as const) {
+    const retired = scoringGoalUrl(general.href, goal);
+    assert.equal(scoringGoalFromSearchParams(retired.searchParams, historical), "sssplus");
+    const canonical = scoringGoalUrl(retired.href, scoringGoalFromSearchParams(retired.searchParams, current));
+    assert.equal(canonical.searchParams.get("scoring"), "sssplus");
+    for (const key of ["mode", "metric", "player"]) assert.equal(canonical.searchParams.get(key), original.searchParams.get(key));
+    assert.equal(canonical.hash, original.hash);
+  }
   // Back/forward reads URL state, rather than persisting a conflicting local preference.
   assert.equal(scoringGoalFromSearchParams(general.searchParams), "general");
   assert.equal(hasSssScoringVariants({ ...fixture, schemaVersion: 57 }), true);
   assert.equal(scoringTargetForPayload({ ...fixture, schemaVersion: 57 }).goal, "sssplus");
 });
 
-test("five goals have stable display order, independent labels and inclusive target policies", () => {
-  assert.deepEqual(SCORING_GOALS, ["general", "ss", "ssplus", "sss", "sssplus"]);
+test("only General and SSS+ are public choices while historical target policies remain immutable", () => {
+  assert.deepEqual(SCORING_GOALS, ["general", "sssplus"]);
   assert.deepEqual(SCORING_TARGET_POLICIES.map(p => [p.key, p.score, p.inclusive]),
     [["ss", 980000, true], ["ssplus", 985000, true], ["sss", 990000, true], ["sssplus", 995000, true]]);
   assert.deepEqual(scoringTargetForGoal("ss"), { goal: "ss", label: "SS", score: 980000 });
@@ -103,11 +105,11 @@ test("SS and SS+ projection owns sorting, support, intervals and matching Pumbil
   assert.deepEqual([first, second], frozen);
 });
 
-test("absent SS and SS+ remain selected and Unrated with explicit General available", () => {
+test("retired SS and SS+ deep links select SSS+ without changing historical projection contracts", () => {
   const row = variantChart(), payload = { ...fixture, singles: [row], doubles: [] };
   for (const goal of ["ss", "ssplus"] as const) {
     assert.equal(hasScoringGoalVariants(payload, goal), false);
-    assert.equal(scoringGoalFromSearchParams(new URLSearchParams(`scoring=${goal}`), payload), goal);
+    assert.equal(scoringGoalFromSearchParams(new URLSearchParams(`scoring=${goal}`), payload), "sssplus");
     const projected = projectScoringGoal(row, goal, "pumbility");
     assert.equal(projected.estimatedDifficulty, null);
     assert.equal(projected.evidenceStatus, "Unrated");
