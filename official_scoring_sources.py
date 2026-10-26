@@ -253,7 +253,8 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boar
         def __init__(self):
             self.count = 0
         def _get_json(self, path):
-            if self.count >= max_boards:
+            from analysis_budget import work_budget_available
+            if self.count >= max_boards or not work_budget_available():
                 raise BatchComplete()
             self.count += 1
             return client._get_json(path)
@@ -282,7 +283,11 @@ def refresh_hosted_official_scoring_sources(client: Any, store: Any, *, max_boar
             store.put_json(pending_key, pending)
             return {"outcome": "official-sources-progress",
                     "capturedBoards": {mix: len(cap["boards"]) for mix, cap in pending.items()},
-                    "targetCharts": len(scoring_target_charts(catalogs["Phoenix2"]))}
+                    "targetCharts": len(scoring_target_charts(catalogs["Phoenix2"])),
+                    "progressIdentity": _sha({mix: {
+                        "asOf": cap["asOf"], "catalogSha256": cap["catalogSha256"],
+                        "targetChartIds": cap["targetChartIds"], "completed": len(cap["boards"]),
+                    } for mix, cap in pending.items()})}
         manifest = {k: v for k, v in loaded.items() if not k.startswith("_")}
         for mix, ref in manifest["captures"].items():
             store.put_json(f"{prefix}/{ref['path']}", loaded["_captures"][mix])

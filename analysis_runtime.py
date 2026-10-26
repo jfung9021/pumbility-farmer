@@ -1193,6 +1193,12 @@ def request_refresh(
         trigger=trigger,
         mix=mix_spec,
     )
+    # Only new requests opt in. Never insert a source mutation into a historical
+    # generation that may already have pinned its official evidence.
+    job["refreshOfficialSources"] = (
+        mix_spec.key == DEFAULT_MIX_KEY
+        and os.getenv("PIU_OFFICIAL_CROSS_LEVEL_SCORING", "") == "1"
+    )
     jobs.save(job)
     jobs.set_latest_job_id(job_id, mix_spec)
     jobs.set_active_job_id(job_id)
@@ -3468,7 +3474,9 @@ def _checkpoint_continuation(
                 or total <= 0 or not 0 <= current_count <= total):
             raise ValueError("The continuation phase progress is invalid.")
         progress.update(current=current_count, total=total,
-            percent=int(100 * current_count / total), phase="tier-analysis", indeterminate=False)
+            percent=int(100 * current_count / total),
+            phase="official-sources" if continuation == "official-sources" else "tier-analysis",
+            indeterminate=False)
     current = update_job(
         job_store,
         job_id,
@@ -4446,6 +4454,64 @@ def _snapshot_from_raw_dir(
     )
 
 
+def _advance_job_official_sources(
+    *, blob_store: JsonBlobStore, job_store: JobStore, job_id: str,
+    job: Mapping[str, Any], client: Any | None, lease_heartbeat: Any | None,
+) -> dict[str, Any] | None:
+    """Capture one bounded batch before this new job pins any model inputs."""
+    if not job.get("refreshOfficialSources"):
+        return None
+    marker = job.get("officialSourceCapture") or {}
+    if marker.get("status") == "completed":
+        return None
+    from official_scoring_sources import refresh_hosted_official_scoring_sources
+    from piu_misgrade_analyzer import ApiError
+
+    update_job(job_store, job_id, stage="syncing", progress={
+        "phase": "official-sources", "current": 0, "total": 0,
+        "percent": 0, "indeterminate": True,
+        "message": "Capturing current official leaderboard evidence before analysis.",
+    })
+    if client is None:
+        key = os.getenv("PIU_SCORES_API_KEY", "").strip()
+        if not key:
+            raise ApiError("PIU_SCORES_API_KEY is not configured as a server-side environment variable.")
+        client = PiuScoresClient(api_key=key)
+    _pulse_job_lease(lease_heartbeat)
+    result = refresh_hosted_official_scoring_sources(client, blob_store, max_boards=100)
+    _pulse_job_lease(lease_heartbeat)
+    if result.get("outcome") == "official-sources-progress":
+        identity = result.get("progressIdentity")
+        counts = result.get("capturedBoards")
+        target = result.get("targetCharts")
+        if (not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity)
+                or not isinstance(counts, Mapping) or not set(counts) <= {"Phoenix", "Phoenix2"}
+                or type(target) is not int or target <= 0
+                or any(type(n) is not int or not 0 <= n <= target for n in counts.values())):
+            raise ValueError("Official source capture progress is invalid.")
+        observations = int(marker.get("observations") or 0) + 1 if marker.get("progressIdentity") == identity else 1
+        if observations >= 3:
+            raise ValueError("Official source capture made no progress after three resumptions.")
+        marker = {"status": "capturing", "progressIdentity": identity,
+                  "observations": observations, "capturedBoards": dict(counts), "targetCharts": target}
+        update_job(job_store, job_id, officialSourceCapture=marker)
+        completed, total = sum(counts.values()), 2 * target
+        return _checkpoint_continuation(job_store=job_store, job_id=job_id,
+            continuation="official-sources", sequence=identity[:16] + "-" + str(observations),
+            stage="syncing", message=f"Official leaderboard capture: {completed} of {total} chart states saved.",
+            lease_heartbeat=lease_heartbeat, phase_progress={"current": completed, "total": total})
+    manifest_hash = result.get("manifestSha256")
+    if not isinstance(manifest_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_hash):
+        raise ValueError("Official source capture did not promote a complete manifest.")
+    update_job(job_store, job_id, officialSourceCapture={"status": "completed",
+        "manifestSha256": manifest_hash, "sourceDates": result["sourceDates"],
+        "boardCounts": result["boardCounts"]})
+    return _checkpoint_continuation(job_store=job_store, job_id=job_id,
+        continuation="official-sources", sequence="ready-" + manifest_hash[:16], stage="syncing",
+        message="Current official leaderboard evidence captured; queued for score synchronization and analysis.",
+        lease_heartbeat=lease_heartbeat)
+
+
 def execute_analysis_job(
     job_id: str,
     *,
@@ -4565,6 +4631,11 @@ def execute_analysis_job(
                     lease_heartbeat=lease_heartbeat,
                     yield_after_checkpoint=yield_after_typed_checkpoint,
                 )
+        source_continuation = _advance_job_official_sources(
+            blob_store=blob_store, job_store=job_store, job_id=job_id,
+            job=job_store.get(job_id) or existing, client=client, lease_heartbeat=lease_heartbeat)
+        if source_continuation is not None:
+            return source_continuation
         current = blob_store.get_json(current_snapshot_path(mix_spec))
         reanalyze_only = bool(existing.get("reanalyzeOnly"))
         resume = None if reanalyze_only else blob_store.get_json(staging_path)
