@@ -196,41 +196,50 @@ class PipelineResumeTests(TestCase):
         ref = tiers.pin_tier_publication_inputs(self.store, first={}, second={}, manifest={}, records=[],
             metadata={}, generated_at_utc=self.timestamp)
         with self.assertRaisesRegex(ValueError, "creation time"):
-            tiers.advance_tier_publication(self.store, {"inputs": ref, "generatedAtUtc": "changed"})
+            tiers.advance_tier_publication(self.store, {"inputs": ref, "generatedAtUtc": "changed", "producer": tiers.RETAINED_PRODUCER})
 
     def test_worker_adapter_rejects_changed_code_before_advancing_pinned_job(self):
         ref = tiers.pin_tier_publication_inputs(self.store, first={}, second={}, manifest={}, records=[],
             metadata={}, generated_at_utc=self.timestamp)
         with patch("production_tiers.pipeline_code_identity", return_value="different-pipeline"), \
-             patch("production_tiers.build_hosted_tiers") as build:
+             patch("production_tiers.build_retained_hosted_tiers") as build:
             with self.assertRaisesRegex(ValueError, "different pipeline code"):
-                tiers.advance_tier_publication(self.store, {"inputs": ref, "generatedAtUtc": self.timestamp})
+                tiers.advance_tier_publication(self.store, {"inputs": ref, "generatedAtUtc": self.timestamp, "producer": tiers.RETAINED_PRODUCER})
         build.assert_not_called()
 
     def test_worker_resume_hydrates_only_phase_inputs_and_required_fit_cohorts(self):
         ref = tiers.pin_tier_publication_inputs(self.store, first={}, second={},
             manifest=self.args["official_scoring_manifest"], records=[], metadata={}, generated_at_utc=self.timestamp)
-        state = {"inputs": ref, "generatedAtUtc": self.timestamp}
+        state = {"inputs": ref, "generatedAtUtc": self.timestamp, "producer": tiers.RETAINED_PRODUCER}
         started = []
-        with patch("production_tiers._finish_stage", side_effect=self.transition):
-            for _ in range(12):
+        with patch("production_tiers._finish_stage", side_effect=self.transition), \
+             patch("production_tiers._retained_dependencies", return_value=(self.context[2], self.context[3], "source")):
+            for _ in range(8):
                 result = tiers.advance_tier_publication(self.store, state, on_stage_start=started.append)
                 state = result["state"]
             prepared = tiers.advance_tier_publication(self.store, state, on_stage_start=started.append)
             self.assertEqual(prepared["stage"], "prepared-inputs")
-            self.assertEqual(prepared["progressOrdinal"], 9)
-            self.assertEqual(prepared["totalStages"], 18)
+            self.assertEqual(prepared["progressOrdinal"], 5)
+            self.assertEqual(prepared["totalStages"], 14)
+            captured = self.store.get_json(tiers.PREFIX + "generations/" + prepared["state"]["generation"] + "/state.json")
+            references = captured["fitReferences"]
+            self.assertEqual(len(references), 4)
+            self.assertEqual({(item["goal"], item["source"], item["mode"]) for item in references},
+                             {("sssplus", source, mode) for source in ("submitted", "official") for mode in ("Single", "Double")})
+            self.assertTrue(all(item["identity"]["target"] == 995000 for item in references))
             with patch("production_tiers.load_context", side_effect=AssertionError("raw context rehydrated")), \
                  patch.object(self.store, "get_json", wraps=self.store.get_json) as reads:
-                centered = tiers.advance_tier_publication(self.store, prepared["state"], on_stage_start=started.append)
+                clearing = tiers.advance_tier_publication(self.store, prepared["state"], on_stage_start=started.append)
+                self.assertFalse(any("/fits/" in call.args[0] for call in reads.call_args_list))
+                reads.reset_mock()
+                plus = tiers.advance_tier_publication(self.store, clearing["state"], on_stage_start=started.append)
                 fit_reads = [call.args[0] for call in reads.call_args_list if "/fits/" in call.args[0]]
                 self.assertEqual(len(fit_reads), 4)
-                plus = tiers.advance_tier_publication(self.store, centered["state"], on_stage_start=started.append)
                 reads.reset_mock()
                 median = tiers.advance_tier_publication(self.store, plus["state"], on_stage_start=started.append)
                 self.assertFalse(any("/fits/" in call.args[0] for call in reads.call_args_list))
-            self.assertEqual(median["progressOrdinal"], 12)
-        self.assertEqual(started[-3:], ["centered-sss", "sssplus", "median"])
+            self.assertEqual(median["progressOrdinal"], 8)
+        self.assertEqual(started[-3:], ["official-clearing", "sssplus", "median"])
         self.fitter.assert_not_called()
 
 

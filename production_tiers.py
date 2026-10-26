@@ -1720,20 +1720,22 @@ def pin_tier_publication_inputs(store, *, first, second, manifest, records, meta
     """Pin the captured inputs once; the durable job stores only this small ref."""
     from tier_pipeline_checkpoints import write_checkpoint
     payload = {"first": first, "second": second, "manifest": manifest, "records": records,
-               "metadata": metadata, "generatedAtUtc": generated_at_utc, "pipelineCode": pipeline_code_identity()}
+               "metadata": metadata, "generatedAtUtc": generated_at_utc,
+               "producer": RETAINED_PRODUCER, "pipelineCode": pipeline_code_identity(True)}
     return write_checkpoint(store, payload, stage="pinned-inputs", identity=digest(payload))
 
 
 def advance_tier_publication(store, state, *, on_stage_start=None):
     """Worker adapter: one fit/finish phase, a compact result, and no promotion."""
     from tier_pipeline_checkpoints import read_checkpoint
-    current_code = pipeline_code_identity()
+    current_code = pipeline_code_identity(True)
     created = state["generatedAtUtc"]
     if state.get("generation") is not None:
         generation = state["generation"]
         captured = store.get_json(PREFIX+"generations/"+generation+"/state.json")
         if (captured is None or captured.get("generation") != generation or digest(captured["identity"]) != generation
                 or captured["identity"].get("pipelineCode") != current_code
+                or not _retained_state(captured)
                 or captured.get("createdAtUtc") != created
                 or captured.get("pinnedInputsSha256") != state["inputs"]["payloadSha256"]):
             raise ValueError("The pinned tier generation has incompatible code, time or inputs.")
@@ -1749,10 +1751,12 @@ def advance_tier_publication(store, state, *, on_stage_start=None):
     created = state["generatedAtUtc"]
     if inputs.get("generatedAtUtc") != created:
         raise ValueError("The tier job creation time differs from its pinned inputs.")
+    if inputs.get("producer") != RETAINED_PRODUCER:
+        raise ValueError("The pinned tier job uses a retired producer; start a current generation.")
     if inputs.get("pipelineCode") != current_code:
         raise ValueError("The pinned tier job uses different pipeline code; start a compatible generation.")
     try:
-        candidate = build_hosted_tiers(inputs["records"], inputs["metadata"], inputs["first"], inputs["second"],
+        candidate = build_retained_hosted_tiers(inputs["records"], inputs["metadata"], inputs["first"], inputs["second"],
             store=store, generated_at_utc=created, on_stage_start=on_stage_start,
             input_reference_sha256=state["inputs"]["payloadSha256"],
             arguments={"official_scoring_manifest": inputs["manifest"],
@@ -1771,11 +1775,26 @@ def _pending_worker_result(state, pending):
             "completedTargetFits": pending.completed, "state": updated}
 
 
+def validate_current_tier_publication(candidate):
+    """The tier-only worker can promote only the current retained producer."""
+    method = candidate.get("summary", {}).get("method", {})
+    publication = method.get("productionTierPublication", {})
+    if (candidate.get("schemaVersion") != 61
+            or method.get("retainedGoalProducer", {}).get("producer") != RETAINED_PRODUCER
+            or publication.get("method") != RETAINED_VERSION
+            or publication.get("inputs", {}).get("producer") != RETAINED_PRODUCER):
+        raise ValueError("Tier publication requires the current retained schema-61 producer.")
+    return publication
+
+
 def _ready_worker_result(state, candidate):
-    publication = candidate["summary"]["method"]["productionTierPublication"]
+    publication = validate_current_tier_publication(candidate)
     generation = digest(publication["inputs"])
+    total = 4 + 1 + len(RETAINED_FINISH_STAGES) + 2
     ready = {"done": True, "stage": "ready", "generation": generation,
-             "progressOrdinal": 9+len(FINISH_STAGES)+2, "totalStages": 9+len(FINISH_STAGES)+2,
+             "producer": RETAINED_PRODUCER, "schemaVersion": 61,
+             "completedTargetFits": 4,
+             "progressOrdinal": total, "totalStages": total,
              "candidatePath": PREFIX+"generations/"+generation+"/public.json",
              "candidateSha256": digest(candidate), "archivePath": publication["fullArtifactPath"],
              "archiveSha256": publication["fullArtifactSha256"]}
