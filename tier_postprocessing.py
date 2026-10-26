@@ -13,6 +13,7 @@ from tier_difficulty import refresh_pumbility_metrics
 
 SCHEMA_VERSION = 44
 HYBRID_SCHEMA_VERSION = 47
+CURRENT_COMPRESSION_FACTOR = .75
 FIT_FIELDS = (
     "estimatedDifficulty", "difficultyDelta", "difficultyCi95Low", "difficultyCi95High",
     "difficultyDeltaCi95Low", "difficultyDeltaCi95High", "effectBand", "effectBandRank",
@@ -21,21 +22,33 @@ FIT_FIELDS = (
 )
 
 
-def compression_policy(base_schema: int) -> dict[str, Any]:
+def compression_policy(base_schema: int, factor: float = CURRENT_COMPRESSION_FACTOR) -> dict[str, Any]:
     if base_schema not in (26, 41, 42, 43, 46):
         raise ValueError("Unsupported initial-fit tier schema.")
-    return {"version": 1, "method": "official-midpoint-compression", "factor": .5,
+    if factor not in (.5, .75) or isinstance(factor, bool):
+        raise ValueError("Unsupported midpoint compression factor.")
+    return {"version": 1 if factor == .5 else 2, "method": "official-midpoint-compression", "factor": factor,
             "reference": "current-official-level-plus-0.5", "metrics": ["scoring", "clearing"],
             "baseAnalysisSchemaVersion": base_schema}
 
 
-def compress_difficulty(value: float | None, level: int) -> float | None:
+def compression_factor(payload: Mapping[str, Any]) -> float:
+    """Read a recorded policy; old standalone projections retain their 50% basis."""
+    policy = payload.get("summary", {}).get("method", {}).get("ratingPostprocessing")
+    if policy is None:
+        return .5
+    if not isinstance(policy, dict) or policy != compression_policy(policy.get("baseAnalysisSchemaVersion"), policy.get("factor")):
+        raise ValueError("Incompatible midpoint compression policy.")
+    return policy["factor"]
+
+
+def compress_difficulty(value: float | None, level: int, factor: float = .5) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError("Initial fitted difficulty must be finite or null.")
     midpoint = level + .5
-    return midpoint + .5 * (value - midpoint)
+    return midpoint + factor * (value - midpoint)
 
 
 def _metrics(row):
@@ -57,7 +70,8 @@ def initial_fit_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         if policy is not None:
             raise ValueError("Post-processing metadata requires its versioned schema.")
         return result
-    if not isinstance(policy, dict) or policy != compression_policy(policy.get("baseAnalysisSchemaVersion")):
+    compression_factor(result)
+    if not isinstance(policy, dict):
         raise ValueError("Incompatible midpoint compression policy.")
     if (result["schemaVersion"] == HYBRID_SCHEMA_VERSION) != (policy["baseAnalysisSchemaVersion"] == 46):
         raise ValueError("Midpoint compression schema disagrees with its initial fit.")
@@ -123,12 +137,12 @@ def _rank_secondary(rows, name):
             row["tierMetrics"][name].update(levelRank=rank, levelComparisonCharts=len(group))
 
 
-def finalize_tiers(payload: Mapping[str, Any], *, newly_fitted_metrics=()) -> dict[str, Any]:
+def finalize_tiers(payload: Mapping[str, Any], *, newly_fitted_metrics=(), factor: float = CURRENT_COMPRESSION_FACTOR) -> dict[str, Any]:
     """Always derive public values from the initial fit, never from a prior compression."""
     if payload.get("schemaVersion") == 48:
         from pumbility_average import apply_average_pumbility, recover_maximum_pumbility
         return apply_average_pumbility(finalize_tiers(recover_maximum_pumbility(payload),
-                                                    newly_fitted_metrics=newly_fitted_metrics))
+                                                    newly_fitted_metrics=newly_fitted_metrics, factor=factor))
     if set(newly_fitted_metrics) - {"scoring", "clearing"}:
         raise ValueError("Unknown newly fitted tier metric.")
     processed = payload.get("schemaVersion") in (SCHEMA_VERSION, HYBRID_SCHEMA_VERSION)
@@ -141,7 +155,7 @@ def finalize_tiers(payload: Mapping[str, Any], *, newly_fitted_metrics=()) -> di
                         for key in FIT_FIELDS:
                             target.pop(key, None)
                         target.update(_fit(source))
-    compression_policy(raw["schemaVersion"])
+    compression_policy(raw["schemaVersion"], factor)
     refresh_pumbility_metrics(raw)
     result = copy.deepcopy(raw)
     for mode in ("singles", "doubles"):
@@ -150,14 +164,14 @@ def finalize_tiers(payload: Mapping[str, Any], *, newly_fitted_metrics=()) -> di
                 metric["initialFit"] = _fit(metric)
             for metric in _metrics(row)[:2]:
                 fitted = metric["initialFit"]
-                value = compress_difficulty(fitted["estimatedDifficulty"], row["level"])
+                value = compress_difficulty(fitted["estimatedDifficulty"], row["level"], factor)
                 metric["estimatedDifficulty"] = value
                 metric["difficultyDelta"] = None if value is None else value - row["level"] - .5
                 metric["effectBandRank"], metric["effectBand"] = (None, None) if value is None else difficulty_effect_band(metric["difficultyDelta"])
                 for side in ("Low", "High"):
                     key = f"difficultyCi95{side}"
                     if key in fitted:
-                        endpoint = compress_difficulty(fitted[key], row["level"])
+                        endpoint = compress_difficulty(fitted[key], row["level"], factor)
                         metric[key] = endpoint
                         if f"difficultyDeltaCi95{side}" in fitted:
                             metric[f"difficultyDeltaCi95{side}"] = None if endpoint is None else endpoint - row["level"] - .5
@@ -170,7 +184,7 @@ def finalize_tiers(payload: Mapping[str, Any], *, newly_fitted_metrics=()) -> di
         for row in result.get(mode, []):
             row["tierMetrics"]["pumbility"]["initialFit"] = pumbility_fits[row["chartId"]]
         _rank_secondary(result.get(mode, []), "pumbility")
-    result["summary"]["method"]["ratingPostprocessing"] = compression_policy(raw["schemaVersion"])
+    result["summary"]["method"]["ratingPostprocessing"] = compression_policy(raw["schemaVersion"], factor)
     result["schemaVersion"] = HYBRID_SCHEMA_VERSION if raw["schemaVersion"] == 46 else SCHEMA_VERSION
     _refresh_summary(result)
     return result
@@ -181,7 +195,7 @@ def validate_postprocessing(payload: Mapping[str, Any]) -> dict[str, Any]:
         from pumbility_average import recover_maximum_pumbility
         return validate_postprocessing(recover_maximum_pumbility(payload))
     raw = initial_fit_payload(payload)
-    expected = finalize_tiers(raw)
+    expected = finalize_tiers(raw, factor=compression_factor(payload))
     for mode in ("singles", "doubles"):
         for actual, correct in zip(payload.get(mode, []), expected.get(mode, [])):
             for a, b in zip(_metrics(actual), _metrics(correct)):

@@ -147,7 +147,7 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--refresh-tier-metadata", action="store_true",
                       help="Refresh Pumbility composites and current producer metadata on existing tiers; preserve Scoring, Clearing, Co-op, recommendations and player score artifacts without fitting models.")
     mode.add_argument("--compress-tiers", action="store_true",
-                      help="Halve fitted Scoring/Clearing deviations from official level + 0.5; preserve initial fits and personal artifacts without refitting.")
+                      help="Retain 75% of fitted Scoring/Clearing deviations from official level + 0.5; preserve initial fits and personal artifacts without refitting.")
     parser.add_argument("--clearing-audit-dir", type=Path,
                         default=ROOT / "output" / "cross-level-clearing-2026-10-17",
                         help="Directory for the public Clearing comparison and verification artifacts.")

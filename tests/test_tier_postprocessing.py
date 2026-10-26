@@ -7,7 +7,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from tier_postprocessing import compress_difficulty, finalize_tiers, initial_fit_payload, validate_postprocessing
+from tier_postprocessing import compress_difficulty, compression_factor, finalize_tiers, initial_fit_payload, validate_postprocessing
 from tests import test_cross_level_runtime as runtime_fixtures
 from scripts import build_local_recommendations as builder
 from tests import test_official_cross_level_scoring as scoring_fixtures
@@ -34,6 +34,29 @@ def fixture():
 
 
 class MidpointTests(unittest.TestCase):
+    def test_current_width_is_75_percent_and_migrates_from_original_fits(self):
+        old = finalize_tiers(fixture(), factor=.5)
+        self.assertEqual(compression_factor(old), .5)
+        validate_postprocessing(old)
+        current = finalize_tiers(old)
+        self.assertEqual(current, finalize_tiers(fixture()))
+        self.assertEqual(current, finalize_tiers(current))
+        self.assertEqual(current["summary"]["method"]["ratingPostprocessing"]["version"], 2)
+        self.assertEqual(compression_factor(current), .75)
+        for before, after in zip(old["singles"], current["singles"]):
+            for a, b in ((before, after), (before["tierMetrics"]["clearing"], after["tierMetrics"]["clearing"])):
+                self.assertEqual(a["initialFit"], b["initialFit"])
+                if a["estimatedDifficulty"] is not None:
+                    self.assertAlmostEqual(b["difficultyDelta"], 1.5 * a["difficultyDelta"])
+        validate_postprocessing(current)
+
+    def test_policy_versions_cannot_mislabel_their_width(self):
+        for factor, wrong_version in ((.5, 2), (.75, 1)):
+            payload = finalize_tiers(fixture(), factor=factor)
+            payload["summary"]["method"]["ratingPostprocessing"]["version"] = wrong_version
+            with self.assertRaisesRegex(ValueError, "Incompatible"):
+                validate_postprocessing(payload)
+
     def test_reference_symmetry_precision_and_null(self):
         self.assertAlmostEqual(compress_difficulty(26.6,25),26.05)
         self.assertAlmostEqual(compress_difficulty(24.4,25),24.95)
@@ -45,9 +68,9 @@ class MidpointTests(unittest.TestCase):
         original=fixture(); frozen=copy.deepcopy(original); p=finalize_tiers(original)
         self.assertEqual(original,frozen)
         hard=p["singles"][0]; c=hard["tierMetrics"]["clearing"]; composite=hard["tierMetrics"]["pumbility"]
-        self.assertAlmostEqual(hard["estimatedDifficulty"],26.05)
+        self.assertAlmostEqual(hard["estimatedDifficulty"],26.325)
         self.assertEqual(hard["initialFit"]["estimatedDifficulty"],26.6)
-        self.assertAlmostEqual(hard["difficultyCi95High"]-hard["difficultyCi95Low"],.2)
+        self.assertAlmostEqual(hard["difficultyCi95High"]-hard["difficultyCi95Low"],.3)
         self.assertEqual(composite["estimatedDifficulty"],max(hard["estimatedDifficulty"],c["estimatedDifficulty"]))
         self.assertEqual(composite["evidenceStatus"],"Provisional")
         self.assertIsNone(c["difficultyCi95Low"])
@@ -67,7 +90,7 @@ class MidpointTests(unittest.TestCase):
         p=finalize_tiers(fixture()); previous=copy.deepcopy(p["singles"][0]["tierMetrics"]["clearing"])
         p["singles"][0].update(estimatedDifficulty=28.2,difficultyCi95Low=28.0,difficultyCi95High=28.4)
         result=finalize_tiers(p,newly_fitted_metrics={"scoring"})
-        self.assertAlmostEqual(result["singles"][0]["estimatedDifficulty"],26.85)
+        self.assertAlmostEqual(result["singles"][0]["estimatedDifficulty"],27.525)
         self.assertEqual(result["singles"][0]["initialFit"]["estimatedDifficulty"],28.2)
         self.assertEqual(result["singles"][0]["tierMetrics"]["clearing"],previous)
         p["singles"][0].update(estimatedDifficulty=None,difficultyCi95Low=None,difficultyCi95High=None,evidenceStatus="Unrated")
@@ -87,7 +110,7 @@ class MidpointTests(unittest.TestCase):
         for row,name,value in zip(p["singles"],("Z-low","A-high"),(16.417525773195873,16.417525773195877)):
             row.update(level=16,songName=name)
             row["tierMetrics"]["clearing"]["estimatedDifficulty"]=value
-        result=finalize_tiers(p)
+        result=finalize_tiers(p, factor=.5)
         clear=[r["tierMetrics"]["clearing"] for r in result["singles"]]
         self.assertEqual(clear[0]["estimatedDifficulty"],clear[1]["estimatedDifficulty"])
         self.assertEqual([c["levelRank"] for c in clear],[1,2])
@@ -101,6 +124,8 @@ class MidpointTests(unittest.TestCase):
             raw=runtime_fixtures.checkpoint(manifest);p=finalize_tiers(raw)
             with patch.dict(os.environ,{**env,"PIU_OFFICIAL_CROSS_LEVEL_SCORING":"1"}):
                 _validate_checkpoint_combined_tier(p,blobs)
+                with self.assertRaisesRegex(ValueError,"policy is incompatible"):
+                    _validate_checkpoint_combined_tier(finalize_tiers(raw, factor=.5),blobs)
                 with self.assertRaisesRegex(ValueError,"requires midpoint"):_validate_checkpoint_combined_tier(raw,blobs)
                 p["summary"]["method"]["ratingPostprocessing"]["factor"] = .25
                 with self.assertRaisesRegex(ValueError,"policy is incompatible"):_validate_checkpoint_combined_tier(p,blobs)

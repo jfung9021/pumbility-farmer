@@ -18,7 +18,7 @@ from scoring_targets import SSS, ScoringTarget
 from official_cross_level_calibration import chart_cost, inverse_chart_cost
 from sss_scoring import MODES, SCORE_TARGET, _derived, payload_sha256
 from sss_scoring_model import _fit, _prepare, _sigmoid
-from tier_postprocessing import FIT_FIELDS, compress_difficulty
+from tier_postprocessing import FIT_FIELDS, compress_difficulty, compression_factor
 
 REFINEMENT_VERSION = 2
 NO_SSS_ENDPOINT_POLICY = {"method": "mean-top-available", "maximumScores": 3, "minimumScores": 1,
@@ -201,7 +201,7 @@ def fit_gap_calibration(boards: Mapping[str, Mapping[str, float]], metadata: Map
 
 
 def boundary_estimate(branch: str, endpoint: float, level: int, frozen_range: Mapping[str, Any],
-                      curve: Mapping[str, Any], points_per_latent_unit: float, *, score_target: int = SCORE_TARGET) -> dict[str, Any]:
+                      curve: Mapping[str, Any], points_per_latent_unit: float, *, score_target: int = SCORE_TARGET, factor: float = .5) -> dict[str, Any]:
     branch = {"no-target": "no-sss", "all-target": "all-sss"}.get(branch, branch)
     if branch not in ("no-sss", "all-sss") or not _finite(points_per_latent_unit) or points_per_latent_unit <= 0:
         raise ValueError("A boundary estimate needs a one-sided branch and positive score conversion.")
@@ -210,14 +210,14 @@ def boundary_estimate(branch: str, endpoint: float, level: int, frozen_range: Ma
     if gap < 0:
         raise ValueError("A boundary endpoint has the wrong side of the inclusive SSS threshold.")
     edge = frozen_range["upper" if branch == "no-sss" else "lower"]
-    edge_initial = midpoint + 2 * (edge - midpoint)
+    edge_initial = midpoint + (edge - midpoint) / factor
     edge_latent = chart_cost(edge_initial, curve)
     target = edge_latent + (1 if branch == "no-sss" else -1) * gap / points_per_latent_unit
     initial = inverse_chart_cost(target, curve)
     return {"endpointScore": endpoint, "gapPoints": gap, "gapScalePointsPerLatentUnit": points_per_latent_unit,
         "gapDirection": "shortfall" if branch == "no-sss" else "surplus", "edgeFinal": edge,
         "edgeInitial": edge_initial, "edgeLatent": edge_latent, "targetLatent": target,
-        "initialDifficulty": initial, "finalDifficulty": compress_difficulty(initial, level),
+        "initialDifficulty": initial, "finalDifficulty": compress_difficulty(initial, level, factor),
         "extrapolated": target < curve["anchors"][0]["cost"] or target > curve["anchors"][-1]["cost"]}
 
 
@@ -245,7 +245,7 @@ def conditional_chart_fit(abilities: np.ndarray, outcomes: np.ndarray, weights: 
         "conditionalExpectedSuccesses": predicted, "likelihoodResidual": predicted - observed}
 
 
-def allocate_upper_band(candidates: Sequence[dict[str, Any]], frozen_range: Mapping[str, Any]) -> None:
+def allocate_upper_band(candidates: Sequence[dict[str, Any]], frozen_range: Mapping[str, Any], factor: float = .5) -> None:
     """Allocate tied conditional positions with mean ranks; never lower a point."""
     if not candidates:
         return
@@ -264,15 +264,15 @@ def allocate_upper_band(candidates: Sequence[dict[str, Any]], frozen_range: Mapp
             value = original + candidate["blendWeight"] * (max(original, target) - original)
             candidate.update(upperBandLow=floor, upperBandHigh=ceiling, candidateCount=len(ordered),
                 conditionalRank=rank, upperTarget=target, finalDifficulty=value,
-                initialDifficulty=candidate["level"] + .5 + 2 * (value - candidate["level"] - .5))
+                initialDifficulty=candidate["level"] + .5 + (value - candidate["level"] - .5) / factor)
         start = stop
 
 
 def _replace_point(metric: dict[str, Any], level: int, raw: float, *, method: str, branch: str,
-                   refinement: dict[str, Any], extrapolated: bool, target: ScoringTarget = SSS) -> None:
+                   refinement: dict[str, Any], extrapolated: bool, target: ScoringTarget = SSS, factor: float = .5) -> None:
     if "scoringFirstPass" not in metric:
         metric["scoringFirstPass"] = copy.deepcopy(metric)
-    metric.update(_derived(compress_difficulty(raw, level), level), scoringMethod=method,
+    metric.update(_derived(compress_difficulty(raw, level, factor), level), scoringMethod=method,
         scoringEstimateBranch=branch, scoringRefinement=refinement, evidenceStatus="Provisional",
         scoringProvisional=True, scoringUnratedReason=None, scoringExtrapolated=extrapolated,
         intervalMethod="unavailable-second-pass-rule-v1", scoringBootstrapValidReplicates=0,
@@ -300,6 +300,7 @@ def apply_sss_refinement(payload49: Mapping[str, Any], prepared: Mapping[str, An
     if target.key == "sss" and payload49.get("schemaVersion") != 49:
         raise ValueError("SSS refinement requires a frozen schema-49 first pass.")
     result, ranges = copy.deepcopy(payload49), freeze_ranges(payload49, goal=target.key)
+    factor = compression_factor(payload49)
     for _, key in MODES:
         for row in result.get(key, []):
             metric = row["scoringVariants"][target.key]
@@ -357,7 +358,7 @@ def apply_sss_refinement(payload49: Mapping[str, Any], prepared: Mapping[str, An
                             scoringUnratedReason=detail["unratedCalibrationReason"])
                         continue
                     endpoint = sum(full["topScores"]) / len(full["topScores"]) if branch == "no-sss" else full["lowestScore"]
-                    boundary = boundary_estimate(branch, endpoint, level, frozen, curve, calibration["pointsPerLatentUnit"], score_target=target.score)
+                    boundary = boundary_estimate(branch, endpoint, level, frozen, curve, calibration["pointsPerLatentUnit"], score_target=target.score, factor=factor)
                     if branch == "no-sss":
                         boundary.update(endpointPolicy="mean-top-3-available-v1", endpointScoreCount=len(full["topScores"]))
                     boundary["calibrationPolicy"] = calibration["policy"]["method"]
@@ -368,7 +369,7 @@ def apply_sss_refinement(payload49: Mapping[str, Any], prepared: Mapping[str, An
                     boundary["calibrationValidationMeanAbsoluteError"] = calibration["validationMeanAbsoluteError"]
                     detail["boundary"] = boundary
                     _replace_point(metric, level, boundary["initialDifficulty"], method=target.boundary_method,
-                                   branch=branch, refinement=detail, extrapolated=boundary["extrapolated"], target=target)
+                                   branch=branch, refinement=detail, extrapolated=boundary["extrapolated"], target=target, factor=factor)
                     audit["changed"].append({"chartId": cid, "mode": mode, "level": level, "branch": branch,
                         "before": metric["scoringFirstPass"]["estimatedDifficulty"], "after": metric["estimatedDifficulty"], **copy.deepcopy(detail)})
                 elif branch == "mixed" and (not eligible["successes"] or not eligible["belowTarget"]):
@@ -389,12 +390,12 @@ def apply_sss_refinement(payload49: Mapping[str, Any], prepared: Mapping[str, An
                     conditional = conditional_chart_fit(point["ability"][data["p"][selected]], data["y"][selected], weights[selected])
                     raw = inverse_chart_cost(conditional["conditionalEffect"], curve)
                     candidate = {"chartId": cid, "level": level, **conditional, **blend,
-                        "conditionalInitialDifficulty": raw, "conditionalDifficulty": compress_difficulty(raw, level),
+                        "conditionalInitialDifficulty": raw, "conditionalDifficulty": compress_difficulty(raw, level, factor),
                         "originalDifficulty": metric["estimatedDifficulty"]}
                     candidates[level].append(candidate)
                     candidate_rows[cid] = (row, detail)
             for level, group in candidates.items():
-                allocate_upper_band(group, ranges[source][mode][str(level)])
+                allocate_upper_band(group, ranges[source][mode][str(level)], factor)
                 for candidate in group:
                     row, detail = candidate_rows[candidate["chartId"]]
                     metric = row["scoringVariants"][target.key]
@@ -403,7 +404,7 @@ def apply_sss_refinement(payload49: Mapping[str, Any], prepared: Mapping[str, An
                     raw = candidate["initialDifficulty"]
                     effect = chart_cost(raw, curve)
                     extrapolated = effect < curve["anchors"][0]["cost"] or effect > curve["anchors"][-1]["cost"]
-                    _replace_point(metric, level, raw, method=target.rare_method, branch="rare-sss", refinement=detail, extrapolated=extrapolated, target=target)
+                    _replace_point(metric, level, raw, method=target.rare_method, branch="rare-sss", refinement=detail, extrapolated=extrapolated, target=target, factor=factor)
                     audit["changed"].append({"chartId": candidate["chartId"], "mode": mode, "level": level,
                         "before": candidate["originalDifficulty"], "after": metric["estimatedDifficulty"], **copy.deepcopy(detail)})
                     counts["rare-corrected"] += 1

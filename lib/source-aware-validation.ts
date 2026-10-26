@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { compressDifficulty, compressionFactor } from "./tier-postprocessing.ts";
 import { validateRanks } from "./sss-analysis-validation.ts";
 import { targetTailRating } from "./sssplus-analysis-validation.ts";
 import type { AnalysisPayload } from "./types";
@@ -81,7 +82,7 @@ export function validateSourceAwarePayload(payload:AnalysisPayload,validateBase:
           if(kind==="sssplus"&&!w.exceptionPreserved)expected=targetTailRating(expected,row.level,false);
           need(same(metric[f],expected),"Final width points or intervals differ.");
           if(kind==="clearing"){
-            const initial=metric.initialFit?.[f],once=initial==null?null:row.level+.5+.5*(initial-row.level-.5);
+            const initial=metric.initialFit?.[f],once=initial==null?null:compressDifficulty(initial,row.level,compressionFactor(payload));
             need(same(w.input[f],once),"Clearing input was not compressed exactly once.");
           }else if(!w.exceptionPreserved){
             const spreadKey=f==="estimatedDifficulty"?"spreadDifficulty":f==="difficultyCi95Low"?"spreadDifficultyCi95Low":"spreadDifficultyCi95High";

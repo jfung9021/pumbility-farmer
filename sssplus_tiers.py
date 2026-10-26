@@ -14,7 +14,7 @@ from sss_scoring import (MODES, RANK_FIELDS, _composite, _derived, _target_metri
 from sss_scoring_refinement import apply_sss_refinement, boundary_estimate
 from target_tail_policy import (INTERVAL_METHOD as TAIL_INTERVAL_METHOD, apply_tail_policy,
                                 finite, tail_value)
-from tier_postprocessing import compress_difficulty
+from tier_postprocessing import compress_difficulty, compression_factor
 
 SCHEMA_VERSION = 52
 GOAL = SSSPLUS.key
@@ -53,7 +53,7 @@ def apply_first_pass(base: Mapping[str, Any], prepared: Mapping[str, Any], fits:
                 if estimate:
                     estimate = {**estimate, "fitConverged": bool(fit["diagnostics"].get("converged"))}
                 metric = _target_metric(row, source, estimate, prepared[source]["charts"].get(cid, {}),
-                                        curve, error, target=SSSPLUS)
+                                        curve, error, target=SSSPLUS, factor=compression_factor(base))
                 row["scoringVariants"][GOAL] = metric
                 row["pumbilityVariants"][GOAL] = _composite(row, metric)
     for _, key in MODES:
@@ -69,7 +69,7 @@ def apply_first_pass(base: Mapping[str, Any], prepared: Mapping[str, Any], fits:
         "intervalMethod": "player-cluster-refit-fixed-calibration-v1",
         "intervalExclusions": ["anchor-uncertainty", "clearing-uncertainty", "effort", "selective-observation"],
         "sourceBoundary": {"submitted": [16, 19], "officialMinimum": 20},
-        "compression": {"factor": .5, "reference": "current-official-level-plus-0.5", "applications": 1},
+        "compression": {"factor": compression_factor(base), "reference": "current-official-level-plus-0.5", "applications": 1},
         "calibration": calibrations, "diagnostics": diagnostics}
     result["summary"]["method"]["sssplusPumbility"] = {"version": 1, "aggregation": "average", "requiresBoth": True,
         "calculation": "(final SSS+ scoring difficulty + unchanged clearing difficulty) / 2 before rounding",
@@ -101,7 +101,7 @@ def apply_centering(base: Mapping[str, Any]) -> dict:
         "population": "all-finite-final-target-excluding-unrated", "reference": "current-official-level-plus-0.5",
         "median": "middle-value-or-mean-of-middle-pair", "borrow": "same-source-mode-offset-interpolation-or-nearest",
         "noDonor": "preserve-point-zero-offset", "processing": "frozen-second-pass-preview-then-initial-shift-then-single-compression",
-        "compressionFactor": .5, "compressionApplications": 1,
+        "compressionFactor": compression_factor(base), "compressionApplications": 1,
         "intervals": "translate-existing-conditional-intervals-fixed-centering-no-new-intervals",
         "pumbility": "mean-centered-target-and-unchanged-clearing-no-composite-centering", "folders": folders}
     result["summary"]["method"]["sssplusFolderCentering"] = policy
@@ -112,7 +112,7 @@ def apply_centering(base: Mapping[str, Any]) -> dict:
                 "pumbility": copy.deepcopy(row["pumbilityVariants"][GOAL])}
             if row["level"] >= 20:
                 frozen = base["summary"]["method"]["sssplusRefinement"]["ranges"]["official"][mode].get(str(row["level"]))
-                shift_scoring(metric, row["level"], folders[mode][str(row["level"])], frozen)
+                shift_scoring(metric, row["level"], folders[mode][str(row["level"])], frozen, compression_factor(base))
     _recompute_means(result)
     return result
 
@@ -205,7 +205,7 @@ def validate_sssplus_tiers(payload: Mapping[str, Any], frozen: Mapping[str, Any]
             if metric["scoringSource"] != ("official" if level >= 20 else "submitted"):
                 raise ValueError("SSS+ source boundary differs.")
             for field in ("estimatedDifficulty", "difficultyCi95Low", "difficultyCi95High"):
-                if before[field] != compress_difficulty(before["initialFit"][field], level):
+                if before[field] != compress_difficulty(before["initialFit"][field], level, compression_factor(payload)):
                     raise ValueError("SSS+ pre-tail metric was not compressed exactly once.")
             if metric["estimatedDifficulty"] is None:
                 if metric["evidenceStatus"] != "Unrated" or not metric.get("scoringUnratedReason"):

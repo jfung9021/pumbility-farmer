@@ -12,6 +12,7 @@ from official_high_level_clearing import (COMBINED_METHOD, COMBINED_CAP_POLICY,
 from pumbility_average import average_difficulties
 from sss_scoring import MODES, _composite, _derived, payload_sha256
 from tier_difficulty import EVIDENCE_ORDER
+from tier_postprocessing import compress_difficulty, compression_factor
 
 SCHEMA_VERSION = 55
 BASE_SCHEMA_VERSION = 54
@@ -170,7 +171,7 @@ def validate_combined_official_clearing(payload: Mapping[str, Any], base: Mappin
                 raise ValueError("Combined official Clearing lost its effective cap policy.")
             value = clearing["estimatedDifficulty"]
             if value is not None:
-                if not math.isfinite(value) or abs(value-(row["level"]+.5+.5*(clearing["initialFit"]["estimatedDifficulty"]-row["level"]-.5))) > 1e-8:
+                if not math.isfinite(value) or abs(value-(compress_difficulty(clearing["initialFit"]["estimatedDifficulty"], row["level"], compression_factor(payload)))) > 1e-8:
                     raise ValueError("Combined official Clearing must compress exactly once.")
                 folders[row["level"]].append(value)
             for goal in goals:

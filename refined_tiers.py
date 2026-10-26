@@ -11,7 +11,7 @@ from piu_misgrade_analyzer import difficulty_effect_band
 from sss_scoring import (MODES, RANK_FIELDS, _composite, payload_sha256,
                          rank_variants, validate_sss_variants)
 from tier_difficulty import EVIDENCE_ORDER
-from tier_postprocessing import FIT_FIELDS, _rank_secondary, compress_difficulty
+from tier_postprocessing import FIT_FIELDS, _rank_secondary, compress_difficulty, compression_factor
 
 SCHEMA_VERSION = 50
 INTEGRATION_METHOD = "frozen-sss-second-pass-official-d26-clearing-v1"
@@ -140,7 +140,7 @@ def validate_refined_tiers(payload: Mapping[str, Any], frozen: Mapping[str, Any]
                 for field in ("estimatedDifficulty", "difficultyCi95Low", "difficultyCi95High"):
                     if field not in metric["initialFit"]:
                         continue
-                    expected = compress_difficulty(metric["initialFit"][field], row["level"])
+                    expected = compress_difficulty(metric["initialFit"][field], row["level"], compression_factor(payload))
                     if metric.get(field) != expected:
                         raise ValueError("Tier was not compressed exactly once.")
             for goal, scoring in (("general", row), ("sss", s)):

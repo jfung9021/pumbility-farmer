@@ -2133,6 +2133,9 @@ def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: A
         from production_tiers import validate_public_tiers
         try:
             validate_public_tiers(payload)
+            from tier_postprocessing import compression_factor, CURRENT_COMPRESSION_FACTOR
+            if compression_factor(payload) != CURRENT_COMPRESSION_FACTOR:
+                raise ValueError("The checkpoint uses a superseded midpoint width factor.")
             if blob_store is not None:
                 from official_scoring_sources import canonical_scoring_manifest_sha256
                 actual = payload["summary"]["method"]["productionTierPublication"]["inputs"]["officialManifest"]
@@ -2158,6 +2161,10 @@ def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: A
         from hybrid_tiers import validate_hybrid_tiers
         try:
             validate_hybrid_tiers(payload)
+            if compressed:
+                from tier_postprocessing import compression_factor, CURRENT_COMPRESSION_FACTOR
+                if compression_factor(payload) != CURRENT_COMPRESSION_FACTOR:
+                    raise ValueError("The checkpoint uses a superseded midpoint width factor.")
             if blob_store is not None:
                 from official_scoring_sources import canonical_scoring_manifest_sha256
                 current = blob_store.get_json(official_scoring_manifest_path())
@@ -2178,6 +2185,9 @@ def _validate_checkpoint_combined_tier(payload: Mapping[str, Any], blob_store: A
         if payload.get("schemaVersion") != processed_schema:
             raise IncompatibleCombinedTierCheckpointError("The combined tier checkpoint requires midpoint compression.")
         try:
+            from tier_postprocessing import compression_factor, CURRENT_COMPRESSION_FACTOR
+            if compression_factor(payload) != CURRENT_COMPRESSION_FACTOR:
+                raise ValueError("The checkpoint uses a superseded midpoint width factor.")
             payload = validate_postprocessing(payload)
         except (ValueError, KeyError, TypeError) as exc:
             raise IncompatibleCombinedTierCheckpointError("The combined tier checkpoint compression policy is incompatible.") from exc

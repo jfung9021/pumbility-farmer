@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { validateLocalAnalysisPayload } from "../lib/local-analysis.ts";
-import { compressDemoPayload, compressDifficulty, recoverInitialFitPayload } from "../lib/tier-postprocessing.ts";
+import { compressDemoPayload, compressDifficulty, recoverInitialFitPayload, compressionFactor } from "../lib/tier-postprocessing.ts";
 import { demoPayload } from "../lib/demo-data.ts";
 import { formatEstimatedDifficulty } from "../lib/format-difficulty.ts";
 import type { AnalysisPayload } from "../lib/types.ts";
@@ -35,5 +35,17 @@ test("display truncates only after full precision processing and demo uses the s
   assert.equal(formatEstimatedDifficulty(compressDifficulty(26.7,25)!),"26.1");
   assert.equal(compressDifficulty(null,25),null);
   const p=compressDemoPayload(demoPayload);
-  assert.equal(p.singles[0].estimatedDifficulty,compressDifficulty(demoPayload.singles[0].estimatedDifficulty,p.singles[0].level));
+  assert.equal(p.singles[0].estimatedDifficulty,compressDifficulty(demoPayload.singles[0].estimatedDifficulty,p.singles[0].level,compressionFactor(p)));
+  assert.equal(compressionFactor(p), .75);
+  assert.deepEqual(compressDemoPayload(p), p);
+  for (const row of [...p.singles, ...p.doubles]) {
+    for (const metric of [row, row.tierMetrics!.clearing, row.tierMetrics!.pumbility]) {
+      const initial = metric.initialFit!;
+      assert.equal(metric.estimatedDifficulty, compressDifficulty(initial.estimatedDifficulty as number | null, row.level, .75));
+    }
+  }
+  assert.equal(formatEstimatedDifficulty(compressDifficulty(26.6,25,.75)!), "26.3");
+  const invalid = structuredClone(p);
+  (invalid.summary.method.ratingPostprocessing as {version: number}).version = 1;
+  assert.throws(() => recoverInitialFitPayload(invalid), /Incompatible/);
 });

@@ -26,7 +26,7 @@ test("hybrid47 validates a single compression and recovers the declared raw gene
   const recovered = recoverInitialFitPayload(p);
   assert.equal(recovered.schemaVersion, 46);
   assert.equal(recovered.singles[0].estimatedDifficulty, hybridTierFixture(false).singles[0].estimatedDifficulty);
-  assert.equal(p.singles[0].estimatedDifficulty, 19.46);
+  assert.equal(p.singles[0].estimatedDifficulty, 19.44);
 });
 
 test("hybrid rejects unsupported source/method declarations, stale formulas and missing official fallback", () => {

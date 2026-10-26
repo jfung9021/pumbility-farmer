@@ -1,4 +1,4 @@
-import { compressDifficulty, FIT_FIELDS } from "./tier-postprocessing.ts";
+import { compressDifficulty, compressionFactor, FIT_FIELDS } from "./tier-postprocessing.ts";
 import type { AnalysisPayload } from "./types";
 
 type ObjectValue = Record<string, unknown>;
@@ -169,7 +169,7 @@ export function validateSssAnalysisPayload(payload: AnalysisPayload, validateGen
     && method.intervalMethod === INTERVAL
     && exact(method.intervalExclusions, ["anchor-uncertainty", "clearing-uncertainty", "effort", "selective-observation"])
     && exact(method.sourceBoundary, {submitted: [16, 19], officialMinimum: 20})
-    && exact(method.compression, {factor: .5, reference: "current-official-level-plus-0.5", applications: 1}), "SSS model or processing policy differs.");
+    && exact(method.compression, {factor: compressionFactor(payload), reference: "current-official-level-plus-0.5", applications: 1}), "SSS model or processing policy differs.");
   const hashes = object(method.sourceHashes);
   requireValue(Object.keys(hashes).length > 0 && Object.values(hashes).every(h => typeof h === "string" && HASH.test(h)), "Invalid SSS source hashes.");
   requireValue(Object.values(object(method.sourceDates)).every(d => d === null || typeof d === "string"), "Invalid SSS source dates.");
@@ -215,7 +215,7 @@ export function validateSssAnalysisPayload(payload: AnalysisPayload, validateGen
       for (const metric of [s, raw, p, rawP]) checkFit(metric, level);
       requireValue(Object.keys(raw).every(k => (FIT_FIELDS as readonly string[]).includes(k)), "SSS initial fit contains unknown fields.");
       for (const field of ["estimatedDifficulty", "difficultyCi95Low", "difficultyCi95High"]) {
-        requireValue(same(s[field], compressDifficulty(raw[field] as number | null, level)), "SSS compression differs.");
+        requireValue(same(s[field], compressDifficulty(raw[field] as number | null, level, compressionFactor(payload))), "SSS compression differs.");
       }
       const rated = s.estimatedDifficulty !== null;
       requireValue(STATUS.includes(s.evidenceStatus as string) && (rated

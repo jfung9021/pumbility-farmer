@@ -105,7 +105,7 @@ existing definitions.
 
 `config/chart-source-exclusions.json` excludes changed chart/version performance
 before merging, qualification, and fitting. Mopemope D26 initially excludes Phoenix
-1. Raw captures remain available. The 50% midpoint compression applies once;
+1. Raw captures remain available. The recorded midpoint adjustment applies once (75% retained for new generations; 50% for historical generations);
 final width preserves folder medians, order, ties, and the global extreme budget.
 
 Hosted publication enables `PIU_SOURCE_AWARE_TIERS=1` alongside the existing
@@ -756,16 +756,17 @@ supported historical average generations retain their original values and labels
 when read. Production-format maximum generations are also accepted without
 rewriting their metadata. See the [parity implementation plan](docs/production-local-tier-parity-implementation-plan.md).
 
-To halve the final Scoring and Clearing distances from each chart's official
+To retain 75% of the initial Scoring and Clearing distances from each chart's official
 level + 0.5, run
 `.venv/Scripts/python.exe scripts/build_local_recommendations.py --compress-tiers`.
 Schema 44 retains the original fitted values and difficulty intervals in
-`initialFit`, applies the fixed 0.5 factor after calibration, and derives Pumbility
+`initialFit`, applies the version-2 factor 0.75 after calibration (version 1 retains 0.50), and derives Pumbility
 from the higher adjusted component. Repeated conversions and metadata refreshes
 reuse the original fit, so compression does not compound. Scoring/Clearing overlay
 commands preserve this policy on an already processed aggregate. Hosted builders
 can opt in with `PIU_TIER_MIDPOINT_COMPRESSION=1`; legacy generations remain readable.
 See the [compression plan](docs/midpoint-compression-implementation-plan.md).
+See the [75% width implementation plan](docs/tier-width-75-percent-implementation-plan.md) for the current factor and historical compatibility.
 
 Open `http://localhost:3000`. Local mode is enabled by the ignored `.env.local` file. The dashboard
 shows a **Local snapshot** badge and its refresh button reloads the aggregate from disk instead of
