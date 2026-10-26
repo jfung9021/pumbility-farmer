@@ -63,6 +63,21 @@ def request_tier_publication(enqueue: Callable[[str], None], *, store=None, jobs
     if operation == "scoring-goal-backfill":
         job.update(operation=operation, goals=list(goals), totalStages=1 + len(goals) * 5)
     current, created = jobs.request_tier_publication(job)
+    if (not created and operation == "tier-publication"
+            and current.get("jobType") == "tier-publication"
+            and current.get("operation", "tier-publication") == "tier-publication"
+            and current.get("producer") != CURRENT_TIER_PRODUCER):
+        # Existing queue deliveries can stay bound to their old deployment.
+        # Cancel that immutable job through the normal store operation first;
+        # its worker then loses the lease needed to advance or publish.
+        cancelled_at = _timestamp()
+        cancelled = jobs.save({**current, "status": "failed", "cancelRequested": True,
+            "error": "retired-tier-producer-replaced", "retryAllowedAtUtc": None,
+            "updatedAtUtc": cancelled_at, "completedAtUtc": cancelled_at})
+        if (cancelled.get("id") != current["id"] or cancelled.get("status") != "failed"
+                or cancelled.get("cancelRequested") is not True):
+            raise RuntimeError("The retired tier publication could not be cancelled.")
+        current, created = jobs.request_tier_publication(job)
     if created:
         try:
             enqueue(str(current["id"]))

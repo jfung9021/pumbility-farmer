@@ -7,6 +7,11 @@ publication, retained-producer/cache/progress, and resume tests pass. An unrelat
 cold-cache fixture failure in `CheckpointTests` reproduces with unchanged HEAD
 source and was left untouched.
 
+The live queue-affinity finding required one focused handoff repair. Compilation
+and 33 affected job/storage tests pass, including cross-worker cancellation,
+failed cancellation, retained duplicates, and rejected old-worker promotion.
+No general review was restarted after that repair.
+
 The protected tier-only control still pins the legacy pipeline and calls its
 eight-fit builder. Normal refreshes already use the retained General/SSS+
 producer, which needs four SSS+ source/mode fits. The tier-only path also starts
@@ -48,10 +53,17 @@ checks, and stop when acceptance passes.
 
 ## Release and running-job handling
 
-Push and merge this as a separate PR, deploy the merged revision, and let the
-already-running legacy tier-only job fail safely on its next new-code
-continuation. Its current fit phase cannot publish by itself. Preserve its
-immutable input/checkpoint artifacts; do not reinterpret them as retained state.
-After it reaches a terminal state, start a fresh retained tier-only job from
-cached production inputs. Verify the live General/SSS+ generation declares the
-75% midpoint policy and that list and lazy chart details agree.
+Push and merge this as a separate PR and deploy the merged revision. Live
+verification showed that already-queued continuations remain on their original
+deployment, so a new-code worker guard alone does not retire an in-flight job.
+The focused repair handles that concrete case at the authenticated tier-only
+request: cancel the exact existing legacy job through the standard job-store
+cancellation mechanism before requesting and enqueueing its retained replacement.
+Cancellation invalidates the old lease and blocks promotion even by an old
+worker. A current retained duplicate remains deduplicated, and cancellation
+failure must not enqueue replacement work. Keep immutable inputs/checkpoints;
+do not reinterpret them as retained state.
+
+Run the fresh retained tier-only job from cached production inputs. Verify the
+live General/SSS+ generation declares the 75% midpoint policy and that list and
+lazy chart details agree.

@@ -20,6 +20,13 @@ class Jobs(MemoryJobStore):
         self.owner = None
         self.expired = False
 
+    def save(self, payload):
+        with self._lock:
+            value = super().save(payload)
+            if value.get('status') == 'failed' and value.get('cancelRequested'):
+                self.owner = None
+            return value
+
     def request_tier_publication(self, payload):
         with self._lock:
             old = self.get(self.active_tier) if self.active_tier else None
@@ -120,6 +127,106 @@ class TierPublicationJobTests(unittest.TestCase):
             results = list(pool.map(lambda _: self.request(enqueue), range(8)))
         self.assertEqual(len({r['id'] for r in results}), 1)
         enqueue.assert_called_once()
+
+    def legacy_job(self, *, status='running', operation=None):
+        result = self.request()
+        job = self.jobs.get(result['id'])
+        job.pop('producer', None)
+        job.update(status=status, stage='target-fit-sss-submitted-single')
+        if operation is not None:
+            job['operation'] = operation
+        self.jobs.save(job)
+        self.jobs.owner = 'retired-worker' if status == 'running' else None
+        return job['id']
+
+    def test_legacy_running_or_queued_job_is_cancelled_before_replacement_enqueue(self):
+        for status in ('running', 'queued'):
+            with self.subTest(status=status):
+                self.jobs, self.store = Jobs(), None
+                self.store = Store(self.jobs)
+                old_id = self.legacy_job(status=status)
+                events = []
+                save = self.jobs.save
+                def record_save(payload):
+                    if payload.get('cancelRequested'):
+                        events.append(('cancel', payload['id']))
+                    return save(payload)
+                def enqueue(new_id):
+                    old = self.jobs.get(old_id)
+                    self.assertEqual(old['status'], 'failed')
+                    self.assertTrue(old['cancelRequested'])
+                    self.assertIsNone(old['retryAllowedAtUtc'])
+                    self.assertEqual(old['error'], 'retired-tier-producer-replaced')
+                    self.assertEqual(self.jobs.get(new_id)['producer'], 'retained-goals-v1')
+                    events.append(('enqueue', new_id))
+                with patch.object(self.jobs, 'save', side_effect=record_save), \
+                     patch.object(self.jobs, 'request_tier_publication', wraps=self.jobs.request_tier_publication) as requests:
+                    result = self.request(enqueue)
+                self.assertNotEqual(result['id'], old_id)
+                self.assertEqual(result['outcome'], 'tier-publication-queued')
+                self.assertEqual(events, [('cancel', old_id), ('enqueue', result['id'])])
+                self.assertEqual(requests.call_count, 2)
+                self.assertIsNone(self.jobs.owner)
+
+    def test_failed_or_unconfirmed_legacy_cancellation_does_not_request_replacement(self):
+        for failure in ('write-failed', 'unconfirmed'):
+            with self.subTest(failure=failure):
+                self.jobs, self.store = Jobs(), None
+                self.store = Store(self.jobs)
+                old_id = self.legacy_job()
+                enqueue = Mock()
+                def failed_save(payload):
+                    if failure == 'write-failed':
+                        raise RuntimeError('Cancellation failed')
+                    return {**payload, 'cancelRequested': False}
+                with patch.object(self.jobs, 'save', side_effect=failed_save), \
+                     patch.object(self.jobs, 'request_tier_publication', wraps=self.jobs.request_tier_publication) as requests:
+                    with self.assertRaises(RuntimeError):
+                        self.request(enqueue)
+                self.assertEqual(requests.call_count, 1)
+                enqueue.assert_not_called()
+                self.assertEqual(self.jobs.get(old_id)['status'], 'running')
+                self.assertEqual(self.jobs.owner, 'retired-worker')
+                self.assertEqual(self.store.promotions, 0)
+
+    def test_current_running_or_queued_duplicate_is_not_cancelled_or_requeued(self):
+        for status in ('running', 'queued'):
+            with self.subTest(status=status):
+                self.jobs, self.store = Jobs(), None
+                self.store = Store(self.jobs)
+                original = self.request()
+                self.jobs.save({**self.jobs.get(original['id']), 'status': status})
+                enqueue = Mock()
+                with patch.object(self.jobs, 'save', side_effect=AssertionError('Current job was mutated')):
+                    result = self.request(enqueue)
+                self.assertEqual(result['id'], original['id'])
+                self.assertEqual(result['outcome'], 'tier-publication-active')
+                self.assertEqual(result['status'], status)
+                enqueue.assert_not_called()
+
+    def test_legacy_backfill_duplicate_is_not_cancelled_by_normal_tier_request(self):
+        old_id = self.legacy_job(operation='scoring-goal-backfill')
+        enqueue = Mock()
+        with patch.object(self.jobs, 'save', side_effect=AssertionError('Backfill job was cancelled')):
+            result = self.request(enqueue)
+        self.assertEqual(result['id'], old_id)
+        enqueue.assert_not_called()
+
+    def test_cancelled_legacy_worker_cannot_promote_after_handoff(self):
+        old_id = self.legacy_job()
+        self.store.put_json('tier', {'previous': True})
+        self.store.put_json('recommendations', {'generation': 'unchanged'})
+        before = copy.deepcopy(self.store.values)
+        result = self.request()
+        self.assertNotEqual(result['id'], old_id)
+        with self.assertRaises(TierPublicationConflict):
+            self.store.promote_tier_publication(job_id=old_id, lease_owner='retired-worker',
+                candidate_path='candidate', candidate_revision={'sha256': 'candidate'},
+                expected_revisions=self.store.tier_publication_revisions(),
+                audit={'jobId': old_id}, completed_job={'id': old_id, 'status': 'completed'})
+        self.assertEqual(self.store.values, before)
+        self.assertEqual(self.store.promotions, 0)
+        self.assertEqual(self.jobs.get(old_id)['status'], 'failed')
 
     def test_new_job_uses_retained_producer_and_fifteen_outer_stages(self):
         result = self.request()
