@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 from refined_tiers import NO_INTERVAL, validate_refined_tiers
 from sss_scoring import MODES, RANK_FIELDS, _composite, _derived, payload_sha256, rank_variants
-from tier_postprocessing import compress_difficulty
+from tier_postprocessing import compress_difficulty, compression_factor
 
 SCHEMA_VERSION = 51
 CENTERING_METHOD = "sss-final-folder-median-centering-v1"
@@ -65,7 +65,7 @@ def centering_folders(base: Mapping[str, Any], *, goal: str = "sss",
                 else:
                     donors, shift, basis = [], 0., "unavailable"
                 record.update(basis=basis, donorLevels=donors, finalShift=shift)
-            record.update(initialShift=2 * record["finalShift"],
+            record.update(initialShift=record["finalShift"] / compression_factor(base),
                 medianAfter=None if record["medianBefore"] is None else record["medianBefore"] + record["finalShift"],
                 donorPopulationChartIds=sorted({cid for donor in record["donorLevels"] for cid in supported[donor]["populationChartIds"]}),
                 donorMixedChartIds=sorted({cid for donor in record["donorLevels"] for cid in supported[donor]["mixedFirstPassChartIds"]}))
@@ -82,20 +82,20 @@ def centering_policy(base: Mapping[str, Any]) -> dict:
         "reference": "current-official-level-plus-0.5", "median": "middle-value-or-mean-of-middle-pair",
         "borrow": "same-source-mode-offset-interpolation-or-nearest", "noDonor": "preserve-point-zero-offset",
         "processing": "frozen-second-pass-preview-then-initial-shift-then-single-compression",
-        "compressionFactor": .5, "compressionApplications": 1,
+        "compressionFactor": compression_factor(base), "compressionApplications": 1,
         "intervals": "translate-existing-conditional-intervals-fixed-centering-no-new-intervals",
         "pumbility": "mean-centered-sss-and-unchanged-clearing-no-composite-centering",
         "folders": centering_folders(base)}
 
 
-def shift_scoring(metric: dict, level: int, folder: Mapping[str, Any], frozen_range: Mapping[str, Any] | None) -> None:
+def shift_scoring(metric: dict, level: int, folder: Mapping[str, Any], frozen_range: Mapping[str, Any] | None, factor: float = .5) -> None:
     before, initial_before = metric["estimatedDifficulty"], metric["initialFit"]["estimatedDifficulty"]
     shift = folder["finalShift"]
     for field in ("estimatedDifficulty", "difficultyCi95Low", "difficultyCi95High"):
         original = metric["initialFit"][field]
         adjusted = None if original is None else original + folder["initialShift"]
         metric["initialFit"][field] = adjusted
-        metric[field] = compress_difficulty(adjusted, level)
+        metric[field] = compress_difficulty(adjusted, level, factor)
         if field != "estimatedDifficulty":
             metric["initialFit"][field.replace("difficulty", "difficultyDelta", 1)] = None if adjusted is None else adjusted - level - .5
             metric[field.replace("difficulty", "difficultyDelta", 1)] = None if metric[field] is None else metric[field] - level - .5
@@ -125,7 +125,7 @@ def _apply(base: Mapping[str, Any], policy: Mapping[str, Any]) -> dict:
             row["sssCenteringBaseline"] = {"scoring": copy.deepcopy(metric), "pumbility": copy.deepcopy(row["pumbilityVariants"]["sss"])}
             if row["level"] >= 20:
                 frozen = base["summary"]["method"]["sssRefinement"]["ranges"]["official"][mode].get(str(row["level"]))
-                shift_scoring(metric, int(row["level"]), policy["folders"][mode][str(row["level"])], frozen)
+                shift_scoring(metric, int(row["level"]), policy["folders"][mode][str(row["level"])], frozen, compression_factor(base))
                 composite = _composite(row, metric)
                 composite["intervalMethod"] = row["pumbilityVariants"]["sss"]["intervalMethod"]
                 row["pumbilityVariants"]["sss"] = composite

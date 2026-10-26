@@ -15,8 +15,8 @@ from typing import Any, Mapping
 from phoenix2_sync import parse_utc, utc_now
 
 
-SCRIPT_VERSION = "6.18.0-midpoint-compression"
-HYBRID_TIER_SCRIPT_VERSION = "6.19.0-hybrid-average"
+SCRIPT_VERSION = "6.26.0-midpoint-width-75"
+HYBRID_TIER_SCRIPT_VERSION = "6.26.0-hybrid-width-75"
 PHOENIX2_MINIMUM_ANALYSIS_SCORES = 50
 CLEARING_TIER_MINIMUM_SCORE_RECORDS = 100
 

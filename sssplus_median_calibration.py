@@ -13,7 +13,7 @@ from sss_scoring import MODES, RANK_FIELDS, _derived, payload_sha256
 from sssplus_final_curve import SCALE_POLICY, fit_final_curve, inverse_final_cost
 from sssplus_tiers import _recompute_means, validate_sssplus_tiers
 from target_tail_policy import apply_tail_policy, finite
-from tier_postprocessing import compress_difficulty
+from tier_postprocessing import compress_difficulty, compression_factor
 
 SCHEMA_VERSION = 53
 POLICY_VERSION = 3
@@ -68,12 +68,12 @@ def final_calibrations(base: Mapping[str, Any], *, policy_version: int = POLICY_
     return latents, populations, curves, errors
 
 
-def _project(metric: dict, level: int, old_curve: dict, curve: dict | None, error: str | None) -> None:
+def _project(metric: dict, level: int, old_curve: dict, curve: dict | None, error: str | None, factor: float = .5) -> None:
     for field in ("estimatedDifficulty", "difficultyCi95Low", "difficultyCi95High"):
         old = metric["initialFit"][field]
         value = None if old is None or curve is None else inverse_final_cost(chart_cost(old, old_curve), curve)
         metric["initialFit"][field] = value
-        metric[field] = compress_difficulty(value, level)
+        metric[field] = compress_difficulty(value, level, factor)
         if field != "estimatedDifficulty":
             metric["initialFit"][field.replace("difficulty", "difficultyDelta", 1)] = None if value is None else value - level - .5
             metric[field.replace("difficulty", "difficultyDelta", 1)] = None if metric[field] is None else metric[field] - level - .5
@@ -83,11 +83,11 @@ def _project(metric: dict, level: int, old_curve: dict, curve: dict | None, erro
         metric.update(evidenceStatus="Unrated", scoringUnratedReason="Final SSS+ median calibration unavailable: " + str(error))
 
 
-def _recalibrated_range(value: dict | None, level: int, old: dict, new: dict | None) -> dict | None:
+def _recalibrated_range(value: dict | None, level: int, old: dict, new: dict | None, factor: float = .5) -> dict | None:
     if not value or not new:
         return None
     midpoint = level + .5
-    return {side: compress_difficulty(inverse_final_cost(chart_cost(midpoint + 2 * (value[side] - midpoint), old), new), level)
+    return {side: compress_difficulty(inverse_final_cost(chart_cost(midpoint + (value[side] - midpoint) / factor, old), new), level, factor)
             for side in ("lower", "upper")}
 
 
@@ -111,7 +111,7 @@ def _apply(base: Mapping[str, Any], *, policy_version: int = POLICY_VERSION) -> 
             for field in ("evidenceStatus", "scoringProvisional", "scoringProvisionalReasons", "scoringExtrapolated"):
                 if field in old_row["scoringVariants"][GOAL]:
                     metric[field] = copy.deepcopy(old_row["scoringVariants"][GOAL][field])
-            _project(metric, row["level"], original[mode], curves[mode], errors[mode])
+            _project(metric, row["level"], original[mode], curves[mode], errors[mode], compression_factor(base))
             row["scoringVariants"][GOAL] = metric
     residuals = centering_folders(result, goal=GOAL, require_mixed_first_pass=policy_version == 1)
     for mode, key in MODES:
@@ -121,11 +121,11 @@ def _apply(base: Mapping[str, Any], *, policy_version: int = POLICY_VERSION) -> 
             level, cid, metric = row["level"], str(row["chartId"]), row["scoringVariants"][GOAL]
             folder = residuals[mode][str(level)]
             ref = metric.get("scoringRefinement", {})
-            frozen_range = _recalibrated_range(ref.get("range"), level, original[mode], curves[mode])
-            shift_scoring(metric, level, folder, frozen_range)
+            frozen_range = _recalibrated_range(ref.get("range"), level, original[mode], curves[mode], compression_factor(base))
+            shift_scoring(metric, level, folder, frozen_range, compression_factor(base))
             rare = ref.get("rare")
             band = _recalibrated_range({"lower": rare["upperBandLow"], "upper": rare["upperBandHigh"]} if rare else None,
-                                      level, original[mode], curves[mode])
+                                      level, original[mode], curves[mode], compression_factor(base))
             metric["scoringFolderCentering"]["effectiveRareBand"] = None if band is None else {k: v + folder["finalShift"] for k, v in band.items()}
             cost = latents[cid]
             limits = curves[mode]["anchors"] if curves[mode] else []
@@ -146,7 +146,7 @@ def _apply(base: Mapping[str, Any], *, policy_version: int = POLICY_VERSION) -> 
         "anchorKind": "derived-provisional-full-folder-median", "minimumLevel": 20,
         "stageOrder": ["frozen-refined-latent", "supported-folder-median-anchors", "final-curve", "residual-median-offset",
                        "single-midpoint-compression", "unchanged-global-tail-policy", "component-mean-and-ranks"],
-        "compressionApplications": 1, "compressionFactor": .5, "modelRefits": 0, "dataFetches": 0,
+        "compressionApplications": 1, "compressionFactor": compression_factor(base), "modelRefits": 0, "dataFetches": 0,
         "originalOfficialCalibration": copy.deepcopy(original), "populations": populations, "calibration": curves,
         "calibrationErrors": errors, "residualFolders": residuals,
         "previousTailPolicy": copy.deepcopy(base["summary"]["method"]["sssplusTailPolicy"])}

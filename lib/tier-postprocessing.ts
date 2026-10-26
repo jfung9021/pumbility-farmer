@@ -3,22 +3,30 @@ import type { AnalysisPayload, ChartResult } from "./types";
 export const POSTPROCESSED_SCHEMA = 44;
 export const HYBRID_INITIAL_SCHEMA = 46;
 export const HYBRID_POSTPROCESSED_SCHEMA = 47;
+export const CURRENT_COMPRESSION_FACTOR = .75;
 export const FIT_FIELDS = ["estimatedDifficulty", "difficultyDelta", "difficultyCi95Low", "difficultyCi95High",
   "difficultyDeltaCi95Low", "difficultyDeltaCi95High", "effectBand", "effectBandRank", "levelRank",
   "levelComparisonCharts", "modeRank", "levelPercentile", "relativeGroup", "relativeGroupRank"] as const;
 
-export function compressionPolicy(baseAnalysisSchemaVersion: number) {
-  return { version: 1, method: "official-midpoint-compression", factor: .5,
+export function compressionPolicy(baseAnalysisSchemaVersion: number, factor = CURRENT_COMPRESSION_FACTOR) {
+  if (factor !== .5 && factor !== .75) throw new Error("Unsupported midpoint compression factor.");
+  return { version: factor === .5 ? 1 : 2, method: "official-midpoint-compression", factor,
     reference: "current-official-level-plus-0.5", metrics: ["scoring", "clearing"], baseAnalysisSchemaVersion };
 }
 
 export function hasMidpointCompression(payload: AnalysisPayload | null | undefined): boolean {
-  const p = payload?.summary.method.ratingPostprocessing as {baseAnalysisSchemaVersion?: number} | undefined;
-  const validBase = payload?.schemaVersion === POSTPROCESSED_SCHEMA
+  const p = payload?.summary.method.ratingPostprocessing as {baseAnalysisSchemaVersion?: number; factor?: number} | undefined;
+  const validBase = [POSTPROCESSED_SCHEMA, 45].includes(payload?.schemaVersion ?? 0)
     ? [26, 41, 42, 43].includes(p?.baseAnalysisSchemaVersion ?? 0)
-    : [HYBRID_POSTPROCESSED_SCHEMA, 48, 49, 50, 51, 52, 53, 57, 58, 59].includes(payload?.schemaVersion ?? 0) && p?.baseAnalysisSchemaVersion === HYBRID_INITIAL_SCHEMA;
-  return validBase && !!p
-    && samePolicy(p, compressionPolicy(p.baseAnalysisSchemaVersion!));
+: [HYBRID_POSTPROCESSED_SCHEMA, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 148].includes(payload?.schemaVersion ?? 0) && p?.baseAnalysisSchemaVersion === HYBRID_INITIAL_SCHEMA;
+  return validBase && !!p && (p.factor === .5 || p.factor === .75)
+    && samePolicy(p, compressionPolicy(p.baseAnalysisSchemaVersion!, p.factor));
+}
+
+export function compressionFactor(payload: AnalysisPayload): number {
+  if (!payload.summary.method.ratingPostprocessing) return .5;
+  if (!hasMidpointCompression(payload)) throw new Error("Incompatible midpoint compression policy.");
+  return (payload.summary.method.ratingPostprocessing as {factor: number}).factor;
 }
 
 function samePolicy(a: object, b: object) {
@@ -27,10 +35,10 @@ function samePolicy(a: object, b: object) {
     JSON.stringify((a as Record<string, unknown>)[k]) === JSON.stringify(v));
 }
 
-export function compressDifficulty(value: number | null, level: number): number | null {
+export function compressDifficulty(value: number | null, level: number, factor = .5): number | null {
   if (value === null) return null;
   if (!Number.isFinite(value)) throw new Error("Invalid initial fitted difficulty.");
-  return level + .5 + .5 * (value - level - .5);
+  return level + .5 + factor * (value - level - .5);
 }
 
 function band(delta: number | null): [number | null, string | null] {
@@ -51,6 +59,7 @@ function metrics(row: ChartResult) {
 /** Validate the final transformation, then expose the original contract to existing validators. */
 export function recoverInitialFitPayload(payload: AnalysisPayload): AnalysisPayload {
   if (!hasMidpointCompression(payload)) throw new Error("Incompatible midpoint compression policy.");
+  const factor = compressionFactor(payload);
   const raw = structuredClone(payload);
   raw.schemaVersion = (payload.summary.method.ratingPostprocessing as {baseAnalysisSchemaVersion:number}).baseAnalysisSchemaVersion;
   delete raw.summary.method.ratingPostprocessing;
@@ -64,7 +73,7 @@ export function recoverInitialFitPayload(payload: AnalysisPayload): AnalysisPayl
           || Object.keys(fitted).some(k => !(FIT_FIELDS as readonly string[]).includes(k))) throw new Error("Missing initial fitted values.");
         const initial = fitted.estimatedDifficulty;
         if (!(initial === null || (typeof initial === "number" && Number.isFinite(initial)))) throw new Error("Invalid initial fitted value.");
-        const value = compressDifficulty(initial, row.level), delta = value === null ? null : value - row.level - .5;
+        const value = compressDifficulty(initial, row.level, factor), delta = value === null ? null : value - row.level - .5;
         const [rank, label] = band(delta);
         if (!equal(m.estimatedDifficulty, value) || !equal(m.difficultyDelta, delta)
           || m.effectBandRank !== rank || m.effectBand !== label) throw new Error("Invalid compressed tier value or band.");
@@ -73,7 +82,7 @@ export function recoverInitialFitPayload(payload: AnalysisPayload): AnalysisPayl
           if (key in fitted) {
             const endpoint = fitted[key];
             if (!(endpoint === null || (typeof endpoint === "number" && Number.isFinite(endpoint)))) throw new Error("Invalid initial interval.");
-            const transformed = compressDifficulty(endpoint, row.level);
+            const transformed = compressDifficulty(endpoint, row.level, factor);
             if (!equal(m[key], transformed)) throw new Error("Invalid compressed interval.");
             if (`difficultyDeltaCi95${side}` in fitted
               && !equal(m[`difficultyDeltaCi95${side}`], transformed === null ? null : transformed - row.level - .5)) throw new Error("Invalid compressed interval delta.");
@@ -115,20 +124,21 @@ function validateRanks(rows: ChartResult[]) {
 }
 
 export function compressDemoPayload(payload: AnalysisPayload): AnalysisPayload {
-  const result = structuredClone(payload);
+  if (hasMidpointCompression(payload) && compressionFactor(payload) === CURRENT_COMPRESSION_FACTOR) return structuredClone(payload);
+  const result = hasMidpointCompression(payload) ? recoverInitialFitPayload(payload) : structuredClone(payload);
   result.schemaVersion = POSTPROCESSED_SCHEMA;
   result.summary.method.ratingPostprocessing = compressionPolicy(26);
   for (const mode of ["singles", "doubles"] as const) for (const row of result[mode]) {
     for (const metric of metrics(row)) {
       const fitted = Object.fromEntries(FIT_FIELDS.filter(k => k in metric).map(k => [k, metric[k]]));
       metric.initialFit = fitted;
-      const value = compressDifficulty(fitted.estimatedDifficulty as number | null, row.level);
+      const value = compressDifficulty(fitted.estimatedDifficulty as number | null, row.level, CURRENT_COMPRESSION_FACTOR);
       metric.estimatedDifficulty = value;
       metric.difficultyDelta = value === null ? null : value - row.level - .5;
       const [rank, label] = band(metric.difficultyDelta as number | null);
       metric.effectBandRank = rank; metric.effectBand = label;
       for (const side of ["Low", "High"]) if (`difficultyCi95${side}` in fitted) {
-        const endpoint = compressDifficulty(fitted[`difficultyCi95${side}`] as number | null, row.level);
+        const endpoint = compressDifficulty(fitted[`difficultyCi95${side}`] as number | null, row.level, CURRENT_COMPRESSION_FACTOR);
         metric[`difficultyCi95${side}`] = endpoint;
         if (`difficultyDeltaCi95${side}` in fitted) metric[`difficultyDeltaCi95${side}`] = endpoint === null ? null : endpoint - row.level - .5;
       }

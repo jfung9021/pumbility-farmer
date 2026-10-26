@@ -2,7 +2,7 @@ import { curve, inverse } from "./sss-analysis-validation.ts";
 import { forward } from "./refined-analysis-validation.ts";
 import { expectedScoring, sssCenteringFolders } from "./sss-centering-validation.ts";
 import { validateTail } from "./sssplus-analysis-validation.ts";
-import { compressDifficulty } from "./tier-postprocessing.ts";
+import { compressDifficulty, compressionFactor } from "./tier-postprocessing.ts";
 import type { AnalysisPayload, ScoringVariant } from "./types";
 
 type Obj = Record<string, unknown>;
@@ -130,7 +130,7 @@ export function validateMedianAnalysisPayload(payload: AnalysisPayload, validate
       const initial=obj(s.initialFit);
       for(const field of FIELDS) {
         const raw=initial[field],v=raw===null||!c?null:inverseFinalCost(forward(Number(raw),obj(original[mode])),c);
-        initial[field]=v;s[field]=compressDifficulty(v,row.level);
+        initial[field]=v;s[field]=compressDifficulty(v,row.level,compressionFactor(payload));
         if(field!=="estimatedDifficulty") {initial[field.replace("difficulty","difficultyDelta")]=v===null?null:v-row.level-.5;s[field.replace("difficulty","difficultyDelta")]=s[field]===null?null:Number(s[field])-row.level-.5;}
       }
       Object.assign(initial,derived(initial.estimatedDifficulty as number|null,row.level));Object.assign(s,derived(s.estimatedDifficulty as number|null,row.level));
@@ -143,7 +143,7 @@ export function validateMedianAnalysisPayload(payload: AnalysisPayload, validate
     ...(version>=2?{anchorEligibility:"minimum-five-finite-refined-charts-v1"}:{}),
     ...(version===3?{finalScalePolicy:SCALE_POLICY}:{}),anchorKind:"derived-provisional-full-folder-median",minimumLevel:20,
     stageOrder:["frozen-refined-latent","supported-folder-median-anchors","final-curve","residual-median-offset","single-midpoint-compression","unchanged-global-tail-policy","component-mean-and-ranks"],
-    compressionApplications:1,compressionFactor:.5,modelRefits:0,dataFetches:0,originalOfficialCalibration:original,populations,calibration:calibrations,calibrationErrors:errors,
+    compressionApplications:1,compressionFactor:compressionFactor(payload),modelRefits:0,dataFetches:0,originalOfficialCalibration:original,populations,calibration:calibrations,calibrationErrors:errors,
     residualFolders:residuals,previousTailPolicy:base.summary.method.sssplusTailPolicy}),"Final median policy, population, curve, source or residual differs.");
   for(const [mode,key] of MODES) for(let i=0;i<payload[key].length;i++) {
     const row=payload[key][i], old=base[key][i], pre=row.sssplusTailBaseline!;
@@ -153,9 +153,9 @@ export function validateMedianAnalysisPayload(payload: AnalysisPayload, validate
       continue;
     }
     const c=calibrations[mode]===null?null:obj(calibrations[mode]), originalCurve=obj(original[mode]), level=row.level, midpoint=level+.5;
-    const projectRange=(r:Obj|null):Obj|null=>!r||!c?null:Object.fromEntries(["lower","upper"].map(side=>[side,compressDifficulty(inverseFinalCost(forward(midpoint+2*(Number(r[side])-midpoint),originalCurve),c),level)]));
+    const projectRange=(r:Obj|null):Obj|null=>!r||!c?null:Object.fromEntries(["lower","upper"].map(side=>[side,compressDifficulty(inverseFinalCost(forward(midpoint+(Number(r[side])-midpoint)/compressionFactor(payload),originalCurve),c),level,compressionFactor(payload))]));
     const originalMetric=preview[key][i].scoringVariants!.sss!, ref=originalMetric.scoringRefinement!,folder=residuals[mode][String(level)];
-    const expected=expectedScoring(originalMetric,level,folder,projectRange(ref.range?obj(ref.range):null));
+    const expected=expectedScoring(originalMetric,level,folder,projectRange(ref.range?obj(ref.range):null),compressionFactor(payload));
     const band=projectRange(ref.rare?{lower:ref.rare.upperBandLow,upper:ref.rare.upperBandHigh}:null);
     obj(expected.scoringFolderCentering).effectiveRareBand=band?Object.fromEntries(Object.entries(band).map(([k,v])=>[k,Number(v)+folder.finalShift])):null;
     const cost=latents.get(row.chartId)!, limits=c?(c.anchors as unknown[]).map(obj):[];

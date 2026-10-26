@@ -19,7 +19,7 @@ from official_tiers import (
 )
 from piu_misgrade_analyzer import difficulty_effect_band
 from tier_difficulty import CLEARING_DIFFICULTY_DELTA_SCALE
-from tier_postprocessing import compress_difficulty
+from tier_postprocessing import compress_difficulty, compression_factor
 
 
 METHOD = "official-d26-clearer-ability-v1"
@@ -120,7 +120,7 @@ def _new_metric(board: Mapping[str, Any] | None, skills: Sequence[float],
     return result
 
 
-def _compress_metric(metric: dict[str, Any], level: int) -> None:
+def _compress_metric(metric: dict[str, Any], level: int, factor: float = .5) -> None:
     midpoint = level + .5
     estimate = metric["estimatedDifficulty"]
     initial = {key: copy.deepcopy(metric[key]) for key in (
@@ -131,14 +131,14 @@ def _compress_metric(metric: dict[str, Any], level: int) -> None:
     metric["initialFit"] = initial
     if estimate is None:
         return
-    value = compress_difficulty(estimate, level)
+    value = compress_difficulty(estimate, level, factor)
     metric["estimatedDifficulty"] = value
     metric["difficultyDelta"] = value - midpoint
     metric["effectBandRank"], metric["effectBand"] = difficulty_effect_band(value - midpoint)
     if metric["defaultedAtCap"]:
         metric["capDefaultDifficulty"] = value
     for side in ("Low", "High"):
-        endpoint = compress_difficulty(initial[f"difficultyCi95{side}"], level)
+        endpoint = compress_difficulty(initial[f"difficultyCi95{side}"], level, factor)
         metric[f"difficultyCi95{side}"] = endpoint
         metric[f"difficultyDeltaCi95{side}"] = None if endpoint is None else endpoint - midpoint
 
@@ -288,7 +288,7 @@ def _apply_official_high_level_clearing(
                     if endpoint is not None:
                         metric[f"difficultyCi95{side}"] = endpoint + shift
                         metric[f"difficultyDeltaCi95{side}"] = endpoint + shift - midpoint
-            _compress_metric(metric, level)
+            _compress_metric(metric, level, compression_factor(payload))
         ordered = sorted((row for row in rows if row["tierMetrics"]["clearing"]["estimatedDifficulty"] is not None),
                          key=lambda row: (row["tierMetrics"]["clearing"]["estimatedDifficulty"],
                                           str(row.get("songName") or ""), str(row["chartId"])))
@@ -318,7 +318,7 @@ def _apply_official_high_level_clearing(
         "shrinkage": {"priorPlayers": CLEARING_PRIOR_PLAYERS, "formula": "n/(n+20)*n/N"},
         "calibration": clearing_calibration_identity(), "folders": folder_audits,
         "recentering": "actual-finite-folder-median-to-current-level-plus-0.5-before-compression",
-        "compressionFactor": .5,
+        "compressionFactor": compression_factor(payload),
         "uncertainty": {"method": "deterministic-conditional-q20-player-bootstrap", "samples": bootstrap_samples,
                         "minimumPlayers": 5, "conditions": "fixed player histories, folder reference, spread and recentering; excludes selection and calibration uncertainty",
                         "cappedDifficultyIntervals": "unavailable-floor-assignment"},

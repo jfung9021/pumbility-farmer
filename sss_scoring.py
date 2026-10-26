@@ -18,7 +18,7 @@ from scoring_targets import SSS, ScoringTarget
 from official_cross_level_calibration import fit_cross_level_curve, inverse_chart_cost
 from piu_misgrade_analyzer import difficulty_effect_band
 from scoring_percentile import collect_percentile_scores
-from tier_postprocessing import FIT_FIELDS, _rank_scoring, compress_difficulty
+from tier_postprocessing import FIT_FIELDS, _rank_scoring, compress_difficulty, compression_factor
 from tier_difficulty import EVIDENCE_ORDER
 
 SCHEMA_VERSION = 49
@@ -163,7 +163,7 @@ def _empty_scoring(source: str, target: ScoringTarget = SSS) -> dict[str, Any]:
 
 def _target_metric(row: Mapping[str, Any], source: str, estimate: Mapping[str, Any] | None,
                    metadata: Mapping[str, Any], curve: Mapping[str, Any] | None,
-                   calibration_error: str | None, *, target: ScoringTarget = SSS) -> dict[str, Any]:
+                   calibration_error: str | None, *, target: ScoringTarget = SSS, factor: float = .5) -> dict[str, Any]:
     metric, level = _empty_scoring(source, target), int(row["level"])
     if estimate:
         reasons = set(estimate.get("provisionalReasons", [])) | set(metadata.get("provisionalReasons", []))
@@ -208,10 +208,10 @@ def _target_metric(row: Mapping[str, Any], source: str, estimate: Mapping[str, A
                     value = inverse_chart_cost(endpoint, curve)
                     initial[f"difficultyCi95{side}"] = value
                     initial[f"difficultyDeltaCi95{side}"] = value - level - .5
-            metric.update(_derived(compress_difficulty(raw, level), level),
+            metric.update(_derived(compress_difficulty(raw, level, factor), level),
                 evidenceStatus="Provisional" if reasons else "Published", scoringExtrapolated=extrapolated)
             for side in ("Low", "High"):
-                endpoint = compress_difficulty(initial[f"difficultyCi95{side}"], level)
+                endpoint = compress_difficulty(initial[f"difficultyCi95{side}"], level, factor)
                 metric[f"difficultyCi95{side}"] = endpoint
                 metric[f"difficultyDeltaCi95{side}"] = None if endpoint is None else endpoint - level - .5
             metric["initialFit"] = initial
@@ -300,7 +300,7 @@ def apply_sss_variants(base: Mapping[str, Any], prepared: Mapping[str, Any],
                 estimate = fit["charts"].get(cid)
                 if estimate:
                     estimate = {**estimate, "fitConverged": bool(fit["diagnostics"].get("converged"))}
-                scoring = _target_metric(row, source, estimate, prepared[source]["charts"].get(cid, {}), curve, error)
+                scoring = _target_metric(row, source, estimate, prepared[source]["charts"].get(cid, {}), curve, error, factor=compression_factor(base))
                 row["scoringVariants"] = {"general": general_scoring_view(row), "sss": scoring}
                 row["pumbilityVariants"] = {"general": copy.deepcopy(row["tierMetrics"]["pumbility"]),
                                              "sss": _composite(row, scoring)}
@@ -316,7 +316,7 @@ def apply_sss_variants(base: Mapping[str, Any], prepared: Mapping[str, Any],
         "weighting": "one-total-weight-per-player-in-source-mode", "bootstrapSamples": bootstrap_samples, "seed": seed,
         "intervalMethod": INTERVAL_METHOD, "intervalExclusions": ["anchor-uncertainty", "clearing-uncertainty", "effort", "selective-observation"],
         "sourceBoundary": {"submitted": [16, 19], "officialMinimum": 20},
-        "compression": {"factor": .5, "reference": "current-official-level-plus-0.5", "applications": 1},
+        "compression": {"factor": compression_factor(base), "reference": "current-official-level-plus-0.5", "applications": 1},
         "calibration": calibrations, "diagnostics": diagnostics}
     method["sssPumbility"] = {"version": 1, "aggregation": "average", "requiresBoth": True,
         "calculation": "(SSS scoring difficulty + unchanged clearing difficulty) / 2 before rounding",
@@ -352,7 +352,7 @@ def validate_sss_variants(payload: Mapping[str, Any]) -> dict[str, Any]:
     declared = {"minimumPlayerCharts": 4, "minimumContributors": 5, "minimumReferenceContributors": 20,
                 "minimumReferencePerOutcome": 5, "minimumReferenceCharts": 5,
                 "weighting": "one-total-weight-per-player-in-source-mode", "intervalMethod": INTERVAL_METHOD,
-                "compression": {"factor": .5, "reference": "current-official-level-plus-0.5", "applications": 1}}
+                "compression": {"factor": compression_factor(base), "reference": "current-official-level-plus-0.5", "applications": 1}}
     if any(method.get(key) != value for key, value in declared.items()):
         raise ValueError("SSS target evidence or compression policy differs.")
     composite_method = payload["summary"]["method"].get("sssPumbility", {})
@@ -398,7 +398,7 @@ def validate_sss_variants(payload: Mapping[str, Any]) -> dict[str, Any]:
                 raise ValueError("An unavailable SSS estimate requires its explicit Unrated reason.")
             for side in ("", "Ci95Low", "Ci95High"):
                 field = "estimatedDifficulty" if not side else "difficulty" + side
-                if not _same(s[field], compress_difficulty(s["initialFit"][field], level)):
+                if not _same(s[field], compress_difficulty(s["initialFit"][field], level, compression_factor(base))):
                     raise ValueError("SSS estimate or interval was not compressed exactly once.")
             for target in (s, s["initialFit"]):
                 if any(not _same(target[k], v) for k, v in _derived(target["estimatedDifficulty"], level).items()):

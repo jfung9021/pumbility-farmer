@@ -19,7 +19,7 @@ from sssplus_median_calibration import (_apply as apply_final_median,
 from sssplus_tiers import _recompute_means
 from target_tail_policy import (INTERVAL_METHOD, TAIL_METHOD, TAIL_PARAMETERS,
     finite, select_exceptions, tail_value)
-from tier_postprocessing import compress_difficulty
+from tier_postprocessing import compress_difficulty, compression_factor
 
 SCHEMA_VERSION = 54
 NAMESPACE = "sssplusSpreadPolicy"
@@ -91,7 +91,7 @@ def _adjusted_base(base53: Mapping[str, Any], adjustments: Mapping[str, Any]) ->
                 raise ValueError("Rare replacement has invalid conditional posterior provenance.")
             raw = inverse_chart_cost(effect, curves[mode])
             metric["initialFit"].update(_derived(raw, row["level"]))
-            metric.update(_derived(compress_difficulty(raw, row["level"]), row["level"]))
+            metric.update(_derived(compress_difficulty(raw, row["level"], compression_factor(base53)), row["level"]))
             metric.update(scoringChartEffect=effect, scoringMethod="target-conditional-pooled-prior-v1",
                 scoringProvisional=True, evidenceStatus="Provisional", scoringBootstrapValidReplicates=0,
                 intervalMethod="unavailable-new-conditional-estimator",
@@ -165,7 +165,7 @@ def build_boundary_candidates(projected: Mapping[str, Any], base: Mapping[str, A
                     for endpoint_gap in (gap, max(0., gap-mae)):
                         latent = boundary["edgeLatent"] + direction*endpoint_gap/candidate["pointsPerLatentUnit"]
                         raw = inverse_final_cost(latent, curve)+folder["initialShift"]
-                        difficulty = compress_difficulty(raw, level)
+                        difficulty = compress_difficulty(raw, level, compression_factor(base))
                         stress.append({**candidate, "gapPoints": endpoint_gap, "difficulty": difficulty,
                             "distance": direction*(difficulty-level-.5)})
             stable = bool(stress) and all(s["distance"] >= 2 for s in stress)
@@ -353,7 +353,7 @@ def _apply(base53: Mapping[str, Any], adjustments: Mapping[str, Any], rare_polic
     result["summary"]["method"][NAMESPACE] = {"version": 1, "method": METHOD, "baseSchemaVersion": 53,
         "basePayloadSha256": payload_sha256(base53), "localOnly": True, "target": 995000,
         "source": "official", "minimumLevel": 20, "scale": SCALE, "compressionApplications": 1,
-        "compressionFactor": .5, "stageOrder": STAGE_ORDER, "dataFetches": 0, "fullPlayerRefits": 0,
+        "compressionFactor": compression_factor(base53), "stageOrder": STAGE_ORDER, "dataFetches": 0, "fullPlayerRefits": 0,
         "rareAdjustments": copy.deepcopy(dict(adjustments)), "rarePolicy": copy.deepcopy(dict(rare_policy)),
         "boundaryCandidates": copy.deepcopy(dict(boundary_candidates)), "boundaryPolicy": copy.deepcopy(dict(boundary_policy)),
         "medianCalibration": median_policy, "previousTailPolicy": copy.deepcopy(base53["summary"]["method"]["sssplusTailPolicy"]),

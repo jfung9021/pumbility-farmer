@@ -1,5 +1,5 @@
 import { checkFit, inverse, validateRanks } from "./sss-analysis-validation.ts";
-import { compressDifficulty, FIT_FIELDS } from "./tier-postprocessing.ts";
+import { compressDifficulty, compressionFactor, FIT_FIELDS } from "./tier-postprocessing.ts";
 import type { AnalysisPayload } from "./types";
 
 type Obj = Record<string, unknown>;
@@ -103,7 +103,7 @@ export function validateRefinedAnalysisPayload(payload: AnalysisPayload, validat
     && same(refinement.rangePolicy,{minimumRatedCharts:5,edges:"actual-finite-first-pass-min-max",borrow:"same-source-mode-offset-interpolation-or-nearest",frozenBeforeSecondPass:true}), "SSS second-pass policy differs.");
   if (refinement.version === 2) need(same(refinement.noSssEndpointPolicy,{method:"mean-top-available",maximumScores:3,minimumScores:1,selection:"deduplicated-full-board-before-history-filter"}), "No-SSS endpoint policy differs.");
   need(official.version === 1 && official.method === "official-d26-clearer-ability-v1" && official.source === "piuscores-official" && official.mix === "Phoenix2"
-    && official.mode === "Double" && official.minimumLevel === 26 && official.percentile === .2 && official.difficultyDeltaScale === .7 && official.compressionFactor === .5
+    && official.mode === "Double" && official.minimumLevel === 26 && official.percentile === .2 && official.difficultyDeltaScale === .7 && official.compressionFactor === compressionFactor(payload)
     && same(official.playerSkill,{method:"leave-one-chart-out-top-official-levels",topCharts:25,minimumOtherCharts:25,historyMinimumLevel:23,levelMidpointOffset:.5,separateModes:true})
     && obj(official.uncertainty).samples === 1000, "Official D26+ Clearing policy differs.");
   const base = recoverRefinedFirstPass(payload);
@@ -120,7 +120,7 @@ export function validateRefinedAnalysisPayload(payload: AnalysisPayload, validat
       if (!isOfficial) need(same(c,obj(original.tierMetrics).clearing), "Clearing outside D26+ changed.");
       for (const metric of [s,c]) {
         const initial=obj(metric.initialFit);
-        for (const field of ["estimatedDifficulty","difficultyCi95Low","difficultyCi95High"]) if (field in initial) need(same(metric[field],compressDifficulty(initial[field] as number|null,level)), "Refined compression differs.");
+        for (const field of ["estimatedDifficulty","difficultyCi95Low","difficultyCi95High"]) if (field in initial) need(same(metric[field],compressDifficulty(initial[field] as number|null,level,compressionFactor(payload))), "Refined compression differs.");
       }
       checkFit(s,level); checkFit(raw,level);
       const changed=s.scoringMethod===BOUNDARY || s.scoringMethod===RARE;
@@ -138,7 +138,7 @@ export function validateRefinedAnalysisPayload(payload: AnalysisPayload, validat
           const endpoint = no ? noSssBoundaryEndpoint(full,b,refinement.version,details.version,scoreTarget) : Number(full.lowestScore);
           const gap=no?scoreTarget-endpoint:endpoint-scoreTarget;
           const scale=obj(obj(obj(refinement.gapCalibration)[source])[mode]);
-          const edge=Number(no?range.upper:range.lower), initial=midpoint+2*(edge-midpoint), latent=forward(initial,calibration)+(no?1:-1)*gap/Number(scale.pointsPerLatentUnit);
+          const edge=Number(no?range.upper:range.lower), initial=midpoint+(edge-midpoint)/compressionFactor(payload), latent=forward(initial,calibration)+(no?1:-1)*gap/Number(scale.pointsPerLatentUnit);
           need((no?full.successes===0:full.belowTarget===0) && gap>=0 && scale.supported===true && finite(scale.pointsPerLatentUnit) && scale.pointsPerLatentUnit>0
             && same(b.endpointScore,endpoint) && same(b.gapPoints,gap) && same(b.edgeFinal,edge)
             && same(b.edgeInitial,initial) && same(b.targetLatent,latent) && same(raw.estimatedDifficulty,inverse(latent,calibration))
@@ -150,7 +150,7 @@ export function validateRefinedAnalysisPayload(payload: AnalysisPayload, validat
           const value=Number(r.originalDifficulty)+weight*(Math.max(Number(r.originalDifficulty),target)-Number(r.originalDifficulty));
           need(successes>=1 && successes<=4 && full.successes===eligible.successes && Number(eligible.belowTarget)>0 && weight>0
             && same(r.blendWeight,weight) && same(r.upperBandLow,floor) && same(r.upperBandHigh,range.upper) && same(r.upperTarget,target)
-            && same(s.estimatedDifficulty,value) && same(r.conditionalDifficulty,compressDifficulty(inverse(Number(r.conditionalEffect),calibration),level))
+            && same(s.estimatedDifficulty,value) && same(r.conditionalDifficulty,compressDifficulty(inverse(Number(r.conditionalEffect),calibration),level,compressionFactor(payload)))
             && Math.abs(Number(r.likelihoodResidual))<1e-7, "Rare-SSS upper-band formula differs.");
         }
       } else {

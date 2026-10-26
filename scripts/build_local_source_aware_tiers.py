@@ -49,7 +49,7 @@ def rebuild_general():
     # No Singles performance input changed. Keep its completed numeric fit exactly.
     if prepared['official']['boards']:
         assert all(a['chartId']==b['chartId'] for a,b in zip(old['singles'],result['singles']))
-        result['singles']=copy.deepcopy(old['singles'])
+        result['singles']=finalize_tiers(old)['singles']
     _write(PRIVATE/'general-baseline.json',result)
     _write(cache,identity)
     print(json.dumps({'stage':'General-complete','schema':result['schemaVersion']}),flush=True)
@@ -67,7 +67,8 @@ def finish():
     from official_scoring_sources import load_official_scoring_manifest
     from source_aware_tiers import apply_source_aware_tiers
     first,second,old,catalog,policy,merged,prepared=inputs()
-    base=json.loads((PRIVATE/'general-baseline.json').read_text(encoding='utf-8'))
+    from tier_postprocessing import finalize_tiers
+    base=finalize_tiers(json.loads((PRIVATE/'general-baseline.json').read_text(encoding='utf-8')))
     source_hashes={'phoenix1':payload_sha256(first),'phoenix2':payload_sha256(second),
         'currentCatalog':payload_sha256(catalog),'officialManifest':merged['manifestSha256']}
     allfits={}

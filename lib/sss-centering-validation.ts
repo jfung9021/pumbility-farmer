@@ -1,5 +1,5 @@
 import { checkFit, validateRanks } from "./sss-analysis-validation.ts";
-import { compressDifficulty } from "./tier-postprocessing.ts";
+import { compressDifficulty, compressionFactor } from "./tier-postprocessing.ts";
 import type { AnalysisPayload, ScoringVariant, SssCenteringFolder } from "./types";
 
 type Obj = Record<string, unknown>;
@@ -56,7 +56,7 @@ export function sssCenteringFolders(base:AnalysisPayload, requireMixedFirstPass=
           Object.assign(folder,{basis:"nearest",donorLevels:[donor],finalShift:supported[donor].finalShift});
         }
       }
-      Object.assign(folder,{initialShift:2*folder.finalShift,medianAfter:folder.medianBefore===null?null:folder.medianBefore+folder.finalShift,
+      Object.assign(folder,{initialShift:folder.finalShift/compressionFactor(base),medianAfter:folder.medianBefore===null?null:folder.medianBefore+folder.finalShift,
         donorPopulationChartIds:[...new Set(folder.donorLevels.flatMap(l=>supported[l].populationChartIds))].sort(),
         donorMixedChartIds:[...new Set(folder.donorLevels.flatMap(l=>supported[l].mixedFirstPassChartIds))].sort()});
     }
@@ -75,12 +75,12 @@ export function recoverUncenteredSss(payload:AnalysisPayload):AnalysisPayload {
   return base;
 }
 
-export function expectedScoring(original:ScoringVariant,level:number,folder:SssCenteringFolder,frozen:unknown):Obj {
+export function expectedScoring(original:ScoringVariant,level:number,folder:SssCenteringFolder,frozen:unknown,factor=.5):Obj {
   const metric=structuredClone(original) as unknown as Obj, initial=object(metric.initialFit);
   const before=metric.estimatedDifficulty, rawBefore=initial.estimatedDifficulty;
   for(const field of ["estimatedDifficulty","difficultyCi95Low","difficultyCi95High"]) {
     const adjusted=initial[field]===null?null:Number(initial[field])+folder.initialShift;
-    initial[field]=adjusted;metric[field]=compressDifficulty(adjusted,level);
+    initial[field]=adjusted;metric[field]=compressDifficulty(adjusted,level,factor);
     if(field!=="estimatedDifficulty") {
       initial[field.replace("difficulty","difficultyDelta")]=adjusted===null?null:adjusted-level-.5;
       metric[field.replace("difficulty","difficultyDelta")]=metric[field]===null?null:Number(metric[field])-level-.5;
@@ -110,7 +110,7 @@ export function validateCenteredAnalysisPayload(payload:AnalysisPayload,validate
     basePayloadSha256:method.basePayloadSha256,localOnly:true,source:"official",minimumLevel:20,minimumMixedFirstPassCharts:5,minimumFinalCharts:5,
     population:"all-finite-final-sss-excluding-unrated",reference:"current-official-level-plus-0.5",median:"middle-value-or-mean-of-middle-pair",
     borrow:"same-source-mode-offset-interpolation-or-nearest",noDonor:"preserve-point-zero-offset",
-    processing:"frozen-second-pass-preview-then-initial-shift-then-single-compression",compressionFactor:.5,compressionApplications:1,
+    processing:"frozen-second-pass-preview-then-initial-shift-then-single-compression",compressionFactor:compressionFactor(payload),compressionApplications:1,
     intervals:"translate-existing-conditional-intervals-fixed-centering-no-new-intervals",pumbility:"mean-centered-sss-and-unchanged-clearing-no-composite-centering",folders}),"SSS centering policy, population or donors differ.");
   const frozenRanges=object(object(payload.summary.method.sssRefinement).ranges);
   for(const [mode,key] of [["Single","singles"],["Double","doubles"]] as const) {
@@ -118,7 +118,7 @@ export function validateCenteredAnalysisPayload(payload:AnalysisPayload,validate
       const row=payload[key][i],old=base[key][i],s=object(row.scoringVariants!.sss!),p=object(row.pumbilityVariants!.sss!),c=row.tierMetrics!.clearing;
       const folder=folders[mode][String(row.level)];
       const frozen=row.level>=20?object(object(frozenRanges.official)[mode])[String(row.level)]:undefined;
-      const expected=row.level>=20?expectedScoring(old.scoringVariants!.sss!,row.level,folder,frozen):object(old.scoringVariants!.sss!);
+      const expected=row.level>=20?expectedScoring(old.scoringVariants!.sss!,row.level,folder,frozen,compressionFactor(payload)):object(old.scoringVariants!.sss!);
       need(same(withoutRanks(s),withoutRanks(expected)),"Centered SSS point, interval, evidence, range or preserved model metadata differs.");
       checkFit(s,row.level);checkFit(object(s.initialFit),row.level);
       if(row.level<20) need(same(row.pumbilityVariants!.sss!,old.pumbilityVariants!.sss!),"Submitted SSS Pumbility changed.");

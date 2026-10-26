@@ -1,3 +1,4 @@
+import { compressDifficulty, compressionFactor } from "./tier-postprocessing.ts";
 import type { AnalysisPayload } from "./types";
 
 type Obj = Record<string, any>;
@@ -17,7 +18,6 @@ function same(a: any, b: any): boolean {
 }
 function quantile(values: number[], p: number): number { const a=values.toSorted((a,b)=>a-b), t=(a.length-1)*p, i=Math.floor(t); return a[i]+(a[Math.min(i+1,a.length-1)]-a[i])*(t-i); }
 function mean(a: any,b: any): number|null { return a===null||b===null?null:(Number(a)+Number(b))/2; }
-function compress(v: any,l: number): number|null { return v===null?null:l+.5+.5*(Number(v)-l-.5); }
 
 export function recoverCombinedClearingBaseline(payload: AnalysisPayload): AnalysisPayload {
   need(payload.schemaVersion===55,"Combined Clearing recovery requires schema 55.");
@@ -43,7 +43,7 @@ export function validateCombinedClearingPayload(payload: AnalysisPayload, valida
     &&marker.mergePolicy==="full-tag-bidirectional-raw-max-v1"&&marker.uniqueClearPolicy==="one-merged-player-chart-clear-regardless-of-winning-source"
     &&marker.capPolicy===capPolicy&&marker.comparabilityPolicy==="current-chart-id-and-mode", "Combined Clearing policy differs.");
   need(policy.version===2&&policy.method===METHOD&&policy.source==="piuscores-official"&&policy.mix==="Phoenix+Phoenix2"
-    &&policy.mode==="Double"&&policy.minimumLevel===26&&policy.percentile===.2&&policy.difficultyDeltaScale===.7&&policy.compressionFactor===.5
+    &&policy.mode==="Double"&&policy.minimumLevel===26&&policy.percentile===.2&&policy.difficultyDeltaScale===.7&&policy.compressionFactor===compressionFactor(payload)
     &&same(policy.playerSkill,{method:"leave-one-chart-out-top-official-levels",topCharts:25,minimumOtherCharts:25,historyMinimumLevel:23,levelMidpointOffset:.5,separateModes:true})
     &&same(policy.shrinkage,{priorPlayers:20,formula:"n/(n+20)*n/N"})
     &&policy.capPolicy===marker.capPolicy&&policy.mergePolicy===marker.mergePolicy&&policy.comparabilityPolicy===marker.comparabilityPolicy
@@ -78,7 +78,7 @@ export function validateCombinedClearingPayload(payload: AnalysisPayload, valida
       }
       need(Number.isInteger(n)&&Number.isInteger(N)&&0<=n&&n<=N&&c.observedClearCount===N&&c.missingSkillCount===N-n
         &&same(c.abilityCoverage,N?n/N:0)&&same(c.shrinkageWeight,n/(n+20)*(N?n/N:0)),"Combined Clearing support or weights differ.");
-      for(const f of ["estimatedDifficulty","difficultyCi95Low","difficultyCi95High"])need(same(c[f],compress(obj(c.initialFit)[f],l)),"Combined Clearing compression must apply once.");
+      for(const f of ["estimatedDifficulty","difficultyCi95Low","difficultyCi95High"])need(same(c[f],compressDifficulty(obj(c.initialFit)[f]===null?null:Number(obj(c.initialFit)[f]),l,compressionFactor(payload))),"Combined Clearing compression must apply once.");
       if(c.defaultedAtCap)need(c.difficultyCi95Low===null&&c.difficultyCi95High===null,"Capped Clearing gained a formal interval.");
       if(!groups.has(l))groups.set(l,[]);groups.get(l)!.push(row);
       for(const goal of ["general","sss","sssplus"]) {

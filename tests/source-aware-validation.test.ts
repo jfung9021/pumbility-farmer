@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { compressionPolicy } from "../lib/tier-postprocessing.ts";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { finalWidthParameters, finalWidthRating, recoverSourceAwareBaseline, validateSourceAwarePayload } from "../lib/source-aware-validation.ts";
@@ -66,4 +67,21 @@ test("source-aware selector is isolated to enabled local analysis",()=>{
   const env={PIU_LOCAL_ANALYSIS:"1",PIU_LOCAL_SCORING_VARIANT_EXPERIMENT:"source-aware-width"};
   assert.match(localCombinedResultsPath(env),/source-aware-width/);
   assert.doesNotMatch(localCombinedResultsPath({...env,PIU_LOCAL_ANALYSIS:undefined}),/source-aware-width/);
+});
+
+
+test("source-aware Clearing validates the recorded 75% adjustment before final width",()=>{
+  const p=structuredClone(candidate);
+  p.summary.method.ratingPostprocessing=compressionPolicy(46,.75);
+  for(const row of [...p.singles,...p.doubles]){
+    const metric=row.tierMetrics!.clearing,w=metric.finalFolderWidth;
+    if(!w)continue;
+    for(const field of ["estimatedDifficulty","difficultyCi95Low","difficultyCi95High"] as const){
+      const value=w.input[field];
+      metric.initialFit![field]=value===null?null:row.level+.5+(value-row.level-.5)/.75;
+    }
+  }
+  assert.equal(validate(p),p);
+  p.summary.method.ratingPostprocessing=compressionPolicy(46,.5);
+  assert.throws(()=>validate(p),/not compressed exactly once/);
 });

@@ -3,7 +3,7 @@ import { forward } from "./refined-analysis-validation.ts";
 import { expectedScoring, sssCenteringFolders } from "./sss-centering-validation.ts";
 import { recoverMedianBaseline, validateFinalCurve, inverseFinalCost } from "./sssplus-median-validation.ts";
 import { targetTailRating, targetTailSelection } from "./sssplus-analysis-validation.ts";
-import { compressDifficulty } from "./tier-postprocessing.ts";
+import { compressDifficulty, compressionFactor } from "./tier-postprocessing.ts";
 import type { AnalysisPayload, ChartResult, ScoringVariant } from "./types";
 
 type Obj = Record<string, unknown>;
@@ -61,7 +61,7 @@ function replayMedian(base:AnalysisPayload,method:Obj):AnalysisPayload {
     const adjustment=obj(adjustments[row.chartId]),metadata=obj(adjustment.metadata),effect=adjustment.effect;
     need(finite(effect) && same(metadata.posteriorEffect,effect),"Rare conditional effect and provenance differ.");
     const metric=obj(row.sssplusCenteringBaseline!.scoring),raw=inverse(effect,obj(original[mode]));
-    Object.assign(obj(metric.initialFit),derived(raw,row.level));Object.assign(metric,derived(compressDifficulty(raw,row.level),row.level));
+    Object.assign(obj(metric.initialFit),derived(raw,row.level));Object.assign(metric,derived(compressDifficulty(raw,row.level,compressionFactor(base)),row.level));
     Object.assign(metric,{scoringChartEffect:effect,scoringMethod:"target-conditional-pooled-prior-v1",scoringProvisional:true,evidenceStatus:"Provisional",
       scoringBootstrapValidReplicates:0,intervalMethod:"unavailable-new-conditional-estimator",
       intervalUnavailableReason:"New fixed-ability conditional chart estimator has no player-bootstrap interval."});
@@ -78,7 +78,7 @@ function replayMedian(base:AnalysisPayload,method:Obj):AnalysisPayload {
   }
   const support=sssCenteringFolders(preview,false),calibration=obj(method.medianCalibration),curves=obj(calibration.calibration),errors=obj(calibration.calibrationErrors),populations:Obj={};
   need(calibration.version===3 && calibration.method==="sssplus-refined-median-calibration-v3" && calibration.baseSchemaVersion===52
-    && calibration.compressionApplications===1 && calibration.compressionFactor===.5 && calibration.modelRefits===0 && calibration.dataFetches===0
+    && calibration.compressionApplications===1 && calibration.compressionFactor===compressionFactor(base) && calibration.modelRefits===0 && calibration.dataFetches===0
     && calibration.minimumFinalCharts===5 && calibration.minimumMixedCharts===0 && calibration.minimumLevel===20
     && calibration.anchorEligibility==="minimum-five-finite-refined-charts-v1"
     && same(calibration.originalOfficialCalibration,original),"Spread median policy or source differs.");
@@ -102,7 +102,7 @@ function replayMedian(base:AnalysisPayload,method:Obj):AnalysisPayload {
       const metric=obj(row.scoringVariants!.sss!),previous=obj(adjusted[key][i].scoringVariants!.sssplus);
       for(const field of ["evidenceStatus","scoringProvisional","scoringProvisionalReasons","scoringExtrapolated"])if(field in previous)metric[field]=structuredClone(previous[field]);
       const initial=obj(metric.initialFit);
-      for(const field of FIELDS){const raw=initial[field],v=raw===null||!c?null:inverseFinalCost(forward(Number(raw),obj(original[mode])),c);initial[field]=v;metric[field]=compressDifficulty(v,row.level);
+      for(const field of FIELDS){const raw=initial[field],v=raw===null||!c?null:inverseFinalCost(forward(Number(raw),obj(original[mode])),c);initial[field]=v;metric[field]=compressDifficulty(v,row.level,compressionFactor(base));
         if(field!=="estimatedDifficulty"){initial[field.replace("difficulty","difficultyDelta")]=v===null?null:v-row.level-.5;metric[field.replace("difficulty","difficultyDelta")]=metric[field]===null?null:Number(metric[field])-row.level-.5;}}
       Object.assign(initial,derived(initial.estimatedDifficulty as number|null,row.level));Object.assign(metric,derived(metric.estimatedDifficulty as number|null,row.level));
       if(!c)Object.assign(metric,{evidenceStatus:"Unrated",scoringUnratedReason:"Final SSS+ median calibration unavailable: "+errors[mode]});
@@ -117,8 +117,8 @@ function replayMedian(base:AnalysisPayload,method:Obj):AnalysisPayload {
   for(const [mode,key] of MODES)for(const row of preview[key]) {
     if(row.level<20)continue;
     const c=curves[mode]===null?null:obj(curves[mode]),old=obj(original[mode]),midpoint=row.level+.5,ref=row.scoringVariants!.sss!.scoringRefinement!;
-    const project=(range:Obj|null):Obj|null=>!range||!c?null:Object.fromEntries(["lower","upper"].map(side=>[side,compressDifficulty(inverseFinalCost(forward(midpoint+2*(Number(range[side])-midpoint),old),c),row.level)]));
-    const metric=expectedScoring(row.scoringVariants!.sss!,row.level,residuals[mode][String(row.level)],project(ref.range?obj(ref.range):null));
+    const project=(range:Obj|null):Obj|null=>!range||!c?null:Object.fromEntries(["lower","upper"].map(side=>[side,compressDifficulty(inverseFinalCost(forward(midpoint+(Number(range[side])-midpoint)/compressionFactor(base),old),c),row.level,compressionFactor(base))]));
+    const metric=expectedScoring(row.scoringVariants!.sss!,row.level,residuals[mode][String(row.level)],project(ref.range?obj(ref.range):null),compressionFactor(base));
     const band=project(ref.rare?{lower:ref.rare.upperBandLow,upper:ref.rare.upperBandHigh}:null),folder=residuals[mode][String(row.level)];
     obj(metric.scoringFolderCentering).effectiveRareBand=band?Object.fromEntries(Object.entries(band).map(([k,v])=>[k,Number(v)+folder.finalShift])):null;
     const effect=latents.get(row.chartId)!,limits=c?(c.anchors as unknown[]).map(obj):[];
@@ -153,7 +153,7 @@ function boundaryCandidates(preview:AnalysisPayload,base:AnalysisPayload,method:
     for(const item of (fit.candidates??[]) as unknown[]){const s=obj(item);if(finite(s.pointsPerLatentUnit)&&s.pointsPerLatentUnit>0)slopes.push({pointsPerLatentUnit:s.pointsPerLatentUnit,kind:"cached-robust-scale",softL1Scale:s.softL1Scale??null});}
     const folder=obj(obj(folders[mode])[String(row.level)]),direction=branch==="all-target"?-1:1,c=curves[mode]===null?null:obj(curves[mode]),stress:Obj[]=[];
     if(c&&finite(gap)&&finite(mae)&&finite(boundary?.edgeLatent))for(const candidate of slopes)for(const endpointGap of [gap,Math.max(0,gap-mae)]) {
-      const latent=boundary.edgeLatent+direction*endpointGap/Number(candidate.pointsPerLatentUnit),raw=inverseFinalCost(latent,c)+Number(folder.initialShift),difficulty=compressDifficulty(raw,row.level)!;
+      const latent=boundary.edgeLatent+direction*endpointGap/Number(candidate.pointsPerLatentUnit),raw=inverseFinalCost(latent,c)+Number(folder.initialShift),difficulty=compressDifficulty(raw,row.level,compressionFactor(base))!;
       stress.push({...candidate,gapPoints:endpointGap,difficulty,distance:direction*(difficulty-row.level-.5)});
     }
     const stable=!!stress.length&&stress.every(s=>Number(s.distance)>=2),reasons:string[]=[];
@@ -287,7 +287,7 @@ export function validateSpreadAnalysisPayload(payload:AnalysisPayload,validateBa
   const method=obj(payload.summary.method[NS]);
   need(method.version===1&&method.method==="sssplus-continuous-rare-asinh-spread-v1"&&method.baseSchemaVersion===53&&method.localOnly===true
     &&/^[a-f0-9]{64}$/.test(String(method.basePayloadSha256))&&method.target===995000&&method.source==="official"&&method.minimumLevel===20
-    &&method.scale===.55&&method.compressionApplications===1&&method.compressionFactor===.5&&method.dataFetches===0&&method.fullPlayerRefits===0
+    &&method.scale===.55&&method.compressionApplications===1&&method.compressionFactor===compressionFactor(payload)&&method.dataFetches===0&&method.fullPlayerRefits===0
     &&same(method.stageOrder,["recover-frozen-refined-latent","replace-rare-band-with-conditional-posterior","supported-folder-median-anchors","final-v3-curve",
       "residual-median-offset","single-midpoint-compression","midpoint-asinh-spread","bounded-global-tail-policy","component-mean-and-ranks"]),"Spread policy, scale, source or stage order differs.");
   validateRare(base,method);

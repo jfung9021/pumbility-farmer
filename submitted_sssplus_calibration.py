@@ -19,7 +19,7 @@ from final_folder_width import POLICY as WIDTH_POLICY, width_parameters, width_v
 from sss_scoring import _composite, _derived, payload_sha256, rank_variants
 from sssplus_spread import SCALE, spread_value
 from target_tail_policy import TAIL_METHOD, TAIL_PARAMETERS, finite, tail_value
-from tier_postprocessing import FIT_FIELDS, compress_difficulty
+from tier_postprocessing import FIT_FIELDS, compress_difficulty, compression_factor
 
 SCHEMA_VERSION = 57
 BASE_SCHEMA_VERSION = 56
@@ -188,7 +188,7 @@ def _build(base: Mapping[str, Any], inputs: Mapping[str, Any], identity: Mapping
                               zip(FIELDS, ("effect", "effectLow", "effectHigh"))}
             _set_endpoints(initial, initial_values, level)
             metric["initialFit"] = initial
-            compressed = {field: compress_difficulty(value, level) for field, value in initial_values.items()}
+            compressed = {field: compress_difficulty(value, level, compression_factor(base)) for field, value in initial_values.items()}
             spread = {field: spread_value(value, level) for field, value in compressed.items()}
             _set_endpoints(metric, spread, level)
             reasons = set(metric.get("scoringProvisionalReasons", [])) | set(raw.get("provisionalReasons") or [])
@@ -241,7 +241,7 @@ def _build(base: Mapping[str, Any], inputs: Mapping[str, Any], identity: Mapping
     result["schemaVersion"] = SCHEMA_VERSION
     result["summary"]["method"][NAMESPACE] = {"version": 1, "method": METHOD, "localOnly": local_only,
         "baseSchemaVersion": BASE_SCHEMA_VERSION, "basePayloadSha256": payload_sha256(base),
-        "policy": copy.deepcopy(POLICY), "fitIdentity": identity, "fitSha256": fit_hash,
+        "policy": {**copy.deepcopy(POLICY), "compressionFactor": compression_factor(base)}, "fitIdentity": identity, "fitSha256": fit_hash,
         "sourcePolicySemanticSha256": source_hash, "fitPolicy": copy.deepcopy(fit_policy),
         "fitDiagnostics": copy.deepcopy(diagnostics), "chartInputs": copy.deepcopy(inputs),
         "chartInputsSha256": payload_sha256(inputs), "folders": folders, "sharedScale": scale,
@@ -292,7 +292,7 @@ def validate_submitted_sssplus_calibration(payload: Mapping[str, Any], original:
                                           fit_identity: Mapping[str, Any] | None = None) -> dict:
     base = recover_submitted_sssplus_calibration(payload)
     marker = payload["summary"]["method"][NAMESPACE]
-    if (marker.get("policy") != POLICY or marker.get("stageOrder") != STAGE_ORDER or marker.get("modelRefits") != 0
+    if (marker.get("policy") != {**POLICY, "compressionFactor": compression_factor(payload)} or marker.get("stageOrder") != STAGE_ORDER or marker.get("modelRefits") != 0
             or marker.get("dataFetches") != 0 or not isinstance(marker.get("localOnly"), bool)):
         raise ValueError("Submitted calibration policy or stage order differs.")
     if payload_sha256(base) != marker.get("basePayloadSha256") or (original is not None and payload_sha256(original) != marker["basePayloadSha256"]):

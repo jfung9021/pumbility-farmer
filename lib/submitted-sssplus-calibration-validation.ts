@@ -2,7 +2,7 @@ import { checkFit, validateRanks } from "./sss-analysis-validation.ts";
 import { FINAL_WIDTH_POLICY, finalWidthParameters, finalWidthRating } from "./source-aware-validation.ts";
 import { spreadRating } from "./sssplus-spread-validation.ts";
 import { targetTailRating } from "./sssplus-analysis-validation.ts";
-import { compressDifficulty } from "./tier-postprocessing.ts";
+import { compressDifficulty, compressionFactor } from "./tier-postprocessing.ts";
 import type { AnalysisPayload } from "./types";
 
 type Obj = Record<string, any>;
@@ -91,7 +91,7 @@ export function validateSubmittedSssplusCalibrationPayload(payload: AnalysisPayl
   const p = payload as unknown as Obj, b = base as unknown as Obj, m = obj(p.summary.method[NS]);
   need(m.version === 1 && m.method === METHOD && typeof m.localOnly === "boolean" && m.baseSchemaVersion === 56
     && HASH.test(m.basePayloadSha256) && HASH.test(m.fitSha256) && HASH.test(m.chartInputsSha256)
-    && m.modelRefits === 0 && m.dataFetches === 0 && same(m.policy, POLICY) && same(m.stageOrder, STAGES), "Submitted SSS+ policy differs.");
+    && m.modelRefits === 0 && m.dataFetches === 0 && same(m.policy, {...POLICY, compressionFactor: compressionFactor(payload)}) && same(m.stageOrder, STAGES), "Submitted SSS+ policy differs.");
   const source = obj(p.summary.method.sourceAwareTiers?.sourcePolicy), identity = obj(m.fitIdentity);
   const pinned = source.targetFits.filter((f: Obj) => f.goal === "sssplus" && f.source === "submitted" && f.mode === "Double");
   need(pinned.length === 1 && same(identity, pinned[0].identity) && identity.target === 995000 && identity.samples === 200
@@ -161,14 +161,14 @@ export function validateSubmittedSssplusCalibrationPayload(payload: AnalysisPayl
       && s.scoringTarget === 995000 && s.scoringSource === "submitted" && s.nContributors === input.usableContributors
       && s.scoringTargetSuccesses === input.targetSuccesses && s.scoringBelowTarget === input.belowTarget
       && same(s.scoringProvisionalReasons, [...new Set([...(oldS.scoringProvisionalReasons ?? []), ...input.provisionalReasons, "submitted-folder-relative-calibration"])].sort()), "Submitted evidence was promoted or support changed.");
-    const points = folder.rows.map(r => ({ id: r.chartId, value: spreadRating(compressDifficulty(submittedSssplusInitialRating(inputs[r.chartId].effect, row.level, folder.center, scale), row.level), row.level) }));
+    const points = folder.rows.map(r => ({ id: r.chartId, value: spreadRating(compressDifficulty(submittedSssplusInitialRating(inputs[r.chartId].effect, row.level, folder.center, scale), row.level, compressionFactor(payload)), row.level) }));
     const width = finalWidthParameters(points, row.level), w = obj(s.finalFolderWidth);
     need(same(folders[String(row.level)].widthParameters, width) && same(w.parameters, width)
       && w.group === `Double:submitted-sssplus:${row.level}` && w.exceptionPreserved === false && w.initialCompressionApplications === 1,
     "Submitted final width population or policy differs.");
     for (const [field, effect] of FIELDS.map((field, i) => [field, input[["effect", "effectLow", "effectHigh"][i]]] as const)) {
       const initial = submittedSssplusInitialRating(effect, row.level, folder.center, scale);
-      const compressed = compressDifficulty(initial, row.level), spread = spreadRating(compressed, row.level);
+      const compressed = compressDifficulty(initial, row.level, compressionFactor(payload)), spread = spreadRating(compressed, row.level);
       const preTail = finalWidthRating(spread, width), final = targetTailRating(preTail, row.level);
       need(same(s.initialFit?.[field], initial) && same(w.input[field], spread) && same(s[field], final), "Submitted point or interval stage differs.");
       const spreadKey = field === "estimatedDifficulty" ? "Difficulty" : field === "difficultyCi95Low" ? "DifficultyCi95Low" : "DifficultyCi95High";
