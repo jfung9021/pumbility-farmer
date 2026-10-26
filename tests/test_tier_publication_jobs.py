@@ -61,7 +61,12 @@ class Store(MemoryBlobStore):
         self.revisions = {'tier': {'sha256': 'previous'}, 'source': {'revision': 'source-1'}}
         self.promotions = 0
         self.reject_promotion = False
-        self.put_json('candidate', {'schemaVersion': 57})
+        from production_tiers import RETAINED_VERSION
+        self.put_json('candidate', {'schemaVersion': 61, 'summary': {'method': {
+            'retainedGoalProducer': {'producer': 'retained-goals-v1'},
+            'productionTierPublication': {'method': RETAINED_VERSION,
+                'inputs': {'producer': 'retained-goals-v1'}}}}})
+        self.last_promotion = None
 
     def tier_publication_revisions(self):
         return copy.deepcopy(self.revisions)
@@ -74,6 +79,7 @@ class Store(MemoryBlobStore):
             if (self.reject_promotion or kwargs['expected_revisions'] != self.revisions
                     or self.jobs.owner != kwargs['lease_owner'] or self.jobs.expired):
                 raise TierPublicationConflict('changed')
+            self.last_promotion = copy.deepcopy(kwargs)
             self.values['tier'] = self.get_json(kwargs['candidate_path'])
             self.jobs.finish_tier_publication(kwargs['completed_job'])
             self.promotions += 1
@@ -96,9 +102,14 @@ class TierPublicationJobTests(unittest.TestCase):
     def request(self, enqueue=None):
         return request_tier_publication(enqueue or Mock(), jobs=self.jobs, store=self.store)[1]
 
+    def ready(self, **overrides):
+        return {'done': True, 'stage': 'ready', 'schemaVersion': 61,
+                'producer': 'retained-goals-v1', 'completedTargetFits': 4, 'candidatePath': 'candidate',
+                'candidateSha256': 'candidate', **overrides}
+
     def pin(self):
         job = self.request()
-        with patch('tier_publication_jobs._pin_inputs', return_value=({'inputs': 'immutable'}, self.store.tier_publication_revisions())):
+        with patch('tier_publication_jobs._pin_inputs', return_value=({'inputs': 'immutable', 'producer': 'retained-goals-v1'}, self.store.tier_publication_revisions())):
             result = execute_tier_publication_job(job['id'], jobs=self.jobs, store=self.store)
         return job['id'], result
 
@@ -109,6 +120,56 @@ class TierPublicationJobTests(unittest.TestCase):
             results = list(pool.map(lambda _: self.request(enqueue), range(8)))
         self.assertEqual(len({r['id'] for r in results}), 1)
         enqueue.assert_called_once()
+
+    def test_new_job_uses_retained_producer_and_fifteen_outer_stages(self):
+        result = self.request()
+        stored = self.jobs.get(result['id'])
+        self.assertEqual(stored['producer'], 'retained-goals-v1')
+        self.assertEqual(result['totalStages'], 15)
+
+    def test_legacy_jobs_fail_terminally_before_pinning_or_advancing(self):
+        for pinned in (False, True):
+            with self.subTest(pinned=pinned):
+                result = self.request()
+                job = self.jobs.get(result['id'])
+                job.pop('producer', None)
+                if pinned:
+                    job['pipelineState'] = {'inputs': 'legacy-inputs', 'generation': 'legacy-generation'}
+                    job['expectedRevisions'] = self.store.tier_publication_revisions()
+                self.jobs.save(job)
+                with patch('tier_publication_jobs._pin_inputs') as pin, \
+                     patch('production_tiers.advance_tier_publication') as advance:
+                    failed = execute_tier_publication_job(job['id'], jobs=self.jobs, store=self.store)
+                pin.assert_not_called()
+                advance.assert_not_called()
+                self.assertEqual(failed['status'], 'failed')
+                self.assertEqual(failed['attempt'], 1)
+                self.assertNotIn(CONTINUATION_FIELD, failed)
+                self.assertIsNone(self.jobs.active_tier)
+                self.assertEqual(self.store.promotions, 0)
+
+    def test_retired_candidate_schema_or_producer_cannot_promote(self):
+        for overrides in ({'schemaVersion': 57}, {'schemaVersion': 60}, {'producer': 'legacy-eight-fits'}):
+            with self.subTest(overrides=overrides):
+                identity, _ = self.pin()
+                with patch('production_tiers.advance_tier_publication', return_value=self.ready(**overrides)):
+                    failed = execute_tier_publication_job(identity, jobs=self.jobs, store=self.store)
+                self.assertEqual(failed['status'], 'failed')
+                self.assertNotIn(CONTINUATION_FIELD, failed)
+                self.assertEqual(self.store.promotions, 0)
+
+    def test_stale_stored_candidate_cannot_use_current_ready_metadata(self):
+        valid = copy.deepcopy(self.store.get_json('candidate'))
+        for schema in (57, 60):
+            with self.subTest(schema=schema):
+                self.store.put_json('candidate', {**valid, 'schemaVersion': schema})
+                identity, _ = self.pin()
+                with patch('production_tiers.advance_tier_publication', return_value=self.ready()):
+                    failed = execute_tier_publication_job(identity, jobs=self.jobs, store=self.store)
+                self.assertEqual(failed['status'], 'failed')
+                self.assertNotIn(CONTINUATION_FIELD, failed)
+                self.assertEqual(self.store.promotions, 0)
+        self.store.put_json('candidate', valid)
 
     def test_status_is_lightweight_and_omits_internal_sources(self):
         identity, _ = self.pin()
@@ -127,10 +188,10 @@ class TierPublicationJobTests(unittest.TestCase):
 
     def test_phase_resume_uses_pinned_state_and_monotonic_sequence(self):
         identity, first = self.pin()
-        advance = {'done': False, 'stage': 'median', 'progressOrdinal': 10, 'state': {'inputs': 'immutable', 'phase': 'median'}}
+        advance = {'done': False, 'stage': 'median', 'progressOrdinal': 10, 'state': {'inputs': 'immutable', 'producer': 'retained-goals-v1', 'phase': 'median'}}
         with patch('production_tiers.advance_tier_publication', return_value=advance) as run:
             second = execute_tier_publication_job(identity, jobs=self.jobs, store=self.store)
-        self.assertEqual(run.call_args.args[1], {'inputs': 'immutable'})
+        self.assertEqual(run.call_args.args[1], {'inputs': 'immutable', 'producer': 'retained-goals-v1'})
         self.assertGreater(second[CONTINUATION_FIELD], first[CONTINUATION_FIELD])
         self.assertEqual(self.jobs.get(identity)['pipelineState']['phase'], 'median')
         self.assertEqual(second['status'], 'queued')
@@ -149,10 +210,10 @@ class TierPublicationJobTests(unittest.TestCase):
         def advance(_store, _state, *, on_stage_start):
             on_stage_start('spread')
             self.assertEqual(get_tier_publication_status(identity, jobs=self.jobs)['stage'], 'spread')
-            return {'done': False, 'stage': 'spread', 'progressOrdinal': 12, 'totalStages': 18}
+            return {'done': False, 'stage': 'spread', 'progressOrdinal': 9, 'totalStages': 14}
         with patch('production_tiers.advance_tier_publication', side_effect=advance):
             result = execute_tier_publication_job(identity, jobs=self.jobs, store=self.store)
-        self.assertEqual(result['totalStages'], 19)
+        self.assertEqual(result['totalStages'], 15)
 
     def test_expired_worker_lease_can_resume(self):
         identity, _ = self.pin()
@@ -221,13 +282,15 @@ class TierPublicationJobTests(unittest.TestCase):
 
     def test_ready_candidate_promotes_once_and_recovers_after_lost_ack(self):
         identity, _ = self.pin()
-        ready = {'done': True, 'stage': 'ready', 'candidatePath': 'candidate', 'candidateSha256': 'candidate'}
+        ready = self.ready()
         with patch('production_tiers.advance_tier_publication', return_value=ready):
             result = execute_tier_publication_job(identity, jobs=self.jobs, store=self.store)
             duplicate = execute_tier_publication_job(identity, jobs=self.jobs, store=self.store)
         self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['completedTargetFits'], 4)
         self.assertEqual(duplicate['status'], 'completed')
         self.assertEqual(self.store.promotions, 1)
+        self.assertEqual(self.store.last_promotion['audit']['schemaVersion'], 61)
 
     def test_transaction_conflict_leaves_tier_and_recommendations_untouched(self):
         identity, _ = self.pin()
@@ -235,16 +298,14 @@ class TierPublicationJobTests(unittest.TestCase):
         self.store.put_json('recommendations', {'generation': 'unchanged'})
         self.store.reject_promotion = True
         before = copy.deepcopy(self.store.values)
-        with patch('production_tiers.advance_tier_publication', return_value={
-            'done': True, 'candidatePath': 'candidate', 'candidateSha256': 'candidate'}):
+        with patch('production_tiers.advance_tier_publication', return_value=self.ready()):
             result = execute_tier_publication_job(identity, jobs=self.jobs, store=self.store)
         self.assertEqual(result['status'], 'failed')
         self.assertEqual(self.store.values, before)
 
     def test_changed_candidate_hash_cannot_be_promoted(self):
         identity, _ = self.pin()
-        with patch('production_tiers.advance_tier_publication', return_value={
-            'done': True, 'candidatePath': 'candidate', 'candidateSha256': 'different-content'}):
+        with patch('production_tiers.advance_tier_publication', return_value=self.ready(candidateSha256='different-content')):
             result = execute_tier_publication_job(identity, jobs=self.jobs, store=self.store)
         self.assertEqual(result['status'], 'failed')
         self.assertEqual(result['exceptionClass'], 'TierPublicationConflict')

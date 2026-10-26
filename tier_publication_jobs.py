@@ -8,6 +8,9 @@ from typing import Any, Callable, Mapping
 
 CONTINUATION_FIELD = "_tierPublicationContinuation"
 MAX_IO_RETRIES = 2
+CURRENT_TIER_PRODUCER = "retained-goals-v1"
+CURRENT_TIER_SCHEMA_VERSION = 61
+TIER_PUBLICATION_STAGES = 15
 
 
 def _retryable_io(error: Exception) -> bool:
@@ -33,7 +36,7 @@ def _public_status(job: Mapping[str, Any]) -> dict[str, Any]:
     fields = ("id", "jobType", "status", "stage", "createdAtUtc", "updatedAtUtc",
               "completedAtUtc", "generatedAtUtc", "progressOrdinal", "totalStages",
               "completedTargetFits", "error", "exceptionClass", "attempt", "publication",
-              "operation", "goals", "backfill")
+              "operation", "goals", "backfill", "producer")
     return {key: job[key] for key in fields if key in job}
 
 
@@ -55,7 +58,8 @@ def request_tier_publication(enqueue: Callable[[str], None], *, store=None, jobs
     job = {"id": "tier-publication-" + uuid.uuid4().hex, "jobType": "tier-publication",
            "status": "queued", "stage": "pin-inputs", "createdAtUtc": stamp,
            "updatedAtUtc": stamp, "generatedAtUtc": stamp, "progressOrdinal": 0,
-           "completedTargetFits": 0, "totalStages": 19, "attempt": 0, "error": None}
+           "completedTargetFits": 0, "totalStages": TIER_PUBLICATION_STAGES, "attempt": 0, "error": None,
+           "producer": CURRENT_TIER_PRODUCER}
     if operation == "scoring-goal-backfill":
         job.update(operation=operation, goals=list(goals), totalStages=1 + len(goals) * 5)
     current, created = jobs.request_tier_publication(job)
@@ -164,6 +168,9 @@ def execute_tier_publication_job(job_id: str, *, store=None, jobs=None) -> dict[
     heartbeat = None
     started = perf_counter()
     try:
+        if (current.get("operation") != "scoring-goal-backfill"
+                and current.get("producer") != CURRENT_TIER_PRODUCER):
+            raise ValueError("This tier job uses a retired producer; start a current tier publication.")
         heartbeat = _start_job_lease_heartbeat(jobs, job_id)
         _pulse_job_lease(heartbeat)
         event("tier-phase-start", job_id=job_id, stage=current["stage"], sequence=current["progressOrdinal"])
@@ -207,12 +214,21 @@ def execute_tier_publication_job(job_id: str, *, store=None, jobs=None) -> dict[
                 return _public_status(completed)
             _stop_job_lease(heartbeat)
             heartbeat = None
+            if (result.get("schemaVersion") != CURRENT_TIER_SCHEMA_VERSION
+                    or result.get("producer") != CURRENT_TIER_PRODUCER):
+                raise ValueError("Tier publication requires the current retained schema-61 producer.")
+            from production_tiers import validate_current_tier_publication
+            candidate = store.get_json(result["candidatePath"])
+            if candidate is None:
+                raise ValueError("The validated tier candidate is unavailable.")
+            validate_current_tier_publication(candidate)
             revision = store.artifact_revision(result["candidatePath"])
             if revision is None:
                 raise ValueError("The validated tier candidate is unavailable.")
             if revision.get("sha256") != result["candidateSha256"]:
                 raise TierPublicationConflict("The validated candidate content differs from its checkpoint.")
-            publication = {"schemaVersion": 57, "candidatePath": result["candidatePath"],
+            publication = {"schemaVersion": CURRENT_TIER_SCHEMA_VERSION, "producer": CURRENT_TIER_PRODUCER,
+                           "candidatePath": result["candidatePath"],
                            "tierSha256": result["candidateSha256"], "scoreFetches": 0,
                            "recommendationFits": 0, "jobId": job_id}
             completed = {**current, "status": "completed", "stage": "published", "error": None,
