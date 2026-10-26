@@ -88,6 +88,23 @@ class TierPublicationStoreTests(unittest.TestCase):
         self.assertIn('for update', self.queries()[0])
         self.assertTrue(any('pumbility.claim_job' in q for q in self.queries()))
 
+    def test_operator_cancellation_fences_the_old_worker_before_any_pointer_write(self):
+        jobs = PumbilityJobStore(database_url='postgresql://local/test')
+        self.cursor.fetchone.return_value = ('job-uuid', 'running', 'retired-worker')
+        cancelled = jobs.save({'id': 'job', 'status': 'failed', 'stage': 'target-fit-sss-submitted-single',
+            'cancelRequested': True, 'error': 'retired-tier-producer-replaced', 'retryAllowedAtUtc': None})
+        self.assertTrue(cancelled['cancelRequested'])
+        cancellations = [call for call in self.cursor.execute.call_args_list if 'pumbility.cancel_job' in str(call.args[0])]
+        self.assertEqual(len(cancellations), 1)
+        self.assertEqual(cancellations[0].args[1], ('job-uuid',))
+        self.cursor.reset_mock()
+        self.cursor.fetchone.return_value = None
+        with self.assertRaises(TierPublicationConflict):
+            self.promote()
+        queries = self.queries()
+        self.assertTrue(any("status = 'running'" in q and 'cancellation_requested_at is null' in q for q in queries))
+        self.assertFalse(any(q.lstrip().startswith('insert') for q in queries))
+
     def test_failure_cannot_cancel_a_new_lease_owner(self):
         jobs = PumbilityJobStore(database_url='postgresql://local/test')
         self.cursor.fetchone.return_value = None
