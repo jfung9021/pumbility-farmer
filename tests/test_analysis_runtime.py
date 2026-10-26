@@ -521,10 +521,18 @@ class ApiRouteTests(unittest.TestCase):
             missing = API_CLIENT.post("/api/jonathan/refresh?mode=official-status", headers=headers)
             self.assertEqual(missing.json()["outcome"], "official-sources-missing")
             dates = {"asOf": "2026-10-11T00:00:00Z", "fetchedAtUtc": "2026-10-17T04:00:00Z"}
-            store.return_value.get_json.return_value = {"captures": {"Phoenix2": {**dates, "path": "private", "sha256": "private"}}}
+            manifest = {"captures": {"Phoenix2": {**dates, "path": "private", "sha256": "private"}}}
+            store.return_value.get_json.side_effect = lambda key: manifest if key.endswith("manifest.json") else None
             ready = API_CLIENT.post("/api/jonathan/refresh?mode=official-status", headers=headers)
-            self.assertEqual(ready.json(), {"outcome": "official-sources-ready", "sources": {"Phoenix2": dates}})
+            self.assertEqual(ready.json(), {"outcome": "official-sources-ready", "frozenPhoenix": None, "sources": {"Phoenix2": dates}})
             self.assertEqual(ready.headers["cache-control"], "no-store")
+            archive = {"sha256": "a" * 64, "capture": {"private": "PLAYER#1234"}}
+            store.return_value.get_json.side_effect = lambda key: manifest if key.endswith("manifest.json") else archive
+            with patch("official_scoring_sources.validate_phoenix_archive", return_value={**dates, "boards": {"chart": {}}}) as validate:
+                frozen = API_CLIENT.post("/api/jonathan/refresh?mode=official-status", headers=headers)
+                validate.assert_called_once_with(archive)
+            self.assertEqual(frozen.json()["frozenPhoenix"], {**dates, "sha256": "a" * 64, "boardCount": 1})
+            self.assertNotIn("PLAYER#1234", frozen.text)
             capture.assert_not_called()
             start.assert_not_called()
             store.return_value.put_json.assert_not_called()

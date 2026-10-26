@@ -1988,6 +1988,16 @@ test("accepts the combined tier-list identity", () => {
   assert.equal(crossChart.tierMetrics!.clearing.clearCount, 60);
   assert.equal(tierSupportLabel(crossChart, "scoring"), "18 players with cross-level official comparisons");
   assert.equal(validateLocalAnalysisPayload(crossLevel, "combined").doubles[0].officialScoringEvidence!.sourceStates.Phoenix.possiblyTruncated, true);
+  const uncapturedArchive = structuredClone(crossLevel);
+  Object.assign(uncapturedArchive.doubles[0].officialScoringEvidence!.sourceStates.Phoenix,
+    { status: "not-captured", asOf: null, rawRowCount: 0, maxRank: 0, cutoffScore: null, possiblyTruncated: false });
+  uncapturedArchive.doubles[0].officialScoringEvidence!.sourceCounts.Phoenix = 0;
+  assert.equal(validateLocalAnalysisPayload(uncapturedArchive, "combined").doubles[0].officialScoringEvidence!.sourceStates.Phoenix.status, "not-captured");
+  const uncapturedLive = structuredClone(crossLevel);
+  Object.assign(uncapturedLive.doubles[0].officialScoringEvidence!.sourceStates.Phoenix2,
+    { status: "not-captured", asOf: null, rawRowCount: 0, maxRank: 0, cutoffScore: null, possiblyTruncated: false });
+  uncapturedLive.doubles[0].officialScoringEvidence!.sourceCounts.Phoenix2 = 0;
+  assert.throws(() => validateLocalAnalysisPayload(uncapturedLive, "combined"), /incompatible/);
   const missingSourceStatus = structuredClone(crossLevel);
   delete missingSourceStatus.doubles[0].officialScoringEvidence!.sourceStates.Phoenix;
   assert.throws(() => validateLocalAnalysisPayload(missingSourceStatus, "combined"), /incompatible/);

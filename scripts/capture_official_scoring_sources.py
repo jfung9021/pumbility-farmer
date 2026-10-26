@@ -13,8 +13,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from official_score_merge import merge_official_scores
 from official_scoring_sources import (
-    DEFAULT_OFFICIAL_SCORING_MANIFEST_PATH, MIXES,
-    capture_official_scoring_sources, import_research_scoring_sources,
+    DEFAULT_OFFICIAL_SCORING_MANIFEST_PATH,
+    capture_official_scoring_sources, fetch_official_scoring_catalogs, import_research_scoring_sources,
 )
 from piu_misgrade_analyzer import ApiError, PiuScoresClient
 from scripts.capture_official_score_snapshot import _api_key
@@ -25,7 +25,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OFFICIAL_SCORING_MANIFEST_PATH)
     parser.add_argument("--import-research", type=Path, help="Migrate an existing complete capture without any API calls.")
-    parser.add_argument("--restart", action="store_true", help="Ignore partial captures and the cached Phoenix source.")
+    parser.add_argument("--restart", action="store_true", help="Restart partial live capture; always retain the frozen Phoenix source.")
     args = parser.parse_args()
     try:
         _ensure_git_ignored(args.output)
@@ -33,7 +33,7 @@ def main() -> int:
             manifest = import_research_scoring_sources(args.import_research, args.output)
         else:
             client = PiuScoresClient(api_key=_api_key())
-            catalogs = {m: client.fetch_page_collection(f"api/v2/charts?mix={m}&limit=500") for m in MIXES}
+            catalogs = fetch_official_scoring_catalogs(client, args.output)
 
             def progress(mix: str, done: int, total: int) -> None:
                 if done % 25 == 0 or done == total:

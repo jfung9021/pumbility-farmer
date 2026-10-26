@@ -330,7 +330,7 @@ export interface OfficialClearingEvidence extends Omit<OfficialTierEvidence, "st
 }
 
 export interface OfficialScoringSourceState {
-  status: "available" | "empty" | "absent-from-catalog" | "not-mirrored";
+  status: "available" | "empty" | "absent-from-catalog" | "not-mirrored" | "not-captured";
   asOf: string | null;
   rawRowCount: number;
   maxRank: number;

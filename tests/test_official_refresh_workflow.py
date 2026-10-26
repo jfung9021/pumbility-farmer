@@ -44,14 +44,14 @@ class OfficialRefreshWorkflowTests(unittest.TestCase):
     def test_real_capture_batches_cross_worker_boundary_before_sync(self):
         clients = iter([
             CatalogClient([api_board([row()], OLD), api_board([row()], OLD)]),
-            CatalogClient([api_board([row()], OLD), api_board([row(99)], NEW)]),
-            CatalogClient([api_board([row()], OLD), api_board([row(99)], NEW), api_board([row(99)], NEW)]),
+            CatalogClient([api_board([row(99)], NEW)]),
+            CatalogClient([api_board([row(99)], NEW), api_board([row(99)], NEW)]),
         ])
         def batch(client, store, *, max_boards):
             self.assertEqual(max_boards, 100)
             # Small real captures force two partial continuations and a complete
             # promotion through the production worker's existing queue handoff.
-            size = 3 if len(client.responses) == 3 else 2
+            size = len(client.responses)
             return refresh_hosted_official_scoring_sources(client, store, max_boards=size)
         def execute(job_id, **kwargs):
             self.assertEqual(job_id, self.job_id)
