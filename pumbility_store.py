@@ -2546,7 +2546,8 @@ class PumbilityJobStore:
             _assert_schema(cursor)
             cursor.execute("select pg_advisory_xact_lock(hashtextextended('active:tier-publication',0))")
             cursor.execute("""select j.payload from pumbility.job_heads h join pumbility.jobs j on j.id=h.job_id
-                where h.name='active:tier-publication' and j.status in ('queued','running') for update of j""")
+                where h.name='active:tier-publication' and j.status in ('queued','running')
+                and j.cancellation_requested_at is null for update of j""")
             row = cursor.fetchone()
             if row is not None:
                 return dict(row[0]), False
