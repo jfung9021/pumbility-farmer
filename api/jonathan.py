@@ -90,9 +90,7 @@ def refresh_from_jonathan(
     full_sync = mode == "full"
     try:
         if mode == "scoring-goal-backfill":
-            from tier_publication_jobs import request_scoring_goal_backfill
-            status, payload = request_scoring_goal_backfill(enqueue_tier_publication)
-            return _response(status, payload)
+            return _response(410, {"error": "SS and SS+ tier lists have been retired. Use General or SSS+."})
         if mode == "tiers":
             from tier_publication_jobs import request_tier_publication
             status, payload = request_tier_publication(enqueue_tier_publication)

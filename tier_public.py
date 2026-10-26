@@ -9,6 +9,8 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from scoring_targets import PUBLIC_SCORING_GOALS
+
 FIELDS = json.loads((Path(__file__).parent / "config/tier-public-fields.json").read_text(encoding="utf-8"))
 MODES = ("singles", "doubles", "coop")
 MAX_LIST_BYTES = 12_000_000
@@ -144,6 +146,12 @@ def tier_browser_payload(payload: Mapping[str, Any]) -> dict:
     for key, keys in FIELDS["browserMethodFields"].items():
         if isinstance(method.get(key), Mapping):
             method[key] = _pick(method[key], keys)
+    method["availableScoringGoals"] = list(PUBLIC_SCORING_GOALS)
+    if isinstance(method.get("scoringGoalPolicies"), Mapping):
+        policies = method["scoringGoalPolicies"]
+        method["scoringGoalPolicies"] = {**policies, "goals": [
+            goal for goal in policies.get("goals", [])
+            if isinstance(goal, Mapping) and goal.get("key") in PUBLIC_SCORING_GOALS]}
     result["summary"] = {**compact.get("summary", {}), "method": method}
 
     def metric(value: Mapping[str, Any], kind: str) -> dict:
@@ -157,7 +165,7 @@ def tier_browser_payload(payload: Mapping[str, Any]) -> dict:
             if isinstance(row.get(key), Mapping):
                 value[key] = {goal: _pick(variant, ["estimatedDifficulty"]) if goal == "general"
                               else metric(variant, kind) for goal, variant in row[key].items()
-                              if isinstance(variant, Mapping)}
+                              if goal in PUBLIC_SCORING_GOALS and isinstance(variant, Mapping)}
         if isinstance(row.get("tierMetrics"), Mapping):
             tiers = row["tierMetrics"]
             value["tierMetrics"] = {kind: metric(tiers[kind], kind) for kind in ("clearing", "pumbility")
@@ -201,6 +209,22 @@ def _without_baselines(value: Any) -> Any:
 def tier_chart_details(payload: Mapping[str, Any], chart_id: str) -> dict | None:
     row = next((row for mode in MODES for row in payload.get(mode, []) if row.get("chartId") == chart_id), None)
     return None if row is None else {"generatedAtUtc": payload.get("generatedAtUtc"), "chart": _without_baselines(row)}
+
+
+def public_tier_chart_details(details: Mapping[str, Any] | None) -> dict | None:
+    """Hide retired targets from current and historical lazy detail responses."""
+    if details is None:
+        return None
+    result = dict(details)
+    row = details.get("chart")
+    if isinstance(row, Mapping):
+        chart = dict(row)
+        for field in ("scoringVariants", "pumbilityVariants"):
+            if isinstance(row.get(field), Mapping):
+                chart[field] = {goal: metric for goal, metric in row[field].items()
+                                if goal in PUBLIC_SCORING_GOALS}
+        result["chart"] = chart
+    return result
 
 
 def prepare_tier_publication(full: Mapping[str, Any], generation: str) -> tuple[dict, dict[str, dict]]:

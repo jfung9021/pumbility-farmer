@@ -1,7 +1,9 @@
 import type { AnalysisPayload, ChartResult, ScoringGoal, ScoringGoalPolicy, ScoringVariant, TierMetricKey } from "./types";
 
 export const DEFAULT_SCORING_GOAL: ScoringGoal = "sssplus";
-export const SCORING_GOALS = ["general", "ss", "ssplus", "sss", "sssplus"] as const;
+export const SCORING_GOALS = ["general", "sssplus"] as const;
+/** Immutable older generation contracts still contain these internal variants. */
+export const HISTORICAL_SCORING_GOALS = ["general", "ss", "ssplus", "sss", "sssplus"] as const;
 export const SS_SCORE_TARGET = 980000;
 export const SSPLUS_SCORE_TARGET = 985000;
 export const SSS_SCORE_TARGET = 990000;
@@ -67,7 +69,7 @@ export function scoringGoalFromSearchParams(params: URLSearchParams, _payload?: 
 /** Preserve player, filters represented by the URL, and unrelated navigation state. */
 export function scoringGoalUrl(href: string, goal: ScoringGoal): URL {
   const url = new URL(href);
-  url.searchParams.set("scoring", goal);
+  url.searchParams.set("scoring", SCORING_GOALS.find(candidate => candidate === goal) ?? DEFAULT_SCORING_GOAL);
   return url;
 }
 

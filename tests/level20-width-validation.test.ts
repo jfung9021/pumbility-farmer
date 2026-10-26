@@ -66,7 +66,7 @@ test("schema60 exactly recovers and validates schema59 with optional earlier goa
   }
 });
 
-test("schema60 browser lists validate and agree with lazy details for all selected goals",()=>{
+test("schema60 historical lists validate and retained public goals agree with lazy details",()=>{
   for(const schema of [57,58] as const) {
     const {candidate}=fixture(schema),compact=compactTierPayload(candidate);
     assert.equal(compactTierPayload(compact),compact);
@@ -75,7 +75,11 @@ test("schema60 browser lists validate and agree with lazy details for all select
       assert.equal(row.level20WidthBaseline,undefined);
       const details=tierChartDetails(candidate,row.chartId)!.chart;
       assert.equal(details.level20WidthBaseline,undefined);
-      for(const goal of GOALS)if(row.scoringVariants?.[goal]) {
+      for(const retired of ["ss","ssplus","sss"]) {
+        assert.equal(details.scoringVariants[retired],undefined);
+        assert.equal(details.pumbilityVariants[retired],undefined);
+      }
+      for(const goal of ["general","sssplus"] as const)if(row.scoringVariants?.[goal]) {
         const projected=projectScoringGoal(row,goal),detail=projectScoringGoal(details,goal);
         assert.equal(projected.estimatedDifficulty,detail.estimatedDifficulty);
         assert.equal(projected.tierMetrics!.pumbility.estimatedDifficulty,detail.tierMetrics!.pumbility.estimatedDifficulty);

@@ -1,4 +1,4 @@
-"""Normal refreshes must publish current SS/SS+ without an operator backfill."""
+"""Historical independent-goal continuation and artifact compatibility fixtures."""
 from __future__ import annotations
 
 import copy
@@ -22,6 +22,9 @@ class RequiredScoringGoalsTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        # Replay the archived five-goal pipeline explicitly. Production defaults
+        # no longer schedule these goals; test_retired_tier_goals covers that.
+        self.stack.enter_context(patch("production_tiers.REQUIRED_REFRESH_GOALS", ("ss", "ssplus")))
         self.store = MemoryBlobStore()
         self.base = production_fixture()
         self.policy_hash = self.base["summary"]["method"]["sourceAwareTiers"]["sourcePolicy"]["effectivePolicySha256"]

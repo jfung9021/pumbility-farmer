@@ -1,4 +1,4 @@
-import { SCORING_GOALS, SCORING_TARGET_POLICIES } from "./scoring-variants.ts";
+import { HISTORICAL_SCORING_GOALS, SCORING_TARGET_POLICIES } from "./scoring-variants.ts";
 import { checkFit, validateRanks } from "./sss-analysis-validation.ts";
 import { targetTailRating, targetTailSelection } from "./sssplus-analysis-validation.ts";
 import { truncateEstimatedDifficulty } from "./format-difficulty.ts";
@@ -53,7 +53,7 @@ function summary(payload: AnalysisPayload): { overlay: Obj; tail: Obj; selected:
     && same(tail.selectedChartIds, [...new Set(tail.selectedChartIds)].sort()) && tail.selectedChartIds.length <= 10,
   "SSS tail selection or global budget differs.");
   const goals = overlay.baseSchemaVersion === 58 ? payload.summary.method.availableScoringGoals : ["general", "sss", "sssplus"];
-  need(Array.isArray(goals) && same(goals, SCORING_GOALS.filter(goal => goals.includes(goal)))
+  need(Array.isArray(goals) && same(goals, HISTORICAL_SCORING_GOALS.filter(goal => goals.includes(goal)))
     && ["general", "sss", "sssplus"].every(goal => goals.includes(goal)), "SSS tail scoring-goal availability differs.");
   if (overlay.baseSchemaVersion === 58) need(goals.some(goal => goal === "ss" || goal === "ssplus")
     && same(payload.summary.method.scoringGoalPolicies, { version: 1, goals: SCORING_TARGET_POLICIES }), "SSS tail expanded-goal policy differs.");

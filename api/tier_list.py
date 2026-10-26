@@ -11,7 +11,8 @@ from fastapi.responses import JSONResponse
 from analysis_runtime import PrivateBlobStore
 from pumbility_contract import combined_tier_blob_path
 from tier_scores import TIER_SCORE_MODES, TierScoresNotFoundError, read_tier_player_scores
-from tier_public import detail_shard_path, tier_browser_payload, tier_chart_details, tier_detail_generated_at
+from tier_public import (detail_shard_path, public_tier_chart_details, tier_browser_payload,
+                         tier_chart_details, tier_detail_generated_at)
 from bpm_metadata_overlay import select_bpm_payload, validate_bpm_policy
 from song_bpm_metadata import bpm_metadata_identity
 
@@ -56,7 +57,7 @@ def get_tier_chart_details(
             details = {"generatedAtUtc": generated_at_utc, "chart": chart} if chart else None
         else:
             details = tier_chart_details(payload, chart_id)
-        return JSONResponse(content=select_bpm_payload(details, bpm_policy), headers=headers) if details else JSONResponse(status_code=404, content={"error": "The selected chart was not found."}, headers=headers)
+        return JSONResponse(content=public_tier_chart_details(select_bpm_payload(details, bpm_policy)), headers=headers) if details else JSONResponse(status_code=404, content={"error": "The selected chart was not found."}, headers=headers)
     except (RuntimeError, ValueError, json.JSONDecodeError):
         return JSONResponse(status_code=503, content={"error": "Chart details are temporarily unavailable."}, headers=headers)
     except Exception:

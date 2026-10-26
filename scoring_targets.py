@@ -36,6 +36,9 @@ SSPLUS = ScoringTarget("ssplus", "SS+", 985000, "ssplus-target-policy-v1", "targ
 TARGETS = (SS, SSPLUS, SSS, SSSPLUS)
 SCORING_GOALS = ("general", *(target.key for target in TARGETS))
 BACKFILL_GOALS = (SS.key, SSPLUS.key)
+# Historical targets remain available to immutable model/archive validators.
+# Only these choices are exposed by the application and public tier responses.
+PUBLIC_SCORING_GOALS = ("general", SSSPLUS.key)
 
 
 def get_scoring_target(key: str) -> ScoringTarget:

@@ -90,6 +90,7 @@ class AnalysisProgressTests(unittest.TestCase):
             if required_goals:
                 from tier_pipeline_checkpoints import write_checkpoint
 
+                patches["production_tiers.REQUIRED_REFRESH_GOALS"] = {"new": ("ss", "ssplus")}
                 patches.pop("production_tiers._advance_required_goals")
                 patches["production_tiers._store_goal_artifact"] = {"side_effect":
                     lambda store, *, goal, **kwargs: write_checkpoint(store, {"goal": goal},

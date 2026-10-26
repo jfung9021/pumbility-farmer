@@ -64,7 +64,7 @@ export default function AboutPage() {
             <h2 id="tier-lists-title">Tier Lists</h2>
             <p>Compare Scoring, Clearing, and Pumbility estimates in compact or detailed views, using Phoenix 1 and Phoenix 2 scores. The selected scoring goal and published generation determine the method. The descriptions below cover current methods, earlier generations, and labeled local experiments; chart details identify the calculation and evidence used for each chart.</p>
             <dl className={styles.metricList}>
-              <div><dt>Scoring</dt><dd>How difficult it is to achieve scores, or the selected SSS / SSS+ target, in the observed best-score records.</dd></div>
+              <div><dt>Scoring</dt><dd>How difficult it is to achieve scores in General, or the SSS+ target, in the observed best-score records.</dd></div>
               <div><dt>Clearing</dt><dd>Difficulty inferred from the skills of successful players.</dd></div>
               <div><dt>Pumbility</dt><dd>A composite of the displayed Scoring and Clearing estimates, using the published generation&apos;s aggregation policy.</dd></div>
             </dl>
@@ -80,8 +80,8 @@ export default function AboutPage() {
 
           <section className={styles.section} id="scoring" aria-labelledby="scoring-title">
             <h2 id="scoring-title">Scoring methods</h2>
-            <h3>SSS and SSS+ target attainment</h3>
-            <p>The inclusive targets are 990,000 for SSS and 995,000 for SSS+. A regularized logistic model fits separate player and chart effects to successful recorded best scores. Players need four observed eligible charts, and their total observation weights are balanced so longer histories do not dominate. Missing scores and broken records add no failures.</p>
+            <h3>SSS+ target attainment</h3>
+            <p>The inclusive SSS+ target is 995,000. A regularized logistic model fits separate player and chart effects to successful recorded best scores. Players need four observed eligible charts, and their total observation weights are balanced so longer histories do not dominate. Missing scores and broken records add no failures.</p>
             <p>Submitted and official cohorts are fitted and calibrated independently for Singles and Doubles. The submitted model uses valid level-16+ histories and supplies levels 16–19. The official model uses merged level-20+ leaderboards and supplies 20+. Official Phoenix versions are matched by exact full game tag, retaining the higher score. Submitted and official identities are never joined by display name.</p>
             <p>Each source uses supported folder medians as anchors at official level + 0.5, joined by exponential segments with labeled boundary tangent extrapolation. A reference chart needs 20 usable contributors, at least five observed outcomes on each side of the target, and comparable metadata. A reference folder needs five charts; calibration needs at least three increasing anchors including the source&apos;s lowest level. Initial estimates and intervals receive the fixed 50% midpoint adjustment once.</p>
             <p>First-pass charts need both outcomes, five usable contributors, a calibrated comparison component, and a stable converged fit. Sparse outcomes, weak information, truncated boards, comparability issues, and extrapolation are provisional. Generations without refinement leave one-sided outcomes Unrated.</p>
@@ -156,7 +156,7 @@ export default function AboutPage() {
             <h2 id="pumbility-title">Pumbility methods</h2>
             <p>Both Scoring and Clearing must be available. Calculations use full precision before one-decimal display truncation. Evidence follows the weaker component, and each component&apos;s support is shown separately.</p>
             <dl className={styles.metricList}>
-              <div><dt>SSS / SSS+ Pumbility</dt><dd>The arithmetic mean of the selected target Scoring estimate, after applicable calibration and tail policy, and selected Clearing. Levels 16–19 use the submitted target model and folder-centered Clearing. Levels 20+ use the independent official target model with submitted Clearing calibrated on 20+ anchors, except official D26+ variants. Missing target estimates never fall back to General or historical SSS.</dd></div>
+              <div><dt>SSS+ Pumbility</dt><dd>The arithmetic mean of the SSS+ Scoring estimate, after applicable calibration and tail policy, and selected Clearing. Levels 16–19 use the submitted target model and folder-centered Clearing. Levels 20+ use the independent official target model with submitted Clearing calibrated on 20+ anchors, except official D26+ variants. Missing target estimates never fall back to General or another target.</dd></div>
               <div><dt>Adjusted-average generations and local experiments</dt><dd>Average the displayed Scoring and Clearing difficulties after midpoint adjustment, with no extra compression.</dd></div>
               <div><dt>Maximum generations</dt><dd>Take the higher of Scoring and Clearing. Historical average generations retain their recorded arithmetic-mean policy. A recognized aggregation policy is required.</dd></div>
             </dl>

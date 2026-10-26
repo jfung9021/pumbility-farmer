@@ -20,6 +20,12 @@ from tier_public import _without_baselines, detail_shard_path, prepare_tier_publ
 
 
 class SssTailPublicationTests(unittest.TestCase):
+    def setUp(self):
+        # These tests replay the historical schema-58 -> schema-60 chain.
+        goals = patch("production_tiers.REQUIRED_REFRESH_GOALS", ("ss", "ssplus"))
+        goals.start()
+        self.addCleanup(goals.stop)
+
     @classmethod
     def setUpClass(cls):
         cls.base = production_fixture()

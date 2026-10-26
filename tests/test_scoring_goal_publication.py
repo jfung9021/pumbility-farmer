@@ -80,6 +80,8 @@ class GoalPublicationTests(unittest.TestCase):
             self.fail("The bounded synthetic publication did not complete.")
 
         with ExitStack() as stack:
+            # Retain replay coverage for immutable historical five-goal caches.
+            stack.enter_context(patch("production_tiers.REQUIRED_REFRESH_GOALS", ("ss", "ssplus")))
             stack.enter_context(patch("tier_public.MODES", ("singles", "doubles")))
             stack.enter_context(patch("production_tiers.load_context", return_value=context))
             stack.enter_context(patch("official_scoring_sources.canonical_scoring_manifest_sha256", return_value="official"))

@@ -57,17 +57,17 @@ class TierPublicTests(unittest.TestCase):
         self.assertEqual(browser["tierListView"], {**compact["tierListView"], "browserVersion": 1})
         self.assertEqual(tier_detail_generated_at(browser), tier_detail_generated_at(compact))
         self.assertEqual(browser["summary"]["method"]["availableScoringGoals"],
-                         compact["summary"]["method"]["availableScoringGoals"])
+                         ["general", "sssplus"])
         self.assertEqual(browser["summary"]["method"]["crossLevelClearing"],
                          {"version": 2, "skillMethod": {"minimumScoreRecords": 100}})
         current = browser["doubles"][0]
         for name in ("scoringVariants", "pumbilityVariants"):
-            for goal, metric in compact["doubles"][0][name].items():
-                self.assertEqual(current[name][goal]["estimatedDifficulty"], metric["estimatedDifficulty"])
+            self.assertEqual(set(current[name]), {"general", "sssplus"})
+            for goal, metric in current[name].items():
+                self.assertEqual(metric["estimatedDifficulty"], compact["doubles"][0][name][goal]["estimatedDifficulty"])
                 if goal != "general":
-                    self.assertEqual(current[name][goal]["effectBandRank"], metric["effectBandRank"])
-        self.assertEqual(current["scoringVariants"]["ss"]["scoringBoundaryRecords"], 42)
-        self.assertNotIn("difficultyCi95Low", current["scoringVariants"]["ss"])
+                    self.assertEqual(metric["effectBandRank"], compact["doubles"][0][name][goal]["effectBandRank"])
+        self.assertNotIn("difficultyCi95Low", current["scoringVariants"]["sssplus"])
         detail = shards[detail_shard_path(browser["tierListView"]["detailsPrefix"], "d18")]["charts"]["d18"]
         self.assertEqual(detail["scoringVariants"]["ss"]["difficultyCi95Low"],
                          full["doubles"][0]["scoringVariants"]["ss"]["difficultyCi95Low"])
@@ -230,7 +230,7 @@ class TierPublicTests(unittest.TestCase):
             response = client.get("/api/tier-list/chart", params={"chartId": "d18", "generatedAtUtc": published_at})
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["generatedAtUtc"], published_at)
-            self.assertEqual(set(response.json()["chart"]["scoringVariants"]), {"general", "ss", "ssplus", "sss", "sssplus"})
+            self.assertEqual(set(response.json()["chart"]["scoringVariants"]), {"general", "sssplus"})
             self.assertEqual(tier_detail_generated_at(compact), published_at)
             actual_path = detail_shard_path(compact["tierListView"]["detailsPrefix"], "d18")
             for wrong in (numeric_at, "2026-10-21T00:00:00Z"):
