@@ -64,6 +64,13 @@ worker. A current retained duplicate remains deduplicated, and cancellation
 failure must not enqueue replacement work. Keep immutable inputs/checkpoints;
 do not reinterpret them as retained state.
 
+The deduplication query must exclude rows with `cancellation_requested_at` set.
+Live verification confirmed that cancellation can leave the typed status
+`running` while the compatibility payload already reports failure; selecting
+that row again prevents the replacement from being created. The focused store
+fix excludes exactly those tier-publication rows and preserves the existing
+lock and other-job admission checks.
+
 Run the fresh retained tier-only job from cached production inputs. Verify the
 live General/SSS+ generation declares the 75% midpoint policy and that list and
 lazy chart details agree.

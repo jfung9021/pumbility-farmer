@@ -79,6 +79,62 @@ class TierPublicationStoreTests(unittest.TestCase):
         self.assertIs(self.connection.transaction.return_value.__exit__.call_args.args[0], ConnectionError)
         self.assertFalse(any("status='completed'" in q for q in self.queries()))
 
+    def mock_tier_head(self, *, payload, typed_status, cancellation_requested_at):
+        # The cancellation primitive can leave SQL status running until the old
+        # delivery acknowledges it, while the JSON status is already failed.
+        head = {'payload': dict(payload), 'typed_status': typed_status,
+                'cancellation_requested_at': cancellation_requested_at}
+        result = {'row': None}
+        def execute(query, parameters=()):
+            sql = ' '.join(str(query).lower().split())
+            if sql.startswith('select j.payload') and "h.name='active:tier-publication'" in sql:
+                active = head['typed_status'] in ('queued', 'running')
+                cancelled_filtered = ('j.cancellation_requested_at is null' in sql
+                                      and head['cancellation_requested_at'] is not None)
+                result['row'] = (head['payload'],) if active and not cancelled_filtered else None
+            elif sql.startswith('select 1') and "h.name='active:analysis'" in sql:
+                result['row'] = None
+            elif sql.startswith('insert into pumbility.jobs('):
+                head.update(payload=dict(parameters[1].obj), typed_status='queued',
+                            cancellation_requested_at=None)
+                result['row'] = ('replacement-uuid',)
+        self.cursor.execute.side_effect = execute
+        self.cursor.fetchone.side_effect = lambda: result['row']
+        return head
+
+    def test_cancelled_typed_running_head_does_not_suppress_retained_replacement(self):
+        old = {'id': 'legacy-job', 'status': 'failed', 'cancelRequested': True,
+               'error': 'retired-tier-producer-replaced'}
+        head = self.mock_tier_head(payload=old, typed_status='running',
+                                  cancellation_requested_at='2026-10-27T00:00:00+00:00')
+        replacement = {'id': 'retained-job', 'status': 'queued', 'producer': 'retained-goals-v1',
+                       'createdAtUtc': '2026-10-27T00:00:01+00:00',
+                       'updatedAtUtc': '2026-10-27T00:00:01+00:00'}
+        jobs = PumbilityJobStore(database_url='postgresql://local/test')
+        current, created = jobs.request_tier_publication(replacement)
+        self.assertTrue(created)
+        self.assertEqual(current, replacement)
+        self.assertEqual(head['payload'], replacement)
+        duplicate, created = jobs.request_tier_publication({**replacement, 'id': 'another-trigger'})
+        self.assertFalse(created)
+        self.assertEqual(duplicate, replacement)
+        queries = self.queries()
+        self.assertTrue(any('j.cancellation_requested_at is null' in q and 'for update of j' in q for q in queries))
+        self.assertEqual(sum(q.lstrip().startswith('insert into pumbility.jobs(') for q in queries), 1)
+        heads = [call for call in self.cursor.execute.call_args_list
+                 if str(call.args[0]).lstrip().startswith('insert into pumbility.job_heads(')]
+        self.assertEqual({call.args[1][0] for call in heads}, {'active:tier-publication', 'latest:tier-publication'})
+        self.assertTrue(all(call.args[1][1] == 'replacement-uuid' for call in heads))
+
+    def test_uncancelled_retained_running_head_still_deduplicates(self):
+        active = {'id': 'retained-job', 'status': 'running', 'producer': 'retained-goals-v1'}
+        self.mock_tier_head(payload=active, typed_status='running', cancellation_requested_at=None)
+        jobs = PumbilityJobStore(database_url='postgresql://local/test')
+        current, created = jobs.request_tier_publication({'id': 'new-trigger', 'status': 'queued'})
+        self.assertFalse(created)
+        self.assertEqual(current, active)
+        self.assertFalse(any(q.lstrip().startswith('insert') for q in self.queries()))
+
     def test_claim_uses_current_payload_under_lock_instead_of_stale_delivery(self):
         jobs = PumbilityJobStore(database_url='postgresql://local/test')
         self.cursor.fetchone.side_effect = [({'id': 'job', 'progressOrdinal': 16, 'stage': 'public'}, 'queued'), ({'claimed': True},)]
