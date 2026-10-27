@@ -11,7 +11,7 @@ class RetainedRuntimeProgressTests(unittest.TestCase):
 
     def test_new_stage_and_total_are_producer_bound(self):
         self.assertEqual(runtime._validated_tier_progress(self.value())["stage"], "official-clearing")
-        for fields in ({"ordinal": 15}, {"stage": "centered-sss"}, {"producer": None},
+        for fields in ({"ordinal": 21}, {"stage": "centered-sss"}, {"producer": None},
                        {"producer": "unknown"}, {"stage": "scoring-goals"}):
             with self.assertRaises(ValueError):
                 runtime._validated_tier_progress(self.value(**fields))

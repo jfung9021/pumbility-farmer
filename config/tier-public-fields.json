@@ -5,20 +5,109 @@
     "evidenceStatus"
   ],
   "browserMethod": [
-    "sourceSelection", "scoring", "officialTiers", "officialCrossLevelScoring",
-    "crossLevelClearing", "hybridTiers", "tierMetrics", "pumbilityExperiment",
-    "ratingPostprocessing", "productionTierPublication", "baseProductionTierPublication", "scoringGoalPolicies",
-    "availableScoringGoals", "sssTailPolicy", "level20ScoringWidth", "bpmMetadata",
-    "sssScoring", "sssRefinement", "submittedSssplusCalibration", "retainedGoalProducer"
+    "sourceSelection",
+    "scoring",
+    "officialTiers",
+    "officialCrossLevelScoring",
+    "crossLevelClearing",
+    "hybridTiers",
+    "tierMetrics",
+    "pumbilityExperiment",
+    "ratingPostprocessing",
+    "productionTierPublication",
+    "baseProductionTierPublication",
+    "scoringGoalPolicies",
+    "availableScoringGoals",
+    "sssTailPolicy",
+    "level20ScoringWidth",
+    "bpmMetadata",
+    "sssScoring",
+    "sssRefinement",
+    "submittedSssplusCalibration",
+    "retainedGoalProducer",
+    "extendedOfficialClearing",
+    "observedCappedClearing",
+    "scopedTierWidth",
+    "finalFolderCentering",
+    "centeredMaximumPumbility"
   ],
   "browserMethodFields": {
-    "scoring": ["version", "calibration"],
-    "officialTiers": ["version", "enabled"],
-    "officialCrossLevelScoring": ["version"],
-    "crossLevelClearing": ["version", "skillMethod"],
-    "hybridTiers": ["version"],
-    "sssTailPolicy": ["version"],
-    "level20ScoringWidth": ["version"]
+    "scoring": [
+      "version",
+      "calibration"
+    ],
+    "officialTiers": [
+      "version",
+      "enabled"
+    ],
+    "officialCrossLevelScoring": [
+      "version"
+    ],
+    "crossLevelClearing": [
+      "version",
+      "skillMethod"
+    ],
+    "hybridTiers": [
+      "version"
+    ],
+    "sssTailPolicy": [
+      "version"
+    ],
+    "level20ScoringWidth": [
+      "version"
+    ],
+    "extendedOfficialClearing": [
+      "version",
+      "method",
+      "localOnly",
+      "baseSchemaVersion",
+      "aggregation",
+      "factor",
+      "previousFactor",
+      "sourceDates"
+    ],
+    "observedCappedClearing": [
+      "version",
+      "method",
+      "localOnly",
+      "baseSchemaVersion",
+      "aggregation",
+      "factor",
+      "previousFactor",
+      "sourceDates"
+    ],
+    "scopedTierWidth": [
+      "version",
+      "method",
+      "localOnly",
+      "baseSchemaVersion",
+      "aggregation",
+      "factor",
+      "previousFactor",
+      "sourceDates"
+    ],
+    "finalFolderCentering": [
+      "version",
+      "method",
+      "localOnly",
+      "baseSchemaVersion",
+      "aggregation",
+      "factor",
+      "previousFactor",
+      "sourceDates"
+    ],
+    "centeredMaximumPumbility": [
+      "version",
+      "method",
+      "localOnly",
+      "baseSchemaVersion",
+      "aggregation",
+      "factor",
+      "previousFactor",
+      "sourceDates",
+      "goals",
+      "folders"
+    ]
   },
   "metric": [
     "estimatedDifficulty",
@@ -91,7 +180,9 @@
     "q30Skill",
     "q50Skill",
     "defaultedAtCap",
-    "unratedReason"
+    "unratedReason",
+    "historyMinimumLevel",
+    "observedAtCap"
   ],
   "pumbility": [
     "aggregation",
@@ -116,6 +207,11 @@
     "sssTailPolicy",
     "level20ScoringWidth",
     "bpmMetadata",
-    "retainedGoalProducer"
+    "retainedGoalProducer",
+    "extendedOfficialClearing",
+    "observedCappedClearing",
+    "scopedTierWidth",
+    "finalFolderCentering",
+    "centeredMaximumPumbility"
   ]
 }

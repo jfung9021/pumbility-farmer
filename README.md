@@ -115,6 +115,17 @@ source-board, target, bootstrap, seed, and model-code identities; each missing
 cohort is checkpointed in a separate worker invocation. Completed bootstrap
 batches can resume only under the identical cohort, selected regularization,
 full-fit alignment, seed, and numerical recipe; the 200 refits are unchanged.
+The approved schema-162 release retains General and SSS+ and adds official
+S24/D25 clearer histories, provisional estimates from observed capped boards,
+and full final widths for S24+ and D25+. Every Singles/Doubles folder is centered
+at official level + 0.5, separately for Scoring and Clearing. Pumbility uses the
+higher full-precision component and then its own folder-median shift. Missing
+components remain Unrated. Each additive transition is privately checkpointed;
+raw fits, evidence status, and earlier immutable schemas remain available.
+This release uses the combined frozen Phoenix 1 and current Phoenix 2 evidence.
+Only the tier publication needs rebuilding when these rating rules change;
+recommendation models and personal score synchronization are independent.
+
 The protected tier-only rebuild (`POST /api/jonathan/refresh?mode=tiers`)
 queues a durable publication job without fetching scores or fitting recommendations.
 Inspect `GET /api/jonathan/tier-publication?jobId=...` until the job completes.

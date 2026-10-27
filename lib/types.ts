@@ -253,7 +253,7 @@ export interface TierMetricResult {
 
 export interface ClearingTierMetric extends TierMetricResult {
   finalFolderWidth?: FinalFolderWidthEvidence;
-  method?: "submitted-cross-level-clearing-v1" | "submitted-cross-level-clearing-v2" | "submitted-folder-centered-clearing-v1" | "official-d26-clearer-ability-v1" | "official-d26-clearer-ability-combined-v2";
+  method?: "submitted-cross-level-clearing-v1" | "submitted-cross-level-clearing-v2" | "submitted-folder-centered-clearing-v1" | "official-d26-clearer-ability-v1" | "official-d26-clearer-ability-combined-v2" | "official-clearer-ability-combined-v3" | "official-clearer-ability-observed-capped-v1";
   clearingEvidence?: OfficialClearingEvidence;
   observedClearCount?: number;
   recenteringShift?: number;
@@ -274,6 +274,8 @@ export interface ClearingTierMetric extends TierMetricResult {
   missingSkillCount: number;
   selectedCount?: number;
   skillMetric?: "official-clearer-ability";
+  historyMinimumLevel?: number;
+  observedAtCap?: boolean;
   abilityCoverage?: number;
   shrinkageWeight?: number;
   spreadCalibration?: OfficialClearingSpread | null;
@@ -319,7 +321,7 @@ export interface OfficialTierEvidence {
 }
 
 export interface OfficialClearingEvidence extends Omit<OfficialTierEvidence, "status"> {
-  capPolicy?: "phoenix1-diagnostic-phoenix2-default-v1";
+  capPolicy?: "phoenix1-diagnostic-phoenix2-default-v1" | "observed-capped-s24-d25-fixed-reference-v1";
   mix: "Phoenix2" | "Phoenix+Phoenix2";
   status: "available" | "empty" | "possibly-truncated" | "missing";
   sourceDates?: Record<string, string | null>;
@@ -448,7 +450,7 @@ export interface PumbilityTierMetric extends TierMetricResult {
   difficultyCi95Low?: number | null;
   difficultyCi95High?: number | null;
   intervalMethod?: string | null;
-  aggregation?: "maximum" | "average";
+  aggregation?: "maximum" | "average" | "centered-maximum";
   maximumBaseline?: PumbilityTierMetric;
   scoringSupportCount: number;
   clearingSupportCount: number;

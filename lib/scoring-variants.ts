@@ -44,7 +44,7 @@ export function scoringGoalUnavailableMessage(goal: Exclude<ScoringGoal, "genera
 export function hasScoringGoalVariants(payload: AnalysisPayload | null | undefined, goal: ScoringGoal): boolean {
   if (!payload) return false;
   if (goal === "general") return true;
-  if ([58, 59, 60, 61].includes(payload.schemaVersion ?? 0) && payload.summary.method.availableScoringGoals) {
+  if ([58, 59, 60, 61, 162].includes(payload.schemaVersion ?? 0) && payload.summary.method.availableScoringGoals) {
     return payload.summary.method.availableScoringGoals.includes(goal);
   }
   return payload.singles.some(chart => Boolean(chart.scoringVariants?.[goal]))
@@ -52,7 +52,7 @@ export function hasScoringGoalVariants(payload: AnalysisPayload | null | undefin
 }
 
 export function scoringTargetForPayload(payload: AnalysisPayload | null | undefined) {
-  return [52, 53, 54, 55, 56, 57, 58, 59, 60, 61].includes(payload?.schemaVersion ?? 0) || !payload
+  return [52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 162].includes(payload?.schemaVersion ?? 0) || !payload
     ? { goal: "sssplus" as const, label: "SSS+", score: SSSPLUS_SCORE_TARGET }
     : { goal: "sss" as const, label: "SSS", score: SSS_SCORE_TARGET };
 }

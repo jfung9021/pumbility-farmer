@@ -48,25 +48,25 @@ class RetainedComputationCacheTests(TestCase):
         self.assertEqual(publication["computationIdentity"], old_publication["computationIdentity"])
         self.assertEqual(self.store.binary_values, binaries)
         self.general.assert_called_once()
-        self.assertEqual(self.transition.call_count, 7)
+        self.assertEqual(self.transition.call_count, 13)
         self.fitter.assert_not_called()
         self.assertTrue(progress)
         self.assertTrue(all(item["producer"] == tiers.RETAINED_PRODUCER for item in progress))
-        self.assertEqual(progress[-1]["ordinal"], 14)
+        self.assertEqual(progress[-1]["ordinal"], 20)
 
     def test_changed_official_observations_recompute_general_and_pipeline(self):
         self.complete(self.first_time)
         self.arguments["official_scoring_manifest"]["numeric"] = "changed-actual-official-scores"
         self.complete(self.second_time)
         self.assertEqual(self.general.call_count, 2)
-        self.assertEqual(self.transition.call_count, 14)
+        self.assertEqual(self.transition.call_count, 26)
 
     def test_changed_general_inputs_are_retained_in_early_descriptor(self):
         self.complete(self.first_time)
         self.arguments["official_snapshot"] = {"different": "clearing-observations"}
         self.complete(self.second_time)
         self.assertEqual(self.general.call_count, 2)
-        self.assertEqual(self.transition.call_count, 14)
+        self.assertEqual(self.transition.call_count, 26)
 
     def test_corrupt_optional_preparation_index_rebuilds_without_accepting_bad_state(self):
         old = self.complete(self.first_time)

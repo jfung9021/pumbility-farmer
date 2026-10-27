@@ -220,7 +220,7 @@ class PipelineResumeTests(TestCase):
             prepared = tiers.advance_tier_publication(self.store, state, on_stage_start=started.append)
             self.assertEqual(prepared["stage"], "prepared-inputs")
             self.assertEqual(prepared["progressOrdinal"], 5)
-            self.assertEqual(prepared["totalStages"], 14)
+            self.assertEqual(prepared["totalStages"], 20)
             captured = self.store.get_json(tiers.PREFIX + "generations/" + prepared["state"]["generation"] + "/state.json")
             references = captured["fitReferences"]
             self.assertEqual(len(references), 4)
