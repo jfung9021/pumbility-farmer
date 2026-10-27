@@ -117,7 +117,7 @@ batches can resume only under the identical cohort, selected regularization,
 full-fit alignment, seed, and numerical recipe; the 200 refits are unchanged.
 The approved schema-162 release retains General and SSS+ and adds official
 S24/D25 clearer histories, provisional estimates from observed capped boards,
-and full final widths for S24+ and D25+. Every Singles/Doubles folder is centered
+and a uniform 0.75 width multiplier for all Singles/Doubles difficulty tiers. Every folder is centered
 at official level + 0.5, separately for Scoring and Clearing. Pumbility uses the
 higher full-precision component and then its own folder-median shift. Missing
 components remain Unrated. Each additive transition is privately checkpointed;

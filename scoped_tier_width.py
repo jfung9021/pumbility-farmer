@@ -1,4 +1,4 @@
-"""Local final-width override for Scoring and Clearing on S24+ and D25+."""
+"""Recoverable width policy for Scoring and Clearing on S24+ and D25+."""
 from __future__ import annotations
 from retained_tiers import scoring_goals
 
@@ -15,7 +15,10 @@ SCHEMA_VERSION = 60
 BASE_SCHEMA_VERSION = 59
 NAMESPACE = "scopedTierWidth"
 STAGE = "scopedTierWidthBaseline"
-METHOD = "scoped-final-component-width-v1"
+LEGACY_METHOD = "scoped-final-component-width-v1"
+METHOD = "scoped-final-component-width-v2"
+POLICY_VERSION = 2
+TARGET_FACTOR = .75
 SCOPE = [{"mode": "Single", "minimumLevel": 24}, {"mode": "Double", "minimumLevel": 25}]
 
 
@@ -41,6 +44,8 @@ def _copy(base):
 
 
 def _widen(metric, level, ratio):
+    if ratio == 1.:
+        return
     midpoint = level + .5
     def scaled(value):
         return None if value is None else midpoint + ratio * (value-midpoint)
@@ -54,9 +59,9 @@ def _widen(metric, level, ratio):
         metric["capDefaultDifficulty"] = metric["estimatedDifficulty"]
 
 
-def _calculate(base):
+def _calculate(base, target_factor=TARGET_FACTOR):
     result = _copy(base)
-    ratio = 1. / compression_factor(base)
+    ratio = target_factor / compression_factor(base)
     for _, key in MODES:
         rows = [r for r in result[key] if _target(r)]
         for row in rows:
@@ -80,6 +85,15 @@ def _calculate(base):
     return result
 
 
+def _policy(base, *, version=POLICY_VERSION, method=METHOD, factor=TARGET_FACTOR):
+    return {"version": version, "method": method, "localOnly": base["schemaVersion"] < 100,
+        "baseSchemaVersion": base["schemaVersion"], "basePayloadSha256": payload_sha256(base), "scope": copy.deepcopy(SCOPE),
+        "previousFactor": compression_factor(base), "factor": factor, "ratio": factor/compression_factor(base),
+        "components": ["scoring", "clearing"], "application": "final-component-distance-from-current-official-midpoint",
+        "rankPolicy": "preserve-fitted-scoring-order-rerank-derived-folder-metrics", "pumbility": "full-precision-component-mean",
+        "dataFetches": 0, "modelRefits": 0}
+
+
 def apply_scoped_tier_width(base: Mapping[str, Any]) -> tuple[dict, dict]:
     _need(base.get("schemaVersion") in (BASE_SCHEMA_VERSION, 159) and STAGE not in base
         and NAMESPACE not in base.get("summary", {}).get("method", {}), "Scoped width requires the schema-59 predecessor.")
@@ -88,12 +102,7 @@ def apply_scoped_tier_width(base: Mapping[str, Any]) -> tuple[dict, dict]:
         "summary": {key: base["summary"][key] for key in ("generatedAtUtc",) if key in base["summary"]}}
     result["schemaVersion"] = 160 if base["schemaVersion"] == 159 else SCHEMA_VERSION
     result["generatedAtUtc"] = result["summary"]["generatedAtUtc"] = (base["generatedAtUtc"] if base["schemaVersion"] >= 100 else datetime.now(timezone.utc).isoformat())
-    result["summary"]["method"][NAMESPACE] = {"version": 1, "method": METHOD, "localOnly": base["schemaVersion"] < 100,
-        "baseSchemaVersion": base["schemaVersion"], "basePayloadSha256": payload_sha256(base), "scope": copy.deepcopy(SCOPE),
-        "previousFactor": compression_factor(base), "factor": 1., "ratio": 1./compression_factor(base),
-        "components": ["scoring", "clearing"], "application": "final-component-distance-from-current-official-midpoint",
-        "rankPolicy": "preserve-fitted-scoring-order-rerank-derived-folder-metrics", "pumbility": "full-precision-component-mean",
-        "dataFetches": 0, "modelRefits": 0}
+    result["summary"]["method"][NAMESPACE] = _policy(base)
     validate_scoped_tier_width(result, base)
     return result, scoped_width_report(result, base)
 
@@ -125,13 +134,14 @@ def recover_scoped_tier_width(payload):
 def validate_scoped_tier_width(payload, original=None):
     base = recover_scoped_tier_width(payload)
     m = payload["summary"]["method"][NAMESPACE]
-    _need(m == {"version": 1, "method": METHOD, "localOnly": base["schemaVersion"] < 100, "baseSchemaVersion": base["schemaVersion"],
-        "basePayloadSha256": payload_sha256(base), "scope": SCOPE, "previousFactor": compression_factor(base), "factor": 1.,
-        "ratio": 1./compression_factor(base), "components": ["scoring", "clearing"],
-        "application": "final-component-distance-from-current-official-midpoint",
-        "rankPolicy": "preserve-fitted-scoring-order-rerank-derived-folder-metrics", "pumbility": "full-precision-component-mean",
-        "dataFetches": 0, "modelRefits": 0} and (original is None or base == original), "Scoped width policy or recovery differs.")
-    expected = _calculate(base)
+    if (m.get("version"), m.get("method")) == (1, LEGACY_METHOD):
+        factor = 1.
+    else:
+        _need((m.get("version"), m.get("method")) == (POLICY_VERSION, METHOD), "Scoped width policy is unrecognized.")
+        factor = TARGET_FACTOR
+    _need(m == _policy(base, version=m["version"], method=m["method"], factor=factor)
+        and (original is None or base == original), "Scoped width policy or recovery differs.")
+    expected = _calculate(base, factor)
     for field in payload.keys() | expected.keys():
         if field in ("schemaVersion", "generatedAtUtc", "summary", STAGE):
             continue
@@ -152,6 +162,6 @@ def scoped_width_report(payload, base):
                 "clearing": {"before": old["tierMetrics"]["clearing"]["estimatedDifficulty"], "after": row["tierMetrics"]["clearing"]["estimatedDifficulty"]},
                 "scoring": {goal: {"before": old["scoringVariants"][goal]["estimatedDifficulty"], "after": row["scoringVariants"][goal]["estimatedDifficulty"]} for goal in scoring_goals(base)},
                 "pumbility": {goal: {"before": old["pumbilityVariants"][goal]["estimatedDifficulty"], "after": row["pumbilityVariants"][goal]["estimatedDifficulty"]} for goal in scoring_goals(base)}})
-    return {"schemaVersion": SCHEMA_VERSION, "localOnly": base["schemaVersion"] < 100, "previousFactor": compression_factor(base), "factor": 1.,
+    return {"schemaVersion": SCHEMA_VERSION, "localOnly": base["schemaVersion"] < 100, "previousFactor": compression_factor(base), "factor": payload["summary"]["method"][NAMESPACE]["factor"],
         "scope": SCOPE, "components": ["scoring", "clearing"], "charts": charts, "affectedCharts": len(charts),
         "baseRecovered": True, "lowerFolderValuesPreserved": True, "dataFetches": 0, "modelRefits": 0}

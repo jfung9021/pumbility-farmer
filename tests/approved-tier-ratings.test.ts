@@ -9,6 +9,9 @@ import {tierChartDetails,tierBrowserPayload} from "../lib/tier-browser-payload.t
 import type {AnalysisPayload} from "../lib/types.ts";
 const p=JSON.parse(readFileSync(new URL("./fixtures/approved-tier-ratings.json",import.meta.url),"utf8")).candidate as AnalysisPayload;
 test("production schema 162 resolves the maximum policy and retains the SSS+ target",()=>{
+  const width=p.summary.method.scopedTierWidth as Record<string,unknown>;
+  assert.equal(width.factor,.75);
+  assert.equal(width.method,"scoped-final-component-width-v2");
   assert.equal(resolvePumbilityPolicy(p)?.aggregation,"centered-maximum");
   assert.equal(hasMidpointCompression(p),true);assert.equal(scoringTargetForPayload(p).goal,"sssplus");
   assert.equal(pumbilityReference("centered-maximum",25.1,25.3,-.2),25.1);

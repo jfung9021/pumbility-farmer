@@ -22,7 +22,7 @@ TAIL_VERSION = "6.23.0-sss-bounded-tails"
 WIDTH_VERSION = "6.24.0-level20-target-width"
 RETAINED_VERSION = "6.25.0-retained-goals"
 RETAINED_PRODUCER = "retained-goals-v1"
-APPROVED_VERSION = "6.26.0-centered-maximum"
+APPROVED_VERSION = "6.27.0-uniform-width"
 APPROVED_SCHEMA = 162
 PREFIX = "analysis/private/source-aware-tiers/"
 SEED = 20261018
@@ -317,7 +317,8 @@ def public_tiers(full, *, private_path, input_identity, full_sha256=None, compon
     else:
         validate_source_aware_tiers(full)
     result = _public_copy(full)
-    version = (APPROVED_VERSION if full.get("schemaVersion") == APPROVED_SCHEMA else RETAINED_VERSION if full.get("schemaVersion") == 61 else WIDTH_VERSION if full.get("schemaVersion") == 60 else TAIL_VERSION
+    from approved_tier_ratings import approved_publication_version
+    version = (approved_publication_version(full) if full.get("schemaVersion") == APPROVED_SCHEMA else RETAINED_VERSION if full.get("schemaVersion") == 61 else WIDTH_VERSION if full.get("schemaVersion") == 60 else TAIL_VERSION
                if full.get("schemaVersion") == 59 else GOAL_VERSION
                if full.get("schemaVersion") == 58 else VERSION if full.get("schemaVersion") == 57 else PREVIOUS_VERSION)
     result["summary"]["scriptVersion"] = version
@@ -372,7 +373,8 @@ def validate_public_tiers(payload):
         raise ValueError("The hosted source-aware tier schema must be 56, 57, 58, 59 or 60.")
     method = payload["summary"]["method"]
     publication = method.get("productionTierPublication", {})
-    expected_version = (APPROVED_VERSION if schema == APPROVED_SCHEMA else RETAINED_VERSION if schema == 61 else WIDTH_VERSION if schema == 60 else TAIL_VERSION if schema == 59
+    from approved_tier_ratings import approved_publication_version
+    expected_version = (approved_publication_version(payload) if schema == APPROVED_SCHEMA else RETAINED_VERSION if schema == 61 else WIDTH_VERSION if schema == 60 else TAIL_VERSION if schema == 59
                         else GOAL_VERSION if schema == 58 else VERSION if schema == 57 else PREVIOUS_VERSION)
     if (publication.get("version") != 1 or publication.get("method") != expected_version
             or publication.get("publicPayloadSha256") != public_digest(payload)):
