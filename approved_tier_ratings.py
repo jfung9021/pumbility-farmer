@@ -7,6 +7,18 @@ from statistics import median
 
 GOALS = ("general", "sssplus")
 SCHEMA_VERSION = 162
+WIDTH_PUBLICATION_VERSIONS = {
+    (1, "scoped-final-component-width-v1", 1.): "6.26.0-centered-maximum",
+    (2, "scoped-final-component-width-v2", .75): "6.27.0-uniform-width",
+}
+
+
+def approved_publication_version(payload):
+    marker = payload["summary"]["method"].get("scopedTierWidth", {})
+    version = WIDTH_PUBLICATION_VERSIONS.get((marker.get("version"), marker.get("method"), marker.get("factor")))
+    if version is None:
+        raise ValueError("Approved width policy differs.")
+    return version
 
 
 def validate_approved_rating_chain(payload):
@@ -30,18 +42,19 @@ def validate_approved_rating_chain(payload):
 
 def validate_public_approved_ratings(payload):
     method = payload["summary"]["method"]
+    approved_publication_version(payload)
     expected = {"extendedOfficialClearing": (61, "official-clearer-ability-combined-v3"),
         "observedCappedClearing": (158, "official-clearer-ability-observed-capped-v1"),
-        "scopedTierWidth": (159, "scoped-final-component-width-v1"),
+        "scopedTierWidth": (159, method["scopedTierWidth"]["method"]),
         "finalFolderCentering": (160, "final-all-rated-folder-median-centering-v1"),
         "centeredMaximumPumbility": (161, "folder-centered-maximum-pumbility-v1")}
     for name, (schema, identity) in expected.items():
         marker = method.get(name, {})
-        if (marker.get("version") != 1 or marker.get("method") != identity
+        expected_version = 2 if name == "scopedTierWidth" and identity == "scoped-final-component-width-v2" else 1
+        if (marker.get("version") != expected_version or marker.get("method") != identity
                 or marker.get("localOnly") is not False or marker.get("baseSchemaVersion") != schema):
             raise ValueError("Approved production rating policy differs: " + name)
-    if (method["scopedTierWidth"].get("factor") != 1.
-            or method["centeredMaximumPumbility"].get("aggregation") != "centered-maximum"
+    if (method["centeredMaximumPumbility"].get("aggregation") != "centered-maximum"
             or method["centeredMaximumPumbility"].get("goals") != list(GOALS)):
         raise ValueError("Approved width or maximum policy differs.")
     groups = defaultdict(list)

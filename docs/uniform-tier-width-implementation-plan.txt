@@ -1,0 +1,27 @@
+Restore the 0.75 tier width
+
+The shared midpoint multiplier is already 0.75. The only exception widens
+S24+ and D25+ Scoring and Clearing to 1. Restore that exception to 0.75;
+do not multiply lower folders by 0.75 again. Co-op has no official-level
+difficulty scale and does not use this multiplier.
+
+Keep the current combined Phoenix 1/Phoenix 2 evidence, provisional capped
+estimates, null handling, independent Scoring/Clearing folder centering,
+and maximum-based Pumbility with its own folder centering.
+
+Keep schema 162 because the payload shape is unchanged. Record a new width
+policy and publication version. Accept the previous exact policy when reading
+existing publications, while allowing only the new version for promotion.
+Preserve reversible checkpoints and apply the policy once.
+
+Verify the identity transition from the existing 0.75 baseline, confidence
+intervals and evidence preservation, old-publication compatibility, folder
+medians, and centered maximum values. Update the public methodology wording.
+Run the affected Python and frontend tests, typecheck, production build, and
+Phoenix 1 archive verification.
+
+Push and merge the focused PR, wait for its Vercel production deployment,
+then run the existing protected tier-only rebuild. Reuse numerical caches
+through the existing producer identities; do not change the cache machinery,
+fetch scores, or refit recommendations. Verify the new live width policy,
+formula, folder medians, source provenance, and plain-English chart details.
