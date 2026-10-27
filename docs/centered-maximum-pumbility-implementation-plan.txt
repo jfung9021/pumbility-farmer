@@ -1,0 +1,78 @@
+Centered maximum Pumbility: local implementation plan
+2026-10-27
+
+Objective
+Replace the current independently centered average Pumbility with an
+independently centered maximum of Scoring and Clearing. Keep all Singles and
+Doubles official folders centered at level + 0.5. Implement and compare locally;
+do not publish or deploy.
+
+Baseline and scope
+- Freeze the existing schema-61 final-folder-centering candidate. Its Scoring,
+  Clearing, evidence, source inputs, and scoped 1.0 widths remain unchanged.
+- Apply the new Pumbility rule to General, SSS, and SSS+, separately for every
+  Singles/Doubles official folder. Co-op remains unchanged.
+- Keep both components required. A missing component leaves Pumbility Unrated.
+- Include every finite current chart rating in the centering population,
+  including provisional charts. Search, BPM, and player filters never refit it.
+
+Calculation
+For mode, official level L, and scoring goal:
+  raw(chart) = max(full-precision Scoring(chart), full-precision Clearing(chart))
+  offset = L + 0.5 - median(raw values for all eligible charts in that folder)
+  Pumbility(chart) = raw(chart) + offset
+Use the middle value for odd populations and the mean of the middle pair for
+even populations. Preserve ties. Empty populations keep null values and use a
+zero offset; single-chart populations center that chart at L + 0.5.
+
+The local audit finds non-positive offsets in all 75 current folder/goal groups.
+SSS+ offsets are about -0.127358 for S24, -0.193018 for D25, and -0.137668
+for D26. The offset is uniform within a folder and goal. Compared with the old
+centered average, individual charts may rise or fall because max changes the
+relative order. Future data could require a positive offset to stay centered;
+do not clamp offsets and silently abandon median centering.
+
+Evidence, intervals, and order
+- Preserve evidence status and both support counts; no source fetches or fits.
+- Derive a conditional interval from an existing Scoring interval while holding
+  Clearing and the folder offset fixed:
+    lower = max(Scoring lower, Clearing point) + offset
+    upper = max(Scoring upper, Clearing point) + offset
+  Missing Scoring endpoints or components remain null. This does not claim to
+  include Clearing uncertainty or uncertainty in centering/selection.
+- Recalculate Pumbility difference and effect-band fields at full precision.
+- Re-rank final Pumbility within each official folder and goal using the new
+  maximum values, then a deterministic song-name/chart-ID tie break. Do not
+  change Scoring/Clearing ranks or historical initial fitted values/ranks.
+- Keep General tierMetrics.pumbility and pumbilityVariants.general identical.
+
+Implementation
+1. Add schema 62 as a recoverable local overlay on schema 61. Record an explicit
+   centered-maximum aggregation, raw maximum, folder offset, population count,
+   input hash, and conditional interval method. Preserve the exact schema-61
+   predecessor and save this candidate in a separate experiment directory.
+2. Add a local builder, Python validation, and an independent TypeScript reader
+   validator. Validate the recovered predecessor through the existing chain.
+3. Add the local selector and schema support to scoring goals, midpoint-policy
+   recognition, and Pumbility policy resolution. Keep historical generations.
+4. Update plain-English chart notes to say Pumbility starts with the higher
+   rating, then centers its official folder. Declare the policy once in the
+   compact list; retain the complete calculation in lazy chart details.
+5. Save before/after folder counts, offsets, chart movements, and largest changes
+   relative to the centered-average candidate. Switch only the local preview
+   after the candidate validates.
+
+Acceptance and verification
+- Each nonempty final Pumbility folder/goal median equals L + 0.5 within 1e-8.
+- Every point equals its selected components' maximum plus the recorded offset;
+  no intermediate rounding. Both components are still required.
+- All Scoring, Clearing, sources, capped/provisional flags, and Co-op values
+  recover exactly. Only final Pumbility rankings can change.
+- Check differing component order, ties, odd/even/sparse/empty populations,
+  nulls, conditional endpoints, support/status preservation, idempotence,
+  exact recovery, and deliberate point/policy/rank tampering.
+- Run focused Python/TypeScript tests, type-checking, a build, full local data
+  validation, and local API/detail checks. Keep the list below 12,000,000 bytes.
+- Verify the browser's displayed maximum-and-centering explanation and save a
+  screenshot. Perform one general review; repair only proven regressions and
+  stop once these acceptance criteria pass.

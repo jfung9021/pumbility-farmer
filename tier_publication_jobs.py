@@ -9,8 +9,8 @@ from typing import Any, Callable, Mapping
 CONTINUATION_FIELD = "_tierPublicationContinuation"
 MAX_IO_RETRIES = 2
 CURRENT_TIER_PRODUCER = "retained-goals-v1"
-CURRENT_TIER_SCHEMA_VERSION = 61
-TIER_PUBLICATION_STAGES = 15
+CURRENT_TIER_SCHEMA_VERSION = 162
+TIER_PUBLICATION_STAGES = 21
 
 
 def _retryable_io(error: Exception) -> bool:

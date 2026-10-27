@@ -45,7 +45,9 @@ function clearingCountLine(chart: ChartResult, minimum: number | null | undefine
     || clearing.method?.startsWith("official-d26-clearer-ability");
   if (qualified) {
     const requirement = hasQualifiedSubmittedClearing(clearing) && minimum
-      ? ` (at least ${minimum} recorded charts in this mode)` : "";
+      ? ` (at least ${minimum} recorded charts in this mode)`
+      : clearing.skillMetric === "official-clearer-ability"
+        ? ` (at least 25 other ${chart.type === "Single" ? "S" : "D"}${clearing.historyMinimumLevel ?? (chart.type === "Single" ? 22 : 23)}+ clears in this mode)` : "";
     return `${count(used)} of ${clearing.clearCount.toLocaleString()} clearers had enough play history to include${requirement}.`;
   }
   return `Based on ${count(used)} clearers from ${clearing.clearCount.toLocaleString()} recorded clears.`;
@@ -89,7 +91,9 @@ function clearingLimitations(chart: ChartResult): string[] {
   if (!clearing) return [];
   const warnings: string[] = [];
   if (clearing.estimatedDifficulty === null) warnings.push("There is not enough comparable clear history to rate this chart.");
-  if (clearing.defaultedAtCap) {
+  if (clearing.observedAtCap) {
+    warnings.push("Only clearers visible on the capped leaderboard are included, so this estimate remains provisional. Missing clears are unknown.");
+  } else if (clearing.defaultedAtCap) {
     warnings.push("The leaderboard is incomplete, so Clearing uses a fallback for this official level.");
   } else if (clearing.clearingEvidence?.possiblyTruncated) {
     warnings.push("The leaderboard may be incomplete; missing clears are unknown.");
@@ -133,7 +137,8 @@ export function chartEvidenceLines(chart: ChartResult, metric: TierMetricKey, op
     const aggregation = chart.tierMetrics?.pumbility.aggregation ?? options.pumbilityAggregation;
     lines.push(chart.tierMetrics?.pumbility.estimatedDifficulty == null
       ? "Pumbility needs both a Scoring and a Clearing rating."
-      : aggregation === "average" ? `Pumbility uses their average, calculated before rounding: ${grade(chart, "pumbility")}.`
+      : aggregation === "centered-maximum" ? `Pumbility starts with the higher rating, then centers this official level around ${chart.type === "Single" ? "S" : "D"}${(chart.level+.5).toFixed(1)}: ${grade(chart, "pumbility")}.`
+        : aggregation === "average" ? `Pumbility uses their average, calculated before rounding: ${grade(chart, "pumbility")}.`
         : aggregation === "maximum" ? `Pumbility uses the higher rating: ${grade(chart, "pumbility")}.`
           : `Pumbility rating: ${grade(chart, "pumbility")}.`);
     lines.push(`Scoring: ${scoringCountLine(chart)}`);

@@ -1,6 +1,6 @@
 import type { AnalysisPayload } from "./types";
 
-export type PumbilityAggregation = "average" | "maximum";
+export type PumbilityAggregation = "average" | "maximum" | "centered-maximum";
 
 export interface PumbilityPolicy {
   aggregation: PumbilityAggregation;
@@ -12,6 +12,11 @@ export const AVERAGE_PUMBILITY_CALCULATION = "(scoring difficulty + clearing dif
 
 /** Resolve declared generations; tier-method 11 alone does not identify the rule. */
 export function resolvePumbilityPolicy(payload: Partial<AnalysisPayload> | null | undefined): PumbilityPolicy | null {
+  if (payload?.schemaVersion === 162) {
+    const marker = payload.summary?.method.centeredMaximumPumbility as {version?:number;method?:string;aggregation?:string} | undefined;
+    return marker?.version === 1 && marker.method === "folder-centered-maximum-pumbility-v1" && marker.aggregation === "centered-maximum"
+      ? {aggregation:"centered-maximum",requiresRowMarker:true} : null;
+  }
   if (payload && [49, 50, 51, 52, 53, 56, 57, 58, 59].includes(payload.schemaVersion ?? 0)) {
     const scoring = payload.summary?.method.sssScoring as { version?: number; baseSchemaVersion?: number } | undefined;
     return scoring?.version === 1 && scoring.baseSchemaVersion === 48
@@ -61,6 +66,10 @@ export function resolvePumbilityPolicy(payload: Partial<AnalysisPayload> | null 
   return null;
 }
 
-export function pumbilityReference(aggregation: PumbilityAggregation, scoring: number, clearing: number): number {
+export function pumbilityReference(aggregation: PumbilityAggregation, scoring: number, clearing: number, folderOffset?: number): number {
+  if (aggregation === "centered-maximum") {
+    if (typeof folderOffset !== "number" || !Number.isFinite(folderOffset)) throw new Error("Centered Pumbility requires its folder offset.");
+    return Math.max(scoring, clearing) + folderOffset;
+  }
   return aggregation === "maximum" ? Math.max(scoring, clearing) : (scoring + clearing) / 2;
 }

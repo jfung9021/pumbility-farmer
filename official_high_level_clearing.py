@@ -35,8 +35,12 @@ def _chart_id(chart: Mapping[str, Any]) -> str:
 
 
 def _is_double(chart: Mapping[str, Any], minimum: int) -> bool:
+    return _is_mode(chart, "Double", minimum)
+
+
+def _is_mode(chart: Mapping[str, Any], mode: str, minimum: int) -> bool:
     level = chart.get("level")
-    return (chart.get("type") == "Double" and not isinstance(level, bool)
+    return (chart.get("type") == mode and not isinstance(level, bool)
             and isinstance(level, (int, float)) and math.isfinite(level)
             and level == int(level) and level >= minimum)
 
@@ -56,7 +60,8 @@ def _ability_interval(skills: Sequence[float], chart_id: str,
 def _new_metric(board: Mapping[str, Any] | None, skills: Sequence[float],
                 observed: int, chart_id: str, capture_as_of: Any,
                 bootstrap_samples: int, *, combined: bool = False,
-                cap_policy: str = COMBINED_CAP_POLICY) -> dict[str, Any]:
+                cap_policy: str = COMBINED_CAP_POLICY, method: str | None = None,
+                history_label: str = "D23+") -> dict[str, Any]:
     # A union's cardinality is not the cap of either source leaderboard.
     capped = bool(board and (any(state.get("possiblyTruncated") for state in board["sourceStates"].values())
                             if combined else (board.get("possiblyTruncated")
@@ -70,9 +75,9 @@ def _new_metric(board: Mapping[str, Any] | None, skills: Sequence[float],
     low, high = _ability_interval(skills, chart_id, bootstrap_samples) if not capped else (None, None)
     reason = ("Official Phoenix 2 leaderboard data is unavailable." if board is None else
               "The official Phoenix 2 leaderboard has no usable observations." if not observed else
-              "No observed clearer has at least 25 other unique official D23+ clears." if not count and not capped else None)
+              f"No observed clearer has at least 25 other unique official {history_label} clears." if not count and not capped else None)
     result = {
-        **_empty_metric(), "method": COMBINED_METHOD if combined else METHOD, "skillMetric": CLEAR_ABILITY_METRIC,
+        **_empty_metric(), "method": method or (COMBINED_METHOD if combined else METHOD), "skillMetric": CLEAR_ABILITY_METRIC,
         "clearCount": observed, "observedClearCount": observed, "ratedClearCount": count,
         "missingSkillCount": observed - count,
         "q20Skill": float(np.quantile(skills, CLEARING_PERCENTILE, method="linear")) if count else None,
@@ -157,6 +162,8 @@ def _apply_official_high_level_clearing(
     current_catalog: Sequence[Mapping[str, Any]] | None = None, *,
     bootstrap_samples: int = 1000, combined: bool = False,
     cap_policy: str = COMBINED_CAP_POLICY,
+    mode: str = "Double", target_levels: Sequence[int] | None = None,
+    history_minimum_level: int = HISTORY_MINIMUM_LEVEL, method: str | None = None,
 ) -> dict[str, Any]:
     """Mutate only target Clearing components and return public policy/audit metadata.
 
@@ -170,6 +177,13 @@ def _apply_official_high_level_clearing(
         raise ValueError("bootstrap_samples must be a nonnegative integer.")
     if cap_policy not in (COMBINED_CAP_POLICY, P1_OBSERVED_CAP_POLICY) or (not combined and cap_policy != COMBINED_CAP_POLICY):
         raise ValueError("Unsupported official Clearing cap policy.")
+    if mode not in ("Single", "Double") or type(history_minimum_level) is not int or history_minimum_level < 1:
+        raise ValueError("Unsupported official Clearing history scope.")
+    if target_levels is not None and (not target_levels or any(type(level) is not int or level < history_minimum_level for level in target_levels)):
+        raise ValueError("Unsupported official Clearing target levels.")
+    minimum_level = min(target_levels) if target_levels is not None else TARGET_MINIMUM_LEVEL
+    def is_target(chart):
+        return _is_mode(chart, mode, minimum_level) and (target_levels is None or int(chart["level"]) in target_levels)
     catalog = {_chart_id(chart): chart for chart in
                (current_catalog if current_catalog is not None else phoenix2_capture.get("catalog", []))}
     if not catalog:
@@ -178,7 +192,7 @@ def _apply_official_high_level_clearing(
     iterable = raw_boards.values() if isinstance(raw_boards, Mapping) else raw_boards
     boards = {str(board["chartId"]): board for board in iterable
               if str(board["chartId"]) in catalog
-              and _is_double(catalog[str(board["chartId"])], HISTORY_MINIMUM_LEVEL)}
+              and _is_mode(catalog[str(board["chartId"])], mode, history_minimum_level)}
     entries = {}
     histories: dict[str, dict[str, float]] = defaultdict(dict)
     for chart_id, board in boards.items():
@@ -190,14 +204,14 @@ def _apply_official_high_level_clearing(
 
     folders: dict[int, list[dict[str, Any]]] = defaultdict(list)
     targets = []
-    for row in payload.get("doubles", []):
+    for row in payload.get("singles" if mode == "Single" else "doubles", []):
         chart_id = str(row["chartId"])
         chart = catalog.get(chart_id)
         if chart is None:
-            if _is_double(row, TARGET_MINIMUM_LEVEL):
+            if is_target(row):
                 raise ValueError("A D26+ target is absent from the current official chart catalog.")
             continue
-        if not _is_double(chart, TARGET_MINIMUM_LEVEL):
+        if not is_target(chart):
             continue
         if row.get("type") != chart["type"] or int(row["level"]) != int(chart["level"]):
             raise ValueError("Official Clearing rows must match the current official chart catalog.")
@@ -207,7 +221,8 @@ def _apply_official_high_level_clearing(
         row["tierMetrics"]["clearing"] = _new_metric(
             boards.get(chart_id), skills, len(samples), chart_id,
             phoenix2_capture.get("sourceDates") if combined else phoenix2_capture.get("asOf"),
-            bootstrap_samples, combined=combined, cap_policy=cap_policy,
+            bootstrap_samples, combined=combined, cap_policy=cap_policy, method=method,
+            history_label=f"{'S' if mode == 'Single' else 'D'}{history_minimum_level}+",
         )
         targets.append(row)
         folders[int(chart["level"])].append(row)
@@ -220,7 +235,7 @@ def _apply_official_high_level_clearing(
                     and row["tierMetrics"]["clearing"]["q20Skill"] is not None]
         reference = float(np.median([m["q20Skill"] for m in measured])) if measured else None
         references[level] = reference
-        scale_folders[("Double", level)] = {
+        scale_folders[(mode, level)] = {
             "deltas": [CLEARING_DIFFICULTY_DELTA_SCALE * m["shrinkageWeight"] * (m["q20Skill"] - reference)
                        for m in measured],
             "players": [m["ratedClearCount"] for m in measured],
@@ -229,7 +244,7 @@ def _apply_official_high_level_clearing(
     folder_audits = {}
     for level, rows in sorted(folders.items()):
         midpoint, reference = level + .5, references[level]
-        parameters = spreads[("Double", level)]
+        parameters = spreads[(mode, level)]
         for row in rows:
             metric = row["tierMetrics"]["clearing"]
             metric["folderReferenceSkill"] = reference
@@ -306,14 +321,14 @@ def _apply_official_high_level_clearing(
             "finalMedian": float(np.median([row["tierMetrics"]["clearing"]["estimatedDifficulty"] for row in ordered])) if ordered else None,
         }
     audit = {
-        "version": 2 if combined else 1, "method": COMBINED_METHOD if combined else METHOD,
+        "version": 2 if combined else 1, "method": method or (COMBINED_METHOD if combined else METHOD),
         "source": OFFICIAL_SOURCE, "mix": "Phoenix+Phoenix2" if combined else "Phoenix2",
-        "asOf": phoenix2_capture.get("asOf"), "minimumLevel": TARGET_MINIMUM_LEVEL,
-        "mode": "Double", "targetCharts": len(targets), "availableBoards": sum(str(row["chartId"]) in boards for row in targets),
+        "asOf": phoenix2_capture.get("asOf"), "minimumLevel": minimum_level,
+        "mode": mode, "targetCharts": len(targets), "availableBoards": sum(str(row["chartId"]) in boards for row in targets),
         "historyBoards": len(boards), "percentile": CLEARING_PERCENTILE,
         "difficultyDeltaScale": CLEARING_DIFFICULTY_DELTA_SCALE,
         "playerSkill": {"method": "leave-one-chart-out-top-official-levels", "topCharts": PLAYER_TOP_CLEARS,
-                        "minimumOtherCharts": PLAYER_MINIMUM_OTHER_CLEARS, "historyMinimumLevel": HISTORY_MINIMUM_LEVEL,
+                        "minimumOtherCharts": PLAYER_MINIMUM_OTHER_CLEARS, "historyMinimumLevel": history_minimum_level,
                         "levelMidpointOffset": .5, "separateModes": True},
         "shrinkage": {"priorPlayers": CLEARING_PRIOR_PLAYERS, "formula": "n/(n+20)*n/N"},
         "calibration": clearing_calibration_identity(), "folders": folder_audits,
@@ -335,6 +350,8 @@ def apply_combined_official_high_level_clearing(
     payload: dict[str, Any], merged: Mapping[str, Any],
     current_catalog: Sequence[Mapping[str, Any]] | None = None, *,
     bootstrap_samples: int = 1000, cap_policy: str = COMBINED_CAP_POLICY,
+    mode: str = "Double", target_levels: Sequence[int] | None = None,
+    history_minimum_level: int = HISTORY_MINIMUM_LEVEL, method: str | None = None,
 ) -> dict[str, Any]:
     """Reuse legacy numeric clearing calibration over the validated official union.
 
@@ -353,14 +370,14 @@ def apply_combined_official_high_level_clearing(
     indexed = {_chart_id(chart): chart for chart in catalog}
     if current_catalog is not None:
         for chart in current_catalog:
-            if _is_double(chart, HISTORY_MINIMUM_LEVEL):
+            if _is_mode(chart, mode, history_minimum_level):
                 expected = indexed.get(_chart_id(chart))
                 if expected is None or any(chart.get(k) != expected.get(k) for k in ("type", "level")):
                     raise ValueError("Combined official Clearing catalog differs from the pinned current catalog.")
     boards = {}
     comparability_diagnostics = defaultdict(list)
     for cid, chart in indexed.items():
-        if not _is_double(chart, HISTORY_MINIMUM_LEVEL):
+        if not _is_mode(chart, mode, history_minimum_level):
             continue
         metadata = merged["charts"].get(cid)
         observations = merged["boards"].get(cid, {})
@@ -383,10 +400,13 @@ def apply_combined_official_high_level_clearing(
                "boards": boards, "asOf": None, "sourceDates": merged["sourceDates"],
                "manifestSha256": merged["manifestSha256"]}
     audit = _apply_official_high_level_clearing(payload, capture, catalog,
-                                               bootstrap_samples=bootstrap_samples, combined=True, cap_policy=cap_policy)
-    for row in payload.get("doubles", []):
+                                               bootstrap_samples=bootstrap_samples, combined=True, cap_policy=cap_policy,
+                                               mode=mode, target_levels=target_levels,
+                                               history_minimum_level=history_minimum_level, method=method)
+    for row in payload.get("singles" if mode == "Single" else "doubles", []):
         cid = str(row["chartId"])
-        if row["level"] >= TARGET_MINIMUM_LEVEL:
+        if (row["level"] >= (min(target_levels) if target_levels is not None else TARGET_MINIMUM_LEVEL)
+                and (target_levels is None or int(row["level"]) in target_levels)):
             metric = row["tierMetrics"]["clearing"]
             metadata = merged["charts"][cid]
             metric["clearingEvidence"].update(comparabilityPolicy="current-chart-id-and-mode")

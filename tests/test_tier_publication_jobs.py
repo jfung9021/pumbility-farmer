@@ -68,10 +68,10 @@ class Store(MemoryBlobStore):
         self.revisions = {'tier': {'sha256': 'previous'}, 'source': {'revision': 'source-1'}}
         self.promotions = 0
         self.reject_promotion = False
-        from production_tiers import RETAINED_VERSION
-        self.put_json('candidate', {'schemaVersion': 61, 'summary': {'method': {
+        from production_tiers import APPROVED_VERSION
+        self.put_json('candidate', {'schemaVersion': 162, 'summary': {'method': {
             'retainedGoalProducer': {'producer': 'retained-goals-v1'},
-            'productionTierPublication': {'method': RETAINED_VERSION,
+            'productionTierPublication': {'method': APPROVED_VERSION,
                 'inputs': {'producer': 'retained-goals-v1'}}}}})
         self.last_promotion = None
 
@@ -110,7 +110,7 @@ class TierPublicationJobTests(unittest.TestCase):
         return request_tier_publication(enqueue or Mock(), jobs=self.jobs, store=self.store)[1]
 
     def ready(self, **overrides):
-        return {'done': True, 'stage': 'ready', 'schemaVersion': 61,
+        return {'done': True, 'stage': 'ready', 'schemaVersion': 162,
                 'producer': 'retained-goals-v1', 'completedTargetFits': 4, 'candidatePath': 'candidate',
                 'candidateSha256': 'candidate', **overrides}
 
@@ -228,11 +228,11 @@ class TierPublicationJobTests(unittest.TestCase):
         self.assertEqual(self.store.promotions, 0)
         self.assertEqual(self.jobs.get(old_id)['status'], 'failed')
 
-    def test_new_job_uses_retained_producer_and_fifteen_outer_stages(self):
+    def test_new_job_uses_retained_producer_and_twenty_one_outer_stages(self):
         result = self.request()
         stored = self.jobs.get(result['id'])
         self.assertEqual(stored['producer'], 'retained-goals-v1')
-        self.assertEqual(result['totalStages'], 15)
+        self.assertEqual(result['totalStages'], 21)
 
     def test_legacy_jobs_fail_terminally_before_pinning_or_advancing(self):
         for pinned in (False, True):
@@ -317,10 +317,10 @@ class TierPublicationJobTests(unittest.TestCase):
         def advance(_store, _state, *, on_stage_start):
             on_stage_start('spread')
             self.assertEqual(get_tier_publication_status(identity, jobs=self.jobs)['stage'], 'spread')
-            return {'done': False, 'stage': 'spread', 'progressOrdinal': 9, 'totalStages': 14}
+            return {'done': False, 'stage': 'spread', 'progressOrdinal': 9, 'totalStages': 20}
         with patch('production_tiers.advance_tier_publication', side_effect=advance):
             result = execute_tier_publication_job(identity, jobs=self.jobs, store=self.store)
-        self.assertEqual(result['totalStages'], 15)
+        self.assertEqual(result['totalStages'], 21)
 
     def test_expired_worker_lease_can_resume(self):
         identity, _ = self.pin()
@@ -397,7 +397,7 @@ class TierPublicationJobTests(unittest.TestCase):
         self.assertEqual(result['completedTargetFits'], 4)
         self.assertEqual(duplicate['status'], 'completed')
         self.assertEqual(self.store.promotions, 1)
-        self.assertEqual(self.store.last_promotion['audit']['schemaVersion'], 61)
+        self.assertEqual(self.store.last_promotion['audit']['schemaVersion'], 162)
 
     def test_transaction_conflict_leaves_tier_and_recommendations_untouched(self):
         identity, _ = self.pin()

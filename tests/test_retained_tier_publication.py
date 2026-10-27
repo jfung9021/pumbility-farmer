@@ -21,9 +21,9 @@ class RetainedTierPublicationTests(unittest.TestCase):
         return {"inputs": reference, "generatedAtUtc": self.timestamp, "producer": tiers.RETAINED_PRODUCER}
 
     def candidate(self):
-        return {"schemaVersion": 61, "summary": {"method": {
+        return {"schemaVersion": tiers.APPROVED_SCHEMA, "summary": {"method": {
             "retainedGoalProducer": {"producer": tiers.RETAINED_PRODUCER},
-            "productionTierPublication": {"method": tiers.RETAINED_VERSION,
+            "productionTierPublication": {"method": tiers.APPROVED_VERSION,
                 "inputs": {"producer": tiers.RETAINED_PRODUCER},
                 "fullArtifactPath": "analysis/private/source-aware-tiers/full.json.gz",
                 "fullArtifactSha256": "f" * 64}}}}
@@ -41,10 +41,10 @@ class RetainedTierPublicationTests(unittest.TestCase):
             result = tiers.advance_tier_publication(self.store, state)
         retained.assert_called_once()
         self.assertEqual(retained.call_args.kwargs["input_reference_sha256"], state["inputs"]["payloadSha256"])
-        self.assertEqual(result["schemaVersion"], 61)
+        self.assertEqual(result["schemaVersion"], tiers.APPROVED_SCHEMA)
         self.assertEqual(result["producer"], tiers.RETAINED_PRODUCER)
-        self.assertEqual(result["progressOrdinal"], 14)
-        self.assertEqual(result["totalStages"], 14)
+        self.assertEqual(result["progressOrdinal"], 20)
+        self.assertEqual(result["totalStages"], 20)
         self.assertEqual(result["completedTargetFits"], 4)
 
     def test_legacy_pinned_inputs_cannot_reach_any_builder(self):
@@ -73,7 +73,7 @@ class RetainedTierPublicationTests(unittest.TestCase):
 
     def test_ready_boundary_rejects_retired_or_mislabelled_candidates(self):
         candidates = []
-        for schema in (57, 60):
+        for schema in (57, 60, 61):
             candidate = self.candidate()
             candidate["schemaVersion"] = schema
             candidates.append(candidate)

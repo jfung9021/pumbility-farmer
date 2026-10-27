@@ -64,12 +64,12 @@ class RetainedTierProducerTests(unittest.TestCase):
                         generated_at_utc=timestamp)
                 self.assertEqual(pending.exception.fit_count, 4)
             generation = pending.exception.generation
-            for _ in range(20):
+            for _ in range(26):
                 try:
                     result = tiers.resume_tier_generation(store, generation, generated_at_utc=timestamp)
                     break
                 except tiers.TierAnalysisPending as progress:
-                    self.assertEqual(progress.total_stages, 14)
+                    self.assertEqual(progress.total_stages, 20)
             else:
                 self.fail("The retained checkpoint chain never finished.")
             self.assertEqual(result, public)
@@ -78,7 +78,9 @@ class RetainedTierProducerTests(unittest.TestCase):
             state = store.get_json(tiers.PREFIX + "generations/" + generation + "/state.json")
             self.assertNotIn("tailOverlay", state)
             self.assertNotIn("goalOverlay", state)
-            self.assertEqual(state["widthOverlay"]["schemaVersion"], 61)
+            self.assertNotIn("widthOverlay", state)
+            self.assertEqual(next(r for r in state["stages"] if r["stage"] == "retained-width")["schemaVersion"], 61)
+            self.assertEqual(state["stages"][-1]["schemaVersion"], 162)
             self.assertEqual(tiers.resume_tier_generation(store, generation, generated_at_utc=timestamp), public)
             self.assertEqual(fitter.call_count, 4)
 
@@ -113,7 +115,7 @@ class RetainedTierProducerTests(unittest.TestCase):
         self.assertEqual([item.stage for item in pending[:8]],
             ["preparation-general", "preparation-phase-model", "preparation-phase-official", "preparation-phase-provenance",
              "preparation-cohort-1", "preparation-cohort-2", "preparation-cohort-3", "preparation-cohort-4"])
-        self.assertTrue(all(item.fit_count == 4 and item.total_stages == 14 for item in pending))
+        self.assertTrue(all(item.fit_count == 4 and item.total_stages == 20 for item in pending))
         self.assertEqual(tiers._preparation_cohorts({}), tiers.PREPARATION_COHORTS)
         self.assertEqual(tiers._fit_count({}), 8)
 

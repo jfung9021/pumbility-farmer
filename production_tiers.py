@@ -22,6 +22,8 @@ TAIL_VERSION = "6.23.0-sss-bounded-tails"
 WIDTH_VERSION = "6.24.0-level20-target-width"
 RETAINED_VERSION = "6.25.0-retained-goals"
 RETAINED_PRODUCER = "retained-goals-v1"
+APPROVED_VERSION = "6.26.0-centered-maximum"
+APPROVED_SCHEMA = 162
 PREFIX = "analysis/private/source-aware-tiers/"
 SEED = 20261018
 SAMPLES = 200
@@ -39,7 +41,7 @@ class TierAnalysisPending(RuntimeError):
         self.stage, self.generation = stage, generation
         self.progress_ordinal = completed if progress_ordinal is None else progress_ordinal
         self.fit_count = fit_count
-        self.total_stages = fit_count + 1 + len(FINISH_STAGES) + 2
+        self.total_stages = fit_count + 1 + len(RETAINED_FINISH_STAGES if fit_count == 4 else FINISH_STAGES) + 2
 
 
 def digest(value: Any) -> str:
@@ -54,9 +56,12 @@ def model_code_identity() -> str:
 
 FINISH_STAGES = ("centered-sss", "sssplus", "median", "spread", "combined-clearing",
                  "source-aware", "submitted-calibration")
-RETAINED_FINISH_STAGES = ("official-clearing", *FINISH_STAGES[1:])
+RETAINED_FINISH_STAGES = ("official-clearing", *FINISH_STAGES[1:], "retained-width",
+    "extended-clearing", "observed-clearing", "scoped-width", "folder-centering", "centered-maximum")
 STAGE_SCHEMAS = dict(zip(FINISH_STAGES, (51, 52, 53, 54, 55, 56, 57)))
 STAGE_SCHEMAS["official-clearing"] = 148
+STAGE_SCHEMAS.update({"retained-width":61,"extended-clearing":158,"observed-clearing":159,
+    "scoped-width":160,"folder-centering":161,"centered-maximum":162})
 GENERAL_FILES = ("scoring_percentile.py", "official_cross_level_scoring.py", "official_player_scoring.py",
                  "official_scoring_calibration.py", "cross_level_clearing.py", "cross_level_clearing_calibration.py",
                  "hybrid_tiers.py", "pumbility_average.py", "tier_postprocessing.py", "tier_difficulty.py",
@@ -73,6 +78,12 @@ STAGE_FILES = {
     "combined-clearing": ("combined_official_clearing.py", "official_high_level_clearing.py"),
     "source-aware": ("source_aware_tiers.py", "final_folder_width.py"),
     "submitted-calibration": ("submitted_sssplus_calibration.py",),
+    "retained-width": ("level20_scoring_width.py",),
+    "extended-clearing": ("extended_official_clearing.py", "official_high_level_clearing.py"),
+    "observed-clearing": ("observed_capped_clearing.py",),
+    "scoped-width": ("scoped_tier_width.py",),
+    "folder-centering": ("final_folder_centering.py",),
+    "centered-maximum": ("centered_maximum_pumbility.py", "approved_tier_ratings.py"),
     "archive": ("tier_pipeline_checkpoints.py",),
     "public": ("production_tiers.py", "tier_public.py", "config/tier-public-fields.json", "sss_tail_tiers.py",
                "level20_scoring_width.py"),
@@ -288,7 +299,10 @@ def public_tiers(full, *, private_path, input_identity, full_sha256=None, compon
                  computation_identity=None):
     """Retain all active values/explanations; rollback history is a private artifact."""
     from source_aware_tiers import validate_source_aware_tiers
-    if full.get("schemaVersion") in (60, 61):
+    if full.get("schemaVersion") == APPROVED_SCHEMA:
+        from approved_tier_ratings import validate_approved_rating_chain
+        validate_approved_rating_chain(full)
+    elif full.get("schemaVersion") in (60, 61):
         from level20_scoring_width import validate_level20_scoring_width
         validate_level20_scoring_width(full)
     elif full.get("schemaVersion") == 59:
@@ -303,11 +317,11 @@ def public_tiers(full, *, private_path, input_identity, full_sha256=None, compon
     else:
         validate_source_aware_tiers(full)
     result = _public_copy(full)
-    version = (RETAINED_VERSION if full.get("schemaVersion") == 61 else WIDTH_VERSION if full.get("schemaVersion") == 60 else TAIL_VERSION
+    version = (APPROVED_VERSION if full.get("schemaVersion") == APPROVED_SCHEMA else RETAINED_VERSION if full.get("schemaVersion") == 61 else WIDTH_VERSION if full.get("schemaVersion") == 60 else TAIL_VERSION
                if full.get("schemaVersion") == 59 else GOAL_VERSION
                if full.get("schemaVersion") == 58 else VERSION if full.get("schemaVersion") == 57 else PREVIOUS_VERSION)
     result["summary"]["scriptVersion"] = version
-    if full.get("schemaVersion") == 61:
+    if full.get("schemaVersion") in (61, APPROVED_SCHEMA):
         result["summary"]["method"]["availableScoringGoals"] = ["general", "sssplus"]
     publication = {"version": 1, "method": version, "fullArtifactPath": private_path,
         "fullArtifactSha256": full_sha256 or digest(full), "inputs": input_identity, "historyStorage": "private",
@@ -354,23 +368,23 @@ def write_private_audit(store, path, full):
 def validate_public_tiers(payload):
     from chart_source_exclusions import load_exclusions
     schema = payload.get("schemaVersion")
-    if schema not in (56, 57, 58, 59, 60, 61):
+    if schema not in (56, 57, 58, 59, 60, 61, APPROVED_SCHEMA):
         raise ValueError("The hosted source-aware tier schema must be 56, 57, 58, 59 or 60.")
     method = payload["summary"]["method"]
     publication = method.get("productionTierPublication", {})
-    expected_version = (RETAINED_VERSION if schema == 61 else WIDTH_VERSION if schema == 60 else TAIL_VERSION if schema == 59
+    expected_version = (APPROVED_VERSION if schema == APPROVED_SCHEMA else RETAINED_VERSION if schema == 61 else WIDTH_VERSION if schema == 60 else TAIL_VERSION if schema == 59
                         else GOAL_VERSION if schema == 58 else VERSION if schema == 57 else PREVIOUS_VERSION)
     if (publication.get("version") != 1 or publication.get("method") != expected_version
             or publication.get("publicPayloadSha256") != public_digest(payload)):
         raise ValueError("The public source-aware tier artifact failed its publication identity.")
-    if schema in (57, 58, 59, 60, 61) and method.get("submittedSssplusCalibration", {}).get("localOnly") is not False:
+    if schema in (57, 58, 59, 60, 61, APPROVED_SCHEMA) and method.get("submittedSssplusCalibration", {}).get("localOnly") is not False:
         raise ValueError("The hosted submitted SSS+ calibration must declare production use.")
     rows = payload["singles"] + payload["doubles"]
     policy = load_exclusions([{**r, "id": r["chartId"]} for r in rows])
     if method["sourceAwareTiers"]["sourcePolicy"]["effectivePolicySha256"] != policy.semantic_hash():
         raise ValueError("The published tiers use a different source exclusion policy.")
     goals = ("general", "sss", "sssplus")
-    if schema == 61:
+    if schema in (61, APPROVED_SCHEMA):
         from retained_tiers import GOALS, validate_marker
         validate_marker(payload)
         goals = GOALS
@@ -397,11 +411,16 @@ def validate_public_tiers(payload):
                     raise ValueError("The public scoring goal has incorrect target or support counts.")
             scoring = row["scoringVariants"][goal]["estimatedDifficulty"]
             actual = row["pumbilityVariants"][goal]["estimatedDifficulty"]
-            expected = None if scoring is None or clearing is None else (scoring + clearing) / 2
+            expected = None if scoring is None or clearing is None else (
+                max(scoring, clearing) + method["centeredMaximumPumbility"]["folders"][row["type"]][str(row["level"])][goal]["offset"]
+                if schema == APPROVED_SCHEMA else (scoring + clearing) / 2)
             if actual != expected or any(v is not None and not math.isfinite(v) for v in (scoring, clearing, actual)):
                 raise ValueError("Public Pumbility must average its finite final components.")
         if row["estimatedDifficulty"] != row["scoringVariants"]["general"]["estimatedDifficulty"]:
             raise ValueError("General Scoring compatibility fields differ.")
+    if schema == APPROVED_SCHEMA:
+        from approved_tier_ratings import validate_public_approved_ratings
+        validate_public_approved_ratings(payload)
     if schema in (60, 61):
         from level20_scoring_width import validate_public_level20_scoring_width
         validate_public_level20_scoring_width(payload)
@@ -521,6 +540,24 @@ def _finish_stage(stage, result, context, fits, identities, generated_at_utc):
             if (item["goal"], item["source"], item["mode"]) == ("sssplus", "submitted", "Double"))
         return apply_submitted_sssplus_calibration(result, fits["sssplus"]["submitted"]["Double"],
             fit_identity=submitted_identity, local_only=False)
+    if stage == "retained-width":
+        from level20_scoring_width import apply_retained_level20_scoring_width
+        return apply_retained_level20_scoring_width(result)
+    if stage == "extended-clearing":
+        from extended_official_clearing import apply_extended_official_clearing
+        return apply_extended_official_clearing(result, merged, bootstrap_samples=1000, local_only=False)[0]
+    if stage == "observed-clearing":
+        from observed_capped_clearing import apply_observed_capped_clearing
+        return apply_observed_capped_clearing(result)[0]
+    if stage == "scoped-width":
+        from scoped_tier_width import apply_scoped_tier_width
+        return apply_scoped_tier_width(result)[0]
+    if stage == "folder-centering":
+        from final_folder_centering import apply_final_folder_centering
+        return apply_final_folder_centering(result)[0]
+    if stage == "centered-maximum":
+        from centered_maximum_pumbility import apply_centered_maximum_pumbility
+        return apply_centered_maximum_pumbility(result)[0]
     raise ValueError("Unknown tier publication phase.")
 
 
@@ -1264,6 +1301,10 @@ def _validate_publication_overlay_chain(state):
         return
     reference = state["stages"][-1]
     if _retained_state(state):
+        if reference.get("schemaVersion") == APPROVED_SCHEMA:
+            if "archive" in state and state["archive"] != reference:
+                raise TierComputationCacheError("The approved archive differs from its final rating checkpoint.")
+            return
         if any(name in state for name in ("goalOverlay", "tailOverlay")):
             raise TierComputationCacheError("A retained producer contains a retired overlay.")
         saved = state.get("widthOverlay")
@@ -1314,6 +1355,8 @@ def _publication_overlays(store, state, reference, *, on_progress=None, on_stage
     from tier_pipeline_checkpoints import read_checkpoint, write_checkpoint
     _validate_publication_overlay_chain(state)
     if _retained_state(state):
+        if reference.get("schemaVersion") == APPROVED_SCHEMA:
+            return reference
         if "widthOverlay" not in state:
             from level20_scoring_width import apply_retained_level20_scoring_width
             full = read_checkpoint(store, reference, stage=reference["stage"], identity=reference["identity"])
@@ -1691,7 +1734,7 @@ def _load_phase_inputs(store, state, stage):
     merged, prepared = provenance["merged"], {}
     if stage in ("centered-sss", "sssplus"):
         prepared = load("model")["prepared"]
-    if stage in ("official-clearing", "centered-sss", "spread", "combined-clearing"):
+    if stage in ("official-clearing", "centered-sss", "spread", "combined-clearing", "extended-clearing"):
         merged = load("official")["merged"]
     fits, identities = {}, []
     for item in state["fitReferences"]:
@@ -1779,11 +1822,11 @@ def validate_current_tier_publication(candidate):
     """The tier-only worker can promote only the current retained producer."""
     method = candidate.get("summary", {}).get("method", {})
     publication = method.get("productionTierPublication", {})
-    if (candidate.get("schemaVersion") != 61
+    if (candidate.get("schemaVersion") != APPROVED_SCHEMA
             or method.get("retainedGoalProducer", {}).get("producer") != RETAINED_PRODUCER
-            or publication.get("method") != RETAINED_VERSION
+            or publication.get("method") != APPROVED_VERSION
             or publication.get("inputs", {}).get("producer") != RETAINED_PRODUCER):
-        raise ValueError("Tier publication requires the current retained schema-61 producer.")
+        raise ValueError("Tier publication requires the approved schema-162 retained producer.")
     return publication
 
 
@@ -1792,7 +1835,7 @@ def _ready_worker_result(state, candidate):
     generation = digest(publication["inputs"])
     total = 4 + 1 + len(RETAINED_FINISH_STAGES) + 2
     ready = {"done": True, "stage": "ready", "generation": generation,
-             "producer": RETAINED_PRODUCER, "schemaVersion": 61,
+             "producer": RETAINED_PRODUCER, "schemaVersion": APPROVED_SCHEMA,
              "completedTargetFits": 4,
              "progressOrdinal": total, "totalStages": total,
              "candidatePath": PREFIX+"generations/"+generation+"/public.json",

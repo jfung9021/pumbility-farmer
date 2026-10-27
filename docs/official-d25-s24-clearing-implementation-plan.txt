@@ -1,0 +1,274 @@
+Official leaderboard Clearing for D25 and S24
+Implementation plan — October 27, 2026
+
+Status: planning only. Three subagents traced the numerical model, audited the
+pinned data, and mapped integration/tests. Application code and production data
+were not changed. All findings refer to the current working tree.
+
+1. Scope and recommended approach
+
+Add official leaderboard Clearing for exactly Double level 25 and Single level
+24. Keep the existing official D26+ calculation and outputs unchanged. S25/S26,
+lower folders, Co-op, all Scoring variants, recommendations, and personal data
+are outside this change. Select targets by current official mode and level,
+never by estimated difficulty.
+
+Introduce a recoverable final overlay after the current schema-57 generation.
+Proposed schema: 58, after confirming it remains unused at implementation time.
+This preserves the meanings and readers of historical schemas 55–57 instead of
+silently broadening their D26-only calculations. The final new Clearing follows
+the same numerical stages as current D26, including its final folder-width map.
+
+Use the frozen schema-57 private full artifact and its pinned, source-filtered
+official inputs. Build a separate local candidate first. This task does not
+authorize implementing or publishing the plan.
+
+2. Findings from the existing implementation
+
+Current production uses the Phoenix + Phoenix 2 official union, not the older
+Phoenix-2-only method described in the October 18 D26 planning document.
+
+Relevant implementation:
+  official_high_level_clearing.py:155 — core clearer-ability calculation
+  combined_official_clearing.py:55 — recovery, composites, and combined overlay
+  production_tiers.py:269 — production uses P1_OBSERVED_CAP_POLICY
+  source_aware_tiers.py:54 — additional final Clearing folder-width stage
+  official_scores.py:26 — existing history floors: Singles 22, Doubles 23
+  final_folder_width.py — current final width parameters and transformation
+  tier_postprocessing.py — recorded compression policy; current default is 0.75
+
+The old D26 document's fixed 0.5 compression is not the current policy. Read the
+factor from the input artifact and apply it once.
+
+3. Data feasibility and source policy
+
+Read-only audit of the actual local pinned manifest:
+
+  Folder   Catalog   Nonempty union   Phoenix 1 capped   Phoenix 2 capped
+  S24           30               27                 24                  8
+  D25           72               69                 60                  3
+  D26           39               36                 22                  0
+
+Each requested folder has three charts without mirrored leaderboard evidence.
+Keep those explicit and Unrated rather than substituting submitted observations.
+
+The manifest already captures current Singles/Doubles 20+, so no capture scope
+or endpoint change is needed. The local source dates are September 6, 2026 for
+Phoenix and October 11, 2026 for Phoenix 2; local fetch dates are October 17.
+These are pinned local inputs, not a claim about today's hosted data.
+
+Local manifest:
+  .local-data/piu-scores/official/scoring/manifest.json
+Hosted manifest key:
+  analysis/private/official/scoring/manifest.json
+
+Reuse official_score_merge.merge_official_scores with the current effective
+chart source exclusion policy, just as production_tiers.load_context does.
+Record manifest hash, effective input hash, exclusion-policy identity, source
+dates, chart catalog identity, and base artifact hash. Reject mismatched inputs.
+Do not use the older official/phoenix2/current.json as the combined source.
+
+Retain existing unambiguous full-tag identity matching, source-specific identities
+when matching is ambiguous, and one unique player/chart observation. Reject
+supplemented records. Keep current-chart-id-and-mode Clearing comparability.
+
+The captured records have score/rank/identity, not a separate stage-clear lamp.
+Continue the current interpretation of leaderboard appearance as observed clear
+evidence. Missing appearances are unknown, not failures; this is not a pass-rate
+estimator.
+
+4. Numerical policy
+
+Use the following existing D26 rules for each new folder:
+
+  a. Build histories separately for each mode. D25 uses D23+ histories; S24
+     uses S22+ histories, matching the existing official Singles contract.
+  b. Exclude the target chart. Require at least 25 other distinct observed
+     official clears, and average the highest 25 current level midpoints L+0.5.
+  c. Take the linearly interpolated 20th percentile of eligible clearer ability.
+  d. With n eligible and N observed unique clearers, use weight
+           n/(n+20) * n/N
+     and raw delta
+           0.70 * weight * (chart q20 - uncapped folder median q20).
+  e. Reuse robust folder-spread calibration. Five qualifying charts, each with
+     at least ten eligible clearers, support an independent folder scale.
+     Retain same-mode neighboring-scale or scale-1 fallback and weaker evidence
+     when unsupported. Never let new folders change old D26+ donor selection.
+  f. Preserve P1_OBSERVED_CAP_POLICY: Phoenix 1 caps remain diagnostic and affect
+     evidence status; Phoenix 2 truncation triggers the existing cap default.
+     Assign capped charts the uncapped folder minimum, or midpoint if none is
+     available. Do not invent confidence intervals for cap assignments.
+  g. Recenter finite core estimates to L+0.5, then apply the artifact's midpoint
+     compression exactly once. Preserve initial-fit and recentering diagnostics.
+  h. Apply the existing final_folder_width policy to the NEW folders only,
+     including the protected median-pair behavior, cap exclusion from the fit
+     population, transformed endpoints, and sparse-population evidence flags.
+  i. Recompute Clearing ranks and General/SSS/SSS+ Pumbility within each affected
+     mode/folder. Each Pumbility value is the full-precision mean of unchanged
+     final Scoring and new final Clearing; both components remain required.
+
+Keep deterministic 1,000-sample conditional q20 bootstrap behavior. Histories,
+folder reference, spread, recentering, and width remain fixed. Preserve sparse
+interval-unavailable reasons and the existing conditional Pumbility convention;
+do not label these as joint intervals for both components.
+
+S22+ feasibility: the audit found median S24 eligible support of 256.5 across
+the 30 catalog charts and median observed-board coverage of 88.10%. Existing
+D23+ histories gave D25 median eligible support 154.5 and coverage 94.318%
+under the current exclusion policy. No reduced eligibility requirement is needed.
+
+Median checks must use the population each stage actually declares. Core
+recentering includes all finite assignments. The supported final width fit
+excludes cap defaults, so its uncapped population median is the protected one.
+With capped boards, the final all-chart median need not equal the uncapped
+median. Report both instead of imposing contradictory guarantees.
+
+5. Implementation work packages
+
+A. Freeze inputs and audit the baseline
+
+Resolve the current full schema-57 artifact and matching inputs. Save hashes and
+aggregate coverage, evidence, cap, and before-values for all target charts. For a
+hosted tier-only migration, resolve productionTierPublication.fullArtifactPath;
+the compact list does not contain the rollback history required for recovery.
+Use the existing source-exclusion policy. Keep player identities private.
+
+B. Reuse the numeric engine without changing legacy behavior
+
+Extract or parameterize the core in official_high_level_clearing.py so explicit
+target scope, mode, history floor, and method metadata can be supplied. Preserve
+legacy D26 entry points, default behavior, and serialized method identifiers.
+Key histories by mode/player and folders/calibration by (mode, level). Replace
+D23-only reason strings with policy-derived descriptions for the new method.
+
+Run only the two new target folders. Fit their scales independently; if a donor
+is needed, permit only independently supported same-mode references. Existing
+D26 diagnostics may supply a read-only donor, but never rewrite old results.
+Apply the final width helper directly to the new folders; do not rerun the
+historical source-aware stage over the full artifact.
+
+C. Add the recoverable final overlay
+
+Suggested new module: extended_official_clearing.py, schema 58, with apply,
+recover, and validate functions. Use a generic versioned method name such as
+official-clearer-ability-combined-v3 for the new rows. Retain old D26 method IDs.
+Use distinct extendedOfficialClearing policy metadata and an
+extendedOfficialClearingBaseline rollback field, preserving the existing
+officialHighLevelClearing audit for D26+.
+
+Store only the changed components/ranks and required summary state for exact
+schema-57 recovery. Follow the existing copy strategy to avoid duplicating the
+large historical artifact unnecessarily. Validate invariance of all Scoring,
+unrelated rows, chart metadata, source inputs, and Co-op. Rebuild all three
+Pumbility variants and their aliases, support counts, intervals, and local ranks.
+Call ranking helpers separately per mode; the existing _rank_pumbility helper
+groups only by level and must not receive mixed modes.
+
+D. Wire local/hosted publication and readers
+
+Add a local candidate builder with explicit base/manifest/output arguments and
+a zero-fetch, zero-Scoring-refit report. Add a final production finish stage:
+FINISH_STAGES, STAGE_SCHEMAS, STAGE_FILES, _finish_stage, and _load_phase_inputs
+in production_tiers.py. The new stage needs full merged official inputs and no
+Scoring fits. Replace the hardcoded final checkpoint stage submitted-calibration
+with the actual final stage when reading the archive for publication.
+
+Extend full/public validation to recover 58 -> 57 -> 56 before validating the
+existing chain. Preserve old schema-57 script version recognition when assigning
+the new publication version. Update tier_publication_jobs.py and
+scripts/verify_tier_publication.py schema assumptions. Reuse existing atomic
+publication and input-change checks; retain the previous pointer for rollback.
+
+For an existing frozen generation, provide a tier-only extension path that reads
+the full private artifact and runs only this overlay. Do not blindly rerun the
+entire fitting pipeline for this migration. Normal future refreshes should
+include the new final stage. Existing model-cache identities can remain reusable;
+stage identities must include the new numeric dependencies and scope policy.
+
+Frontend/public changes:
+  - New schema-58 validator, dispatched before 57 in lib/local-analysis.ts.
+  - Preserve existing historical combined/source-aware validators unchanged.
+  - Extend lib/types.ts with the new method and per-mode history provenance.
+  - Extend lib/tier-metrics.ts method recognition for support and limited-data
+    displays; cover provisional official charts with 20+ eligible clearers.
+  - Update supported schema gates in lib/tier-postprocessing.ts,
+    lib/pumbility-policy.ts, lib/scoring-variants.ts, and app/tier-list/page.tsx.
+  - Preserve submitted-SSS+ and other existing features on schema 58.
+  - Update config/tier-public-fields.json, tier_public.py, and
+    lib/tier-browser-payload.ts only as needed to retain new method diagnostics
+    while keeping rollback fields and player identities private.
+  - Update official method detection and descriptions in app/tier-list/page.tsx
+    and app/about/page.tsx where applicable. Render '25 other S22+ clears' for
+    S24 and '25 other D23+ clears' for D25/D26+, from recorded provenance.
+  - Check list and lazy chart-detail generation identities still match.
+
+No new leaderboard capture endpoint, UI selector, Scoring model, or database
+entity is required. Read the relevant installed Next.js guide before writing
+frontend code, as required by AGENTS.md.
+
+6. Verification and acceptance
+
+Add focused Python/TypeScript fixtures and tests for:
+  - Exact dispatch: S24/D25 change; S23/S25/S26/D24 and existing D26+ do not.
+  - Same-mode histories, target exclusion, 24-versus-25-other-clear eligibility,
+    top-25 selection, cross-version deduplication, and current level mapping.
+  - q20 interpolation, n/N weight, robust scale, same-mode-only fallback,
+    old-folder donor invariance, and deterministic bootstrap results.
+  - Phoenix 1-only cap versus Phoenix 2 cap, no uncapped folder, missing boards,
+    no eligible histories, sparse support, and unavailable intervals.
+  - Core and final width population medians, cap exclusion from width fitting,
+    protected median pairs, dynamic compression once, and transformed endpoints.
+  - All three Pumbility component means, aliases, evidence status, support counts,
+    conditional intervals, ranks, and goal projection.
+  - Exact baseline recovery; rejection of tampered scope/source/cap/count/value
+    metadata; retained schema-57 reading; compact/detail provenance and privacy.
+  - Hosted final-stage hydration/checkpoint/archive selection, cached fit reuse,
+    zero fetches/refits for tier-only extension, atomic publication/rollback,
+    and matching list/detail generations.
+
+Existing suites to retain as regression checks include:
+  tests/test_official_high_level_clearing.py
+  tests/test_combined_official_clearing.py
+  tests/test_source_aware_tiers.py
+  tests/test_production_tiers.py
+  tests/test_tier_release.py
+  tests/test_tier_public.py
+  tests/combined-clearing-validation.test.ts
+  tests/p1-observed-clearing.test.ts
+  tests/source-aware-validation.test.ts
+
+Run targeted unittest modules and new overlay tests first, followed by
+npm run test:frontend, npm run typecheck, and npm run build for the frontend
+changes. Smoke-test a local S24 and D25 chart in Clearing and each Pumbility goal,
+including capped/unavailable examples and an unchanged D26 chart. Confirm the
+explanation uses the correct history floor and evidence source.
+
+Existing targeted commands (add the new overlay test modules during implementation):
+  .venv/Scripts/python.exe -m unittest tests.test_official_high_level_clearing tests.test_combined_official_clearing tests.test_official_clearing_calibration tests.test_source_aware_tiers tests.test_production_tiers tests.test_tier_pipeline_checkpoints tests.test_tier_public tests.test_tier_publication_jobs
+  node --experimental-strip-types --test tests/combined-clearing-validation.test.ts tests/source-aware-validation.test.ts tests/submitted-sssplus-calibration.test.ts tests/scoring-variants.test.ts tests/tier-postprocessing.test.ts tests/tier-public.test.ts tests/local-tier-loading.test.ts tests/frontend-api.test.ts
+
+The candidate report must show chart-by-chart before/after Clearing and all
+Pumbility values, eligible/observed counts, cap state, evidence status, scale
+support, width populations, median checks, ranks, and unchanged-scope hashes.
+No expected numerical ratings are asserted by this planning audit.
+
+Stop when the explicit criteria pass. Perform at most one general review; repair
+only proven regressions and rerun affected checks without restarting that review.
+Publishing requires a subsequent implementation/release request.
+
+7. Planning verification and unresolved items
+
+Completed: repository code tracing by three subagents, validation/merging of the
+actual local pinned manifest, aggregate coverage/cap/eligibility audits, and an
+eligibility check under the effective source exclusion policy. No network
+requests, score refreshes, application tests, model fits, deployment, or
+implementation were performed.
+
+No proven data blocker was found for a local candidate. Three missing-evidence
+charts per requested folder and the observed cap counts are handled by the
+existing evidence policy. Concrete final ratings remain to be computed during
+implementation. Check the live release's private baseline and source identities
+when implementing; the local pinned inputs may differ from hosted inputs.
+
+Incidental observation: the workspace contains extensive pre-existing modified
+and untracked work. It was not altered. No unrelated repair work was undertaken.
