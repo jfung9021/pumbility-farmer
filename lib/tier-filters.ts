@@ -1,7 +1,15 @@
 import { displayBpmRange, focalBpm, type SongBpm } from "./song-bpm.ts";
+import phoenix2DebutCharts from "../config/phoenix2-debut-charts.json" with { type: "json" };
 
 export type BpmRange = { min: number; max: number };
 type ChartBpm = SongBpm;
+const phoenix2DebutChartIds = new Set(phoenix2DebutCharts.chartIds);
+
+export function matchesTierPhoenix2Debut(chart: { chartId: string; originalMix?: string }, selected: boolean): boolean {
+  if (!selected) return true;
+  if (chart.originalMix !== undefined) return chart.originalMix === "Phoenix2";
+  return phoenix2DebutChartIds.has(chart.chartId);
+}
 
 export function matchesTierLevel(chart: { level: number; type: string }, selected: string): boolean {
   if (selected === "All") return true;

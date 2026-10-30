@@ -1128,6 +1128,8 @@ def analyze_snapshot(
         "nContributors", "nPlayersScored", "contributionAppearanceRate", "reliabilityWeight",
         "meanContributorBaselinePb", "evidenceStatus",
     ]
+    if "originalMix" in result.columns:
+        output_columns.append("originalMix")
     for col in output_columns:
         if col not in result.columns:
             result[col] = pd.NA
@@ -1250,6 +1252,9 @@ def build_web_payload(
 ) -> dict[str, Any]:
     """Convert analysis frames into a JSON-safe contract for the web UI."""
     records = json.loads(chart_results.to_json(orient="records", double_precision=6))
+    for row in records:
+        if row.get("originalMix") is None:
+            row.pop("originalMix", None)
     return {
         "generatedAtUtc": summary.get("generatedAtUtc"),
         "mix": dict(summary.get("mix") or resolve_mix().as_payload()),

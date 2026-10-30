@@ -5,7 +5,7 @@ import { compactTierPayload, tierBrowserPayload, tierBrowserJson, tierChartDetai
 import { createTierChartDetailLoader } from "../lib/tier-chart-details.ts";
 import { hasScoringGoalVariants, projectScoringGoal, SCORING_GOALS, SCORING_TARGET_POLICIES } from "../lib/scoring-variants.ts";
 import { clearingMinimumScoreRecords, clearingPercentileRange, clearingSkillPercentile, estimatedTierGroups, hasLimitedTierData, selectedTierMetric, sortTierCharts, tierBandCharts, tierSupportLabel } from "../lib/tier-metrics.ts";
-import { matchesTierBpm, matchesTierLevel, tierBpmBounds } from "../lib/tier-filters.ts";
+import { matchesTierBpm, matchesTierLevel, matchesTierPhoenix2Debut, tierBpmBounds } from "../lib/tier-filters.ts";
 import { formatDisplayBpm } from "../lib/song-bpm.ts";
 import { resolvePumbilityPolicy } from "../lib/pumbility-policy.ts";
 import { hasMidpointCompression } from "../lib/tier-postprocessing.ts";
@@ -13,6 +13,19 @@ import type { AnalysisPayload } from "../lib/types";
 
 const source = JSON.parse(readFileSync(new URL("./fixtures/tier-public-source.json", import.meta.url), "utf8")) as AnalysisPayload;
 const expected = JSON.parse(readFileSync(new URL("./fixtures/tier-public-list.json", import.meta.url), "utf8"));
+
+test("public list, browser, and detail projections retain chart introduction metadata for debut filters", () => {
+  const payload = structuredClone(source);
+  payload.doubles.forEach((chart, index) => { chart.originalMix = index === 0 ? "Phoenix2" : "Phoenix"; });
+  const expectedMixes = payload.doubles.map(chart => chart.originalMix);
+  const expectedIds = payload.doubles.filter(chart => matchesTierPhoenix2Debut(chart, true)).map(chart => chart.chartId);
+  const compact = compactTierPayload(payload);
+  for (const projected of [compact, tierBrowserPayload(payload), tierBrowserPayload(compact)]) {
+    assert.deepEqual(projected.doubles.map(chart => chart.originalMix), expectedMixes);
+    assert.deepEqual(projected.doubles.filter(chart => matchesTierPhoenix2Debut(chart, true)).map(chart => chart.chartId), expectedIds);
+  }
+  for (const chart of payload.doubles) assert.equal(tierChartDetails(payload, chart.chartId)?.chart.originalMix, chart.originalMix);
+});
 
 test("browser and lazy detail DTOs retire SS, SS+ and SSS while retaining General and SSS+ results", () => {
   const payload = structuredClone(source);

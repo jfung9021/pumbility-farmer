@@ -12,6 +12,10 @@
 .tier-list-page .filter-bar label > span { color: var(--muted); font-size: 12px; font-weight: 400; letter-spacing: 0; margin-bottom: 6px; text-transform: none; }
 .tier-list-page .filter-bar input, .tier-list-page .filter-bar select { background: var(--surface); border-color: #727a85; font-size: 14px; }
 .tier-list-page .tier-filter-disclosure, .tier-list-page .tier-display-disclosure { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin-top: 14px; padding: 18px; }
+.tier-list-page .tier-filter-disclosure { display: grid; gap: 18px; }
+.tier-list-page .tier-phoenix2-toggle { align-items: center; color: var(--ink); cursor: pointer; display: flex; font-size: 14px; gap: 10px; min-height: 44px; }
+.tier-list-page .tier-phoenix2-toggle input { accent-color: var(--acid); flex: 0 0 18px; height: 18px; margin: 0; width: 18px; }
+.tier-list-page .tier-phoenix2-toggle small { color: var(--muted); display: block; font-size: 12px; margin-top: 4px; }
 .tier-list-page .tier-display-disclosure { display: flex; flex-wrap: wrap; gap: 16px; }
 .tier-list-page .bpm-filter legend { color: var(--muted); font-size: 12px; letter-spacing: 0; text-transform: none; }
 .tier-list-page .tier-results-context { align-items: center; color: var(--muted); display: flex; flex-wrap: wrap; font-size: 12px; gap: 8px; justify-content: space-between; margin: 14px 0; min-height: 34px; }

@@ -1,6 +1,43 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chartBpmRange, clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds } from "../lib/tier-filters.ts";
+import { chartBpmRange, clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, matchesTierPhoenix2Debut, tierBpmBounds } from "../lib/tier-filters.ts";
+import phoenix2DebutCharts from "../config/phoenix2-debut-charts.json" with { type: "json" };
+
+test("Phoenix 2 chart debuts use explicit introduction metadata before the legacy UUID catalog", () => {
+  const catalogChartId = phoenix2DebutCharts.chartIds[0]!;
+  assert.ok(catalogChartId);
+  assert.equal(matchesTierPhoenix2Debut({ chartId: catalogChartId }, true), true);
+  assert.equal(matchesTierPhoenix2Debut({ chartId: "unknown-chart", originalMix: "Phoenix2" }, true), true);
+  assert.equal(matchesTierPhoenix2Debut({ chartId: "unknown-chart" }, true), false);
+  for (const originalMix of ["Phoenix", "XX", "Rise", "Unknown", ""]) {
+    assert.equal(matchesTierPhoenix2Debut({ chartId: catalogChartId, originalMix }, true), false);
+  }
+});
+
+test("turning off the Phoenix 2 debut filter retains every chart regardless of metadata", () => {
+  for (const chart of [
+    { chartId: phoenix2DebutCharts.chartIds[0]! },
+    { chartId: "unknown-chart" },
+    { chartId: "older-chart", originalMix: "Phoenix" },
+    { chartId: "new-chart", originalMix: "Phoenix2" },
+    { chartId: "future-chart", originalMix: "Rise" },
+  ]) assert.equal(matchesTierPhoenix2Debut(chart, false), true);
+});
+
+test("Phoenix 2 chart debuts compose with level, BPM, and search including new charts for older songs", () => {
+  const charts = [
+    { chartId: "new-pavane", originalMix: "Phoenix2", songName: "Pavane", type: "Double", level: 23, bpmFocal: 160, bpmMin: 160, bpmMax: 160 },
+    { chartId: "old-pavane", originalMix: "XX", songName: "Pavane", type: "Double", level: 23, bpmFocal: 160, bpmMin: 160, bpmMax: 160 },
+    { chartId: "low-pavane", originalMix: "Phoenix2", songName: "Pavane", type: "Single", level: 19, bpmFocal: 160, bpmMin: 160, bpmMax: 160 },
+    { chartId: "fast-pavane", originalMix: "Phoenix2", songName: "Pavane", type: "Double", level: 23, bpmFocal: 200, bpmMin: 200, bpmMax: 200 },
+    { chartId: phoenix2DebutCharts.chartIds[0]!, songName: "Other", type: "Double", level: 23, bpmFocal: 160, bpmMin: 160, bpmMax: 160 },
+  ];
+  const selected = (newPhoenix2Only: boolean) => charts.filter(chart => matchesTierPhoenix2Debut(chart, newPhoenix2Only)
+    && matchesTierLevel(chart, "20+") && matchesTierBpm(chart, { min: 150, max: 170 })
+    && chart.songName.toLowerCase().includes("pavane")).map(chart => chart.chartId);
+  assert.deepEqual(selected(true), ["new-pavane"]);
+  assert.deepEqual(selected(false), ["new-pavane", "old-pavane"]);
+});
 
 test("Only 20+ selects current official Singles and Doubles levels while composing with BPM and search", () => {
   const charts = [
