@@ -487,8 +487,8 @@ test("Pumbility generation policy preserves production maximum and historical av
 test("tier labels share Pumbility dispatch and use plain evidence and interval copy", async () => {
   const page = await readFile(path.join(process.cwd(), "app", "tier-list", "page.tsx"), "utf8");
   assert.match(page, /const pumbilityPolicy = resolvePumbilityPolicy\(payload\)/);
-  assert.match(page, /PumbilityPolicyContext.Provider value=\{pumbilityPolicy\?\.aggregation/);
-  assert.match(page, /chartEvidenceLines\(chart, metric, \{ minimumScoreRecords, pumbilityAggregation \}\)/);
+  assert.match(page, /PumbilityPolicyContext.Provider value=\{pumbilityPolicy\}/);
+  assert.match(page, /chartEvidenceLines\(chart, metric, \{ minimumScoreRecords, pumbilityAggregation, pumbilityDownwardAdjustmentScale \}\)/);
   assert.match(page, /<small title=\{TIER_INTERVAL_TOOLTIP\}>/);
   const details = page.slice(page.indexOf("function ChartDetails"), page.indexOf("function ChartCard"));
   assert.doesNotMatch(details, /bootstrap|latent|asinh|frozen|exception decision/i);

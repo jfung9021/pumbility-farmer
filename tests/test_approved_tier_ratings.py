@@ -12,7 +12,7 @@ from observed_capped_clearing import apply_observed_capped_clearing, validate_ob
 from scoped_tier_width import apply_scoped_tier_width, validate_scoped_tier_width
 from final_folder_centering import apply_final_folder_centering, validate_final_folder_centering
 from centered_maximum_pumbility import apply_centered_maximum_pumbility, validate_centered_maximum_pumbility
-from production_tiers import _public_copy
+from production_tiers import APPROVED_VERSION, RETAINED_PRODUCER, _public_copy, validate_current_tier_publication
 from tier_public import compact_tier_payload, tier_browser_payload
 
 
@@ -88,7 +88,7 @@ class ApprovedTierRatingsTests(unittest.TestCase):
                 ratio=.75 if row['level']>=(24 if k=='singles' else 25) else 1
                 pairs=[(previous['tierMetrics']['clearing'],row['tierMetrics']['clearing'])]
                 pairs.extend((previous[field][goal],row[field][goal])
-                    for field in ('scoringVariants','pumbilityVariants') for goal in ('general','sssplus'))
+                    for field in ('scoringVariants',) for goal in ('general','sssplus'))
                 for before,after in pairs:
                     for field in ('estimatedDifficulty','difficultyCi95Low','difficultyCi95High'):
                         if before.get(field) is None:self.assertIsNone(after.get(field))
@@ -101,7 +101,10 @@ class ApprovedTierRatingsTests(unittest.TestCase):
         legacy=json.loads((Path(__file__).parent/'fixtures/approved-tier-ratings.json').read_text(encoding='utf-8'))['legacyCandidate']
         validate_public_approved_ratings(legacy)
         self.assertEqual(approved_publication_version(legacy),'6.26.0-centered-maximum')
-        self.assertEqual(approved_publication_version(self.result),'6.27.0-uniform-width')
+        uniform,_=apply_centered_maximum_pumbility(self.stages[-2],policy_version=1)
+        validate_public_approved_ratings(uniform)
+        self.assertEqual(approved_publication_version(uniform),'6.27.0-uniform-width')
+        self.assertEqual(approved_publication_version(self.result),'6.28.0-half-downward-pumbility')
         prior=validate_centered_maximum_pumbility(legacy)
         validate_scoped_tier_width(validate_final_folder_centering(prior))
         for version,method,factor in ((1,'scoped-final-component-width-v1',.75),
@@ -111,15 +114,47 @@ class ApprovedTierRatingsTests(unittest.TestCase):
             mixed['summary']['method']['scopedTierWidth'].update(version=version,method=method,factor=factor)
             with self.assertRaises(ValueError):validate_public_approved_ratings(mixed)
 
-    def test_final_components_and_maximum_are_centered_and_nulls_remain_unrated(self):
-        validate_public_approved_ratings(self.result)
+    def test_current_publication_cannot_promote_a_legacy_full_adjustment(self):
+        payload=copy.deepcopy(self.result)
+        publication={'method':APPROVED_VERSION,'inputs':{'producer':RETAINED_PRODUCER}}
+        payload['summary']['method']['productionTierPublication']=publication
+        self.assertEqual(validate_current_tier_publication(payload),publication)
+        for version in ('6.26.0-centered-maximum','6.27.0-uniform-width'):
+            publication['method']=version
+            with self.assertRaises(ValueError):validate_current_tier_publication(payload)
+
+    def test_current_publication_excludes_standalone_sss(self):
+        self.assertEqual(self.result['summary']['method']['centeredMaximumPumbility']['goals'],['general','sssplus'])
+        for field in ('scoringVariants','pumbilityVariants'):
+            payload=copy.deepcopy(self.result)
+            payload['singles'][0][field]['sss']=copy.deepcopy(payload['singles'][0][field]['sssplus'])
+            with self.assertRaises(ValueError):validate_public_approved_ratings(payload)
+
+    def test_final_components_keep_centers_and_maximum_uses_half_downward_offsets(self):
+        from tests.test_centered_maximum_pumbility import half_downward_fixture_base
+        result,_=apply_centered_maximum_pumbility(half_downward_fixture_base())
+        validate_public_approved_ratings(result)
+        groups={}
         for k in ('singles','doubles'):
-            for r in self.result[k]:
+            for r in result[k]:
                 c=r['tierMetrics']['clearing']['estimatedDifficulty']
                 for goal in ('general','sssplus'):
                     s=r['scoringVariants'][goal]['estimatedDifficulty'];p=r['pumbilityVariants'][goal]
                     self.assertEqual(p['estimatedDifficulty'],None if s is None or c is None else max(s,c)+p['centeredMaximumPumbility']['offset'])
                     if s is None or c is None:self.assertEqual(p['evidenceStatus'],'Unrated')
+                    else:groups.setdefault((k,r['level'],goal),[]).append((max(s,c),p['estimatedDifficulty']))
+        downward=0
+        for (key,level,goal),values in groups.items():
+            raw_median=median(a for a,_ in values)
+            full_offset=level+.5-raw_median
+            offset=full_offset*.5 if full_offset<0 else full_offset
+            mode='Single' if key=='singles' else 'Double'
+            marker=result['summary']['method']['centeredMaximumPumbility']['folders'][mode][str(level)][goal]
+            self.assertAlmostEqual(marker['fullOffset'],full_offset)
+            self.assertAlmostEqual(marker['offset'],offset)
+            self.assertAlmostEqual(median(b for _,b in values),raw_median+offset)
+            downward+=full_offset<0
+        self.assertGreater(downward,0)
 
     def test_compact_and_browser_values_keep_the_production_policy(self):
         public=_public_copy(self.result);compact=compact_tier_payload(public);browser=tier_browser_payload(compact)
@@ -131,6 +166,10 @@ class ApprovedTierRatingsTests(unittest.TestCase):
         for mutate in (
             lambda p:p['singles'][0]['pumbilityVariants']['sssplus'].update(estimatedDifficulty=99),
             lambda p:p['summary']['method']['centeredMaximumPumbility'].update(localOnly=True),
+            lambda p:p['summary']['method']['centeredMaximumPumbility'].update(downwardAdjustmentScale=1),
+            lambda p:p['summary']['method']['centeredMaximumPumbility'].update(upwardAdjustmentScale=.5),
+            lambda p:p['summary']['method']['centeredMaximumPumbility'].update(method='folder-centered-maximum-pumbility-v1'),
+            lambda p:next(iter(next(iter(p['summary']['method']['centeredMaximumPumbility']['folders'].values())).values()))['general'].update(fullOffset=99),
             lambda p:p['doubles'][0]['scoringVariants']['sssplus'].update(estimatedDifficulty=99),
         ):
             p=copy.deepcopy(self.result);mutate(p)

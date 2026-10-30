@@ -131,7 +131,7 @@ test("incomplete boards, exclusions, rare attainment and unrated states use ever
 test("the shared chart panel renders only concise copy and keeps lazy detail loading", () => {
   const page = readFileSync(new URL("../app/tier-list/page.tsx", import.meta.url), "utf8");
   const detail = page.slice(page.indexOf("function ChartDetails"), page.indexOf("function ChartCard"));
-  assert.match(detail, /chartEvidenceLines\(chart, metric, \{ minimumScoreRecords, pumbilityAggregation \}\)/);
+  assert.match(detail, /chartEvidenceLines\(chart, metric, \{ minimumScoreRecords, pumbilityAggregation, pumbilityDownwardAdjustmentScale \}\)/);
   assert.match(detail, /TIER_INTERVAL_TOOLTIP/);
   assert.match(page, /<ChartDetails chart=\{loaded\} metric=\{metric\}[^>]*detailsLoaded/);
   assert.doesNotMatch(detail, /latent|bootstrap|asinh|frozen|offset|exception|coefficient|percentile/i);

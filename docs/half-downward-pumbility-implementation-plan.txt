@@ -1,0 +1,44 @@
+Half downward Pumbility adjustment: implementation and release plan
+2026-10-30
+
+Scope
+Apply half of negative final Pumbility folder offsets to the current retained
+General and SSS+ goals for Singles and Doubles. Preserve Scoring, Clearing,
+evidence, missing values, Co-op, and historical full-adjustment generations.
+Preserve actual SSS game grades. Exclude standalone SSS difficulty options,
+current target jobs, and current list/detail variants; internal SSS work may
+remain where SSS+ depends on it or historical artifacts require validation.
+
+Calculation
+raw = max(full-precision Scoring, full-precision Clearing)
+fullOffset = officialLevel + 0.5 - median(all finite raw folder values)
+appliedOffset = fullOffset * 0.5 if fullOffset < 0 else fullOffset
+Pumbility = raw + appliedOffset
+
+Both components are required. Use one offset per official folder and goal,
+independent of browser filters. Empty populations retain nulls and zero offset.
+Translate conditional interval endpoints by the same applied offset and update
+derived differences/bands. Preserve within-folder order and component ranks.
+For negative offsets, the final median lies halfway between the raw median
+and official midpoint. It no longer has to equal the midpoint.
+
+Implementation
+1. Add explicit policy version 2 with full/applied offsets and scale metadata.
+   Keep version 1 validation/recovery exact and retain schema 62/162 contracts.
+2. Update approved production validation, publication identity, independent
+   frontend validation, public policy fields, and visible explanation text.
+3. Verify current goals contain only General and SSS+, including lazy details
+   and target scheduling. Keep official SSS score-grade presentation.
+4. Test negative/zero/positive offsets, sparse populations, missing components,
+   intervals, component/evidence preservation, legacy reads, and tamper rejection.
+5. Run directly affected Python/TypeScript tests, type-checking, and a build.
+   Perform one general review and repair only a proven current regression.
+
+Release
+Create and merge a focused pull request from the latest main branch. Build an
+immutable staged Production deployment, smoke it, then promote it. Run the
+durable tier-only publication against captured inputs so the new offset is
+published without a new score sync or recommendation-model fit. Verify every
+published folder/goal formula, component preservation, General/SSS+ exclusion
+of retired goals, list budget, and representative lazy chart details. Stop
+when these acceptance checks pass and report the merge/deployment/publication.

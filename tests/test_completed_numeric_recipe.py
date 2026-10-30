@@ -73,6 +73,20 @@ class ProducerRecipeTests(TestCase):
             clear_recipes()
             self.assertNotEqual(tiers.general_code_identity(), baseline)
 
+    def test_pumbility_adjustment_invalidates_only_the_final_retained_numeric_stage(self):
+        clear_recipes()
+        baseline = tiers.numerical_pipeline_recipe(retained=True)
+        with self.changed_source("centered_maximum_pumbility.py", b'record["offset"] *= .5',
+                                 b'record["offset"] *= 1.'):
+            clear_recipes()
+            changed = tiers.numerical_pipeline_recipe(retained=True)
+            self.assertEqual(changed["general"], baseline["general"])
+            self.assertEqual(changed["kernel"], baseline["kernel"])
+            for stage in tiers.RETAINED_FINISH_STAGES[:-1]:
+                self.assertEqual(changed["stages"][stage], baseline["stages"][stage])
+            self.assertNotEqual(changed["stages"]["centered-maximum"],
+                                baseline["stages"]["centered-maximum"])
+
 
 class CompletedNumericalReuseTests(TestCase):
     def setUp(self):
