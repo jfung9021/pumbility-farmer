@@ -26,7 +26,7 @@ import {
 } from "../../lib/format-difficulty";
 import { tierMetricFromSearchParams, tierModeFromSearchParams } from "../../lib/page-view-state";
 import { DEFAULT_SCORING_GOAL, SCORING_GOALS, hasScoringGoalVariants, isSssScoringChart, projectScoringGoal, scoringGoalFromSearchParams, scoringGoalUrl, scoringTargetForChart, scoringTargetForGoal } from "../../lib/scoring-variants";
-import { clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
+import { clampBpmRange, formatTierScore, matchesTierBpm, matchesTierLevel, matchesTierPhoenix2Debut, tierBpmBounds, type BpmRange } from "../../lib/tier-filters";
 import {
   clearingPercentileRange,
   clearingSkillPercentile,
@@ -53,6 +53,7 @@ type FilterState = {
   query: string;
   level: string;
   bpm: BpmRange | null;
+  newPhoenix2Only: boolean;
 };
 
 type GroupingView = "tiers" | "estimated";
@@ -62,6 +63,7 @@ const initialFilter: FilterState = {
   query: "",
   level: "All",
   bpm: null,
+  newPhoenix2Only: false,
 };
 
 const TierScoresContext = createContext<{
@@ -631,6 +633,7 @@ export default function TierListPage() {
   const filter = filters[activeMode];
   const bpmBounds = useMemo(() => tierBpmBounds(modeCharts), [modeCharts]);
   const selectedBpm = useMemo(() => filter.bpm && bpmBounds ? clampBpmRange(filter.bpm, bpmBounds) : null, [bpmBounds, filter.bpm]);
+  const extraFilterCount = Number(Boolean(selectedBpm)) + Number(filter.newPhoenix2Only);
   const levels = useMemo(
     () => [...new Set(modeCharts.map((chart) => chart.level))].sort((a, b) => a - b),
     [modeCharts],
@@ -638,6 +641,7 @@ export default function TierListPage() {
   const filteredCharts = useMemo(() => {
     const query = filter.query.trim().toLocaleLowerCase();
     return modeCharts.filter((chart) => {
+      if (!matchesTierPhoenix2Debut(chart, filter.newPhoenix2Only)) return false;
       if (!matchesTierLevel(chart, filter.level)) return false;
       if (!matchesTierBpm(chart, selectedBpm)) return false;
       return !query || `${chart.songName} ${chart.stepArtist || ""}`.toLocaleLowerCase().includes(query);
@@ -753,16 +757,23 @@ export default function TierListPage() {
               ))}
             </select>
           </label>
-          <button aria-expanded={filtersOpen} aria-controls="tier-more-filters" className="tier-toolbar-button" onClick={() => setFiltersOpen(value => !value)} type="button">Filters{selectedBpm ? " · 1" : ""}</button>
+          <button aria-expanded={filtersOpen} aria-controls="tier-more-filters" className="tier-toolbar-button" onClick={() => setFiltersOpen(value => !value)} type="button">Filters{extraFilterCount ? ` · ${extraFilterCount}` : ""}</button>
           <button aria-expanded={displayOpen} aria-controls="tier-display-settings" className="tier-toolbar-button" onClick={() => setDisplayOpen(value => !value)} type="button">Display</button>
         </div>
-        <div className="tier-filter-disclosure" hidden={!filtersOpen} id="tier-more-filters"><BpmRangeFilter bounds={bpmBounds} onChange={(bpm) => updateFilter({ bpm })} selected={selectedBpm} /></div>
+        <div className="tier-filter-disclosure" hidden={!filtersOpen} id="tier-more-filters">
+          <label className="tier-phoenix2-toggle">
+            <input checked={filter.newPhoenix2Only} onChange={(event) => updateFilter({ newPhoenix2Only: event.target.checked })} type="checkbox" />
+            <span>New Phoenix 2 charts only<small>Includes new charts for older songs.</small></span>
+          </label>
+          <BpmRangeFilter bounds={bpmBounds} onChange={(bpm) => updateFilter({ bpm })} selected={selectedBpm} />
+        </div>
         <div className="tier-display-disclosure" hidden={!displayOpen} id="tier-display-settings">
           <label>Group by<select aria-label="Difficulty grouping" disabled={activeMode === "coop"} onChange={event => setGroupingView(event.target.value as GroupingView)} value={activeMode === "coop" ? "estimated" : groupingView}><option value="estimated">Difficulty</option><option value="tiers">Tier bands</option></select></label>
           <label>Chart layout<select aria-label="Chart layout" onChange={event => setLayoutView(event.target.value as LayoutView)} value={layoutView}><option value="compact">Named grid</option><option value="detailed">Readable list</option></select></label>
         </div>
-        <div className="tier-results-context"><span aria-live="polite">{filteredCharts.length} charts · {activeMode === "coop" ? "Co-op" : activeMode === "singles" ? "Singles" : "Doubles"} · {metricLabels[activeMetric]}{showScoringGoal ? ` · ${scoringGoal === "general" ? "General" : target.label}` : ""}</span>{filter.query || filter.level !== "All" || selectedBpm ? <button onClick={() => updateFilter({...initialFilter})} type="button">Clear filters</button> : null}</div>
+        <div className="tier-results-context"><span aria-live="polite">{filteredCharts.length} charts · {activeMode === "coop" ? "Co-op" : activeMode === "singles" ? "Singles" : "Doubles"} · {metricLabels[activeMetric]}{showScoringGoal ? ` · ${scoringGoal === "general" ? "General" : target.label}` : ""}</span>{filter.query || filter.level !== "All" || selectedBpm || filter.newPhoenix2Only ? <button onClick={() => updateFilter({...initialFilter})} type="button">Clear filters</button> : null}</div>
         <div className="tier-active-filters" aria-label="Applied filters">
+          {filter.newPhoenix2Only ? <button aria-label="Remove new Phoenix 2 charts filter" onClick={() => updateFilter({newPhoenix2Only: false})} type="button">New Phoenix 2 charts only ×</button> : null}
           {filter.query ? <button aria-label="Remove search filter" onClick={() => updateFilter({query: ""})} type="button">Search: {filter.query} ×</button> : null}
           {filter.level !== "All" ? <button aria-label="Remove level filter" onClick={() => updateFilter({level: "All"})} type="button">{filter.level === "20+" ? "Only 20+" : activeMode === "coop" ? `${filter.level} players` : `${activeMode === "singles" ? "S" : "D"}${filter.level}`} ×</button> : null}
           {selectedBpm ? <button aria-label="Remove main BPM filter" onClick={() => updateFilter({bpm: null})} type="button">Main BPM {selectedBpm.min}–{selectedBpm.max} ×</button> : null}

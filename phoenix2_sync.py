@@ -24,6 +24,7 @@ CHART_FIELDS = (
     "id",
     "songName",
     "songType",
+    "originalMix",
     "type",
     "level",
     "difficulty",
@@ -112,7 +113,7 @@ def sanitize_chart(row: Mapping[str, Any]) -> dict[str, Any] | None:
     if chart_id is None or str(chart_id).strip() == "":
         return None
     sanitized = {field: row.get(field) for field in CHART_FIELDS}
-    for field in ("songType", "bpmFocal"):
+    for field in ("songType", "bpmFocal", "originalMix"):
         if field not in row:
             sanitized.pop(field, None)
     sanitized["id"] = str(chart_id)

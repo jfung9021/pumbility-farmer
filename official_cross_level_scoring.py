@@ -43,6 +43,7 @@ def _new_row(chart: Mapping[str, Any]) -> dict[str, Any]:
         "folder": f"{'S' if mode == 'Single' else 'D'}{level}",
         "imageUrl": chart.get("imageUrl"), "noteCount": chart.get("noteCount"),
         "stepArtist": chart.get("stepArtist"), "songType": chart.get("songType"), "bpmMin": chart.get("bpmMin"), "bpmMax": chart.get("bpmMax"), "bpmFocal": chart.get("bpmFocal"),
+        **({"originalMix": chart["originalMix"]} if "originalMix" in chart else {}),
         "phoenix1Contributors": 0, "phoenix2Contributors": 0,
         "tierMetrics": {"clearing": {**_empty_metric(), "clearCount": 0, "ratedClearCount": 0,
                                       "missingSkillCount": 0}, "pumbility": _empty_metric()},
@@ -153,6 +154,8 @@ def apply_cross_level_scoring(base_payload: Mapping[str, Any], merged: Mapping[s
                 level = int(chart["level"])
                 row.update(level=level, difficulty=chart.get("difficulty") or f"{'S' if mode == 'Single' else 'D'}{level}",
                            folder=f"{'S' if mode == 'Single' else 'D'}{level}")
+                if "originalMix" in chart:
+                    row["originalMix"] = chart["originalMix"]
             level = int(row["level"])
             if retain_submitted_below20 and level < 20:
                 row.update(scoringMethod="submitted-score-profile-v2", officialScoringContributors=0,

@@ -534,6 +534,8 @@ export interface ChartResult {
   level: number;
   chartId: string;
   imageUrl: string | null;
+  /** Version in which this chart was first introduced. */
+  originalMix?: string;
   noteCount: number | null;
   stepArtist: string | null;
   bpmMin?: number | null;

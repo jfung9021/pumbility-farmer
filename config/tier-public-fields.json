@@ -132,6 +132,7 @@
     "mode",
     "folder",
     "songName",
+    "originalMix",
     "difficulty",
     "type",
     "level",

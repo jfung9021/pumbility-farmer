@@ -2117,6 +2117,7 @@ def build_coop_chart_results(
                 "imageUrl": chart.get("imageUrl"),
                 "noteCount": chart.get("noteCount"),
                 "stepArtist": chart.get("stepArtist"),
+                **({"originalMix": chart["originalMix"]} if "originalMix" in chart else {}),
                 "bpmMin": chart.get("bpmMin"),
                 "bpmMax": chart.get("bpmMax"),
                 **_omit_unavailable_bpm_fields({
@@ -2524,10 +2525,15 @@ def build_combined_chart_results(
         "phoenix2Contributors",
         "evidenceStatus",
     ]
+    if "originalMix" in output.columns:
+        keep.append("originalMix")
     for column in keep:
         if column not in output.columns:
             output[column] = pd.NA
     records = json.loads(output[keep].to_json(orient="records", double_precision=6))
+    for row in records:
+        if row.get("originalMix") is None:
+            row.pop("originalMix", None)
     records.extend(coop_records)
     metadata = {
         "tierMetrics": tier_metric_method(folder_references),
