@@ -5,17 +5,28 @@ export type PumbilityAggregation = "average" | "maximum" | "centered-maximum";
 export interface PumbilityPolicy {
   aggregation: PumbilityAggregation;
   requiresRowMarker: boolean;
+  downwardAdjustmentScale?: number;
 }
 
 export const MAXIMUM_PUMBILITY_CALCULATION = "max(scoring difficulty, clearing difficulty) before rounding";
 export const AVERAGE_PUMBILITY_CALCULATION = "(scoring difficulty + clearing difficulty) / 2 before rounding";
+export const CENTERED_MAXIMUM_CALCULATION = "max(scoring difficulty, clearing difficulty) + per-folder median offset before rounding";
+export const HALF_DOWNWARD_PUMBILITY_CALCULATION = "max(scoring difficulty, clearing difficulty) + per-folder median offset with half downward adjustment before rounding";
 
 /** Resolve declared generations; tier-method 11 alone does not identify the rule. */
 export function resolvePumbilityPolicy(payload: Partial<AnalysisPayload> | null | undefined): PumbilityPolicy | null {
   if (payload?.schemaVersion === 162) {
-    const marker = payload.summary?.method.centeredMaximumPumbility as {version?:number;method?:string;aggregation?:string} | undefined;
-    return marker?.version === 1 && marker.method === "folder-centered-maximum-pumbility-v1" && marker.aggregation === "centered-maximum"
-      ? {aggregation:"centered-maximum",requiresRowMarker:true} : null;
+    const marker = payload.summary?.method.centeredMaximumPumbility as {
+      version?: number; method?: string; aggregation?: string;
+      downwardAdjustmentScale?: number; upwardAdjustmentScale?: number;
+    } | undefined;
+    if (marker?.aggregation !== "centered-maximum") return null;
+    if (marker.version === 1 && marker.method === "folder-centered-maximum-pumbility-v1") {
+      return {aggregation:"centered-maximum",requiresRowMarker:true};
+    }
+    return marker.version === 2 && marker.method === "folder-centered-maximum-pumbility-v2"
+      && marker.downwardAdjustmentScale === .5 && marker.upwardAdjustmentScale === 1
+      ? {aggregation:"centered-maximum",requiresRowMarker:true,downwardAdjustmentScale:.5} : null;
   }
   if (payload && [49, 50, 51, 52, 53, 56, 57, 58, 59].includes(payload.schemaVersion ?? 0)) {
     const scoring = payload.summary?.method.sssScoring as { version?: number; baseSchemaVersion?: number } | undefined;

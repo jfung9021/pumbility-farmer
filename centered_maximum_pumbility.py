@@ -1,9 +1,10 @@
-"""Local Pumbility maximum followed by an independent final folder median shift."""
+"""Pumbility maximum with half of each downward folder median adjustment."""
 from __future__ import annotations
 from retained_tiers import scoring_goals
 
 from collections import defaultdict
 from datetime import datetime, timezone
+from statistics import median
 
 from extended_official_clearing import _need
 from final_folder_centering import GOALS, _location
@@ -13,8 +14,10 @@ SCHEMA_VERSION = 62
 BASE_SCHEMA_VERSION = 61
 NAMESPACE = "centeredMaximumPumbility"
 STAGE = "centeredMaximumPumbilityBaseline"
-METHOD = "folder-centered-maximum-pumbility-v1"
-CALCULATION = "max(scoring difficulty, clearing difficulty) + per-folder median offset before rounding"
+METHOD = "folder-centered-maximum-pumbility-v2"
+CALCULATION = "max(scoring difficulty, clearing difficulty) + per-folder median offset with half downward adjustment before rounding"
+LEGACY_METHOD = "folder-centered-maximum-pumbility-v1"
+LEGACY_CALCULATION = "max(scoring difficulty, clearing difficulty) + per-folder median offset before rounding"
 INTERVAL_METHOD = "conditional-scoring-fixed-clearing-and-folder-centering-v1"
 
 
@@ -34,7 +37,7 @@ def _copy(base):
     return result
 
 
-def _calculate(base):
+def _calculate(base, policy_version=2):
     result, folders = _copy(base), {}
     for key, mode in (("singles", "Single"), ("doubles", "Double")):
         groups = defaultdict(list)
@@ -48,6 +51,10 @@ def _calculate(base):
             for goal in scoring_goals(base):
                 record = _location([_maximum(r["scoringVariants"][goal]["estimatedDifficulty"],
                     r["tierMetrics"]["clearing"]["estimatedDifficulty"]) for r in rows], level)
+                if policy_version == 2:
+                    record["fullOffset"] = record["offset"]
+                    if record["offset"] < 0:
+                        record["offset"] *= .5
                 folders[mode][str(level)][goal] = record
                 offset = record["offset"]
                 for row in rows:
@@ -57,7 +64,9 @@ def _calculate(base):
                     metric.update(_derived(None if raw is None else raw+offset, level), aggregation="centered-maximum",
                         intervalMethod=INTERVAL_METHOD, levelRank=None, levelComparisonCharts=None)
                     metric.pop("finalFolderCentering", None)
-                    metric[NAMESPACE] = {"version": 1, "unshiftedDifficulty": raw, "offset": offset}
+                    metric[NAMESPACE] = {"version": policy_version, "unshiftedDifficulty": raw, "offset": offset}
+                    if policy_version == 2:
+                        metric[NAMESPACE]["fullOffset"] = record["fullOffset"]
                     for side in ("Low", "High"):
                         endpoint = None if raw is None else _maximum(scoring.get(f"difficultyCi95{side}"), clearing["estimatedDifficulty"])
                         value = None if endpoint is None else endpoint+offset
@@ -72,10 +81,13 @@ def _calculate(base):
     return result, folders
 
 
-def _policy(base, folders):
-    return {"version": 1, "method": METHOD, "localOnly": base["schemaVersion"] < 100, "baseSchemaVersion": base["schemaVersion"],
+def _policy(base, folders, policy_version=2):
+    return {"version": policy_version, "method": METHOD if policy_version == 2 else LEGACY_METHOD,
+        **({"downwardAdjustmentScale": .5, "upwardAdjustmentScale": 1} if policy_version == 2 else {}),
+        "localOnly": base["schemaVersion"] < 100, "baseSchemaVersion": base["schemaVersion"],
         "basePayloadSha256": payload_sha256(base), "aggregation": "centered-maximum", "requiresBoth": True,
-        "calculation": CALCULATION, "scope": ["Single", "Double"], "goals": list(scoring_goals(base)),
+        "calculation": CALCULATION if policy_version == 2 else LEGACY_CALCULATION,
+        "scope": ["Single", "Double"], "goals": list(scoring_goals(base)),
         "population": "all-finite-component-pairs-including-provisional", "reference": "current-official-level-plus-0.5",
         "median": "middle-value-or-mean-of-middle-pair", "unrated": "excluded-and-preserved", "ties": "preserved",
         "filters": "frozen-full-official-folder", "components": "preserve-schema61-scoring-and-clearing-exactly",
@@ -83,17 +95,18 @@ def _policy(base, folders):
         "intervalMethod": INTERVAL_METHOD, "dataFetches": 0, "modelRefits": 0, "folders": folders}
 
 
-def apply_centered_maximum_pumbility(base):
+def apply_centered_maximum_pumbility(base, *, policy_version=2):
+    _need(type(policy_version) is int and policy_version in (1, 2), "Unsupported centered maximum policy version.")
     _need(base.get("schemaVersion") in (BASE_SCHEMA_VERSION, 161) and STAGE not in base
         and NAMESPACE not in base["summary"]["method"], "Centered maximum requires schema 61.")
-    result, folders = _calculate(base)
+    result, folders = _calculate(base, policy_version)
     old_policy = base["summary"]["method"].get("tierMetrics", {}).get("pumbility")
     result[STAGE] = {"top": {k: base[k] for k in ("generatedAtUtc",) if k in base},
         "summary": {k: base["summary"][k] for k in ("generatedAtUtc",) if k in base["summary"]}, "pumbilityPolicy": old_policy}
     if old_policy is not None:
-        result["summary"]["method"]["tierMetrics"]["pumbility"] = {**old_policy, "version": 6,
-            "aggregation": "centered-maximum", "calculation": CALCULATION}
-    result["summary"]["method"][NAMESPACE] = _policy(base, folders)
+        result["summary"]["method"]["tierMetrics"]["pumbility"] = {**old_policy, "version": 7 if policy_version == 2 else 6,
+            "aggregation": "centered-maximum", "calculation": CALCULATION if policy_version == 2 else LEGACY_CALCULATION}
+    result["summary"]["method"][NAMESPACE] = _policy(base, folders, policy_version)
     result["schemaVersion"] = 162 if base["schemaVersion"] == 161 else SCHEMA_VERSION
     result["generatedAtUtc"] = result["summary"]["generatedAtUtc"] = (base["generatedAtUtc"] if base["schemaVersion"] >= 100 else datetime.now(timezone.utc).isoformat())
     validate_centered_maximum_pumbility(result, base)
@@ -121,17 +134,20 @@ def recover_centered_maximum_pumbility(payload):
 
 
 def validate_centered_maximum_pumbility(payload, original=None):
+    policy_version = payload.get("summary", {}).get("method", {}).get(NAMESPACE, {}).get("version")
+    _need(type(policy_version) is int and policy_version in (1, 2), "Unsupported centered maximum policy version.")
     base = recover_centered_maximum_pumbility(payload)
     _need(original is None or base == original, "Centered maximum baseline differs.")
-    expected, folders = _calculate(base)
-    _need(payload["summary"]["method"][NAMESPACE] == _policy(base, folders), "Centered maximum policy or population differs.")
+    expected, folders = _calculate(base, policy_version)
+    _need(payload["summary"]["method"][NAMESPACE] == _policy(base, folders, policy_version), "Centered maximum policy or population differs.")
     for key in ("singles", "doubles", "coop"):
         _need(payload.get(key) == expected.get(key), "Centered maximum changed components, evidence, ranks or values incorrectly.")
     method = dict(payload["summary"]["method"])
     method.pop(NAMESPACE)
     if method.get("tierMetrics") is not None:
         old = base["summary"]["method"]["tierMetrics"]["pumbility"]
-        _need(method["tierMetrics"]["pumbility"] == {**old, "version": 6, "aggregation": "centered-maximum", "calculation": CALCULATION},
+        _need(method["tierMetrics"]["pumbility"] == {**old, "version": 7 if policy_version == 2 else 6,
+            "aggregation": "centered-maximum", "calculation": CALCULATION if policy_version == 2 else LEGACY_CALCULATION},
             "Centered maximum declared Pumbility policy differs.")
         method["tierMetrics"] = {**method["tierMetrics"], "pumbility": old}
     _need(method == base["summary"]["method"], "Centered maximum protected methods differ.")
@@ -154,7 +170,7 @@ def maximum_report(payload, base):
                 values = [r["pumbilityVariants"][goal]["estimatedDifficulty"] for r in rows]
                 folders.append({"mode": mode, "level": int(level), "goal": goal, **record,
                     "previous": counts(old_values), "unshiftedMaximum": counts(raw_values), "current": counts(values),
-                    "finalMedian": None if not record["ratedCharts"] else int(level)+.5})
+                    "finalMedian": median(v for v in values if v is not None) if record["ratedCharts"] else None})
         for old, row in zip(base[key], payload[key]):
             goals = {}
             for goal in scoring_goals(base):
@@ -164,6 +180,6 @@ def maximum_report(payload, base):
                     "unshiftedMaximum": after[NAMESPACE]["unshiftedDifficulty"], "offset": after[NAMESPACE]["offset"],
                     "oldRank": before.get("levelRank"), "newRank": after.get("levelRank")}
             charts.append({"chartId": row["chartId"], "songName": row["songName"], "mode": mode, "level": row["level"], "goals": goals})
-    return {"schemaVersion": SCHEMA_VERSION, "localOnly": base["schemaVersion"] < 100, "officialFolders": sum(len(v) for v in payload["summary"]["method"][NAMESPACE]["folders"].values()),
+    return {"schemaVersion": payload["schemaVersion"], "localOnly": base["schemaVersion"] < 100, "officialFolders": sum(len(v) for v in payload["summary"]["method"][NAMESPACE]["folders"].values()),
         "folderGoals": len(folders), "folders": folders, "charts": charts, "scoringPreserved": True, "clearingPreserved": True,
         "baseRecovered": True, "aggregation": "centered-maximum", "dataFetches": 0, "modelRefits": 0}

@@ -99,6 +99,8 @@
     "centeredMaximumPumbility": [
       "version",
       "method",
+      "downwardAdjustmentScale",
+      "upwardAdjustmentScale",
       "localOnly",
       "baseSchemaVersion",
       "aggregation",

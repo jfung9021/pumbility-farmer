@@ -7,6 +7,7 @@ import type { ChartResult, TierMetricKey } from "./types";
 export interface EvidenceCopyOptions {
   minimumScoreRecords?: number | null;
   pumbilityAggregation?: PumbilityAggregation | null;
+  pumbilityDownwardAdjustmentScale?: number | null;
 }
 
 function count(value: number | null): string {
@@ -135,9 +136,13 @@ export function chartEvidenceLines(chart: ChartResult, metric: TierMetricKey, op
     const target = isSssScoringChart(chart) ? `${scoringTargetForChart(chart).label} Scoring` : "Scoring";
     lines.push(`${target}: ${grade(chart, "scoring")}. Clearing: ${grade(chart, "clearing")}.`);
     const aggregation = chart.tierMetrics?.pumbility.aggregation ?? options.pumbilityAggregation;
+    const halfDownward = chart.tierMetrics?.pumbility.centeredMaximumPumbility?.version === 2
+      || options.pumbilityDownwardAdjustmentScale === .5;
     lines.push(chart.tierMetrics?.pumbility.estimatedDifficulty == null
       ? "Pumbility needs both a Scoring and a Clearing rating."
-      : aggregation === "centered-maximum" ? `Pumbility starts with the higher rating, then centers this official level around ${chart.type === "Single" ? "S" : "D"}${(chart.level+.5).toFixed(1)}: ${grade(chart, "pumbility")}.`
+      : aggregation === "centered-maximum" ? halfDownward
+        ? `Pumbility starts with the higher rating, then applies half of any downward adjustment toward this official level's midpoint: ${grade(chart, "pumbility")}.`
+        : `Pumbility starts with the higher rating, then centers this official level around ${chart.type === "Single" ? "S" : "D"}${(chart.level+.5).toFixed(1)}: ${grade(chart, "pumbility")}.`
         : aggregation === "average" ? `Pumbility uses their average, calculated before rounding: ${grade(chart, "pumbility")}.`
         : aggregation === "maximum" ? `Pumbility uses the higher rating: ${grade(chart, "pumbility")}.`
           : `Pumbility rating: ${grade(chart, "pumbility")}.`);

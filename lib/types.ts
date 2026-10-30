@@ -447,6 +447,12 @@ export interface OfficialScoringSpread {
 }
 
 export interface PumbilityTierMetric extends TierMetricResult {
+  centeredMaximumPumbility?: {
+    version: 1 | 2;
+    unshiftedDifficulty: number | null;
+    fullOffset?: number;
+    offset: number;
+  };
   difficultyCi95Low?: number | null;
   difficultyCi95High?: number | null;
   intervalMethod?: string | null;

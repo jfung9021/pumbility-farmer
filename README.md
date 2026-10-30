@@ -89,13 +89,12 @@ verification results are in `output/bpm-implementation-2026-10-24/`.
 
 ### Source-aware scoring goals
 
-The tier selector offers **General**, **SS** (980,000), **SS+** (985,000),
-**SSS** (990,000), and **SSS+** (995,000, selected by default). All target
-thresholds are inclusive. Existing SSS results are exposed without a new fit.
-SS and SS+ become available only after an independent backfill matches the
-publication's stored inputs; an unavailable selection explains that state rather
-than displaying another goal's rating. Pumbility averages the selected final Scoring and
-Clearing difficulties before rounding. SSS+ combines Phoenix 1 and Phoenix 2
+The tier selector offers **General** and **SSS+** (995,000, selected by default).
+The SSS+ threshold is inclusive. Standalone SSS difficulty is excluded from public
+choices and chart variants; historical SSS calculations remain available internally
+where the SSS+ calculation needs them. Actual SSS game grades remain intact.
+Pumbility uses the higher selected Scoring and Clearing difficulty, followed by
+the recorded folder adjustment described below. SSS+ combines Phoenix 1 and Phoenix 2
 official best scores for 20+ charts; lower charts use submitted records. The target
 model, boundary/rare-success estimates, median calibration, smooth tail policy,
 and final folder width follow the approved local methodology. D26+ Clearing uses
@@ -119,7 +118,10 @@ The approved schema-162 release retains General and SSS+ and adds official
 S24/D25 clearer histories, provisional estimates from observed capped boards,
 and a uniform 0.75 width multiplier for all Singles/Doubles difficulty tiers. Every folder is centered
 at official level + 0.5, separately for Scoring and Clearing. Pumbility uses the
-higher full-precision component and then its own folder-median shift. Missing
+higher full-precision component and then its own folder-median shift. Version 2
+applies half of a negative offset and the full positive offset: downward-adjusted
+medians sit halfway between their raw median and official level + 0.5. Version 1
+artifacts retain their original full offsets. Missing
 components remain Unrated. Each additive transition is privately checkpointed;
 raw fits, evidence status, and earlier immutable schemas remain available.
 This release uses the combined frozen Phoenix 1 and current Phoenix 2 evidence.

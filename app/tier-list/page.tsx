@@ -18,7 +18,7 @@ import { loadTierChartDetails } from "../../lib/tier-chart-details";
 import { chartEvidenceLines, plainTierDataWarning, TIER_INTERVAL_TOOLTIP } from "../../lib/tier-evidence-copy";
 import { loadWithGenerationRecovery, MODEL_DELAY_THRESHOLD_MS } from "../../lib/refresh-reliability";
 import { demoPayload } from "../../lib/demo-data";
-import { resolvePumbilityPolicy, type PumbilityAggregation } from "../../lib/pumbility-policy";
+import { resolvePumbilityPolicy, type PumbilityPolicy } from "../../lib/pumbility-policy";
 import { compressDemoPayload, hasMidpointCompression } from "../../lib/tier-postprocessing";
 import {
   formatCoopEstimatedDifficulty,
@@ -70,7 +70,7 @@ const TierScoresContext = createContext<{
   unavailable: boolean;
   scores: Map<string, TierPlayerScore>;
 }>({ selected: false, loading: false, unavailable: false, scores: new Map() });
-const PumbilityPolicyContext = createContext<PumbilityAggregation | null>(null);
+const PumbilityPolicyContext = createContext<PumbilityPolicy | null>(null);
 const RatingCompressionContext = createContext(false);
 const TierDetailContext = createContext<{compact: boolean; generatedAtUtc: string; bpmMetadataRevision?: string; goal: ScoringGoal; select: (chart: ChartResult) => void; reload: (chartId: string) => Promise<{generatedAtUtc:string; bpmMetadataRevision?:string}>}>({compact:false, generatedAtUtc:"", goal:"general", select:() => {}, reload:async () => {throw new Error("Reload the tier list to continue.");}});
 
@@ -178,7 +178,9 @@ function LimitedDataWarning({ chart, metric, compact = false }: { chart: ChartRe
 function ChartDetails({ chart, metric, headingId, detailsLoaded = false }: { chart: ChartResult; metric: TierMetricKey; headingId?: string; detailsLoaded?: boolean }) {
   const detailSource = useContext(TierDetailContext);
   const listOnly = detailSource.compact && !detailsLoaded;
-  const pumbilityAggregation = useContext(PumbilityPolicyContext);
+  const pumbilityPolicy = useContext(PumbilityPolicyContext);
+  const pumbilityAggregation = pumbilityPolicy?.aggregation;
+  const pumbilityDownwardAdjustmentScale = pumbilityPolicy?.downwardAdjustmentScale;
   const minimumScoreRecords = useContext(ClearingRecordMinimumContext);
   const selected = selectedTierMetric(chart, metric);
   const delta = selected.difficultyDelta;
@@ -226,7 +228,7 @@ function ChartDetails({ chart, metric, headingId, detailsLoaded = false }: { cha
           ) : null}
         </div>
         {listOnly ? <button type="button" onClick={() => detailSource.select(chart)}>Calculation and evidence</button> : <div className="chart-meta metric-details">
-          {chartEvidenceLines(chart, metric, { minimumScoreRecords, pumbilityAggregation }).map((line) => <span key={line}>{line}</span>)}
+          {chartEvidenceLines(chart, metric, { minimumScoreRecords, pumbilityAggregation, pumbilityDownwardAdjustmentScale }).map((line) => <span key={line}>{line}</span>)}
         </div>}
       </div>
       {isCoop ? null : (
@@ -691,7 +693,7 @@ export default function TierListPage() {
   return (
     <TierBrowseContext.Provider value={{metric: activeMetric, showRating: groupingView === "tiers" && activeMode !== "coop"}}>
     <TierScoresContext.Provider value={scoreContext}>
-    <PumbilityPolicyContext.Provider value={pumbilityPolicy?.aggregation ?? null}>
+    <PumbilityPolicyContext.Provider value={pumbilityPolicy}>
     <ClearingRecordMinimumContext.Provider value={minimumScoreRecords}>
     <RatingCompressionContext.Provider value={hasMidpointCompression(payload) || localAveragePumbility}>
     <TierDetailContext.Provider value={{compact:payload?.tierListView?.kind === "list", generatedAtUtc:payload?.generatedAtUtc ?? "", bpmMetadataRevision:payload?.bpmMetadata?.bpmMetadataRevision, goal:scoringGoal, select:setSelectedChart, reload:reloadSelectedChart}}>

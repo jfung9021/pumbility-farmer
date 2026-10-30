@@ -161,6 +161,6 @@ test("chart details retain evidence warnings while browsing tiles stay concise",
   assert.doesNotMatch(row, /LimitedDataWarning/);
   assert.match(page, /<ChartDetails chart=\{loaded\} metric=\{metric\}[^>]*detailsLoaded/);
   assert.equal((page.match(/<CompactChartGrid[^>]*metric=\{/g) ?? []).length, 3);
-  assert.match(page, /chartEvidenceLines\(chart, metric, \{ minimumScoreRecords, pumbilityAggregation \}\)/);
+  assert.match(page, /chartEvidenceLines\(chart, metric, \{ minimumScoreRecords, pumbilityAggregation, pumbilityDownwardAdjustmentScale \}\)/);
   assert.doesNotMatch(page, /200-record|200 valid records|200 distinct valid/);
 });
