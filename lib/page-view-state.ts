@@ -6,6 +6,7 @@ export const DEFAULT_TIER_MODE: ModeKey = "singles";
 export const DEFAULT_TIER_METRIC: TierMetricKey = "scoring";
 export const DEFAULT_RECOMMENDATION_MODE: RecommendationModeKey = "overall";
 export const DEFAULT_RECOMMENDATION_VIEW: RecommendationView = "recommendations";
+export const RECOMMENDATION_VIEW_STORAGE_KEY = "pumbility-farmer.recommendation-view.v1";
 
 export function tierModeFromSearchParams(params: URLSearchParams): ModeKey {
   const mode = params.get("mode");
@@ -31,7 +32,8 @@ export function recommendationModeFromSearchParams(
 
 export function recommendationViewFromSearchParams(
   params: URLSearchParams,
+  savedView?: string | null,
 ): RecommendationView {
-  const view = params.get("view");
+  const view = params.get("view") ?? savedView;
   return view === "top50" || view === "pro" ? view : DEFAULT_RECOMMENDATION_VIEW;
 }

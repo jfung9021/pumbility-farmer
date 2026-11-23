@@ -34,6 +34,7 @@ import {
 import {
   recommendationModeFromSearchParams,
   recommendationViewFromSearchParams,
+  RECOMMENDATION_VIEW_STORAGE_KEY,
   type RecommendationView,
 } from "../../lib/page-view-state";
 import { pumbilityProgress } from "../../lib/pumbility-progress";
@@ -866,8 +867,12 @@ export default function RecommendationsPage() {
   useEffect(() => {
     const applyViewFromUrl = () => {
       const params = new URLSearchParams(window.location.search);
+      let savedView: string | null = null;
+      try { savedView = window.localStorage.getItem(RECOMMENDATION_VIEW_STORAGE_KEY); } catch {}
+      const view = recommendationViewFromSearchParams(params, savedView);
+      params.set("view", view);
       setActiveMode(recommendationModeFromSearchParams(params));
-      setRecommendationView(recommendationViewFromSearchParams(params));
+      setRecommendationView(view);
       setProUrlPlayerKey(params.get("player") || "");
       if (params.get("view") === "pro" && !["overall", "singles", "doubles"].includes(params.get("mode") || "")) {
         const url = new URL(window.location.href);
@@ -1079,6 +1084,7 @@ export default function RecommendationsPage() {
     updatePageUrl(mode, recommendationView);
   };
   const selectView = (view: RecommendationView) => {
+    try { window.localStorage.setItem(RECOMMENDATION_VIEW_STORAGE_KEY, view); } catch {}
     setSelectedTopScore(null);
     setRecommendationView(view);
     const nextMode = view === "pro" && activeMode === "coop" ? "overall" : activeMode;

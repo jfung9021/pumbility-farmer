@@ -58,6 +58,16 @@ members do not guarantee ten recorded scores on each chart. Production API
 readers use the private `analysis/pro-recommendations/modes/current` artifact prefix;
 these local commands do not deploy or publish production data.
 
+Production releases can supply an ignored, private
+`runtime_reference_data/pro-recommendations-bootstrap.json.gz` bundle and set
+`PRO_RECOMMENDATIONS_PUBLISH_ON_BUILD=1` for that deployment. The backend build
+validates one generation, stages its profiles, reads them back, then advances the
+private Pro index. The bundle is excluded from Git and included only in the
+private service upload. Builds without the explicit flag do not publish Pro data.
+The Recommendations page remembers the last selected view in this browser; an
+explicit `view` URL parameter takes precedence.
+
+
 ## Official leaderboard player comparison
 
 Open `/official-leaderboard-comparison` to compare two official players' BPM

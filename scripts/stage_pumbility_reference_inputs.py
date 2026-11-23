@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -37,6 +38,9 @@ def main() -> int:
     if (PROJECT_ROOT / "config/phoenix2-song-bpm-runtime.json").read_text(encoding="utf-8") != compiled:
         raise RuntimeError("BPM runtime metadata is stale. Run npm run bpm:build before deployment.")
     counts = stage_reference_inputs()
+    if os.getenv("PRO_RECOMMENDATIONS_PUBLISH_ON_BUILD") == "1":
+        from scripts.publish_pro_pumbility import publish_bundle
+        counts["proRecommendations"] = publish_bundle(RUNTIME_REFERENCE_ROOT / "pro-recommendations-bootstrap.json.gz")
     print(json.dumps({"status": "staged", **counts}, sort_keys=True))
     return 0
 

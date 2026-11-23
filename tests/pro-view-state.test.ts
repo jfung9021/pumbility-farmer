@@ -20,3 +20,10 @@ test("Normal recommendation and Top 50 links retain their selected mode", () => 
   }
   assert.equal(recommendationViewFromSearchParams(new URLSearchParams("view=invalid")), "recommendations");
 });
+test("Recommendations restores the saved view unless the URL selects a view", () => {
+  assert.equal(recommendationViewFromSearchParams(new URLSearchParams(), "pro"), "pro");
+  assert.equal(recommendationViewFromSearchParams(new URLSearchParams(), "top50"), "top50");
+  assert.equal(recommendationViewFromSearchParams(new URLSearchParams(), "invalid"), "recommendations");
+  assert.equal(recommendationViewFromSearchParams(new URLSearchParams("view=recommendations"), "pro"), "recommendations");
+  assert.equal(recommendationViewFromSearchParams(new URLSearchParams("view=top50"), "pro"), "top50");
+});
