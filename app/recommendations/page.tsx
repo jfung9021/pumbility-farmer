@@ -17,6 +17,8 @@ import { RefreshMeta } from "../_components/refresh-meta";
 import { GlobalRefreshNotice } from "../_components/global-refresh-notice";
 import { usePlayerProfile } from "../_components/player-profile-provider";
 import { PlayerRequired } from "../_components/player-required";
+import { ProRecommendations } from "../_components/pro-recommendations";
+import proStyles from "../_components/pro-recommendations.module.css";
 import { ResultGrade, ResultPlate, ResultScore } from "../_components/player-result";
 import resultStyles from "../_components/player-result.module.css";
 import { ChartVideoLink } from "../_components/chart-video-link";
@@ -32,6 +34,7 @@ import {
 import {
   recommendationModeFromSearchParams,
   recommendationViewFromSearchParams,
+  RECOMMENDATION_VIEW_STORAGE_KEY,
   type RecommendationView,
 } from "../../lib/page-view-state";
 import { pumbilityProgress } from "../../lib/pumbility-progress";
@@ -60,6 +63,7 @@ const RECOMMENDATION_MODES: RecommendationModeKey[] = [
   "doubles",
   "coop",
 ];
+const RECOMMENDATION_VIEWS: RecommendationView[] = ["recommendations", "pro", "top50"];
 const INITIAL_DIFFICULTY_FILTERS: Record<RecommendationModeKey, string> = {
   overall: ALL_DIFFICULTIES,
   singles: ALL_DIFFICULTIES,
@@ -774,7 +778,8 @@ function TopScoresSection({
 }
 
 export default function RecommendationsPage() {
-  const { playerKey: selectedKey, player: profilePlayer, players: playersPayload, loading: loadingPlayers } = usePlayerProfile();
+  const { playerKey: selectedKey, player: profilePlayer, players: playersPayload, loading: loadingPlayers,
+    temporary: temporaryPlayerSelection } = usePlayerProfile();
   const activePlayerKeyRef = useRef(selectedKey);
   activePlayerKeyRef.current = selectedKey;
   const [playerPayloadCache, setPlayerPayloadCache] = useState<PlayerModePayloadCache>({
@@ -783,6 +788,8 @@ export default function RecommendationsPage() {
   });
   const [activeMode, setActiveMode] = useState<RecommendationModeKey>("overall");
   const [recommendationView, setRecommendationView] = useState<RecommendationView>("recommendations");
+  const [viewRestored, setViewRestored] = useState(false);
+  const [proUrlPlayerKey, setProUrlPlayerKey] = useState("");
   const [selectedTopScore, setSelectedTopScore] = useState<{
     score: RecommendationTopScore;
     rank: number;
@@ -860,8 +867,19 @@ export default function RecommendationsPage() {
   useEffect(() => {
     const applyViewFromUrl = () => {
       const params = new URLSearchParams(window.location.search);
+      let savedView: string | null = null;
+      try { savedView = window.localStorage.getItem(RECOMMENDATION_VIEW_STORAGE_KEY); } catch {}
+      const view = recommendationViewFromSearchParams(params, savedView);
+      params.set("view", view);
       setActiveMode(recommendationModeFromSearchParams(params));
-      setRecommendationView(recommendationViewFromSearchParams(params));
+      setRecommendationView(view);
+      setProUrlPlayerKey(params.get("player") || "");
+      if (params.get("view") === "pro" && !["overall", "singles", "doubles"].includes(params.get("mode") || "")) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("mode", "overall");
+        window.history.replaceState(window.history.state, "", url);
+      }
+      setViewRestored(true);
       setSelectedTopScore(null);
     };
     applyViewFromUrl();
@@ -876,6 +894,10 @@ export default function RecommendationsPage() {
   }, [selectedKey]);
 
   useEffect(() => {
+    if (!viewRestored || recommendationView === "pro") {
+      setLoadingPlayer(false);
+      return;
+    }
     setRefreshPending(null);
     if (!selectedKey) {
       const emptyCache = { playerKey: "", modes: {} };
@@ -1025,7 +1047,9 @@ export default function RecommendationsPage() {
     cachePlayerPayload,
     difficultyFilters.overall,
     playersPayload?.refreshSupported,
+    recommendationView,
     selectedKey,
+    viewRestored,
   ]);
 
   const mode = playerPayload?.player.modes[activeMode] || null;
@@ -1060,9 +1084,23 @@ export default function RecommendationsPage() {
     updatePageUrl(mode, recommendationView);
   };
   const selectView = (view: RecommendationView) => {
+    try { window.localStorage.setItem(RECOMMENDATION_VIEW_STORAGE_KEY, view); } catch {}
     setSelectedTopScore(null);
     setRecommendationView(view);
-    updatePageUrl(activeMode, view);
+    const nextMode = view === "pro" && activeMode === "coop" ? "overall" : activeMode;
+    setActiveMode(nextMode);
+    updatePageUrl(nextMode, view);
+  };
+
+  const handleViewKeyDown = (event: KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
+    const nextIndex = event.key === "ArrowRight" ? (currentIndex + 1) % RECOMMENDATION_VIEWS.length
+      : event.key === "ArrowLeft" ? (currentIndex - 1 + RECOMMENDATION_VIEWS.length) % RECOMMENDATION_VIEWS.length
+        : event.key === "Home" ? 0 : event.key === "End" ? RECOMMENDATION_VIEWS.length - 1 : null;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextView = RECOMMENDATION_VIEWS[nextIndex];
+    selectView(nextView);
+    window.requestAnimationFrame(() => document.getElementById(`recommendation-view-${nextView}`)?.focus());
   };
 
   const handleTabKeyDown = (
@@ -1135,7 +1173,8 @@ export default function RecommendationsPage() {
       <SiteHeader active="recommendations" />
 
       <section className="hero page-title-hero recommendations-title-hero">
-        <h1>Recommended Charts</h1>
+        <h1>{recommendationView === "pro" ? "Pro Farming" : "Recommended Charts"}</h1>
+        {recommendationView !== "pro" ? <>
         <div className="refresh-meta-group">
           <RefreshMeta
             delayedAfterMs={MODEL_DELAY_THRESHOLD_MS}
@@ -1156,30 +1195,33 @@ export default function RecommendationsPage() {
           ) : null}
         </div>
         <GlobalRefreshNotice surface="model" nowMs={nowMs} publishedAtUtc={availableModelGeneratedAt} />
+        </> : null}
       </section>
 
       <section className="recommendations-hero">
         <div className={resultStyles.viewControl}>
           <span className={resultStyles.viewLabel} id="recommendation-view-label">View</span>
-          <button
-            aria-checked={recommendationView === "top50"}
-            aria-labelledby="recommendation-view-label"
-            className={`recommendation-view-switch ${recommendationView === "top50" ? "top50-active" : "recommendations-active"}`}
-            onClick={() => {
-              selectView(recommendationView === "recommendations" ? "top50" : "recommendations");
-            }}
-            role="switch"
-            type="button"
-          >
-            <span>Recommendations</span>
-            <span>{activeMode === "coop" ? "Scores" : "Top 50"}</span>
-          </button>
+          <div className={proStyles.viewTabs} role="tablist" aria-labelledby="recommendation-view-label">
+            {RECOMMENDATION_VIEWS.map((view, index) => <button
+              aria-controls="recommendation-workspace"
+              aria-selected={recommendationView === view}
+              id={`recommendation-view-${view}`}
+              key={view}
+              onClick={() => selectView(view)}
+              onKeyDown={(event) => handleViewKeyDown(event, index)}
+              role="tab"
+              tabIndex={recommendationView === view ? 0 : -1}
+              type="button"
+            >
+              {view === "recommendations" ? "Recommendations" : view === "pro" ? "Pro Farming" : activeMode === "coop" ? "Scores" : "Top 50"}
+            </button>)}
+          </div>
         </div>
         <Link className={aboutStyles.contextLink} href="/about#recommendations">About recommendations ↗</Link>
-        {error ? <div className="recommendation-notice error-notice">{error}</div> : null}
-        {playerPayload?.stale ? <div className="recommendation-notice stale-notice" role="status">These saved recommendations use an older model. They will update after your player refresh completes.</div> : null}
-        {refreshPending ? <div className="recommendation-notice stale-notice" role="status">{refreshPending}</div> : null}
-        {refreshWarning ? (
+        {recommendationView !== "pro" && error ? <div className="recommendation-notice error-notice">{error}</div> : null}
+        {recommendationView !== "pro" && playerPayload?.stale ? <div className="recommendation-notice stale-notice" role="status">These saved recommendations use an older model. They will update after your player refresh completes.</div> : null}
+        {recommendationView !== "pro" && refreshPending ? <div className="recommendation-notice stale-notice" role="status">{refreshPending}</div> : null}
+        {recommendationView !== "pro" && refreshWarning ? (
           <div className="recommendation-notice stale-notice" role="status">
             <span aria-hidden="true" className="recommendation-warning-icon">!</span>
             <span>{refreshWarning}</span>
@@ -1187,8 +1229,12 @@ export default function RecommendationsPage() {
         ) : null}
       </section>
 
-      <section className="recommendations-workspace" aria-busy={loadingPlayer}>
-        {!hasSelection ? (
+      <section className="recommendations-workspace" id="recommendation-workspace" role="tabpanel"
+        aria-labelledby={`recommendation-view-${recommendationView}`} aria-busy={recommendationView !== "pro" && loadingPlayer}>
+        {recommendationView === "pro" ? (
+          <ProRecommendations playerKey={selectedKey || (temporaryPlayerSelection ? proUrlPlayerKey : "")}
+            mode={activeMode === "coop" ? "overall" : activeMode} onModeChange={selectMode} />
+        ) : !hasSelection ? (
           <PlayerRequired feature="recommendations" />
         ) : loadingPlayer && !playerPayload && !hasAnyPlayerPayload ? (
           <div className="recommendation-empty"><span className="spinner" /><h2>Calculating your route</h2></div>

@@ -1,0 +1,427 @@
+Pro Pumbility Farming tab - implementation plan
+November 23, 2026
+
+Superseded by pro-pumbility-mode-consolidation-implementation-plan.txt: the local
+v3 implementation has separate Singles/Doubles datasets, q75 and a pure
+consolidation Overall view. This document records the retained historical v2 design.
+
+Status: implemented and verified locally on November 23, 2026. Three subagents
+implemented the engine, capture/build pipeline, and UI; API integration and
+end-to-end verification are complete. Current requirements: overall-only
+recommendations and UI; an adaptive
++100/+150/+200 peer window with lower-Pumbility backfill to ten peers; the 50th
+percentile truncated to its earned grade; and explicit score-based MG/SG/PG
+assumptions. Overall Pumbility remains the sole skill metric. All recommendation
+inputs are Phoenix2-only: rankings, peer scores, chart catalog, personal bests,
+and the player's current shared Top 50 baseline. When the PIUScores baseline is
+missing or incomplete, automatically reconstruct it from official placements.
+
+1. Feature contract
+
+Add a Pro Farming tab to Recommendations. A player qualifies when their current
+official Phoenix2 overall Pumbility rank is 1 through 300 inclusive. The skill
+value for this tab is the official overall Pumbility itself.
+
+For a selected player with overall Pumbility P, exclude their official player ID
+and select peers using this decision flow:
+
+  [P, P + 100] -- at least 10 peers? --> use everyone in that window
+        | fewer than 10
+        v
+  [P, P + 150] -- at least 10 peers? --> use everyone in that window
+        | fewer than 10
+        v
+  [P, P + 200] -- at least 10 peers? --> use everyone in that window
+        | fewer than 10
+        v
+  Retain those peers, then fill downward through players below P until the
+  cohort contains 10 other players.
+
+Every window includes both endpoints. Stop at the first window containing at
+least ten peers; do not trim a qualifying window to ten. The backfill stage adds
+only the number needed to reach ten, starting with the nearest lower Pumbility
+and continuing downward. Resolve equal-rating cutoff ties by official overall
+rank, then official player ID for deterministic selection. This is the meaning
+of "fill downwards and backwards": add the closest lower-rated players rather
+than extending the upper boundary beyond P + 200.
+
+Use the full official ranking response as the peer population. Only recipients
+have the top-300 gate; backfill can include players below overall rank 300.
+Exclude self throughout and deduplicate by official player ID. If the complete
+available population has fewer than ten other players, retain those available
+and report limited support instead of duplicating or inventing peers.
+
+For example, the overall number-one player starts with no upward peers and is
+backfilled with the next ten lower-Pumbility players. The final cohort is shared
+by Singles and Doubles suggestions. Window selection is based on player count,
+not on the number of observed scores for an individual chart.
+
+Recommend current-catalog Single charts at level >=24 and Double charts at
+level >=25. The floors apply to current official levels, not fitted difficulty.
+The Pro UI has one combined Overall list containing both kinds of chart, with
+S/D chart badges identifying their type. It has no Overall/Singles/Doubles/Co-op
+mode selector or mode-specific list. Overall Pumbility, official overall rank,
+selected cohort, and marginal overall Top 50 gain are the displayed metrics.
+
+For each eligible chart:
+  - Keep one best current official raw score per qualifying peer/chart.
+  - Compute an unweighted, linearly interpolated 50th percentile (median) from observed
+    peer scores: h=(n-1)*0.50, interpolating between floor(h) and ceil(h).
+  - Truncate to the lower boundary of the earned Phoenix2 grade. For example,
+    993,400 becomes SSS at 990,000; 995,000 remains SSS+ at 995,000.
+  - Select the assumed plate from the raw percentile score before grade
+    truncation: exactly 1,000,000 => PG; strictly above 995,000 and below
+    1,000,000 => SG; everything else => MG. See section 5 for boundary behavior.
+  - Convert the truncated grade and assumed plate to chart Pumbility using the
+    current Phoenix2 formula and its two-decimal truncation.
+  - Calculate marginal gain to the player's shared Singles + Doubles Top 50.
+  - Keep positive gains and sort descending, with deterministic chart ties.
+
+Keep the raw percentile available alongside the truncated grade target and
+assumed plate so the estimate is explainable. Record the chosen window, whether
+lower-rated backfill was needed, the number added, and the actual cohort rating
+range. Do not interpret an 50th percentile as an 50% success chance.
+
+2. Verified data availability
+
+Current primary API schema:
+  https://piuscores.arroweclip.se/swagger/v1/swagger.json
+
+Overall rankings:
+  GET /api/v2/official/rankings
+      ?mix=Phoenix2&type=All&supplemented=false
+
+Chart board:
+  GET /api/v2/official/charts/{chartId}/board
+      ?mix=Phoenix2&supplemented=false
+
+Official player score history, including placements below the suggestion floors:
+  GET /api/v2/official/players/{URL-encoded-full-gameTag}
+      ?mix=Phoenix2&supplemented=false
+Pin its latest history timestamp, identity, overall rank and overall Pumbility
+to the ranking snapshot. Capture every top-300 player's unsupplemented placements.
+
+The overall response exposes rank, official rating, playerId, full gameTag,
+snapshotAt, and ratingIsOfficial. The chart response exposes raw score, place,
+the matching official player identity, and asOf. Reject supplemented evidence.
+
+Read-only live verification found 1,000 overall ranking rows with authoritative
+ratings. The source snapshot is November 22 at 17:33 UTC / November 23 at 02:33
+JST. A sampled chart's asOf exactly matched the ranking snapshotAt.
+
+At inspection, exactly 300 rows have rank <=300. Rank 300 has 18,457.45 and rank
+301 has 18,456.47, so there is no current boundary tie. Under the PREVIOUS fixed
++200-only rule, peer counts across the top 300 were min 0, median 57, max 110;
+nine players had fewer than five peers and number one had no upward peers.
+Those counts describe the old policy, not the new adaptive/backfill cohorts.
+
+The inspected local catalog contains 162 candidate charts: 42 S24+ and 120 D25+.
+All are present in the local official score capture; none have empty boards.
+Seven boards are capped at 300 observations. These counts describe local inputs,
+not a fresh full-board capture from the live API.
+
+The local standalone capture is dated September 27 and the scoring manifest's
+Phoenix2 source October 11. A fresh capture is required before joining these
+scores to the November ranking snapshot.
+
+3. Coverage and source policy
+
+Official chart boards are censored to their published leaderboard population.
+A missing peer score is unknown, not zero or a failure. The available API does
+not establish a complete score history for every peer. Consequently, a percentile
+of observed board scores cannot be presented as the exact percentile of every
+cohort member's scores when coverage is incomplete.
+
+Report observed chart sample count / total peer count and board cap status,
+alongside the chosen +100/+150/+200 stage and any downward backfill. Ten cohort
+members do not guarantee ten recorded scores on every chart. Do not silently
+rerun the window flow per chart or impute missing scores. No peers or no observed
+chart scores means no target; sparse chart samples remain visibly limited data.
+A strict requirement for all peer scores would need an additional complete
+official source or suppression of incomplete charts; that policy remains a
+product limitation to resolve.
+
+Use only current Phoenix2 data. Rankings and peer scores come from official
+mix=Phoenix2 responses, and chart metadata comes from the Phoenix2 catalog.
+Reject Phoenix1 or mixed-version recommendation inputs. Do not use Phoenix1
+scores, converted Phoenix1 scores, cross-version maximums, or Phoenix1 fallback
+records when a Phoenix2 result is absent. The existing comparison feature's
+Phoenix/Phoenix2 merge is outside this feature's source policy. Its roster also
+requires 200 recorded scores, which is not this feature's eligibility rule.
+
+4. Automatic PIUScores identity mapping
+
+Live Swagger and actual responses confirm both PIUScores player profiles and
+official ranking rows expose the same full gameTag, including its discriminator.
+The schema explicitly documents this join; official playerId and PIUScores
+account ID are separate identifiers.
+
+Join exact full gameTag during consented-player refresh and save a dedicated
+private link from the existing player key/account ID to official playerId.
+Record source generation, match time and status. Reuse the saved PIUScores
+selection to open the Pro tab without another username prompt.
+
+Only resolve an automatic match when the official identity is unambiguous.
+Several PIUScores accounts may map to one official player; do not enforce reverse
+one-to-one uniqueness. Verify eligibility from official rank, not PIUScores'
+estimatedPumbilityRank. Avoid username similarity matching.
+
+The read-only probe found 1,059 readable profiles, 860 with full tags. Forty-five
+profiles match 44 distinct current top-300 players. All matched profiles are
+public; current official top-300 tags have no blanks or duplicates. These counts
+do not imply that every top-300 player has a readable PIUScores account.
+
+For missing/stale tags, a one-time official-player selection can be stored in
+this browser, or the UI can direct the player to an official PIUScores import.
+A manual association supports recommendations; it is not account ownership
+verification. Missing personal history is handled by official reconstruction.
+
+Generic private score snapshots intentionally exclude gameTag. Keep the join in
+a separate private artifact, expose only the resolved public name/rank/total,
+and retain the existing player-selection privacy boundary.
+
+5. Personal baseline, plates, and gain
+
+Peer scores must be official Phoenix2-only. Select a baseline automatically for
+every resolved official profile, including players without a PIUScores account:
+
+  a. Prefer a complete PIUScores API read containing at least 50 usable distinct
+     current Phoenix2 Singles/Doubles charts. Preserve actual plates and chart
+     Pumbility. The summed Top 50 must reach the official published total within
+     one cent; a lower total indicates an incomplete import even when the API
+     read itself succeeded. A newer personal total above the weekly total is
+     usable. Never interpret a zero-score import as an actual empty score list.
+  b. Otherwise reconstruct the player's Top 50 from their official profile's
+     observed, unsupplemented raw scores. Apply the MG/SG/PG guesses below and
+     current Phoenix2 chart levels, deduplicate charts, and select the highest
+     50 estimated chart values. Use all current Singles/Doubles levels, not just
+     S24+/D25+; those floors apply only to recommendations.
+  c. Record the baseline source, whether it is estimated, fallback reason,
+     observed score count, contributing Top 50, total, and 50th-chart cutoff.
+     Show guessed plates as assumed, including on displayed current scores.
+  d. If neither source provides 50 usable charts, show gain unavailable. Missing
+     leaderboard observations are unknown slots, never zero-Pumbility slots.
+
+An official reconstruction is an estimate because plates and unlisted scores
+are unknown. Show its total beside the actual overall Pumbility and the signed
+difference. Do not force the reconstructed values to sum to the official total.
+Calculate marginal gain as the change within the selected baseline, using its
+current chart value or its 50th-chart cutoff. Keep source dates visible. Do not
+pass merged Phoenix1/Phoenix2 scores into any part of this calculation.
+
+Use these fixed plate assumptions, evaluated on the raw, full-precision 50th
+percentile q before truncating its grade:
+
+  Raw percentile score q                 Assumed plate
+  q = 1,000,000                          PG (Perfect Game)
+  995,000 < q < 1,000,000                 SG (Superb Game)
+  0 <= q <= 995,000                       MG (Marvelous Game)
+
+Check the exact-million exception first. "Above 995k" is strictly greater than:
+exactly 995,000 uses MG. A fractional percentile of 995,000.25 uses SG, and
+999,999.99 is still SG, not PG. A score of exactly 1,000,000 uses SSS+ with PG.
+Apply the plate rule before grade truncation, since all these upper scores have
+the same SSS+ lower grade boundary of 995,000. Preserve both raw percentile and
+grade-boundary score in the response; when PG is assumed, display 1,000,000 as
+the required score so the UI does not imply PG is achievable at the grade cutoff.
+
+These rules apply to projected targets and to reconstructed official baselines.
+Preserve real recorded plates and Pumbility when using a usable PIUScores baseline.
+Label reconstruction values, guessed plates, targets and gains estimated.
+
+Marginal gain follows the existing shared-top-50 rules:
+  - Existing Top 50 chart: max(0, target value - current chart value).
+  - New Top 50 entrant with a full list: max(0, target value - 50th value).
+  - Fewer than 50 usable scores in both sources: gain is unavailable; do not use
+    the existing helper's empty-slot behavior for an incomplete imported history.
+Always retain an existing better result; one chart occupies at most one slot.
+
+6. Concrete integration points
+
+Frontend:
+  lib/page-view-state.ts:3 and :31 - extend RecommendationView with "pro".
+  app/recommendations/page.tsx:1166 - replace the two-way view switch with
+    Recommendations / Pro Farming / Top 50 tabs.
+  app/recommendations/page.tsx:1200 - omit the mode tab row entirely in Pro view;
+    render a single combined Overall recommendation list with S/D chart badges.
+  app/_components/player-profile-provider.tsx - reuse saved selection.
+  lib/types.ts - add a separate pro contract rather than another mode key.
+
+The tab can use /recommendations?view=pro, preserving the existing personal route
+and shared-link behavior. Normalize Pro URLs/state to overall even if a stale
+mode=singles, doubles or coop parameter is present. A previously selected normal
+recommendation mode must not affect the Pro request or presentation. The Pro API
+contract declares scope="overall" and accepts no alternate recommendation mode.
+
+Label the view "Pro Farming - Overall" and show overall Pumbility, overall rank,
+and overall gain. Show chart type/level as metadata, PB, raw p50 score, target
+grade, assumed plate, estimated gain and peer coverage. Explain the selected
+window and any lower-rated backfill. Add explicit states for rank>300, unresolved
+identity, missing personal baseline, insufficient available peers and unavailable
+official captures. Pro view never presents a Singles or Doubles skill value.
+
+Backend/calculation:
+  official_scores.py:98 - board validation/deduplication/cap diagnostics.
+  official_scores.py:220 - resumable, atomic snapshot capture pattern.
+  official_scoring_sources.py:239 - bounded hosted official refresh pattern.
+  phoenix2_sync.py:339 - existing profile fetch needed for identity links.
+  phoenix2_pumbility.py:24 and :128 - grade thresholds and exact chart formula.
+  New pro helpers - adaptive overall peer selection and raw-score MG/SG/PG rules.
+  piu_recommendations.py:1502 - reuse earned-grade truncation unchanged.
+  piu_recommendations.py:2852 - exact marginal Top 50 gain.
+  piu_recommendations.py:4312 - shared Singles/Doubles Top 50 baseline logic,
+    supplied with the chosen Phoenix2 personal or reconstructed official baseline.
+
+Introduce a dedicated pro capture/builder and artifact contract containing the
+ranking, selected chart boards, source time and current catalog identity. Require
+matching source generations before publishing. Refresh official inputs in bounded
+background work, then atomically publish the completed generation.
+
+Precompute adaptive overall cohorts and chart targets for official recipients.
+Record the minimum-peer target (10), selected upward window (100/150/200),
+backfill count, cohort count, rating bounds, and raw/truncated score and assumed
+plate per chart. Derive personal overall gains during the existing per-player
+refresh or a cached Pro read. Key results by official generation, personal score
+generation, identity-link status and a method version identifying p50, adaptive
+windows/backfill and the new plate boundaries.
+
+Add a local Next route under app/api/pro-recommendations and a production FastAPI
+route under api/pro_recommendations.py; register the latter in api_service.py.
+Production vercel.json routes /api traffic to Python, so the Next route alone
+would not expose the feature in production.
+
+7. Implementation acceptance and verification
+
+Targeted new tests should cover:
+  - Overall rank 300/301 eligibility and a single overall skill/cohort.
+  - Inclusive P, P+100, P+150 and P+200 boundaries and self exclusion.
+  - Stop at exactly ten or more peers in the earliest successful window, keeping
+    every matching peer in that window rather than capping it at ten.
+  - Widen only when the current count is below ten; retain +200 peers and add
+    nearest lower-rated players only until ten, including the number-one case.
+  - Stable cutoff ties, backfill beyond rank 300, deduplication, and insufficient
+    total available population without duplicate or invented observations.
+  - Ten cohort members but fewer chart observations, with visible coverage and
+    no unrequested chart-specific window widening or zero imputation.
+  - Exact S24/D25 floors, known interpolated p50 examples and grade truncation.
+  - MG at 995,000; SG at 995,000.25 and 999,999.99; PG only at 1,000,000;
+    plate selection before grade truncation; correct PG score display.
+  - Usable personal plates remain authoritative; otherwise the official baseline
+    uses the declared fixed plate rule and an estimated Top 50 cutoff.
+  - Empty/partial imports trigger reconstruction, not full-chart-value gains;
+    fewer than 50 observations in both sources suppress gain estimates. Validate
+    official profile identity/snapshot/provenance and inspect all contributors.
+  - No Pro mode controls or per-mode skill values, mixed S/D chart list,
+    overall-only API contract, and normalization of stale mode URLs/state.
+  - Identity matching/missing/ambiguous/many-to-one cases and matching
+    capture/cache generations.
+  - Phoenix2-only provenance throughout; Phoenix1 records, converted results,
+    cross-version maximums and fallback PBs never enter cohorts, targets or the
+    personal baseline. Adding a higher Phoenix1 score must not change Pro output.
+
+Verify the tab with a mapped eligible player, a non-eligible player, an unresolved
+identity, and a top-ranked player requiring downward backfill. Confirm the UI
+stays Overall when arriving from Singles, Doubles, Co-op or their shared links.
+Run affected Python/TypeScript tests and typecheck/build for actual implementation.
+One bounded review is sufficient.
+
+Investigation verification already performed:
+  - Live primary API schema, overall rankings, one chart board and profile pages.
+  - Aggregate cohort, catalog coverage and identity-link counts described above.
+  - Four existing tests passed for grade boundaries, the official Top 50 formula
+    fixture, marginal replacement and shared Singles/Doubles Top 50.
+  - After the user's p50/truncation correction, the existing earned-grade
+    truncation test passed:
+      python -m unittest tests.test_recommendations.PlayerRecommendationTests.
+          test_recommendation_goals_truncate_to_the_earned_grade_boundary
+    (The dotted test name above is one continuous command-line argument.)
+
+8. Initial local implementation handoff (before automatic reconstruction)
+
+Implemented pro_pumbility.py, dedicated capture/build scripts, local Next and
+production FastAPI readers, versioned contracts, and the overall-only Pro UI.
+The local capture is independent of the generic score/analysis snapshots.
+
+Fresh real data was fetched November 23 at 06:04 JST. The latest official weekly
+source snapshot is November 23 at 02:33 JST. It contains 1,000 official overall
+ranking rows and all 175 current S24+/D25+ boards (47 Singles, 128 Doubles).
+Forty-five matched PIUScores accounts have 17,675 freshly fetched Phoenix2
+personal records, producing 4,752 median-based suggestions. There are 23 capped boards and
+no empty boards; per-chart coverage remains visible.
+
+Generated artifacts live at .local-data/piu-scores/pro/current. There are 1,315
+public profiles: 45 ready, 256 official-only profiles needing a personal
+baseline, 932 unresolved identities, and 82 ineligible players.
+
+Run npm run pro:refresh to fetch current real inputs and build; run npm run
+pro:build to rebuild captured inputs without another upstream fetch. Set
+PIU_LOCAL_ANALYSIS=1 and run npm run dev -- --hostname 127.0.0.1 --port 3000.
+
+Ready test page (RSS, official overall rank 4):
+  http://127.0.0.1:3000/recommendations?view=pro&mode=overall&player=70558ddebd80f81b026b
+This player exercises eight-player downward backfill and has 68 median-based suggestions.
+The Pro page also offers a chooser for all 45 ready captured profiles.
+
+Verification completed:
+  - All 24 targeted Python engine, capture and runtime tests passed.
+  - All five new frontend contract/local-reader/view-state tests passed; the
+    directly affected existing view tests also passed.
+  - TypeScript typecheck and the production Next build passed.
+  - The original generation passed validation of all 1,315 profiles. That
+    p50 generation contained 4,752 recommendations; the local API served its new
+    method identity, and all 68 RSS recommendations independently match the
+    observed peer-score median. Previous p80 artifacts are rejected by readers.
+  - Local HTTP checks passed for ready, ineligible, unresolved identity and
+    missing-baseline responses, plus rejection of alternate modes and stale
+    generation requests.
+  - Browser verification rendered the mixed S/D list and eight-player backfill,
+    hid mode controls, and normalized a Singles URL to Overall.
+
+The full frontend suite passed 337 of 339 tests. Two existing tier-list source
+assertions fail (tests/frontend-api.test.ts, "tier labels share Pumbility dispatch
+and distinguish Scoring interval methods" and "tier list chart details provide
+local mode-specific what-if estimates"). Their tier-list implementation was
+already modified before this work and was not changed for Pro Farming. Existing
+official-comparison/skill-radar filesystem tracing warnings also remain.
+
+No production deployment or production data publication was performed. The
+production reader is registered and expects the equivalent private artifact
+prefix when this feature is deployed. Personal baseline availability and official
+board truncation remain explicit product states. Existing unrelated working-tree
+edits were preserved; no unresolved local Pro Farming blocker remains.
+
+9. Automatic official reconstruction - November 23 revision
+
+The prior implementation treated a successfully fetched but empty PIUScores
+history as an actual empty Top 50. For TUSA, this displayed full chart Pumbility
+as gain. The revised v2 method automatically selects a usable personal baseline
+or reconstructs an estimated Top 50 from official placements, as specified in
+section 5. It never uses missing imported observations as empty score slots.
+
+Captured all 300 official top-300 player profiles, containing 99,062 published
+placements. The source remains Phoenix2 only, pinned to the November 23 02:33
+JST weekly snapshot. The latest capture began at 06:25 JST. All 1,315 generated
+profiles passed validation; 301 eligible profile views are ready (300 distinct
+official players, with one additional linked PIUScores account). Eighteen use
+usable PIUScores baselines and 283 reconstruct from official leaderboard scores.
+There are 21,711 estimated positive-gain suggestions.
+
+TUSA is the current test player:
+  http://127.0.0.1:3000/recommendations?view=pro&mode=overall&player=da29cee9bce0065b55ed
+TUSA's 318 published placements include 311 current standard-chart matches.
+The reconstructed Top 50 is 18,974.32, the estimated cutoff is 373.36, and the
+actual official overall Pumbility is 18,949.46 (reconstruction difference +24.86).
+The leading Brown Sky S25 target contributes 387.72, yielding +14.36 estimated
+overall gain, rather than the incorrect +387.72 from the empty imported history.
+The page now has 57 suggestions and an inspectable list of all 50 contributors.
+
+The UI labels each baseline source, guessed plate, reconstructed total/cutoff,
+fallback reason, and difference from the official total. Baselines are not forced
+to equal the official total. The API method version changed to reject old
+personal-only-baseline artifacts and publish a new immutable generation.
+
+Verification: 29 targeted Python tests, five frontend tests, TypeScript and the
+production build passed. Every generated profile passed the frontend contract
+validator. Local HTTP and browser checks confirmed the reconstructed TUSA list,
+cutoff, and corrected gain. Existing unrelated tier-list test failures and
+filesystem tracing warnings were not changed. No production publication occurred.

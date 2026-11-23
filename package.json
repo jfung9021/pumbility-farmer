@@ -8,6 +8,8 @@
     "snapshot:local": "python scripts/capture_private_score_snapshot.py",
     "snapshot:phoenix2": "python scripts/capture_private_score_snapshot.py --mix phoenix2",
     "snapshot:official": "python scripts/capture_official_score_snapshot.py",
+    "pro:refresh": "python scripts/capture_pro_pumbility.py",
+    "pro:build": "python scripts/build_pro_pumbility.py",
     "snapshot:phoenix1:rebuild": "python scripts/capture_private_score_snapshot.py --mix phoenix1 --rebuild-archived --restart",
     "analyze:local": "npm run analyze:phoenix1 && npm run analyze:phoenix2 && npm run analyze:recommendations",
     "analyze:phoenix1": "python piu_misgrade_analyzer.py cache --mix phoenix1 --raw-dir .local-data/piu-scores/phoenix1/current --output-dir .local-data/piu-scores/phoenix1/analysis",

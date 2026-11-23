@@ -44,7 +44,7 @@ class NevsisterChartLinkTests(unittest.TestCase):
         payload = json.loads(catalog.DEFAULT_OUTPUT.read_text(encoding="utf-8"))
         self.assertEqual(payload["schemaVersion"], 1)
         self.assertEqual(payload["channelId"], catalog.CHANNEL_ID)
-        self.assertEqual(len(payload["charts"]), 2_746)
+        self.assertEqual(len(payload["charts"]), 2_874)
         self.assertEqual(payload["charts"]["7c947bcb-631c-4565-a712-5abe045c122f"], "aYW8lkw9GBg")
         self.assertEqual(payload["charts"]["bd01894e-be99-46c6-875f-eff800f43430"], "ElBQ808kG5Q")
         for chart_id, video_id in payload["charts"].items():
