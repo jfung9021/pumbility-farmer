@@ -12,6 +12,7 @@ from api.deploy import router as deploy_router
 from api.jonathan import router as jonathan_router
 from api.operator import router as operator_router
 from api.official_comparison import router as official_comparison_router
+from api.pro_recommendations import router as pro_recommendations_router
 from api.recommendations import router as recommendations_router
 from api.refresh_status import router as refresh_status_router
 from api.tier_list import router as tier_list_router
@@ -31,6 +32,7 @@ app.include_router(deploy_router)
 app.include_router(jonathan_router)
 app.include_router(operator_router)
 app.include_router(official_comparison_router)
+app.include_router(pro_recommendations_router)
 app.include_router(recommendations_router)
 app.include_router(refresh_status_router)
 app.include_router(tier_list_router)

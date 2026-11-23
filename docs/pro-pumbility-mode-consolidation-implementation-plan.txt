@@ -1,0 +1,363 @@
+Current behavior amendment - November 23, 2026 (v6)
+
+The Overall tab now shows expected overall gain against the reconstructed
+combined Top 50. This supersedes the calculation-free Overall proposal below.
+Singles and Doubles keep independent peer groups, median targets and mode gains.
+Overall keeps those targets and evidence, merges the two mode Top 50 histories,
+selects the strongest 50 chart contributions and estimates replacement gains.
+A chart already in the combined Top 50 replaces itself; another chart replaces
+the combined cutoff. Targets with no overall gain are omitted, then rows sort
+by expected overall gain. Original mode gain remains available in calculation
+details. Unknown results are never filled with zero. Actual Phoenix 2 facts and
+official grade/plate estimates follow the existing per-chart merge policy.
+
+The UI uses the existing Recommendations card layout with jackets, chart badges,
+compact metadata, mode or overall gain labels and expandable calculation details.
+The Overall baseline is inspectable; official standing is shown separately.
+
+Active method: pro-pumbility-p50-modes-overall-top50-phoenix2-v6, schema 2.
+Local source: .local-data/piu-scores/pro-modes/current.
+Verification: 18 affected Python tests, six frontend tests, TypeScript and the
+production build passed. All 1,315 generated profile contracts and three HTTP
+mode requests passed. Every Singles/Doubles result was compared against the
+previous generation and remained identical apart from its generation ID.
+The local data now contains 14,100 overall suggestions. TUSA has 46 overall
+suggestions against a reconstructed 18,974.32 baseline and 373.36 cutoff.
+Dead End S25 illustrates the change: +23.72 Singles gain, +14.36 overall gain.
+No production data was published and no deployment was performed.
+
+Earlier proposal and its initial implementation record follow for context.
+
+Pro Farming: separate mode datasets and consolidated Overall
+Implementation plan - November 23, 2026
+
+Status: implemented locally on November 23, 2026. This revision supersedes the
+earlier overall-only v2 Pro design. The running v4 engine uses the 50th percentile
+and independent Singles/Doubles calculations; Overall consolidates their rows.
+
+1. Requested behavior and gain meaning
+
+Pro Farming should mirror the existing Recommendations interaction with three
+mode tabs: Overall, Singles, Doubles. Co-op remains outside Pro chart scope.
+Singles recommends only current official S24+ charts; Doubles only D25+ charts.
+Keep Phoenix2-only inputs, exact-tag identity matching, and the actual official
+OVERALL top-300 eligibility gate. Mode estimates do not create a new top-300 gate.
+
+Construct a Singles dataset and a Doubles dataset independently. Each contains
+its mode-specific player Pumbility, Top 50 baseline, peer cohort, chart targets,
+and estimated gains. Overall consolidates the resulting recommendation rows.
+
+Default interpretation of "just consolidates": preserve each source row's
+mode-specific gain unchanged. Overall sorts those rows but does not calculate
+a combined Top 50 gain. Consequently, label these values "Singles gain" and
+"Doubles gain", or "Mode Pumbility gain". Do not label the merged values as
+official overall Pumbility gains. A mode improvement may not affect the game's
+combined Top 50. A clarification about gain labeling was requested; this is the
+documented default implemented after the user's instruction to implement this plan.
+
+                      Phoenix2 score facts
+                       /                \
+           Singles histories         Doubles histories
+           Singles Top 50            Doubles Top 50
+           Singles cohorts           Doubles cohorts
+           S24+ chart q50            D25+ chart q50
+           Singles gain rows         Doubles gain rows
+                       \                /
+                         merge + sort
+                             Overall
+
+No independent Overall skill fit, cohort, percentile, target, baseline, gain
+calculation, or eligibility decision belongs in the consolidation step. Display
+the already-captured official overall rank/Pumbility as profile context. Never
+add Singles and Doubles totals to invent an overall Pumbility value.
+
+2. Findings from the current implementation and real inputs
+
+Current v2 Pro has a single overall cohort and shared Top 50 baseline:
+  pro_pumbility.py - _cohort, _player_baseline, _baseline, _build
+  scripts/capture_pro_pumbility.py - captures candidate boards and histories
+  app/_components/pro-recommendations.tsx - overall-only presentation
+  lib/pro-recommendations.ts - scope="overall" response contract
+  lib/page-view-state.ts - forcibly normalizes Pro mode to overall
+  app/api/pro-recommendations/route.ts and api/pro_recommendations.py - reject
+    Singles/Doubles requests
+
+The normal Recommendations page already has mode-tab styling, keyboard behavior,
+selection state, and URL handling. Reuse that interaction pattern rather than
+creating a separate navigation convention. Its current backend DOES recompute
+shared Top 50 gains for Overall, so do not copy that backend behavior into the
+new Pro consolidator.
+
+Read-only audit of the captured November 23 02:33 JST source snapshot:
+  - Ranking response: 1,000 official players.
+  - Captured player score histories: only the overall top 300.
+  - Candidate boards: 175 (47 S24+, 128 D25+).
+  - At least 50 observed Singles charts: 264/300 players; 36 have fewer.
+  - At least 50 observed Doubles charts: 260/300 players; 40 have fewer.
+  - These are observed official histories, not proof the other players have
+    played fewer than 50 charts. Do not zero-fill unknown observations.
+
+TUSA example, reconstructed with the current MG/SG/PG guesses:
+                 Observed charts    Estimated mode Top 50    50th cutoff
+  Singles                    144               18,341.15          364.00
+  Doubles                    167               18,974.32          373.36
+  Actual official overall Pumbility: 18,949.46.
+These illustrate why mode ratings and mode gains must be kept distinct from the
+official combined total. They are input-audit estimates, not new q50 results.
+
+Live primary API verification on November 23:
+  GET /api/v2/official/rankings?mix=Phoenix2&type=All&supplemented=false
+  GET /api/v2/official/rankings?mix=Phoenix2&type=Single&supplemented=false
+  GET /api/v2/official/rankings?mix=Phoenix2&type=Double&supplemented=false
+All three currently return identical player/rank/rating triples for 1,000 rows,
+including the same first rating of 20,271.32. The live Swagger advertises the type
+parameter, but these observed responses do not establish independent mode
+Pumbility. Construct the mode datasets locally from scores; do not silently call
+the returned overall numbers Singles/Doubles ratings.
+Primary schema: https://piuscores.arroweclip.se/swagger/v1/swagger.json
+
+3. Capture and build the underlying mode datasets
+
+Keep raw captures and identity links private. All sources must be Phoenix2.
+Capture the current chart catalog, overall ranking, and unsupplemented official
+scores with matching weekly timestamps. The baseline includes ALL current
+Singles/Doubles levels; S24+/D25+ applies only to recommendation candidates.
+
+Extend official player-history capture from 300 to all 1,000 players returned by
+the current ranking. A player with lower overall Pumbility can have higher
+Singles-only or Doubles-only Pumbility than the recipient, so excluding ranks
+301-1,000 would distort mode cohorts. Only recipients retain the top-300 gate.
+Keep the existing bounded workers and per-player weekly checkpoints. Publish
+only after the required peer-history population is captured, or explicitly mark
+a partial population and withhold a complete-generation claim. Do not discard
+the 700 uncaptured histories as zero or narrow the population silently.
+
+Use readable PIUScores profiles/records where available and retain the official
+fallback for every other player. Fetch additional consented personal histories
+only for exact-linked accounts used by the chosen peer population. Record source
+identity and capture dates for every input. Never substitute private unshared
+accounts, supplemented leaderboard rows, Phoenix1 scores, or converted P1 scores.
+
+Create a chart-fact index per official player:
+  - Join current chart ID, type, level, and metadata.
+  - Keep at most one best result per unique chart.
+  - Prefer actual PIUScores Pumbility/plate when its score matches or exceeds the
+    captured official score for that chart.
+  - Fill missing results, or newer/higher official scores lacking a corresponding
+    personal result, using the official raw score and declared plate guess.
+    Preserve a known higher actual chart Pumbility as a floor for that chart.
+  - Mark whether each retained value is actual or estimated; sources may be
+    personal-only, official-only, or mixed.
+  - Split this index into Single-only and Double-only histories. A chart from
+    one mode must never contribute to the other's total, cutoff, or cohort.
+
+For each player/mode, sum the highest 50 chart Pumbility values and retain the
+contributing charts, cutoff, source flags, observed count, and source dates.
+At least 50 usable unique observations are required to establish this revision's
+mode Top 50 baseline. Fewer observations means the mode is unavailable/insufficient
+for rating or gain estimation, not a zero rating or an empty-slot gain.
+
+Remove the current completeness comparison against official overall Pumbility
+for mode baselines: a Singles total below the official combined total is normal,
+as TUSA demonstrates. Completeness/source decisions instead use the mode's
+observed chart facts, actual-versus-estimated provenance and available count.
+Do not force either mode's estimate to match the overall total or report their
+difference as an error. Label mode Pumbility estimated when derived from guessed
+values; there is no verified independent official mode total in the live API.
+
+4. Independent cohort selection
+
+For mode m, the recipient's mode Pumbility is P_m, the sum of its mode Top 50.
+Select only other players with usable mode-m ratings, excluding the subject's
+official ID and deduplicating duplicate PIUScores account links.
+
+Try inclusive [P_m, P_m+100], then +150 if fewer than ten peers, then +200 if
+still fewer than ten. Stop at the first successful window and retain all peers
+within it. If +200 remains below ten, retain those peers and add the nearest
+lower mode-Pumbility players until ten are selected. Resolve cutoff ties by
+deterministic official rank and player ID; overall rank is a tie-breaker, not
+the skill metric. If the usable population is still below ten, expose its actual
+count and limited support.
+
+Build two different cohorts when the player's mode skills differ. Singles must
+not use overall or Doubles Pumbility to select its peers, and vice versa. The
+count threshold applies to the player cohort; missing chart scores do not cause
+an undocumented second widening per chart. Keep cohort/source-quality metadata
+separate for the two modes.
+
+5. Target scores, plates and mode gains
+
+For each mode's eligible charts, use only raw, unsupplemented official scores
+from that mode's selected peers, one score per peer/chart. Personal data can
+inform actual chart Pumbility baselines; it must not supplement peer target
+scores that are absent from the official leaderboard.
+
+Use the linearly interpolated 50th percentile:
+  h = (n-1)*0.5
+  q50 = sorted_scores[floor(h)] + fractional(h) *
+        (sorted_scores[ceil(h)] - sorted_scores[floor(h)])
+
+Keep full precision through plate/grade decisions. Truncate q50 to the minimum
+score of its earned Phoenix2 grade; do not round up to another grade.
+Retain the fixed plate assumptions applied to raw q50 before grade truncation:
+  exactly 1,000,000          PG
+  above 995,000, below 1M    SG
+  at or below 995,000        MG
+Exactly 995,000 remains MG. Show a required score of 1,000,000 for a PG target,
+even though the SSS+ grade boundary is 995,000.
+
+Calculate expected chart Pumbility using current type/level and target grade/
+plate. Calculate marginal gain against that mode's Top 50:
+  - Chart already in mode Top 50: max(0, target value - current chart value).
+  - Chart outside the mode Top 50: max(0, target value - mode 50th cutoff).
+  - Missing usable mode baseline: no gain estimate; do not fill unknown slots
+    with zeros or display full chart Pumbility as improvement.
+
+Retain only positive mode gains. Preserve the raw q50, truncated grade target,
+assumed plate, existing chart result/provenance, peer observations/cohort count,
+board-cap diagnostics, source mode and mode gain. Sort deterministically by
+gain, expected chart Pumbility, song title and chart ID.
+
+6. Overall is a pure consolidation
+
+The only inputs to consolidate_pro_modes are finalized Singles and Doubles
+results from the same model/source generation. The function:
+  1. Collects all source recommendation rows from ready modes.
+  2. Keeps every calculation field unchanged, including q50, grade, plate,
+     expected chart value, gain, coverage and baseline provenance.
+  3. Rejects accidental repeated chart IDs; different S/D charts of the same
+     song remain distinct. Do not silently merge contradictory duplicate rows.
+  4. Sorts the union using the same deterministic gain-first sort key.
+  5. Applies display limits only after consolidation, retaining full source lists
+     for filtering and pagination. Do not merge independently truncated results.
+
+No score, grade, plate, cutoff or gain is recomputed here. Overall displays the
+source mode on each row and uses its source gain label. It has no synthetic
+combined baseline or third cohort. Mode totals may appear as two reused summary
+cards; the captured official overall total may appear separately as context.
+
+If one mode is unavailable, show the available mode unchanged and explain which
+mode lacks evidence. A Doubles issue must not block Singles or the combined
+view's usable Singles rows. Zero positive gains is a valid ready-mode result,
+distinct from unavailable mode data. Do not add hypothetical gains across rows
+to promise a total increase; each row represents a separate candidate attempt.
+
+7. API, artifacts and UI
+
+Create a new public schema/method identity, for example schemaVersion=2 and
+method=pro-pumbility-p50-modes-consolidated-phoenix2-v4. Coordinate that identity
+in Python, TypeScript, readers, fixtures and cache keys. Retain old immutable v2
+generations; do not mutate old method meanings or serve them as new-mode data.
+
+Pro player response:
+  shared: player identity, official overall eligibility/rank/total, source times,
+          schema/method/generation and chart catalog identity
+  modes.singles: status, modePumbility, baseline/top50/source, cohort, complete
+                 recommendation rows, diagnostics
+  modes.doubles: the corresponding independent Doubles result
+  overall: kind="consolidated", source-generation references, sorted source rows,
+           available/unavailable source modes and notices
+
+Do not include top-level overall calculated gain/baseline/cohort fields. The
+index should expose per-mode availability and source quality, preserving existing
+public player keys, official-only keys and consented identity links.
+Prefer returning the complete bundle in one request for consistent mode
+switching; a mode query, if supported, selects a prebuilt view without rebuilding
+or recalculating. Reject mismatched child generations.
+
+Frontend changes:
+  - app/recommendations/page.tsx: reuse the existing mode tab row for Pro with
+    Overall/Singles/Doubles; keep the existing top-level view tabs.
+  - app/_components/pro-recommendations.tsx: render selected mode data or the
+    consolidated list. Show source mode, q50, grade/plate guesses, proper gain
+    label, coverage, source dates and inspectable mode Top 50 contributors.
+  - lib/page-view-state.ts: remove forced Pro-to-Overall normalization; preserve
+    valid Pro Singles/Doubles links. Invalid/Co-op Pro modes default to Overall.
+  - Preserve mode when moving between Recommendations and Pro where supported;
+    entering from Co-op defaults Pro to Overall. Player-chooser links preserve
+    the current valid Pro mode and existing shared-player behavior.
+  - lib/pro-recommendations.ts and lib/local-pro-recommendations.ts: validate and
+    read the new mode bundle, including consolidation identity and statuses.
+  - app/api/pro-recommendations/route.ts and api/pro_recommendations.py: remove
+    overall-only guards, accept only the new supported modes/contract, and keep
+    local and production reads consistent.
+  - pro_pumbility_runtime.py, scripts/build_pro_pumbility.py, capture script,
+    README and methodology copy: update source scope and method identity.
+
+Reuse existing visual components, responsive styles, tab keyboard navigation,
+focus behavior, source-date formatting and result grade/plate components.
+
+8. Bounded implementation and verification
+
+Implementation sequence:
+  1. Extract source facts and mode baseline/index builders with focused tests.
+  2. Extend resumable official-history capture to the peer population; build
+     mode cohorts and q50 targets from a complete pinned source generation.
+  3. Implement mode gains and pure consolidation, then version artifacts/readers.
+  4. Wire the three mode tabs, deep links, labels and partial availability UI.
+  5. Build candidate artifacts separately under .local-data/piu-scores/pro-modes
+     before advancing the active Pro pointer. Preserve the working v2 generation.
+  6. Verify actual TUSA examples and one player with a missing/partial mode,
+     then perform one bounded review. Publish/deploy only if separately requested.
+
+Required checks:
+  - Changing Doubles facts cannot alter Singles Pumbility, cohort, targets or
+    gains; the reciprocal independence check must also pass.
+  - Mode baselines use all standard levels, with exact S24+/D25+ candidate floors.
+  - Empty or partial personal histories fall back per mode; fewer than 50 known
+    mode charts never become zeros, synthetic skill values or empty-slot gains.
+  - Lower-overall-rank players with the right mode rating can enter cohorts;
+    official overall rank 300/301 still controls recipient eligibility only.
+  - Inclusive +100/+150/+200 boundaries, self exclusion, ties and downward fill.
+  - Known q50 example: [900000,910000,920000,930000] => 915000, then A+ at
+    900000/MG. Preserve exact 995000 and 1000000 plate behavior.
+  - Known mode Top 50 replacement gains and preservation of better existing PBs.
+  - Every Overall row is deeply equal to its source row for all calculation
+    fields. Its chart-ID set is exactly the union of ready source lists, and
+    consolidation never invokes a scoring/cohort/gain calculation helper.
+  - Partial-mode and zero-gain states, sorting, duplicate guards and generation
+    mismatches; all three URLs restore the right view and mode.
+  - Frontend/API contracts reject stale p75/overall-only generations. Update
+    the old Pro test that currently requires every URL to normalize to Overall.
+  - Affected Python/TypeScript tests, typecheck/build, and local browser/API checks
+    with real captured data. Existing unrelated tier-list failures remain outside
+    scope and must be reported separately rather than repaired here.
+
+The original planning audit traced sources, probed the live API/schema and
+checked local mode coverage. The implementation results follow.
+
+9. Local implementation results
+
+Current engine: pro_pumbility_modes.py, reusing validated Phoenix2 capture,
+grade/plate, identity and cohort helpers from the retained v2 module. The v2
+calculation module and its immutable data generation remain available, but the
+active builder, local/API readers and UI use public schema 2 / v4 mode bundles.
+
+Captured the full 1,000-player ranking population with 226,030 official placements,
+all 175 candidate boards and fresh personal histories for 127 readable linked
+accounts. The official snapshot remains November 23 at 02:33 JST; the capture
+started at 06:45 JST. Inputs and public artifacts are under
+.local-data/piu-scores/pro-modes/current. Existing weekly official capture
+checkpoints are reused, and completed public mode generations publish index last.
+
+There are 1,315 profile views: 301 eligible/ready, 82 ineligible and 932 unresolved
+identities. Among eligible profile views, 266 have usable Singles results and 261
+usable Doubles results. The combined lists contain 22,243 suggestions, with every
+Overall row validated as identical to its source mode row. Duplicate linked
+accounts do not create duplicate peer identities.
+
+TUSA has Singles Pumbility 18,341.15, a 364.00 mode cutoff, 44 +100 peers and 20
+recommendations. Doubles has 18,974.32, a 373.36 cutoff, 14 +100 peers and 44
+recommendations. Overall displays their exact sorted union of 64 rows.
+
+Local views:
+  http://127.0.0.1:3000/recommendations?view=pro&mode=overall&player=da29cee9bce0065b55ed
+  http://127.0.0.1:3000/recommendations?view=pro&mode=singles&player=da29cee9bce0065b55ed
+  http://127.0.0.1:3000/recommendations?view=pro&mode=doubles&player=da29cee9bce0065b55ed
+
+Median update verification: 16 affected Python tests, six affected frontend tests,
+TypeScript, all 1,315 artifact contracts and all three local HTTP mode requests
+passed. Browser checks confirmed 50th-percentile labels and regenerated targets.
+The earlier full frontend suite had two pre-existing tier-list assertion failures;
+those unrelated files were not changed. No production data was published and no
+deployment was performed.

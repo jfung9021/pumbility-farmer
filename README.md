@@ -2,6 +2,62 @@
 
 Pumbility Farmer is a PIU Phoenix difficulty analyzer and Vercel web UI with Scoring, Clearing, and Pumbility tier lists. Its scoring list combines normalized Phoenix 1 and Phoenix 2 score evidence against the current Phoenix 2 catalog. Phoenix 1 is a frozen, privacy-safe source captured on August 7, 2026; Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Singles and Doubles rankings are completely independent. Co-op has its own combined 2x-5x scoring analysis because those charts have no official difficulty rating. Published Singles and Doubles analysis starts at level 16, while player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 16.
 
+
+## Pro Farming recommendations
+
+Open `/recommendations?view=pro&mode=overall` for Phoenix 2 recommendations for
+the official overall Pumbility top 300. Pro has Overall, Singles and Doubles
+tabs. Singles uses its own mode Top 50 and recommends S24+; Doubles independently
+uses its own mode Top 50 and recommends D25+. Each mode tries peers up to +100,
++150, then +200 mode Pumbility; when still below ten peers, it fills with the
+nearest lower-mode-Pumbility players. Each chart uses the observed official peer
+scores' linearly interpolated 50th percentile (median), truncated to its earned grade.
+The raw percentile determines the
+assumed plate: MG through 995,000, SG above 995,000, and PG at exactly 1,000,000.
+Actual Phoenix 2 PIUScores results take precedence when they match or improve
+the captured official score; missing results are filled from official placements
+using the same MG/SG/PG guesses. A known better actual chart value is preserved.
+Each mode has an inspectable Top 50 and source labels; at least 50 usable charts
+are required. A mode total is not compared with the official combined total.
+Missing observations are never treated as empty Top 50 slots.
+
+Overall combines the finalized Singles/Doubles targets, then calculates expected
+overall gains against the player's reconstructed combined Top 50. Its baseline
+merges both modes' known chart values, keeps the strongest 50 and exposes the
+50th cutoff. An existing Top 50 chart replaces its own contribution; other charts
+replace the cutoff. Overall removes zero-gain targets and sorts by overall gain.
+Targets, peer evidence and original mode gains are retained. Singles and Doubles
+still show their own mode Top 50 gains. Reconstructed values can differ from the
+game's official overall total, especially when plates are estimated. If one mode
+is unavailable, the other remains usable.
+
+Capture fresh real data and start the local UI:
+
+```powershell
+npm run pro:refresh
+$env:PIU_LOCAL_ANALYSIS = "1"
+npm run dev -- --hostname 127.0.0.1 --port 3000
+```
+
+The capture uses the existing `PIU_SCORES_API_KEY` configuration. Official boards,
+rankings and personal scores are fetched from Phoenix 2 only. It matches readable
+PIUScores profiles to the official ranking by exact full game tag, fetches fresh
+personal scores where available, and captures all 1,000 ranked players' published
+score histories across the current chart catalog to construct the peer population.
+Only official overall top-300 recipients are eligible. Pro Farming offers players
+with a usable personal or reconstructed baseline for testing. If neither source
+provides a usable Top 50, it explains that the cutoff is unavailable.
+
+Private inputs and generated local artifacts live in
+`.local-data/piu-scores/pro-modes/current`. `npm run pro:build` rebuilds targets from
+those inputs without another upstream fetch. A refresh resumes matching weekly
+board and official player captures but always rereads the mapped players' personal scores. Immutable
+player generations are written before the public index changes. Source dates,
+adaptive cohort details and per-chart score coverage remain visible; ten cohort
+members do not guarantee ten recorded scores on each chart. Production API
+readers use the private `analysis/pro-recommendations/modes/current` artifact prefix;
+these local commands do not deploy or publish production data.
+
 ## Official leaderboard player comparison
 
 Open `/official-leaderboard-comparison` to compare two official players' BPM

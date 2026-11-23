@@ -740,7 +740,7 @@ test("NEVSISTER catalog has the complete validated chart inventory", async () =>
 
   assert.equal(catalog.schemaVersion, 1);
   assert.equal(catalog.channelId, "UCicVRsgv4iIhZGZcbx7xUkw");
-  assert.equal(catalogIds.length, 2746);
+  assert.equal(catalogIds.length, 2874);
   assert.equal(new Set(catalogIds).size, catalogIds.length);
   for (const [chartId, videoId] of Object.entries(catalog.charts)) {
     assert.match(chartId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
@@ -1267,14 +1267,15 @@ test("mobile recommendation cards keep gain on the right and show estimated diff
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.recommendation-mode-tabs button \{[^}]*gap: 4px;[^}]*min-width: 0;[^}]*padding: 8px 3px;/);
 });
 
-test("Recommendations retains its view switch and uses shared player management", async () => {
+test("Recommendations exposes three view tabs and uses shared player management", async () => {
   const page = await readFile(path.join(process.cwd(), "app", "recommendations", "page.tsx"), "utf8");
   const header = await readFile(path.join(process.cwd(), "app", "_components", "site-header.tsx"), "utf8");
   assert.doesNotMatch(page, /<PlayerPicker|id="player-select"/);
   assert.match(page, /<PlayerRequired feature="recommendations"/);
-  assert.match(page, /role="switch"/);
-  assert.match(page, /aria-checked=\{recommendationView === "top50"\}/);
-  assert.match(page, /<span>Recommendations<\/span>[\s\S]*Top 50/);
+  assert.match(page, /RECOMMENDATION_VIEWS: RecommendationView\[\] = \["recommendations", "pro", "top50"\]/);
+  assert.match(page, /role="tablist"/);
+  assert.match(page, /aria-selected=\{recommendationView === view\}/);
+  assert.match(page, /view === "pro" \? "Pro Farming"/);
   assert.match(header, /openChooser/);
   assert.match(header, /href=\{SCORE_SYNC_URL\}/);
 });
