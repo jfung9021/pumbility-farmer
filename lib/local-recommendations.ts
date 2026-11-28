@@ -3,9 +3,12 @@ import path from "node:path";
 
 import {
   chartMatchesRecommendationLevelRange,
+  GENERAL_PUMBILITY_METHOD,
   officialDifficulty,
   RECOMMENDATION_DISPLAY_COUNT,
+  RECOMMENDATION_RANKING_METHOD,
   recommendationDifficultyOptions,
+  recommendationScoreProgress,
 } from "./recommendation-filters.ts";
 import type {
   ModeKey,
@@ -30,6 +33,8 @@ function boundedStandardMode(
       chart,
       modeKey,
       mode.scoringRating,
+      DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL,
+      mode.skillMethod,
     ));
   const filterCandidates = bounded(mode.filterCandidates);
   const topRecommendations = bounded(mode.topRecommendations)
@@ -75,13 +80,13 @@ function boundedRecommendationPlayer(
         filterCandidates: (rawOverall.filterCandidates ?? []).flatMap((candidate) => {
           const source = sourceCandidates.get(candidate.chartId);
           return source
-            ? [{ ...source, projectedGain: candidate.projectedGain }]
+            ? [{ ...source, ...candidate }]
             : [];
         }),
         topRecommendations: rawOverall.topRecommendations.flatMap((candidate) => {
           const source = sourceCandidates.get(candidate.chartId);
           return source
-            ? [{ ...source, projectedGain: candidate.projectedGain }]
+            ? [{ ...source, ...candidate }]
             : [];
         }).slice(0, RECOMMENDATION_DISPLAY_COUNT),
       }
@@ -213,7 +218,7 @@ const COOP_TOP_SCORE_KEYS = new Set([
 ]);
 const DEFAULT_DISPLAY_MINIMUM_OFFICIAL_LEVEL = 16;
 const RECOMMENDATION_UPPER_RADIUS = 1.0;
-const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 28;
+const LOCAL_RECOMMENDATION_SCHEMA_VERSION = 29;
 
 export type LocalRecommendationIndex = {
   schemaVersion?: number;
@@ -293,10 +298,11 @@ function isRecommendationTopScore(value: unknown): value is RecommendationTopSco
       || score.evidenceStatus === "Insufficient"
       || score.evidenceStatus === "Unrated"
     )
-    && typeof score.score === "number"
-    && Number.isInteger(score.score)
-    && score.score >= 0
-    && score.score <= 1_000_000
+    && ((score.type !== "CoOp" && score.score === null)
+      || (typeof score.score === "number"
+        && Number.isInteger(score.score)
+        && score.score >= 0
+        && score.score <= 1_000_000))
     && (score.type === "CoOp"
       ? typeof score.coopRating === "number"
         && Number.isFinite(score.coopRating)
@@ -314,13 +320,37 @@ function hasValidTopScores(modes: unknown): boolean {
   if (!modes || typeof modes !== "object" || Array.isArray(modes)) return false;
   return Object.entries(modes).every(([modeKey, value]) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const topScores = (value as Record<string, unknown>).topScores;
+    const record = value as Record<string, unknown>;
+    const topScores = record.topScores;
     return Array.isArray(topScores)
       && (modeKey === "coop" || topScores.length <= 50)
       && topScores.every((score) => isRecommendationTopScore(score)
         && (modeKey !== "singles" || score.type === "Single")
         && (modeKey !== "doubles" || score.type === "Double")
-        && (modeKey !== "coop" || score.type === "CoOp"));
+        && (modeKey !== "coop" || score.type === "CoOp"))
+      && hasValidRecommendationRanks(record);
+  });
+}
+
+function hasValidRecommendationRanks(mode: Record<string, unknown>): boolean {
+  if (mode.manual || (mode.skillMethod !== GENERAL_PUMBILITY_METHOD
+    && mode.rankingMethod !== RECOMMENDATION_RANKING_METHOD)) return true;
+  const pools = [mode.topRecommendations, ...(mode.filterCandidates === undefined ? [] : [mode.filterCandidates])];
+  return pools.every((pool) => {
+    if (!Array.isArray(pool)) return false;
+    let previousRank = 0;
+    return pool.every((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const row = value as Record<string, unknown>;
+      const nonnegative = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0;
+      if (!nonnegative(row.scoreAtOrAboveTargetCount)
+        || !nonnegative(row.gainRank) || row.gainRank < 1
+        || !nonnegative(row.scoreCountRank) || row.scoreCountRank < 1
+        || row.rankScore !== row.gainRank + row.scoreCountRank
+        || !nonnegative(row.recommendationRank) || row.recommendationRank <= previousRank) return false;
+      previousRank = row.recommendationRank;
+      return true;
+    });
   });
 }
 
@@ -362,8 +392,7 @@ export function validateLocalRecommendationIndex(value: unknown): LocalRecommend
       || typeof chart.songName !== "string"
       || (chart.type !== "Single" && chart.type !== "Double" && chart.type !== "CoOp")
       || typeof chart.level !== "number"
-      || typeof chart.estimatedDifficulty !== "number"
-      || !Number.isFinite(chart.estimatedDifficulty)
+      || !isNullableFiniteNumber(chart.estimatedDifficulty)
     ) {
       throw new LocalRecommendationsValidationError(
         "The local recommendation index contains an invalid chart estimate.",
@@ -512,7 +541,9 @@ function manualMode(
   const maximumEstimatedDifficulty = scoringRating + RECOMMENDATION_UPPER_RADIUS;
   const filterCandidates: RecommendationChart[] = charts
     .filter(
-      (chart) => chart.type === chartType
+      (chart): chart is RecommendationChartEstimate & { estimatedDifficulty: number } => chart.type === chartType
+        && typeof chart.estimatedDifficulty === "number"
+        && Number.isFinite(chart.estimatedDifficulty)
         && chartMatchesRecommendationLevelRange(chart, modeKey, scoringRating),
     )
     .map((chart) => {
@@ -534,24 +565,25 @@ function manualMode(
       };
     })
     .sort((left, right) =>
-      left.estimatedDifficulty - right.estimatedDifficulty
+      (left.estimatedDifficulty ?? Infinity) - (right.estimatedDifficulty ?? Infinity)
       || left.songName.localeCompare(right.songName)
       || left.chartId.localeCompare(right.chartId),
     );
   filterCandidates.sort((left, right) =>
-    right.farmEdge - left.farmEdge
-    || left.estimatedDifficulty - right.estimatedDifficulty
+    (right.farmEdge ?? 0) - (left.farmEdge ?? 0)
+    || (left.estimatedDifficulty ?? Infinity) - (right.estimatedDifficulty ?? Infinity)
     || left.songName.localeCompare(right.songName)
     || left.chartId.localeCompare(right.chartId),
   );
   const defaultCandidates = filterCandidates.filter(
     (chart) => chart.level >= minimumOfficialLevel
+      && chart.estimatedDifficulty !== null
       && chart.estimatedDifficulty <= maximumEstimatedDifficulty,
   );
   const topRecommendations = [...defaultCandidates]
     .sort((left, right) =>
-      right.farmEdge - left.farmEdge
-      || left.estimatedDifficulty - right.estimatedDifficulty
+      (right.farmEdge ?? 0) - (left.farmEdge ?? 0)
+      || (left.estimatedDifficulty ?? Infinity) - (right.estimatedDifficulty ?? Infinity)
       || left.songName.localeCompare(right.songName)
       || left.chartId.localeCompare(right.chartId),
     )
@@ -586,15 +618,15 @@ function manualOverallMode(
     ...(singles.filterCandidates ?? []),
     ...(doubles.filterCandidates ?? []),
   ].sort((left, right) =>
-    right.farmEdge - left.farmEdge
-    || left.estimatedDifficulty - right.estimatedDifficulty
+    (right.farmEdge ?? 0) - (left.farmEdge ?? 0)
+    || (left.estimatedDifficulty ?? Infinity) - (right.estimatedDifficulty ?? Infinity)
     || left.songName.localeCompare(right.songName)
     || left.chartId.localeCompare(right.chartId),
   );
   const topRecommendations = [...sourceRecommendations]
     .sort((left, right) =>
-      right.farmEdge - left.farmEdge
-      || left.estimatedDifficulty - right.estimatedDifficulty
+      (right.farmEdge ?? 0) - (left.farmEdge ?? 0)
+      || (left.estimatedDifficulty ?? Infinity) - (right.estimatedDifficulty ?? Infinity)
       || left.songName.localeCompare(right.songName)
       || left.chartId.localeCompare(right.chartId),
     )
@@ -697,26 +729,10 @@ export function recommendationPlayerList(
       scoreProgress: "modes" in player
         ? {
             singles: {
-              validScoreCount: player.modes.singles?.projectionAvailable
-                ? player.modes.singles?.projectionRatingSourceScoreCount ?? 0
-                : player.modes.singles?.phoenix2ScoreCount
-                  ?? player.modes.singles?.validScoreCount
-                  ?? 0,
-              requiredScoreCount:
-                player.modes.singles?.projectionRatingRequiredScoreCount
-                ?? player.modes.singles?.requiredScoreCount
-                ?? 30,
+              ...recommendationScoreProgress(player.modes.singles),
             },
             doubles: {
-              validScoreCount: player.modes.doubles?.projectionAvailable
-                ? player.modes.doubles?.projectionRatingSourceScoreCount ?? 0
-                : player.modes.doubles?.phoenix2ScoreCount
-                  ?? player.modes.doubles?.validScoreCount
-                  ?? 0,
-              requiredScoreCount:
-                player.modes.doubles?.projectionRatingRequiredScoreCount
-                ?? player.modes.doubles?.requiredScoreCount
-                ?? 30,
+              ...recommendationScoreProgress(player.modes.doubles),
             },
           }
         : player.scoreProgress,

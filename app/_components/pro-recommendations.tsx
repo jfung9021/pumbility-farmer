@@ -26,7 +26,7 @@ function ProChart({chart, rank, overall}: {chart: ProRecommendationChart | ProOv
   const bpm = chart.bpmMin ? chart.bpmMax && chart.bpmMax !== chart.bpmMin ? `${score(chart.bpmMin)}–${score(chart.bpmMax)} BPM` : `${score(chart.bpmMin)} BPM` : null;
   return <li><article className="recommendation-card">
     <div className="recommendation-leading">
-      <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
+      <span className="recommendation-rank">{String(chart.recommendationRank ?? rank).padStart(2, "0")}</span>
       <ChartVideoLink chartId={chart.chartId} difficulty={chart.chartLabel} songName={chart.songName} variant="recommendation" />
     </div>
     <div className="chart-art recommendation-jacket" data-chart-type={chart.type} aria-hidden="true">
@@ -41,9 +41,9 @@ function ProChart({chart, rank, overall}: {chart: ProRecommendationChart | ProOv
           <b aria-hidden="true">!</b><span>Uncommon play</span></span> : null}
       </div>
       <p>{chart.stepArtist || chart.chartLabel}{bpm ? ` · ${bpm}` : ""}</p>
-      <div className="recommendation-tags"><span>{chart.currentScore === null ? "No recorded PB" : <>
+      <div className="recommendation-tags"><span title="Peer results at or above this recommended target score">{chart.scoreAtOrAboveTargetCount} at or above target</span><span>{chart.currentScore === null ? "No recorded PB" : <>
         PB <ResultScore score={chart.currentScore} /> {chart.currentPlate ? <ResultPlate plate={chart.currentPlate} /> : null}
-        {chart.currentPlateEstimated ? " (plate assumed)" : ""}</>}</span></div>
+        </>}</span></div>
     </div>
     <div className="recommendation-value">
       <details className={styles.gainDetails}>
@@ -52,9 +52,11 @@ function ProChart({chart, rank, overall}: {chart: ProRecommendationChart | ProOv
         </summary>
         <div className={styles.gainBreakdown}>
           <b>{chart.chartLabel} · {gainLabel} Top 50</b>
-          <p>Target <ResultScore score={chart.targetScore} grade={chart.targetGrade} /> · assumed {chart.assumedPlate}</p>
+          <p>Target <ResultScore score={chart.targetScore} grade={chart.targetGrade} /> · <ResultPlate plate={chart.assumedPlate} /></p>
           <p>Peer 50th percentile: {score(chart.rawPercentileScore)}</p>
           <p>{chart.peerScoreCount}/{chart.cohortPlayerCount} peer scores{chart.boardPossiblyTruncated ? " · Leaderboard capped" : ""}</p>
+          <p>{chart.scoreAtOrAboveTargetCount} peer results at or above target</p>
+          <p>Gain rank {chart.gainRank} + target-count rank {chart.scoreCountRank} = {chart.rankScore}</p>
           <p>Target chart Pumbility: {pumbility(chart.expectedPumbility)}</p>
           <p>{chart.currentPumbility === null ? "No recorded chart Pumbility" : `Current chart Pumbility: ${pumbility(chart.currentPumbility)}`}</p>
           {overall && "modeProjectedGain" in chart ? <>
@@ -79,7 +81,7 @@ function CapturedPlayerChooser({index, currentKey, mode}: {index: ProPlayersResp
     window.location.assign(url.href);
   };
   return <details className={styles.playerChooser} open={!currentKey}>
-    <summary>Choose an official top-300 player</summary>
+    <summary>Choose an official top-500 player</summary>
     <form onSubmit={open}><label htmlFor={id}>Player</label><div>
       <select id={id} value={chosen} onChange={e => setChosen(e.target.value)}>
         <option value="">Choose an eligible player</option>
@@ -101,13 +103,13 @@ function ModeSummary({result}: {result: Pick<ProModeResult, "baseline" | "cohort
     {baseline ? <>
       <details className={styles.top50}><summary>View {label} {baseline.top50.length === 50 ? "Top 50" : "observed charts"}</summary>
         <p>{baseline.scoreCount} observed charts · {baseline.source === "piuscores" ? "PIUScores" : baseline.source === "mixed" ? "PIUScores + official estimates" : "Official leaderboard estimates"}</p>
-        {baseline.fallbackReason ? <p>{baseline.fallbackReason}</p> : null}
+        {baseline.fallbackReason ? <p>{baseline.fallbackReason.replace(" with assumed plates", "")}</p> : null}
         {cohort?.minimumPumbility !== null && cohort?.minimumPumbility !== undefined && cohort.maximumPumbility !== null ?
           <p>Peer range: {pumbility(cohort.minimumPumbility)}–{pumbility(cohort.maximumPumbility)}.</p> : null}
-        <p>History captured: {sourceDate(baseline.syncedAtUtc)}. Guessed plates are marked “plate assumed”.</p>
+        <p>History captured: {sourceDate(baseline.syncedAtUtc)}.</p>
         <ol>{baseline.top50.map(row => <li key={row.chartId}><span>{row.chartLabel} · {row.songName}</span>
           <span>{row.score !== null ? <ResultScore score={row.score} /> : "Score unknown"} {row.plate ? <ResultPlate plate={row.plate} /> : null}
-            {row.plateEstimated ? " (plate assumed)" : ""} · {pumbility(row.pumbility)}</span></li>)}</ol>
+            · {pumbility(row.pumbility)}</span></li>)}</ol>
       </details>
     </> : null}
     {cohort?.limitedData ? <p className={styles.limited}>Fewer than ten usable peers are available.</p> : null}
@@ -147,7 +149,7 @@ export function ProRecommendations({playerKey, mode, onModeChange}: {
   const ready = data && (mode === "overall" ? data.overall.availableModes.length > 0 && data.overall.baseline?.cutoffPumbility !== null : selected?.status === "ready");
   const summaries: ProModeKey[] = mode === "overall" ? ["singles", "doubles"] : [mode];
   return <div className={styles.workspace} aria-busy={loading}>
-    <p className={styles.intro}>Official overall Top 300 · Phoenix 2 only · S24+ and D25+</p>
+    <p className={styles.intro}>Official overall Top 500 · Phoenix 2 only · S23+ and D24+</p>
     <div className="recommendation-mode-tabs" role="tablist" aria-label="Pro recommendation mode">
       {VIEWS.map((view,i) => <button id={`pro-mode-${view}`} key={view} type="button" role="tab"
         aria-controls="pro-mode-panel" aria-selected={mode === view} tabIndex={mode === view ? 0 : -1}
@@ -166,7 +168,7 @@ export function ProRecommendations({playerKey, mode, onModeChange}: {
           <div><span className={styles.label}>Official overall rank</span><strong>#{data.player.overallRank}</strong></div>
           <div className={styles.playerName}>{data.player.officialDisplayName || data.player.displayName}</div>
         </section> : null}
-        {!data.eligible ? <section className={styles.notice} role="status"><h2>{data.status === "ineligible" ? "Official overall Top 300 required" : "Link your official player"}</h2>
+        {!data.eligible ? <section className={styles.notice} role="status"><h2>{data.status === "ineligible" ? "Official overall Top 500 required" : "Link your official player"}</h2>
           <p>{data.message}</p>{data.status === "identity-unresolved" ? <a href={SCORE_SYNC_URL} target="_blank" rel="noopener noreferrer">Import Phoenix 2 scores on PIUScores ↗</a> : null}</section> : <>
           <div className={styles.modeSummaries}>
             {mode === "overall" ? <ModeSummary result={{mode:"overall",baseline:data.overall.baseline,cohort:null,
@@ -181,7 +183,7 @@ export function ProRecommendations({playerKey, mode, onModeChange}: {
               : <p className={styles.notice}>No observed target currently improves this Top 50.</p>}
           </section> : <p className={styles.notice}>This mode needs at least 50 usable chart observations. Available modes remain usable.</p>}
           <details className={styles.method}><summary>About these targets</summary>
-            <p>Targets use the official peer scores’ 50th percentile, truncated to the earned grade. Assumed plates: MG through 995,000; SG above 995,000; PG at 1,000,000.
+            <p>Targets use the official peer scores’ 50th percentile, truncated to the earned grade. Target plates: MG through 995,000; SG above 995,000; PG at 1,000,000.
               Mode ratings and Top 50 lists use actual Phoenix 2 results where available, with official score estimates filling missing results. Unknown scores are never zero-filled.</p>
             <p>Overall uses the same mode targets, then calculates each expected gain against the reconstructed combined Top 50. Existing Top 50 charts replace their own contribution; other charts replace the 50th contribution. Personal results take precedence, with official leaderboard estimates filling gaps.</p>
             <div className={styles.sourceDates}><span>Official snapshot: {sourceDate(data.snapshotAt)}</span><span>Model built: {sourceDate(data.generatedAtUtc)}</span></div>

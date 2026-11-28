@@ -69,6 +69,8 @@ from phoenix2_pumbility import (
     skill_rating_for_pumbility,
 )
 from phoenix2_sync import sanitize_score
+from general_pumbility import GeneralPumbilityModel
+from recommendation_ranking import RANKING_METHOD, rank_recommendations
 from tier_difficulty import build_tier_metrics, tier_metric_method
 from player_skill_ratings import (
     cleared_chart_ids_by_player, clearing_ratings_by_player_mode,
@@ -4072,8 +4074,10 @@ def build_player_coop_mode(
     *,
     phoenix1_goals: Mapping[str, tuple[int, str]] | None = None,
     include_candidates: bool = True,
+    pumbility_model: GeneralPumbilityModel | None = None,
 ) -> dict[str, Any]:
-    """Build additive Co-op recommendations from ladder and Phoenix 1 goals."""
+    """Keep Co-op goals, ranking gains with observed submitted-score support."""
+    peer_model = pumbility_model or GeneralPumbilityModel.from_snapshot(phoenix2_snapshot)
     catalog, phoenix2_observations = build_coop_observations(
         None, phoenix2_snapshot
     )
@@ -4174,6 +4178,7 @@ def build_player_coop_mode(
                 ),
                 "expectedCoopRating": round(expected, 2),
                 "projectedGain": round(gain, 2),
+                "scoreAtOrAboveTargetCount": peer_model.count_scores_at_least(player_id, chart_id, score),
                 "projectedScore": score,
                 "scoreProjectionSource": projection_source,
                 "scoreProjectionSupportCount": projection_support_count,
@@ -4186,23 +4191,11 @@ def build_player_coop_mode(
                 "played": existing is not None,
             }
         )
-    candidates.sort(
-        key=lambda row: (
-            -float(row["projectedGain"]),
-            (
-                float(row["difficultyModelContinuous"])
-                if isinstance(row.get("difficultyModelContinuous"), (int, float))
-                and math.isfinite(float(row["difficultyModelContinuous"]))
-                else float(row["estimatedDifficulty"])
-            ),
-            -float(row["expectedCoopRating"]),
-            str(row.get("songName") or "").casefold(),
-            str(row.get("chartId") or ""),
-        )
-    )
+    candidates = rank_recommendations(candidates)
     top_recommendations = candidates[:TOP_RECOMMENDATION_COUNT]
     return {
         "eligible": True,
+        "rankingMethod": RANKING_METHOD,
         "validScoreCount": len(player_scores),
         "requiredScoreCount": 0,
         "projectionAvailable": bool(candidates),
@@ -4217,12 +4210,29 @@ def build_player_coop_mode(
     }
 
 
+
+def general_recommendation_method(peer_model: GeneralPumbilityModel) -> dict[str, Any]:
+    """Public source and policy identity, shared by bulk builds and refreshes."""
+    return {
+        **peer_model.method_metadata(),
+        "catalog": "Phoenix 2 current PIUScores catalog",
+        "currentStateSource": "Phoenix 2 submitted PIUScores only",
+        "actualPumbilitySource": "upstream",
+        "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
+        "topPumbilityCount": TOP_PUMBILITY_COUNT,
+        "coopScoreProjectionModel": COOP_SCORE_PROJECTION_MODEL_NAME,
+        "coopScoreProjection": "the higher grade-boundary goal from the fixed whole-number Co-op difficulty ladder and normalized Phoenix 1 personal best, using a Fair Game plate; catalog additions do not rebalance folder goals",
+        "coopGoalGradeByDifficulty": {str(key): value for key, value in COOP_GOAL_GRADE_BY_DIFFICULTY.items()},
+        "coopRating": "sum of unique current Phoenix 2 Co-op chart ratings",
+    }
+
+
 def build_player_recommendation(
     player_id: str,
     phoenix2_snapshot: Mapping[str, Any],
     combined_charts: Sequence[Mapping[str, Any]],
     phoenix2_slopes: Mapping[str, float],
-    score_response_model: ScoreResponseModel | None = None,
+    score_response_model: GeneralPumbilityModel | ScoreResponseModel | None = None,
     *,
     phoenix1_snapshot: Mapping[str, Any] | None = None,
     prepared_phoenix2: tuple[pd.DataFrame, pd.DataFrame] | None = None,
@@ -4233,613 +4243,39 @@ def build_player_recommendation(
     plate_model: PlateProjectionModel | None = None,
     include_candidates: bool = True,
 ) -> dict[str, Any]:
-    """Build recommendations with historical rating and current-state separation."""
-    target_charts = phoenix2_snapshot.get("charts", [])
-    if phoenix1_cleared_chart_ids is None:
-        phoenix1_cleared_chart_ids = cleared_chart_ids_by_player(
-            phoenix1_snapshot or {}, target_charts,
-        ).get(str(player_id), set())
-    if phoenix2_cleared_chart_ids is None:
-        phoenix2_cleared_chart_ids = cleared_chart_ids_by_player(
-            phoenix2_snapshot, target_charts,
-        ).get(str(player_id), set())
-    player_clear_ids = phoenix1_cleared_chart_ids | phoenix2_cleared_chart_ids
-    catalog, scores = prepared_phoenix2 or _clean_snapshot_frames(phoenix2_snapshot)
-    if prepared_phoenix1 is not None:
-        phoenix1_catalog, phoenix1_scores = prepared_phoenix1
-    elif phoenix1_snapshot is not None:
-        phoenix1_catalog, phoenix1_scores = _prepare_phoenix1_rating_frames(
-            phoenix1_snapshot, catalog
-        )
-    else:
-        phoenix1_catalog = catalog.iloc[0:0].copy()
-        phoenix1_scores = scores.iloc[0:0].copy()
-
-    if plate_model is None:
-        plate_model = PlateProjectionModel(phoenix1_snapshot or {}, phoenix2_snapshot)
-
-    player_scores = scores[scores["playerId"] == str(player_id)].copy()
-    player_phoenix1_scores = phoenix1_scores[
-        phoenix1_scores["playerId"] == str(player_id)
-    ].copy()
-    modes: dict[str, Any] = {}
-    catalog_by_id = {
-        str(row["chartId"]): row for row in catalog.to_dict(orient="records")
-    }
-    chart_analysis_by_id = {
-        str(row["chartId"]): dict(row)
-        for row in combined_charts
-        if row.get("chartId") is not None
-    }
-    if phoenix1_goals is None:
-        valid_chart_ids = set(catalog["chartId"].astype(str))
-        if phoenix1_snapshot is not None:
-            normalizations = build_phoenix1_score_normalizations(
-                [
-                    row
-                    for row in phoenix1_snapshot.get("charts", [])
-                    if isinstance(row, Mapping)
-                ],
-                [
-                    row
-                    for row in phoenix2_snapshot.get("charts", [])
-                    if isinstance(row, Mapping)
-                ],
-            )
-            goals_by_player = _phoenix1_goals_by_player(
-                [
-                    row
-                    for row in phoenix1_snapshot.get("scores", [])
-                    if isinstance(row, Mapping)
-                ],
-                valid_chart_ids,
-                normalizations=normalizations,
-            )
-        else:
-            goals_by_player = _phoenix1_goals_by_player(
-                player_phoenix1_scores.to_dict(orient="records"),
-                valid_chart_ids,
-            )
-        phoenix1_goals = goals_by_player.get(str(player_id), {})
-    overall_source_rows: dict[str, list[dict[str, Any]]] = {
-        "singles": [],
-        "doubles": [],
-    }
-    overall_filter_rows: dict[str, list[dict[str, Any]]] = {
-        "singles": [],
-        "doubles": [],
-    }
-
-    chart_type_by_id = {
-        str(row["chartId"]): str(row["type"])
-        for row in catalog[["chartId", "type"]].to_dict(orient="records")
-        if row.get("type") in MODE_TYPES
-    }
-    overall_scores = player_scores[
-        player_scores["chartId"].astype(str).isin(set(chart_type_by_id))
-    ].copy()
-    overall_scores = overall_scores.sort_values(
-        ["pumbility", "score", "chartId"],
-        ascending=[False, False, True],
-        kind="mergesort",
+    """Use submitted Phoenix 2 mode Pumbility; keep Co-op's independent policy."""
+    peer_model = (
+        score_response_model if isinstance(score_response_model, GeneralPumbilityModel)
+        else GeneralPumbilityModel.from_snapshot(phoenix2_snapshot)
     )
-    overall_values = [float(value) for value in overall_scores["pumbility"]]
-    overall_current_total = _top_total(overall_values)
-    overall_top_scores = _public_top_scores(
-        overall_scores,
-        catalog_by_id,
-        chart_analysis_by_id,
-    )
-    overall_existing_by_chart = {
-        str(row["chartId"]): float(row["pumbility"])
-        for row in overall_scores.to_dict(orient="records")
-    }
-    overall_top50_chart_ids = set(
-        overall_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str)
-    )
-    overall_top50_cutoff = (
-        float(overall_scores.iloc[TOP_PUMBILITY_COUNT - 1]["pumbility"])
-        if len(overall_scores) >= TOP_PUMBILITY_COUNT
-        else None
-    )
-    overall_top50_mode_counts = {"singles": 0, "doubles": 0}
-    for chart_id in overall_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str):
-        chart_type = chart_type_by_id.get(chart_id)
-        if chart_type in MODE_TYPES:
-            overall_top50_mode_counts[_mode_key(chart_type)] += 1
-
-    def public_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in row.items()
-            if not str(key).startswith("_")
-        }
-
-    for chart_type in MODE_TYPES:
-        mode_key = _mode_key(chart_type)
-        clearing_skill = clearing_skill_for_chart_ids(
-            player_clear_ids, target_charts, chart_type,
-        )
-        mode_ids = set(catalog.loc[catalog["type"] == chart_type, "chartId"])
-        mode_scores = player_scores[player_scores["chartId"].isin(mode_ids)].copy()
-        mode_scores = mode_scores.sort_values(
-            ["pumbility", "score", "chartId"],
-            ascending=[False, False, True],
-            kind="mergesort",
-        )
-        phoenix1_mode_ids = set(
-            phoenix1_catalog.loc[phoenix1_catalog["type"] == chart_type, "chartId"]
-        )
-        phoenix1_mode_scores = player_phoenix1_scores[
-            player_phoenix1_scores["chartId"].isin(phoenix1_mode_ids)
-        ].copy()
-        phoenix1_mode_scores = phoenix1_mode_scores.sort_values(
-            ["pumbility", "score", "chartId"],
-            ascending=[False, False, True],
-            kind="mergesort",
-        )
-
-        phoenix2_score_count = len(mode_scores)
-        current_values = [float(value) for value in mode_scores["pumbility"]]
-        current_total = _top_total(current_values)
-        top_scores = _public_top_scores(
-            mode_scores,
-            catalog_by_id,
-            chart_analysis_by_id,
-        )
-        existing_by_chart = {
-            str(row["chartId"]): float(row["pumbility"])
-            for row in mode_scores.to_dict(orient="records")
-        }
-        top50_chart_ids = set(
-            mode_scores.iloc[:TOP_PUMBILITY_COUNT]["chartId"].astype(str)
-        )
-        top50_cutoff = (
-            float(mode_scores.iloc[TOP_PUMBILITY_COUNT - 1]["pumbility"])
-            if len(mode_scores) >= TOP_PUMBILITY_COUNT
-            else None
-        )
-        rating_source, rating_scores = _select_rating_scores(
-            phoenix1_mode_scores, mode_scores
-        )
-
-        if rating_scores.empty:
-            modes[mode_key] = {
-                **clearing_skill,
-                "eligible": False,
-                "validScoreCount": int(phoenix2_score_count),
-                "requiredScoreCount": 1,
-                "phoenix2ScoreCount": int(phoenix2_score_count),
-                "phoenix2ScoreThreshold": PHOENIX2_RATING_SCORE_THRESHOLD,
-                "ratingSource": None,
-                "reason": (
-                    "At least one valid Phoenix 2 score or 20 valid Phoenix 1 "
-                    "scores are required in this mode."
-                ),
-                "projectionAvailable": False,
-                "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
-                "currentTop50Pumbility": round(current_total, 3),
-                "currentTop50CutoffPumbility": (
-                    round(top50_cutoff, 3) if top50_cutoff is not None else None
-                ),
-                "currentTop50Count": min(
-                    int(phoenix2_score_count), TOP_PUMBILITY_COUNT
-                ),
-                "topScores": top_scores,
-                **({"filterCandidates": []} if include_candidates else {}),
-                "topRecommendations": [],
-            }
-            continue
-
-        rating_baseline, rating_start, rating_end, rating_label = _rating_window(
-            rating_scores
-        )
-        scoring_rating = _skill_rating_from_rows(
-            rating_baseline,
-            chart_type,
-            start_rank=1,
-            end_rank=len(rating_baseline),
-        )
-        if scoring_rating is None:
-            raise ValueError("A selected recommendation rating window is invalid.")
-        official_level_center = math.floor(scoring_rating)
-        official_level_low = max(
-            MIN_TARGET_LEVEL,
-            official_level_center - CANDIDATE_OFFICIAL_LEVEL_RADIUS,
-        )
-        official_level_high = (
-            official_level_center + CANDIDATE_OFFICIAL_LEVEL_RADIUS
-        )
-
-        projection_rating_source, projection_rating_scores = (
-            _select_projection_rating_scores(phoenix1_mode_scores, mode_scores)
-        )
-        projection_rating, projection_rating_leave_one_out = _rating_lookup(
-            projection_rating_scores, chart_type
-        )
-        projection_start = PROJECTION_RATING_START_RANK
-        projection_end = PROJECTION_RATING_END_RANK
-        projection_label = "ranks 11-30"
-        projection_baseline = (
-            projection_rating_scores.iloc[projection_start - 1 : projection_end]
-            if projection_rating is not None
-            else projection_rating_scores.iloc[0:0]
-        )
-        baseline_pb = (
-            float(projection_baseline["pumbility"].mean())
-            if not projection_baseline.empty
-            else None
-        )
-        slope = phoenix2_slopes.get(mode_key)
-
-        filter_candidates: list[dict[str, Any]] = []
-        for chart in combined_charts:
-            if chart.get("type") != chart_type:
-                continue
-            chart_level = int(chart.get("level") or 0)
-            if chart_level < official_level_low or chart_level > official_level_high:
-                continue
-            estimate = chart.get("estimatedDifficulty")
-            if estimate is None or not math.isfinite(float(estimate)):
-                continue
-            estimate = float(estimate)
-            farm_edge = float(chart["level"]) + 0.5 - estimate
-            chart_id = str(chart["chartId"])
-            existing = existing_by_chart.get(chart_id)
-            candidate_projection_rating = projection_rating_leave_one_out.get(
-                chart_id, projection_rating
-            )
-            if candidate_projection_rating is None:
-                candidate_projection_rating = projection_rating
-            projection = (
-                score_response_model.predict(
-                    str(player_id),
-                    mode_key,
-                    candidate_projection_rating,
-                    estimate,
-                    chart_id,
-                )
-                if score_response_model is not None
-                and candidate_projection_rating is not None
-                else ScoreProjectionResult(None, "population-crossfit", 0, "unavailable")
-            )
-            engine_score, engine_grade = _recommendation_goal_from_projected_score(
-                projection.score
-            )
-            phoenix1_score, phoenix1_grade = (phoenix1_goals or {}).get(
-                chart_id,
-                (None, None),
-            )
-            if phoenix1_score is not None and (
-                engine_score is None or phoenix1_score > engine_score
-            ):
-                projected_score = phoenix1_score
-                projected_grade = phoenix1_grade
-                projection_source: str | None = "phoenix1-personal-best"
-                projection_support_count: int | None = 1
-                projection_confidence = "high"
-            else:
-                projected_score = engine_score
-                projected_grade = engine_grade
-                projection_source = (
-                    projection.source if engine_score is not None else None
-                )
-                projection_support_count = (
-                    projection.support_count if engine_score is not None else None
-                )
-                projection_confidence = (
-                    projection.confidence if engine_score is not None else "unavailable"
-                )
-            projected_plate: str | None = None
-            projected_plate_probability: float | None = None
-            plate_projection_source: str | None = None
-            expected: float | None = None
-            gain: float | None = None
-            overall_gain: float | None = None
-            if projected_grade is not None:
-                distribution = plate_model.distribution(
-                    str(player_id), chart_type, projected_grade
-                )
-                projected_plate = distribution.median_plate
-                projected_plate_probability = distribution.probabilities[projected_plate]
-                plate_projection_source = distribution.source
-                expected = phoenix2_pumbility(
-                    chart_type,
-                    int(chart["level"]),
-                    projected_grade,
-                    projected_plate,
-                )
-                gain = _top50_marginal_gain(
-                    expected,
-                    existing_pumbility=existing,
-                    existing_in_top50=chart_id in top50_chart_ids,
-                    current_score_count=len(mode_scores),
-                    cutoff=top50_cutoff,
-                )
-                overall_existing = overall_existing_by_chart.get(chart_id)
-                overall_gain = _top50_marginal_gain(
-                    expected,
-                    existing_pumbility=overall_existing,
-                    existing_in_top50=chart_id in overall_top50_chart_ids,
-                    current_score_count=len(overall_scores),
-                    cutoff=overall_top50_cutoff,
-                )
-            phoenix1_gain: float | None = None
-            phoenix1_overall_gain: float | None = None
-            if phoenix1_grade is not None:
-                if phoenix1_grade == projected_grade and expected is not None:
-                    phoenix1_expected = expected
-                else:
-                    phoenix1_distribution = plate_model.distribution(
-                        str(player_id), chart_type, phoenix1_grade
-                    )
-                    phoenix1_expected = phoenix2_pumbility(
-                        chart_type,
-                        int(chart["level"]),
-                        phoenix1_grade,
-                        phoenix1_distribution.median_plate,
-                    )
-                phoenix1_gain = _top50_marginal_gain(
-                    phoenix1_expected,
-                    existing_pumbility=existing,
-                    existing_in_top50=chart_id in top50_chart_ids,
-                    current_score_count=len(mode_scores),
-                    cutoff=top50_cutoff,
-                )
-                overall_existing = overall_existing_by_chart.get(chart_id)
-                phoenix1_overall_gain = _top50_marginal_gain(
-                    phoenix1_expected,
-                    existing_pumbility=overall_existing,
-                    existing_in_top50=chart_id in overall_top50_chart_ids,
-                    current_score_count=len(overall_scores),
-                    cutoff=overall_top50_cutoff,
-                )
-            filter_candidates.append(
-                {
-                    **dict(chart),
-                    "distanceFromRating": round(estimate - scoring_rating, 6),
-                    "farmEdge": round(farm_edge, 6),
-                    "existingPumbility": (
-                        round(existing, 3) if existing is not None else None
-                    ),
-                    "expectedPumbility": (
-                        round(expected, 3) if expected is not None else None
-                    ),
-                    "projectedGain": round(gain, 3) if gain is not None else None,
-                    "_overallProjectedGain": (
-                        round(overall_gain, 3) if overall_gain is not None else None
-                    ),
-                    "_phoenix1ModeTop50Exception": bool(
-                        phoenix1_gain is not None and phoenix1_gain > 0
-                    ),
-                    "_phoenix1OverallTop50Exception": bool(
-                        phoenix1_overall_gain is not None
-                        and phoenix1_overall_gain > 0
-                    ),
-                    "projectedScore": projected_score,
-                    "scoreProjectionSource": projection_source,
-                    "scoreProjectionSupportCount": projection_support_count,
-                    "scoreProjectionConfidence": projection_confidence,
-                    "projectedGrade": projected_grade,
-                    "projectedPlate": projected_plate,
-                    "projectedPlateCode": (
-                        PLATE_CODES[projected_plate] if projected_plate else None
-                    ),
-                    "projectedPlateProbability": (
-                        round(projected_plate_probability, 6)
-                        if projected_plate_probability is not None
-                        else None
-                    ),
-                    "plateProjectionSource": plate_projection_source,
-                    "played": existing is not None,
-                }
-            )
-        projection_available = any(
-            row.get("projectedScore") is not None for row in filter_candidates
-        )
-        if projection_available:
-            ranked_filter_candidates = sorted(
-                filter_candidates,
-                key=_projected_gain_sort_key,
-            )
-        else:
-            ranked_filter_candidates = sorted(
-                filter_candidates,
-                key=lambda row: (
-                    -float(row["farmEdge"]),
-                    float(row["estimatedDifficulty"]),
-                    str(row["songName"]).casefold(),
-                    str(row["chartId"]),
-                ),
-            )
-        default_candidates = [
-            row
-            for row in ranked_filter_candidates
-            if int(row.get("level") or 0) >= MIN_TARGET_LEVEL
-            and (
-                float(row["estimatedDifficulty"])
-                <= scoring_rating + RECOMMENDATION_RADIUS
-                or bool(row.get("_phoenix1ModeTop50Exception"))
-            )
-        ]
-        top = default_candidates[:TOP_RECOMMENDATION_COUNT]
-
-        overall_source_rows[mode_key] = [
-            dict(row)
-            for row in ranked_filter_candidates
-            if float(row["estimatedDifficulty"])
-            <= scoring_rating + RECOMMENDATION_RADIUS
-            or bool(row.get("_phoenix1OverallTop50Exception"))
-        ]
-        overall_filter_rows[mode_key] = [
-            dict(row) for row in ranked_filter_candidates
-        ]
-
-        modes[mode_key] = {
-            **clearing_skill,
-            "eligible": True,
-            "validScoreCount": int(phoenix2_score_count),
-            "phoenix2ScoreCount": int(phoenix2_score_count),
-            "phoenix2ScoreThreshold": PHOENIX2_RATING_SCORE_THRESHOLD,
-            "ratingSource": rating_source,
-            "ratingSourceScoreCount": int(len(rating_scores)),
-            "ratingBaselineRanks": [rating_start, rating_end],
-            "ratingBaselineLabel": rating_label,
-            "baselineRanks": [projection_start, projection_end],
-            "baselineLabel": projection_label,
-            "baselinePumbility": (
-                round(baseline_pb, 3) if baseline_pb is not None else None
-            ),
-            "scoringRating": round(scoring_rating, 3),
-            "projectionRating": (
-                round(projection_rating, 3)
-                if projection_rating is not None
-                else None
-            ),
-            "projectionRatingSource": projection_rating_source,
-            "projectionRatingSourceScoreCount": int(len(projection_rating_scores)),
-            "projectionRatingRequiredScoreCount": PROJECTION_RATING_SCORE_THRESHOLD,
-            "projectionRatingRanks": [projection_start, projection_end],
-            "projectionRatingLabel": projection_label,
-            "ratingReferenceGrade": SKILL_RATING_REFERENCE_GRADE,
-            "ratingReferencePlate": SKILL_RATING_REFERENCE_PLATE,
-            "ratingReferenceMultiplier": round(
-                SKILL_RATING_REFERENCE_MULTIPLIER, 6
-            ),
-            "projectionAvailable": projection_available,
-            "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
-            "pumbilityPerLevel": (
-                round(float(slope), 6) if slope is not None else None
-            ),
-            "currentTop50Pumbility": round(current_total, 3),
-            "currentTop50CutoffPumbility": (
-                round(top50_cutoff, 3) if top50_cutoff is not None else None
-            ),
-            "currentTop50Count": min(
-                int(phoenix2_score_count), TOP_PUMBILITY_COUNT
-            ),
-            "topScores": top_scores,
-            "candidateRange": [
-                None,
-                round(scoring_rating + RECOMMENDATION_RADIUS, 3),
-            ],
-            "candidateCount": len(default_candidates),
-            "filterCandidateCount": len(ranked_filter_candidates),
-            **(
-                {
-                    "filterCandidates": [
-                        public_candidate(row) for row in ranked_filter_candidates
-                    ]
-                }
-                if include_candidates
-                else {}
-            ),
-            "topRecommendations": [public_candidate(row) for row in top],
-        }
-
-    modes["coop"] = build_player_coop_mode(
+    result = peer_model.build_player(
         str(player_id),
-        phoenix2_snapshot,
-        combined_charts,
-        phoenix1_goals=phoenix1_goals,
+        scores=phoenix2_snapshot.get("scores", []),
+        chart_annotations=combined_charts,
+        chart_catalog=phoenix2_snapshot.get("charts", []),
         include_candidates=include_candidates,
+        player_synced_at_utc=phoenix2_snapshot.get("lastSyncedAtUtc"),
     )
-
-    source_mode_eligibility = {
-        mode_key: bool(modes.get(mode_key, {}).get("eligible"))
-        for mode_key in ("singles", "doubles")
-    }
-    source_recommendation_counts = {
-        mode_key: len(modes.get(mode_key, {}).get("topRecommendations", []))
-        for mode_key in ("singles", "doubles")
-    }
-    overall_candidates: list[dict[str, Any]] = []
-    for mode_key in ("singles", "doubles"):
-        if not source_mode_eligibility[mode_key]:
-            continue
-        for source in overall_source_rows[mode_key]:
-            row = public_candidate(source)
-            row["projectedGain"] = source.get("_overallProjectedGain")
-            overall_candidates.append(row)
-
-    overall_projection_available = any(
-        row.get("projectedScore") is not None for row in overall_candidates
-    )
-    if overall_projection_available:
-        overall_top = sorted(
-            overall_candidates,
-            key=_projected_gain_sort_key,
-        )[:TOP_RECOMMENDATION_COUNT]
-    else:
-        overall_top = sorted(
-            overall_candidates,
-            key=lambda row: (
-                -float(row["farmEdge"]),
-                float(row["estimatedDifficulty"]),
-                str(row["songName"]).casefold(),
-                str(row["chartId"]),
-            ),
-        )[:TOP_RECOMMENDATION_COUNT]
-
-    overall_filter_candidates: list[dict[str, Any]] = []
-    for mode_key in ("singles", "doubles"):
-        if not source_mode_eligibility[mode_key]:
-            continue
-        for source in overall_filter_rows[mode_key]:
-            row = public_candidate(source)
-            row["projectedGain"] = source.get("_overallProjectedGain")
-            overall_filter_candidates.append(row)
-    if overall_projection_available:
-        overall_filter_candidates.sort(key=_projected_gain_sort_key)
-    else:
-        overall_filter_candidates.sort(
-            key=lambda row: (
-                -float(row["farmEdge"]),
-                float(row["estimatedDifficulty"]),
-                str(row["songName"]).casefold(),
-                str(row["chartId"]),
-            )
+    if phoenix1_goals is None:
+        source = phoenix1_snapshot or {}
+        valid_ids = {str(row.get("id", row.get("chartId", ""))) for row in phoenix2_snapshot.get("charts", [])}
+        normalizations = build_phoenix1_score_normalizations(
+            [row for row in source.get("charts", []) if isinstance(row, Mapping)],
+            [row for row in phoenix2_snapshot.get("charts", []) if isinstance(row, Mapping)],
         )
+        phoenix1_goals = _phoenix1_goals_by_player(
+            [row for row in source.get("scores", []) if isinstance(row, Mapping)],
+            valid_ids,
+            normalizations=normalizations,
+        ).get(str(player_id), {})
+    result["playerKey"] = public_player_key(player_id)
+    result["modes"]["coop"] = build_player_coop_mode(
+        str(player_id), phoenix2_snapshot, combined_charts,
+        phoenix1_goals=phoenix1_goals, include_candidates=include_candidates,
+        pumbility_model=peer_model,
+    )
+    return result
 
-    overall_eligible = any(source_mode_eligibility.values())
-    modes["overall"] = {
-        "eligible": overall_eligible,
-        "validScoreCount": int(len(overall_scores)),
-        "phoenix2ScoreCount": int(len(overall_scores)),
-        "requiredScoreCount": 1,
-        "projectionAvailable": overall_projection_available,
-        "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
-        "currentTop50Pumbility": round(overall_current_total, 3),
-        "currentTop50CutoffPumbility": (
-            round(overall_top50_cutoff, 3)
-            if overall_top50_cutoff is not None
-            else None
-        ),
-        "currentTop50Count": min(len(overall_scores), TOP_PUMBILITY_COUNT),
-        "topScores": overall_top_scores,
-        "top50ModeCounts": overall_top50_mode_counts,
-        "sourceModeEligibility": source_mode_eligibility,
-        "sourceRecommendationCounts": source_recommendation_counts,
-        "candidateCount": len(overall_candidates),
-        "filterCandidateCount": len(overall_filter_candidates),
-        **(
-            {"filterCandidates": overall_filter_candidates}
-            if include_candidates
-            else {}
-        ),
-        "topRecommendations": overall_top,
-        **(
-            {}
-            if overall_eligible
-            else {
-                "reason": (
-                    "At least one mode needs a valid Phoenix 2 score or 20 valid "
-                    "Phoenix 1 scores before Overall recommendations are available."
-                )
-            }
-        ),
-    }
-    return {"playerKey": public_player_key(player_id), "modes": modes}
 
 
 def build_recommendation_index(
@@ -4852,6 +4288,7 @@ def build_recommendation_index(
     generation_key: str | None = None,
     shard_writer: Callable[[int, Mapping[str, Any]], None] | None = None,
     shard_size: int = RECOMMENDATION_SHARD_SIZE,
+    pumbility_model: GeneralPumbilityModel | None = None,
 ) -> dict[str, Any]:
     if (generation_key is None) != (shard_writer is None):
         raise ValueError("Recommendation sharding requires a generation key and writer.")
@@ -4865,33 +4302,19 @@ def build_recommendation_index(
         phoenix2_slopes = built_slopes
     charts_for_players = _recommendation_chart_rows(combined_charts)
     slopes = dict(phoenix2_slopes)
-    score_response_model, score_projection_metadata = fit_score_response_model(
-        phoenix1_snapshot,
-        phoenix2_snapshot,
-        charts_for_players,
+    peer_model = pumbility_model or GeneralPumbilityModel.from_snapshot(phoenix2_snapshot)
+    scores_by_player: dict[str, list[Mapping[str, Any]]] = {}
+    for score in phoenix2_snapshot.get("scores", []):
+        if isinstance(score, Mapping):
+            scores_by_player.setdefault(str(score.get("playerId") or ""), []).append(score)
+    source_normalizations = build_phoenix1_score_normalizations(
+        [row for row in phoenix1_snapshot.get("charts", []) if isinstance(row, Mapping)],
+        [row for row in phoenix2_snapshot.get("charts", []) if isinstance(row, Mapping)],
     )
-    prepared_phoenix2 = _clean_snapshot_frames(phoenix2_snapshot)
-    score_normalizations = _normalizations_from_frames(
-        _clean_snapshot_frames(phoenix1_snapshot)[0], prepared_phoenix2[0]
-    )
-    phoenix1_goals_by_player = _phoenix1_goals_by_player(
-        [
-            score
-            for score in phoenix1_snapshot.get("scores", [])
-            if isinstance(score, Mapping)
-        ],
-        set(prepared_phoenix2[0]["chartId"].astype(str)),
-        normalizations=score_normalizations,
-    )
-    prepared_phoenix1 = _prepare_phoenix1_rating_frames(
-        phoenix1_snapshot, prepared_phoenix2[0]
-    )
-    plate_model = PlateProjectionModel(phoenix1_snapshot, phoenix2_snapshot)
-    phoenix1_clear_ids = cleared_chart_ids_by_player(
-        phoenix1_snapshot, phoenix2_snapshot.get("charts", []),
-    )
-    phoenix2_clear_ids = cleared_chart_ids_by_player(
-        phoenix2_snapshot, phoenix2_snapshot.get("charts", []),
+    valid_ids = {str(row.get("id", row.get("chartId", ""))) for row in phoenix2_snapshot.get("charts", [])}
+    coop_goals = _phoenix1_goals_by_player(
+        [row for row in phoenix1_snapshot.get("scores", []) if isinstance(row, Mapping)],
+        valid_ids, normalizations=source_normalizations,
     )
     players = phoenix2_snapshot.get("players", [])
     named_players = [
@@ -4919,16 +4342,11 @@ def build_recommendation_index(
         username = str(row["username"]).strip()
         recommendation = build_player_recommendation(
             player_id,
-            phoenix2_snapshot,
+            {**phoenix2_snapshot, "scores": scores_by_player.get(player_id, []), "lastSyncedAtUtc": row.get("lastSyncedAtUtc")},
             charts_for_players,
             slopes,
-            score_response_model,
-            prepared_phoenix2=prepared_phoenix2,
-            prepared_phoenix1=prepared_phoenix1,
-            phoenix1_cleared_chart_ids=phoenix1_clear_ids.get(player_id, set()),
-            phoenix2_cleared_chart_ids=phoenix2_clear_ids.get(player_id, set()),
-            phoenix1_goals=phoenix1_goals_by_player.get(player_id, {}),
-            plate_model=plate_model,
+            peer_model,
+            phoenix1_goals=coop_goals.get(player_id, {}),
             include_candidates=True,
         )
         suffix = recommendation["playerKey"][-4:]
@@ -4954,6 +4372,10 @@ def build_recommendation_index(
                     mode: bool(details.get("eligible"))
                     for mode, details in recommendation.get("modes", {}).items()
                     if mode in {"singles", "doubles", "coop"}
+                },
+                "scoreProgress": {
+                    mode: {"validScoreCount": peer_model.player_counts(player_id).get(mode, 0), "requiredScoreCount": 50}
+                    for mode in ("singles", "doubles")
                 },
                 "shard": shard_number,
             }
@@ -4985,76 +4407,7 @@ def build_recommendation_index(
     payload = {
         "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
         "generatedAtUtc": generated_at,
-        "method": {
-            "catalog": "Phoenix 2 authoritative catalog",
-            "overlapRule": "Phoenix 2 replaces Phoenix 1 for population-model evidence and current state; a normalized Phoenix 1 personal best remains a recommendation-goal floor on overlapping charts",
-            "phoenix1RerateHandling": "Phoenix 1 rating rows use current Phoenix 2 chart levels and recompute Pumbility from the raw score, Phoenix 2 grade boundaries, and recorded plate",
-            "crossVersionNormalization": "Phoenix 1 raw scores use PIUScores catalog-derived note-count normalization; chart-difficulty evidence then uses version- and mode-normalized residuals, and player ratings use Phoenix 2-formula Pumbility in both versions",
-            "difficultyDeltaScale": DIFFICULTY_DELTA_SCALE,
-            "folderRangeNormalization": {
-                "method": "one-sided expected-normal-maximum order-statistic compression",
-                "referenceMeasuredCharts": FOLDER_RANGE_REFERENCE_CHARTS,
-                "formula": "min(1, expectedNormalMax(reference) / expectedNormalMax(measured charts in folder))",
-                "expandsFolders": False,
-            },
-            "phoenix1ScoreOverrides": phoenix1_score_overrides_metadata(
-                score_normalizations
-            ),
-            "pumbilityPerLevel": slopes,
-            "scoreProjectionCoverage": score_projection_metadata,
-            "scoreProjectionData": "joined Phoenix 1 + Phoenix 2 scores normalized with the Phoenix 2 chart catalog and grade-and-plate Pumbility formula, with Phoenix 2 precedence for overlapping player/chart rows",
-            "baselineRanks": [BASELINE_START_RANK, BASELINE_END_RANK],
-            "recommendationRatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
-            "projectionRatingRanks": [
-                PROJECTION_RATING_START_RANK,
-                PROJECTION_RATING_END_RANK,
-            ],
-            "phoenix1RatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
-            "phoenix2RatingRanks": [1, RECOMMENDATION_RATING_SCORE_COUNT],
-            "phoenix2RatingScoreThreshold": PHOENIX2_RATING_SCORE_THRESHOLD,
-            "projectionRatingScoreThreshold": PROJECTION_RATING_SCORE_THRESHOLD,
-            "ratingReference": "continuous chart level whose Phoenix 2 S with Fair Game Pumbility equals the selected window's average Pumbility",
-            "ratingReferenceGrade": SKILL_RATING_REFERENCE_GRADE,
-            "ratingReferencePlate": SKILL_RATING_REFERENCE_PLATE,
-            "ratingReferenceMultiplier": SKILL_RATING_REFERENCE_MULTIPLIER,
-            "ratingSource": "the displayed rating and recommendation ceiling use Phoenix 2 top 20 at 20 valid scores; otherwise Phoenix 1 top 20 when available, then partial Phoenix 2",
-            "projectionRatingSource": "score projections use Phoenix 2 ranks 11-30 at 30 valid scores; otherwise Phoenix 1 ranks 11-30 when all 30 are available",
-            "shortHistoryBaseline": "a mode without a complete 30-score Phoenix 2 or Phoenix 1 source can still use normalized Phoenix 1 personal-best goals; other charts keep farm-edge ordering without projected scores",
-            "recommendationGoalPolicy": RECOMMENDATION_GOAL_POLICY,
-            "recommendationGoal": "truncate both the engine estimate and normalized Phoenix 1 personal best to the lower boundary of the earned Phoenix 2 letter grade, then use the higher goal; exact ties retain engine provenance",
-            "candidateUpperRadius": RECOMMENDATION_RADIUS,
-            "phoenix1Top50DifficultyException": "a normalized Phoenix 1 personal-best goal with positive marginal gain may bypass only the scoring-rating-plus-one estimated-difficulty ceiling in Single, Double, or the shared Overall pool",
-            "candidateLowerBound": None,
-            "candidateOfficialLevelWindow": {
-                "center": "floor(scoringRating)",
-                "radius": CANDIDATE_OFFICIAL_LEVEL_RADIUS,
-                "minimumOfficialLevel": MIN_TARGET_LEVEL,
-            },
-            "topPumbilityCount": TOP_PUMBILITY_COUNT,
-            "overallPumbility": "the highest 50 Phoenix 2 Pumbility values from the player's combined Single and Double scores",
-            "overallRecommendations": "merge all Single and Double candidates inside the official-level window that satisfy the standard ceiling or the Phoenix 1 shared-top-50 exception, recalculate every projected gain against the shared Phoenix 2 S+D top 50, then retain the best 50",
-            "actualPumbilitySource": "upstream",
-            "projection": "the higher grade-boundary goal from the median engine estimate and normalized Phoenix 1 personal best, converted with the mode-specific Phoenix 2 formula and the weighted-median plate",
-            "plateProjection": "weighted median of the ordered RG-to-PG hierarchical player, mode, and Phoenix 2 letter-grade distribution using Phoenix 2 observations plus a held-out-tuned capped Phoenix 1 prior and population smoothing",
-            "plateProjectionStatistic": "weighted-median",
-            "pumbilityProjectionStatistic": "median-score-median-plate",
-            "phoenix1PlatePriorCap": plate_model.phoenix1_cap,
-            "projectedGain": "deterministic change from the median-score and median-plate projected Pumbility to the active Phoenix 2 top-50 pool; Single and Double use their mode pool, while Overall uses the shared S+D pool; the projection replaces the current chart PB and the number-50 chart only when it improves the retained top 50",
-            "projectedGainTieBreak": "equal displayed projected gains are ordered by estimated difficulty from easiest to hardest, then expected Pumbility and chart name",
-            "manualRanking": "farm edge up to 1.0 estimated-difficulty point above the requested scoring rating; official-difficulty filters use floor(scoring rating) plus or minus two levels with a level-16 minimum and no personal top-50 gain is inferred",
-            "skillRatingCatalog": "all valid charts retained by the Phoenix 2 catalog, including levels below the display minimum",
-            "currentStateSource": "Phoenix 2 only for played status, existing Pumbility, current top 50, and projected gain",
-            "displayMinimumOfficialLevel": MIN_TARGET_LEVEL,
-            "scoreProjection": "using each player's S+FG-equivalent ranks 11-30 Pumbility rating, take the Phoenix-source-weighted median raw score from all other players with a normalized result on the exact chart (Phoenix 1 = 1, Phoenix 2 = 2); search plus or minus 0.2 through 0.5 in 0.1 steps seeking 20 peers, repeat seeking 10, then repeat seeking five; use all peers within the narrowest successful radius and fall back below five peers to the player-balanced population response surface with the same source weights",
-            "scoreProjectionModel": SCORE_PROJECTION_MODEL_NAME,
-            "coopScoreProjectionModel": COOP_SCORE_PROJECTION_MODEL_NAME,
-            "coopScoreProjection": "the higher grade-boundary goal from the fixed whole-number Co-op difficulty ladder and normalized Phoenix 1 personal best, using a Fair Game plate; catalog additions do not rebalance folder goals",
-            "coopGoalGradeByDifficulty": {
-                str(difficulty): grade
-                for difficulty, grade in COOP_GOAL_GRADE_BY_DIFFICULTY.items()
-            },
-            "coopRating": "the sum of every unique current Phoenix 2 Co-op chart rating; projected gain is additive and is not limited to a top-50 pool",
-        },
+        "method": general_recommendation_method(peer_model),
         "players": output_players,
     }
     if shard_writer is not None:

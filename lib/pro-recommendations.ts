@@ -1,6 +1,7 @@
 import { gradeForScore } from "./score-appearance.ts";
+import type { RecommendationRanking } from "./types";
 
-export const PRO_RECOMMENDATION_METHOD = "pro-pumbility-p50-modes-overall-top50-phoenix2-v6";
+export const PRO_RECOMMENDATION_METHOD = "pro-pumbility-p50-modes-overall-top50-phoenix2-v8";
 export type ProModeKey = "singles" | "doubles";
 export type ProModeView = "overall" | ProModeKey;
 export type ProRecommendationStatus = "ready" | "identity-unresolved" | "ineligible" | "insufficient-data" | "unavailable";
@@ -24,7 +25,7 @@ export interface ProBaseline {
   scoreCount: number; top50Pumbility: number; cutoffPumbility: number | null;
   syncedAtUtc: string; snapshotAt: string; fallbackReason: string | null; top50: ProTopScore[];
 }
-export interface ProRecommendationChart {
+export interface ProRecommendationChart extends RecommendationRanking {
   chartId: string; songName: string; chartLabel: string; type: "Single" | "Double"; level: number; sourceMode: ProModeKey;
   imageUrl?: string | null; stepArtist?: string | null; bpmMin?: number | null; bpmMax?: number | null;
   rawPercentileScore: number; gradeBoundaryScore: number; targetScore: number; targetGrade: string;
@@ -58,9 +59,38 @@ const finite = (v: unknown): v is number => typeof v === "number" && Number.isFi
 const count = (v: unknown): v is number => finite(v) && Number.isInteger(v);
 const date = (v: unknown): v is string => text(v) && /(?:Z|[+-]\d\d:\d\d)$/.test(v) && Number.isFinite(Date.parse(v));
 const nullable = <T>(v: unknown, check: (v: unknown) => v is T): v is T | null => v === null || check(v);
+const RANK_FIELDS = new Set(["gainRank", "scoreCountRank", "rankScore", "recommendationRank"]);
 export const isProPlayerKey = (v: unknown): v is string => typeof v === "string" && /^(?:[0-9a-f]{20}|op_[0-9a-f]{64})$/.test(v);
 function invalid(message = "The Pro mode data is invalid. Run npm run pro:refresh to build the current Phoenix 2 mode datasets."): never {
   throw new ProRecommendationValidationError(message);
+}
+function recommendationRanks(rows: Record<string, unknown>[]): void {
+  const ranks = (field: "projectedGain" | "scoreAtOrAboveTargetCount") => {
+    const result = new Map<number, number>();
+    [...rows].sort((a, b) => Number(b[field]) - Number(a[field])).forEach((row, index) => {
+      const value = Number(row[field]);
+      if (!result.has(value)) result.set(value, index + 1);
+    });
+    return result;
+  };
+  const gainRanks = ranks("projectedGain");
+  const countRanks = ranks("scoreAtOrAboveTargetCount");
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index];
+    if (!count(row.scoreAtOrAboveTargetCount) || Number(row.scoreAtOrAboveTargetCount) > Number(row.peerScoreCount)
+      || row.gainRank !== gainRanks.get(Number(row.projectedGain))
+      || row.scoreCountRank !== countRanks.get(Number(row.scoreAtOrAboveTargetCount))
+      || row.rankScore !== Number(row.gainRank) + Number(row.scoreCountRank)
+      || row.recommendationRank !== index + 1) invalid("The Pro recommendation ranks do not match the full candidate pool.");
+    if (index > 0) {
+      const previous = rows[index - 1];
+      const order = Number(previous.rankScore) - Number(row.rankScore)
+        || Number(row.projectedGain) - Number(previous.projectedGain)
+        || Number(row.scoreAtOrAboveTargetCount) - Number(previous.scoreAtOrAboveTargetCount)
+        || Number(row.expectedPumbility) - Number(previous.expectedPumbility);
+      if (order > 0) invalid("The Pro recommendations do not follow their combined ranks.");
+    }
+  }
 }
 function metadata(v: unknown): asserts v is Record<string, unknown> {
   if (!object(v) || v.schemaVersion !== 2 || v.method !== PRO_RECOMMENDATION_METHOD || v.mix !== "Phoenix2"
@@ -116,7 +146,7 @@ function modeResult(v: unknown, mode: ProModeKey, generation: unknown): asserts 
   for (const row of v.recommendations) {
     if (!object(row) || !text(row.chartId) || ids.has(row.chartId) || !text(row.songName) || !text(row.chartLabel)
       || row.sourceMode !== mode || row.type !== (mode === "singles" ? "Single" : "Double") || !count(row.level)
-      || row.level < (mode === "singles" ? 24 : 25) || !finite(row.rawPercentileScore) || row.rawPercentileScore > 1_000_000
+      || row.level < (mode === "singles" ? 23 : 24) || !finite(row.rawPercentileScore) || row.rawPercentileScore > 1_000_000
       || !count(row.gradeBoundaryScore) || !count(row.targetScore) || row.targetScore > 1_000_000
       || !text(row.targetGrade) || gradeForScore(row.rawPercentileScore) !== row.targetGrade || !finite(row.expectedPumbility)
       || !finite(row.projectedGain) || row.projectedGain <= 0 || !nullable(row.currentScore, finite)
@@ -128,6 +158,7 @@ function modeResult(v: unknown, mode: ProModeKey, generation: unknown): asserts 
     if (row.assumedPlate !== plate || (plate === "PG" && row.targetScore !== 1_000_000)) invalid();
     ids.add(row.chartId);
   }
+  recommendationRanks(v.recommendations as Record<string, unknown>[]);
 }
 export function validateProRecommendationsResponse(v: unknown, index?: ProPlayersResponse, playerKey?: string): ProRecommendationsResponse {
   metadata(v);
@@ -136,7 +167,7 @@ export function validateProRecommendationsResponse(v: unknown, index?: ProPlayer
   const selected = v.player;
   if (playerKey && selected.playerKey !== playerKey) invalid("The Pro player does not match the selection.");
   if (index && (index.generation !== v.generation || index.snapshotAt !== v.snapshotAt || !index.players.some(row => row.playerKey === selected.playerKey))) invalid("The Pro mode capture changed. Reload the player list.");
-  if (v.eligible && (!count(selected.overallRank) || selected.overallRank < 1 || selected.overallRank > 300)) invalid();
+  if (v.eligible && (!count(selected.overallRank) || selected.overallRank < 1 || selected.overallRank > 500)) invalid();
   const sourceRows = new Map<string, Record<string, unknown>>(); const available: string[] = []; const unavailable: string[] = [];
   for (const mode of MODES) {
     const result = v.modes[mode]; modeResult(result, mode, v.generation);
@@ -167,16 +198,17 @@ export function validateProRecommendationsResponse(v: unknown, index?: ProPlayer
     if (gain > 0) expected.set(id,{gain,replacement});
   }
   if (overall.recommendations.length !== expected.size) invalid("Overall must include exactly the targets that improve its Top 50.");
-  const seen = new Set<string>(); let lastGain = Infinity;
+  const seen = new Set<string>();
   for (const row of overall.recommendations) {
     if (!object(row) || !text(row.chartId) || seen.has(row.chartId)) invalid();
     const source = sourceRows.get(row.chartId);
     const estimate = expected.get(row.chartId);
     if (!source || !estimate || Object.keys(source).length+2 !== Object.keys(row).length
-      || Object.keys(source).some(key => key !== "projectedGain" && source[key] !== row[key])
+      || Object.keys(source).some(key => key !== "projectedGain" && !RANK_FIELDS.has(key) && source[key] !== row[key])
       || row.modeProjectedGain !== source.projectedGain || row.replacedPumbility !== estimate.replacement || row.projectedGain !== estimate.gain
-      || !finite(row.projectedGain) || row.projectedGain > lastGain) invalid("Overall must preserve mode targets and calculate gains against its combined Top 50.");
-    lastGain = row.projectedGain; seen.add(row.chartId);
+      || !finite(row.projectedGain)) invalid("Overall must preserve mode targets and calculate gains against its combined Top 50.");
+    seen.add(row.chartId);
   }
+  recommendationRanks(overall.recommendations as Record<string, unknown>[]);
   return v as unknown as ProRecommendationsResponse;
 }

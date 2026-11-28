@@ -3983,10 +3983,7 @@ def _resume_typed_analysis_checkpoint(
     if checkpoint_phase == TYPED_CHECKPOINT_MODEL_FIT_DOUBLES_PHASE:
         if combined_inputs is None or not isinstance(raw_model_parts, Mapping):
             raise ValueError("The typed model checkpoint parts are missing.")
-        from piu_recommendations import (
-            ScoreResponseModel,
-            merge_score_response_mode_models,
-        )
+        from general_pumbility import GeneralPumbilityModel
 
         mode_parts: dict[str, tuple[Any, Mapping[str, Any]]] = {}
         for mode in ("singles", "doubles"):
@@ -4002,10 +3999,11 @@ def _resume_typed_analysis_checkpoint(
                 input_sha256=str(combined_inputs.get("inputSha256") or ""),
             )
             mode_parts[mode] = (
-                ScoreResponseModel.from_npz_bytes(score_bytes),
+                GeneralPumbilityModel.from_npz_bytes(score_bytes),
                 score_metadata,
             )
-        overall_model, overall_metadata = merge_score_response_mode_models(mode_parts)
+        overall_model = GeneralPumbilityModel.merge_models([part[0] for part in mode_parts.values()])
+        overall_metadata = overall_model.metadata
         overall_reference = _write_typed_checkpoint_model_part(
             blob_store,
             job_id=job_id,
@@ -4049,9 +4047,9 @@ def _resume_typed_analysis_checkpoint(
             mode="overall",
             input_sha256=str(combined_inputs.get("inputSha256") or ""),
         )
-        from piu_recommendations import ScoreResponseModel
+        from general_pumbility import GeneralPumbilityModel
 
-        overall_model = ScoreResponseModel.from_npz_bytes(overall_bytes)
+        overall_model = GeneralPumbilityModel.from_npz_bytes(overall_bytes)
         (
             combined_tier_payload,
             recommendation_payload,

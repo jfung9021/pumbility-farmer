@@ -2,6 +2,7 @@ import type {
   RecommendationChart,
   RecommendationModeKey,
   RecommendationModeResult,
+  RecommendationScoreProgress,
 } from "./types";
 
 
@@ -9,6 +10,34 @@ export const ALL_DIFFICULTIES = "All";
 export const RECOMMENDATION_DISPLAY_COUNT = 50;
 export const MIN_RECOMMENDATION_LEVEL = 16;
 export const RECOMMENDATION_OFFICIAL_LEVEL_RADIUS = 2;
+export const GENERAL_PUMBILITY_METHOD = "general-piuscores-p50-modes-overall-top50-phoenix2-v3";
+export const RECOMMENDATION_RANKING_METHOD = "equal-weight-gain-and-target-score-count-competition-ranks-v1";
+
+export function isGeneralPumbilityMode(mode: RecommendationModeResult | null | undefined): boolean {
+  return mode?.skillMethod === GENERAL_PUMBILITY_METHOD;
+}
+
+export function recommendationScoreProgress(
+  mode: RecommendationModeResult | null | undefined,
+  summary?: RecommendationScoreProgress,
+): RecommendationScoreProgress {
+  const required = isGeneralPumbilityMode(mode)
+    ? mode?.requiredScoreCount ?? 50
+    : summary?.requiredScoreCount
+      ?? mode?.projectionRatingRequiredScoreCount
+      ?? mode?.requiredScoreCount
+      ?? (mode ? 30 : 50);
+  const valid = isGeneralPumbilityMode(mode)
+    ? mode?.validScoreCount ?? 0
+    : summary?.validScoreCount
+      ?? (mode?.projectionAvailable ? mode.projectionRatingSourceScoreCount : mode?.phoenix2ScoreCount)
+      ?? mode?.validScoreCount
+      ?? 0;
+  return {
+    validScoreCount: Math.max(0, Number.isFinite(valid) ? valid : 0),
+    requiredScoreCount: Math.max(1, Number.isFinite(required) ? required : 50),
+  };
+}
 
 export function recommendationOfficialLevelRange(
   scoringRating: number | undefined,
@@ -41,10 +70,13 @@ export function chartMatchesRecommendationLevelRange(
   mode: RecommendationModeKey,
   scoringRating: number | undefined,
   minimumOfficialLevel = MIN_RECOMMENDATION_LEVEL,
+  skillMethod?: string,
 ): boolean {
   if (!chartMatchesMode(chart, mode)) return false;
   if (mode === "coop") return true;
-  if (mode === "overall") return chart.level >= minimumOfficialLevel;
+  if (mode === "overall" || skillMethod === GENERAL_PUMBILITY_METHOD) {
+    return chart.level >= minimumOfficialLevel;
+  }
   const bounds = recommendationOfficialLevelRange(scoringRating, minimumOfficialLevel);
   return bounds !== null && chart.level >= bounds[0] && chart.level <= bounds[1];
 }
@@ -62,6 +94,7 @@ export function recommendationDifficultyOptions(
   mode: RecommendationModeKey,
   charts: RecommendationChart[],
   scoringRating?: number,
+  skillMethod?: string,
 ): string[] {
   return [...new Set(
     charts
@@ -70,6 +103,8 @@ export function recommendationDifficultyOptions(
           chart,
           mode,
           scoringRating,
+          MIN_RECOMMENDATION_LEVEL,
+          skillMethod,
         ),
       )
       .map(officialDifficulty),
@@ -86,18 +121,13 @@ export function visibleRecommendations(
     chart,
     modeKey,
     mode.scoringRating,
+    MIN_RECOMMENDATION_LEVEL,
+    mode.skillMethod,
   );
-  if (difficulty === ALL_DIFFICULTIES) {
-    return mode.topRecommendations
-      .filter(visible)
-      .slice(0, RECOMMENDATION_DISPLAY_COUNT);
-  }
-  return (mode.filterCandidates ?? [])
-    .filter(
-      (chart) => visible(chart)
-        && officialDifficulty(chart) === difficulty,
-    )
-    .sort((left, right) => {
+  const compare = (left: RecommendationChart, right: RecommendationChart) => {
+      if (typeof left.recommendationRank === "number" && typeof right.recommendationRank === "number") {
+        return left.recommendationRank - right.recommendationRank;
+      }
       const leftGain = left.projectedGain;
       const rightGain = right.projectedGain;
       if (leftGain !== null && rightGain !== null && leftGain !== rightGain) {
@@ -105,10 +135,25 @@ export function visibleRecommendations(
       }
       if (leftGain !== null && rightGain === null) return -1;
       if (leftGain === null && rightGain !== null) return 1;
-      return right.farmEdge - left.farmEdge
-        || left.estimatedDifficulty - right.estimatedDifficulty
+      if (isGeneralPumbilityMode(mode)) {
+        const leftName = left.songName.toLocaleLowerCase();
+        const rightName = right.songName.toLocaleLowerCase();
+        return (right.expectedPumbility ?? 0) - (left.expectedPumbility ?? 0)
+          || (leftName < rightName ? -1 : leftName > rightName ? 1 : 0)
+          || (left.chartId < right.chartId ? -1 : left.chartId > right.chartId ? 1 : 0);
+      }
+      return (right.farmEdge ?? 0) - (left.farmEdge ?? 0)
+        || (left.estimatedDifficulty ?? Infinity) - (right.estimatedDifficulty ?? Infinity)
         || (right.expectedPumbility ?? 0) - (left.expectedPumbility ?? 0)
         || left.songName.localeCompare(right.songName)
         || left.chartId.localeCompare(right.chartId);
-    });
+    };
+  if (difficulty === ALL_DIFFICULTIES) {
+    const charts = mode.topRecommendations.filter(visible);
+    if (mode.rankingMethod === RECOMMENDATION_RANKING_METHOD) charts.sort(compare);
+    return charts.slice(0, RECOMMENDATION_DISPLAY_COUNT);
+  }
+  return (mode.filterCandidates ?? [])
+    .filter((chart) => visible(chart) && officialDifficulty(chart) === difficulty)
+    .sort(compare);
 }

@@ -758,7 +758,7 @@ export interface RecommendationChartEstimate {
   /** Full display endpoints remain separate from the numerical focal tempo. */
   bpmFocal?: number | null;
   songType?: string;
-  estimatedDifficulty: number;
+  estimatedDifficulty: number | null;
   difficultyModelContinuous?: number | null;
   difficultyModelSignal?: number | null;
   percentileScore?: number | null;
@@ -769,15 +769,23 @@ export interface RecommendationChartEstimate {
   difficultyDelta: number | null;
   difficultyCi95Low: number | null;
   difficultyCi95High: number | null;
-  nContributors: number;
-  phoenix1Contributors: number;
-  phoenix2Contributors: number;
-  evidenceStatus: EvidenceStatus;
+  nContributors: number | null;
+  phoenix1Contributors: number | null;
+  phoenix2Contributors: number | null;
+  evidenceStatus: EvidenceStatus | null;
 }
 
-export interface RecommendationChart extends RecommendationChartEstimate {
-  distanceFromRating: number;
-  farmEdge: number;
+export interface RecommendationRanking {
+  scoreAtOrAboveTargetCount: number;
+  gainRank: number;
+  scoreCountRank: number;
+  rankScore: number;
+  recommendationRank: number;
+}
+
+export interface RecommendationChart extends RecommendationChartEstimate, Partial<RecommendationRanking> {
+  distanceFromRating: number | null;
+  farmEdge: number | null;
   existingPumbility: number | null;
   expectedPumbility: number | null;
   existingCoopRating?: number | null;
@@ -788,10 +796,22 @@ export interface RecommendationChart extends RecommendationChartEstimate {
   projectedPlate: string | null;
   projectedPlateCode: string | null;
   projectedPlateProbability: number | null;
-  plateProjectionSource: "phoenix1" | "phoenix2" | "population" | "fixed-fair-game" | null;
+  plateProjectionSource: "phoenix1" | "phoenix2" | "population" | "fixed-fair-game" | "fixed-pumbility-policy" | "piuscores-peer-median" | null;
   scoreProjectionSource?: string | null;
   scoreProjectionSupportCount?: number | null;
   scoreProjectionConfidence?: "high" | "medium" | "low" | "limited" | "unavailable";
+  rawPercentileScore?: number | null;
+  targetScore?: number | null;
+  targetGrade?: string | null;
+  peerScoreCount?: number;
+  peerPairedScoreCount?: number;
+  peerMissingPlateCount?: number;
+  peerRawScoreCount?: number;
+  cohortPlayerCount?: number;
+  limitedData?: boolean;
+  sourceMode?: "singles" | "doubles";
+  modeProjectedGain?: number;
+  replacedPumbility?: number;
   played: boolean;
 }
 
@@ -818,7 +838,7 @@ export interface RecommendationTopScore {
   phoenix2Contributors: number | null;
   evidenceStatus: EvidenceStatus | null;
   /** Present on recommendation schema 26+ public Top 50 rows. */
-  score?: number;
+  score?: number | null;
   pumbility?: number | null;
   coopRating?: number | null;
   grade: string | null;
@@ -838,6 +858,23 @@ export interface ClearingSkillMetadata {
 
 export interface RecommendationModeResult {
   eligible: boolean;
+  skillMethod?: "general-piuscores-p50-modes-overall-top50-phoenix2-v3";
+  rankingMethod?: "equal-weight-gain-and-target-score-count-competition-ranks-v1";
+  skillSource?: "piuscores-submitted";
+  modePumbility?: number | null;
+  status?: "ready" | "insufficient-data";
+  baseline?: Record<string, unknown>;
+  pairedObservationCount?: number;
+  missingPlateObservationCount?: number;
+  cohort?: {
+    minimumPlayers: number;
+    upwardWindow: number | null;
+    backfillCount: number;
+    playerCount: number;
+    minPumbility?: number | null;
+    maxPumbility?: number | null;
+    limitedData: boolean;
+  };
   manual?: boolean;
   validScoreCount: number;
   requiredScoreCount?: number;
@@ -876,6 +913,7 @@ export interface RecommendationModeResult {
     | "similar-skill-pumbility-11-30-q50-v6"
     | "similar-skill-pumbility-11-30-weighted-q50-v8"
     | "similar-skill-pumbility-11-30-weighted-q50-v9"
+    | "general-piuscores-p50-modes-overall-top50-phoenix2-v3"
     | "chart-population-q75-v1"
     | "estimated-difficulty-master-grade-ladder-v1"
     | "estimated-difficulty-master-grade-ladder-v2"

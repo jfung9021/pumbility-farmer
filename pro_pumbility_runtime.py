@@ -5,7 +5,7 @@ import os
 import re
 from typing import Any
 
-METHOD = "pro-pumbility-p50-modes-overall-top50-phoenix2-v6"
+METHOD = "pro-pumbility-p50-modes-overall-top50-phoenix2-v8"
 PLAYER_KEY = re.compile(r"(?:[0-9a-f]{20}|op_[0-9a-f]{64})\Z")
 GENERATION = re.compile(r"[0-9a-f]{64}\Z")
 DEFAULT_PREFIX = "analysis/pro-recommendations/modes/current"

@@ -3,12 +3,57 @@
 Pumbility Farmer is a PIU Phoenix difficulty analyzer and Vercel web UI with Scoring, Clearing, and Pumbility tier lists. Its scoring list combines normalized Phoenix 1 and Phoenix 2 score evidence against the current Phoenix 2 catalog. Phoenix 1 is a frozen, privacy-safe source captured on August 7, 2026; Phoenix 2 remains live and uses the upstream `mix=Phoenix2` filter. Singles and Doubles rankings are completely independent. Co-op has its own combined 2x-5x scoring analysis because those charts have no official difficulty rating. Published Singles and Doubles analysis starts at level 16, while player baselines and contribution cutoffs use each eligible player's complete mode history, including levels below 16.
 
 
+## General Pumbility recommendations
+
+General uses only submitted Phoenix 2 PIUScores results for player skill, peer
+selection, targets, and gain baselines. Singles and Doubles independently sum
+their highest 50 chart Pumbility contributions, including charts below level 16.
+A mode requires 50 known unique nonbroken results. Valid zero-Pumbility results
+remain known observations; missing results never become empty Top 50 slots.
+
+For a mode total P, select other accounts in [P,P+100], widening to +150 and then
++200 until at least ten peers are available. Keep every peer in the first
+successful window. Otherwise backfill with the nearest lower totals, breaking
+ties by stable PIUScores account ID. Each chart uses peers with both a valid raw
+score and a recorded plate on that chart. The target uses the score median and
+the lower ordinal median of their actual plates, ordered RG, FG, TG, MG, SG, EG,
+UG, PG. Missing plates do not receive a substitute target observation. The score
+target is the earned grade's lower boundary, except PG requires 1,000,000.
+Sparse paired coverage is labeled.
+
+Recommendations cover current S16+/D16+ charts with positive expected Top 50
+gain, including charts without a fitted tier estimate. There is no converted
+scoring-skill window or estimated-difficulty ceiling. Overall preserves each
+mode's targets and recomputes gains against the combined Singles+Doubles Top 50.
+Every viable list combines two competition ranks with equal weight: projected
+gain descending and the number of eligible peer results meeting or exceeding
+the target score descending. The smallest rank sum sorts first, before the
+50-row display limit; difficulty filters preserve that order. General requires
+neither an official account nor an official rank. Co-op retains its separate
+goals and rating method, using other accounts' Phoenix 2 chart results for the
+target-score support count and the same combined-rank ordering.
+
+Refresh and test locally without rebuilding existing tier analyses:
+
+```powershell
+.venv/Scripts/python.exe scripts/capture_private_score_snapshot.py --mix phoenix2
+.venv/Scripts/python.exe scripts/build_local_recommendations.py --recommendations-only
+$env:PIU_LOCAL_ANALYSIS = "1"
+npm run dev -- --hostname 127.0.0.1 --port 3000
+```
+
+The capture reads `PIU_SCORES_API_KEY` from the environment. Private inputs stay
+under `.local-data/piu-scores/phoenix2/current`; generated shards and the peer
+model remain under `.local-data/piu-scores/recommendations`. Existing tier
+estimates are display annotations with their own source policy. The peer model
+is Phoenix 2 only and uses no Phoenix 1 fallback or official score reconstruction.
+
 ## Pro Farming recommendations
 
 Open `/recommendations?view=pro&mode=overall` for Phoenix 2 recommendations for
-the official overall Pumbility top 300. Pro has Overall, Singles and Doubles
-tabs. Singles uses its own mode Top 50 and recommends S24+; Doubles independently
-uses its own mode Top 50 and recommends D25+. Each mode tries peers up to +100,
+the official overall Pumbility top 500. Pro has Overall, Singles and Doubles
+tabs. Singles uses its own mode Top 50 and recommends S23+; Doubles independently
+uses its own mode Top 50 and recommends D24+. Each mode tries peers up to +100,
 +150, then +200 mode Pumbility; when still below ten peers, it fills with the
 nearest lower-mode-Pumbility players. Each chart uses the observed official peer
 scores' linearly interpolated 50th percentile (median), truncated to its earned grade.
@@ -25,7 +70,10 @@ Overall combines the finalized Singles/Doubles targets, then calculates expected
 overall gains against the player's reconstructed combined Top 50. Its baseline
 merges both modes' known chart values, keeps the strongest 50 and exposes the
 50th cutoff. An existing Top 50 chart replaces its own contribution; other charts
-replace the cutoff. Overall removes zero-gain targets and sorts by overall gain.
+replace the cutoff. Overall removes zero-gain targets and ranks the remaining
+pool by the sum of overall-gain rank and target-score support rank. Singles and
+Doubles use the same equal-weight ranking against their own mode gains. Support
+counts selected peers' chart scores at or above the recommendation's target.
 Targets, peer evidence and original mode gains are retained. Singles and Doubles
 still show their own mode Top 50 gains. Reconstructed values can differ from the
 game's official overall total, especially when plates are estimated. If one mode
@@ -44,7 +92,7 @@ rankings and personal scores are fetched from Phoenix 2 only. It matches readabl
 PIUScores profiles to the official ranking by exact full game tag, fetches fresh
 personal scores where available, and captures all 1,000 ranked players' published
 score histories across the current chart catalog to construct the peer population.
-Only official overall top-300 recipients are eligible. Pro Farming offers players
+Only official overall top-500 recipients are eligible. Pro Farming offers players
 with a usable personal or reconstructed baseline for testing. If neither source
 provides a usable Top 50, it explains that the cutoff is unavailable.
 

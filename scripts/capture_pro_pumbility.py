@@ -62,7 +62,26 @@ def is_candidate(chart: Mapping[str, Any]) -> bool:
     level = chart.get("level")
     if isinstance(level, bool) or not isinstance(level, (int, float)):
         return False
-    return (chart.get("type") == "Single" and level >= 24) or (chart.get("type") == "Double" and level >= 25)
+    return (chart.get("type") == "Single" and level >= 23) or (chart.get("type") == "Double" and level >= 24)
+
+
+def fetch_official_board(client: Any, chart_id: str, snapshot_at: str) -> dict:
+    """Capture a board or explicitly record the API's unmirrored-chart response."""
+    try:
+        payload = client._get_json(f"api/v2/official/charts/{chart_id}/board",
+                                   params={"mix": "Phoenix2", "supplemented": "false"})
+    except ApiError as exc:
+        if str(exc) != "PIU Scores returned HTTP 404. Detail: No official board is mirrored for that chart.":
+            raise
+        board = normalize_official_board(chart_id, {"asOf": snapshot_at, "data": []})
+        return {**board, "mix": "Phoenix2", "source": "piuscores-official", "boardStatus": "unmirrored",
+                "asOfSource": "official-ranking-snapshot", "fetchedAtUtc": utc_now(),
+                "sourceResponse": {"statusCode": 404, "detail": "No official board is mirrored for that chart."}}
+    payload["asOf"] = timestamp(payload.get("asOf"))
+    board = normalize_official_board(chart_id, payload)
+    if not same_instant(board["asOf"], snapshot_at):
+        raise ValueError("An official chart has a different source snapshot; completed generation was not published.")
+    return board
 
 
 def normalize_official_profile(payload: Mapping[str, Any], ranking: Mapping[str, Any],
@@ -146,7 +165,7 @@ def capture(client: Any, output: Path = DEFAULT_OUTPUT, *, workers: int = 4, res
         raise ValueError("The current Phoenix2 catalog is empty.")
     targets = [chart for chart in charts if is_candidate(chart)]
     if not targets:
-        raise ValueError("The current Phoenix2 catalog has no S24+/D25+ charts.")
+        raise ValueError("The current Phoenix2 catalog has no S23+/D24+ charts.")
     source_key = hashlib.sha256(json.dumps([rankings, charts], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     staging = ROOT / ".local-data/piu-scores/pro/capture" / (source_key + ("-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f") if restart else ""))
     staging.mkdir(parents=True, exist_ok=True)
@@ -158,11 +177,7 @@ def capture(client: Any, output: Path = DEFAULT_OUTPUT, *, workers: int = 4, res
             previous = json.loads(checkpoint.read_text(encoding="utf-8"))
             if previous.get("chartId") == chart_id and same_instant(previous.get("asOf"), snapshot_at):
                 return previous
-        payload = client._get_json(f"api/v2/official/charts/{chart_id}/board", params={"mix": "Phoenix2", "supplemented": "false"})
-        payload["asOf"] = timestamp(payload.get("asOf"))
-        board = normalize_official_board(chart_id, payload)
-        if not same_instant(board["asOf"], snapshot_at):
-            raise ValueError("An official chart has a different source snapshot; completed generation was not published.")
+        board = fetch_official_board(client, chart_id, snapshot_at)
         write_json(checkpoint, board)
         return board
 

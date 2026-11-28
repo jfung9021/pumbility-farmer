@@ -938,7 +938,7 @@ test("local recommendations reject stale schemas before rendering", () => {
   assert.throws(
     () => validateLocalRecommendationIndex(payload),
     (error: unknown) => error instanceof LocalRecommendationsValidationError
-      && /Regenerate schema 28 recommendations/.test(error.message),
+      && /Regenerate schema 29 recommendations/.test(error.message),
   );
 });
 
@@ -971,7 +971,7 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
   };
   const { pumbility: _pumbility, ...topScoreWithoutPumbility } = topScore;
   const payload = {
-    schemaVersion: 28,
+    schemaVersion: 29,
     generatedAtUtc: "2026-08-08T00:00:00Z",
     method: {},
     charts: [],
@@ -995,11 +995,11 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
     }],
   };
 
-  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 28);
+  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 29);
   for (const exactScore of [0, 1_000_000]) {
     const boundaryPayload = structuredClone(payload);
     boundaryPayload.players[0].modes.singles.topScores[0].score = exactScore;
-    assert.equal(validateLocalRecommendationIndex(boundaryPayload).schemaVersion, 28);
+    assert.equal(validateLocalRecommendationIndex(boundaryPayload).schemaVersion, 29);
   }
   const privatePayload = structuredClone(payload);
   Object.assign(privatePayload.players[0].modes.singles.topScores[0], { rawScore: 1_000_000 });
@@ -1014,7 +1014,6 @@ test("local recommendation schema validates privacy-safe Top 50 rows", () => {
     Number.NaN,
     Number.POSITIVE_INFINITY,
     true,
-    null,
   ]) {
     const invalidScorePayload = structuredClone(payload);
     Object.assign(
@@ -1076,7 +1075,7 @@ test("recommendation refresh metadata distinguishes the model from player scores
   assert.equal(displayedRecommendationModel(cached, index), cached.modelGeneratedAtUtc);
   assert.notEqual(displayedRecommendationModel(cached, index), cached.currentModelGeneratedAtUtc);
   assert.equal(displayedRecommendationModel(null, index), index.modelGeneratedAtUtc);
-  assert.match(page, /label="Model updated"/);
+  assert.match(page, /label=\{isGeneralPumbilityMode\(mode\) \? "Peer model updated" : "Model updated"\}/);
   assert.match(page, /label="Player scores synced"/);
   assert.match(page, /generatedAtUtc=\{playerSyncedAt\}/);
   assert.match(refreshMeta, /Math\.max\(0, nowMs - generatedAtMs\) > delayedAfterMs/);
@@ -1248,8 +1247,8 @@ test("mobile recommendation cards keep gain on the right and show estimated diff
   assert.match(page, /chart\.stepArtist \|\| "Unknown step artist"/);
   assert.match(page, /formatBpm\(chart\.bpmMin, chart\.bpmMax\)/);
   assert.match(page, /bpm \? <> · \{bpm\}<\/> : null/);
-  assert.match(page, /const estimate = isCoop[\s\S]*formatCoopEstimatedDifficulty\(chart\.estimatedDifficulty\)[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
-  assert.match(page, /<b> · \{estimate\} estimate<\/b>/);
+  assert.match(page, /const estimate = chart\.estimatedDifficulty === null[\s\S]*formatCoopEstimatedDifficulty\(chart\.estimatedDifficulty\)[\s\S]*formatEstimatedDifficulty\(chart\.estimatedDifficulty\)/);
+  assert.match(page, /estimate === null \? "Estimate unavailable"/);
   assert.doesNotMatch(page, /official<\/b>/);
   assert.doesNotMatch(page, /formula expected/);
   assert.match(css, /grid-template-columns: 34px 62px minmax\(0, 1fr\) max-content/);
@@ -1291,7 +1290,7 @@ test("Top 50 cards expose PIU result data and open an accessible detail dialog",
   assert.match(page, /\{score\.songName\}/);
   assert.match(page, /className="top-score-copy"/);
   assert.match(page, /function topScoreValue\(score: RecommendationTopScore\)/);
-  assert.match(page, /score\.score === undefined \? "—"/);
+  assert.match(page, /score\.score === undefined \|\| score\.score === null \? "—"/);
   assert.match(page, /<ResultGrade grade=\{score.grade \|\| gradeForScore\(score.score\)\}/);
   assert.match(page, /<ResultPlate plate=\{score.plateCode \|\| score.plate\}/);
   assert.doesNotMatch(page, /className="top-score-copy-score"/);

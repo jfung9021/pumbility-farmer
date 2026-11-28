@@ -27,7 +27,7 @@ def chart(cid, kind="Single", level=24):
 
 def fixture():
     rankings = [ranking(1, 1_000, 20)] + [ranking(pid, 1_000 + pid, pid) for pid in range(2, 12)]
-    charts = [chart("s24"), chart("d25", "Double", 25), chart("s23", level=23), chart("d24", "Double", 24)]
+    charts = [chart("s24"), chart("d25", "Double", 25), chart("s22", level=22), chart("d23", "Double", 23)]
     boards = [{"chartId": cid, "asOf": AS_OF, "possiblyTruncated": False,
                "entries": [{"playerId": f"official:{pid}", "score": 1_000_000, "place": pid} for pid in range(2, 12)]}
               for cid in ("s24", "d25")]
@@ -141,6 +141,21 @@ class ProRecommendationTests(unittest.TestCase):
             self.assertEqual(row["gradeBoundaryScore"], 995_000)
             self.assertEqual(row["assumedPlate"], "PG")
             self.assertEqual(row["expectedPumbility"], 395.2)
+            self.assertEqual(row["scoreAtOrAboveTargetCount"], 10)
+            self.assertEqual(row["gainRank"], 1)
+            self.assertEqual(row["scoreCountRank"], 1)
+            self.assertEqual(row["rankScore"], 2)
+
+    def test_overall_engine_final_sort_uses_gain_and_target_count_ranks(self):
+        snapshot, profile = fixture()
+        for cid, level, count in (("s25-high", 25, 1), ("s23-low", 23, 9)):
+            snapshot["charts"].append(chart(cid, level=level))
+            snapshot["boards"].append({**snapshot["boards"][0], "chartId": cid,
+                                       "entries": copy.deepcopy(snapshot["boards"][0]["entries"][:count])})
+        rows = build_pro_recommendation(snapshot, profile)["recommendations"]
+        self.assertEqual({row["chartId"] for row in rows[:2]}, {"s24", "d25"})
+        self.assertEqual(rows[2]["chartId"], "s25-high")
+        self.assertEqual([row["recommendationRank"] for row in rows], [1, 2, 3, 4])
 
     def test_self_and_duplicates_do_not_inflate_percentile_or_coverage(self):
         snapshot, profile = fixture()
@@ -205,13 +220,22 @@ class ProRecommendationTests(unittest.TestCase):
         self.assertEqual(result["unobservedChartCount"], 1)
         self.assertEqual([row["chartId"] for row in result["recommendations"]], ["d25"])
 
-    def test_rank_300_qualifies_301_does_not(self):
-        for rank, expected in ((300, "ready"), (301, "ineligible")):
+    def test_rank_500_qualifies_501_does_not(self):
+        for rank, expected in ((300, "ready"), (301, "ready"), (500, "ready"), (501, "ineligible")):
             with self.subTest(rank=rank):
                 snapshot, profile = fixture()
                 snapshot["rankings"]["data"][0]["rank"] = rank
                 snapshot["officialProfiles"][0]["rank"] = rank
                 self.assertEqual(build_pro_recommendation(snapshot, profile)["status"], expected)
+
+    def test_new_s23_and_d24_candidates_are_included(self):
+        snapshot, profile = fixture()
+        for cid, kind, level in (("s23", "Single", 23), ("d24", "Double", 24)):
+            snapshot["charts"].append(chart(cid, kind, level))
+            snapshot["boards"].append({**snapshot["boards"][0], "chartId": cid})
+        result = build_pro_recommendation(snapshot, profile)
+        self.assertEqual(result["candidateCount"], 4)
+        self.assertEqual({row["chartId"] for row in result["recommendations"]}, {"s24", "d25", "s23", "d24"})
 
     def test_explicit_identity_and_baseline_unavailable_states(self):
         snapshot, profile = fixture()

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from unittest.mock import Mock
 
 from analysis_runtime import MemoryBlobStore
+from general_pumbility import GeneralPumbilityModel, METHOD
 from piu_recommendations import ScoreResponseModel, build_player_recommendation
 from pumbility_contract import (
     recommendation_model_path,
@@ -117,44 +118,9 @@ class ClearingSkillRefreshTests(unittest.TestCase):
             set(player["clearedChartIds"]),
             {f"s{i:02d}" for i in range(40)} | {f"d{i:02d}" for i in range(49)},
         )
-        self.assertEqual(actual[1]["method"]["clearingSkill"]["ranks"], [1, 50])
+        self.assertEqual(actual[1]["method"]["id"], METHOD)
 
-    def test_refresh_matches_raw_calculation_and_mode_projection_preserves_skills(self) -> None:
-        store, artifacts = self._published()
-        index, _, score_bytes, _, _ = artifacts
-        client = Mock()
-        client.fetch_page_collection.return_value = []
-        response = refresh_player_recommendations(
-            store,
-            client,
-            index_path=self.index_path,
-            player_key=index["players"][0]["playerKey"],
-            now=lambda: datetime(2026, 9, 26, tzinfo=timezone.utc),
-        )
-        direct = build_player_recommendation(
-            "player",
-            self.phoenix2,
-            [],
-            {},
-            ScoreResponseModel.from_npz_bytes(score_bytes),
-            phoenix1_snapshot=self.phoenix1,
-            include_candidates=True,
-        )
-        for mode in ("singles", "doubles"):
-            for field in ("clearingRating", "clearingSkill"):
-                self.assertEqual(response["player"]["modes"][mode][field], direct["modes"][mode][field])
-        singles = response["player"]["modes"]["singles"]
-        doubles = response["player"]["modes"]["doubles"]
-        self.assertEqual(singles["clearingRating"], 18.2)
-        self.assertEqual(singles["clearingSkill"]["uniqueClearCount"], 50)
-        self.assertEqual(singles["clearingSkill"]["selectedCount"], 50)
-        self.assertFalse(singles["eligible"])
-        self.assertIsNone(doubles["clearingRating"])
-        self.assertEqual(doubles["clearingSkill"]["uniqueClearCount"], 49)
-        cached = store.get_json(recommendation_player_path(index["players"][0]["playerKey"]))
-        projected = materialize_player_recommendation_cache(cached, mode="singles")
-        self.assertEqual(projected["player"]["modes"]["singles"], singles)
-        self.assertNotIn("clearedChartIds", json.dumps(projected))
+
 
     def test_missing_membership_is_rejected_before_upstream_refresh(self) -> None:
         store, artifacts = self._published()
@@ -183,6 +149,47 @@ class ClearingSkillRefreshTests(unittest.TestCase):
         store.put_json(recommendation_model_path(self.generation), model)
         with self.assertRaisesRegex(RuntimeError, "rebuilt from stored snapshots"):
             _load_model(store, self.generation)
+
+    def test_refresh_matches_phoenix2_only_history_and_mode_projection(self) -> None:
+        store, artifacts = self._published()
+        index, _, score_bytes, _, _ = artifacts
+        client = Mock()
+        client.fetch_page_collection.return_value = []
+        response = refresh_player_recommendations(
+            store,
+            client,
+            index_path=self.index_path,
+            player_key=index["players"][0]["playerKey"],
+            now=lambda: datetime(2026, 9, 26, tzinfo=timezone.utc),
+        )
+        direct = build_player_recommendation(
+            "player",
+            self.phoenix2,
+            [],
+            {},
+            GeneralPumbilityModel.from_npz_bytes(score_bytes),
+            phoenix1_snapshot=self.phoenix1,
+            include_candidates=True,
+        )
+        for mode in ("singles", "doubles"):
+            for field in ("modePumbility", "currentTop50Pumbility", "currentTop50Count", "validScoreCount", "eligible", "topScores"):
+                self.assertEqual(response["player"]["modes"][mode][field], direct["modes"][mode][field])
+            self.assertNotIn("clearingRating", response["player"]["modes"][mode])
+            self.assertNotIn("clearingSkill", response["player"]["modes"][mode])
+        singles = response["player"]["modes"]["singles"]
+        doubles = response["player"]["modes"]["doubles"]
+        self.assertEqual(singles["validScoreCount"], 11)
+        self.assertEqual(singles["currentTop50Count"], 11)
+        self.assertEqual(singles["requiredScoreCount"], 50)
+        self.assertFalse(singles["eligible"])
+        self.assertEqual(doubles["validScoreCount"], 0)
+        self.assertFalse(doubles["eligible"])
+        cached = store.get_json(recommendation_player_path(index["players"][0]["playerKey"]))
+        projected = materialize_player_recommendation_cache(cached, mode="singles")
+        self.assertEqual(projected["player"]["modes"]["singles"], singles)
+        self.assertNotIn("clearedChartIds", json.dumps(projected))
+
+
 
 
 if __name__ == "__main__":

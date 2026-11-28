@@ -81,10 +81,13 @@ def _read_snapshot(mix: str) -> dict:
     raw_dir = DATA_ROOT / mix / "current"
     players, charts, scores = load_snapshot(raw_dir)
     api_mix = "Phoenix" if mix == "phoenix1" else "Phoenix2"
+    manifest_path = raw_dir / "snapshot_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
     return sanitize_snapshot(
         {
             "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
             "mix": api_mix,
+            "generatedAtUtc": manifest.get("captureCompletedAtUtc", ""),
             "players": players,
             "charts": charts,
             "scores": scores,
@@ -117,6 +120,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
+        "--recommendations-only",
+        action="store_true",
+        help="Rebuild Phoenix 2 PIUScores recommendations using existing tier annotations; preserve tier analyses.",
+    )
+    mode.add_argument(
         "--phoenix2-only",
         action="store_true",
         help="Rebuild only local tier lists using cached Phoenix 2 data; leave recommendations unchanged.",
@@ -147,7 +155,7 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--refresh-tier-metadata", action="store_true",
                       help="Refresh Pumbility composites and current producer metadata on existing tiers; preserve Scoring, Clearing, Co-op, recommendations and player score artifacts without fitting models.")
     mode.add_argument("--compress-tiers", action="store_true",
-                      help="Retain 75% of fitted Scoring/Clearing deviations from official level + 0.5; preserve initial fits and personal artifacts without refitting.")
+                      help="Retain 75%% of fitted Scoring/Clearing deviations from official level + 0.5; preserve initial fits and personal artifacts without refitting.")
     parser.add_argument("--clearing-audit-dir", type=Path,
                         default=ROOT / "output" / "cross-level-clearing-2026-10-17",
                         help="Directory for the public Clearing comparison and verification artifacts.")
@@ -251,7 +259,7 @@ def main() -> int:
         return 0
     removed = (
         _prune_unpublished_generations(_published_generation_key())
-        if args.prune_only or not (args.phoenix2_only or args.tiers_only or args.scoring_percentile or args.official_tiers or args.tier_scores_only) else 0
+        if args.prune_only or not (args.recommendations_only or args.phoenix2_only or args.tiers_only or args.scoring_percentile or args.official_tiers or args.tier_scores_only) else 0
     )
     if args.prune_only:
         print(f"Removed {removed} unpublished recommendation generation(s).")
@@ -264,6 +272,47 @@ def main() -> int:
         )
         print("Built local player tier scores from the cached Phoenix 2 snapshot.")
         return 0
+
+    if args.recommendations_only:
+        from general_pumbility import GeneralPumbilityModel
+
+        tiers = json.loads(COMBINED_OUTPUT_PATH.read_text(encoding="utf-8"))
+        annotations = [row for mode_key in ("singles", "doubles", "coop") for row in tiers.get(mode_key, [])]
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        generation_key = recommendation_generation_key(generated_at)
+        phoenix2 = _read_snapshot("phoenix2")
+        peer_model = GeneralPumbilityModel.from_snapshot(phoenix2)
+
+        def write_recommendation_shard(shard: int, shard_payload: object) -> None:
+            _write_json(GENERATIONS_PATH / generation_key / "shards" / f"{shard:04d}.json", shard_payload)
+
+        # Phoenix 1 remains an input to the independent Co-op path only. The
+        # General Singles/Doubles peer model consumes the Phoenix 2 snapshot.
+        payload = build_recommendation_index(
+            _read_snapshot("phoenix1"),
+            phoenix2,
+            generated_at_utc=generated_at,
+            combined_charts=annotations,
+            phoenix2_slopes={},
+            generation_key=generation_key,
+            shard_writer=write_recommendation_shard,
+            pumbility_model=peer_model,
+        )
+        model_path = GENERATIONS_PATH / generation_key / "peer-model.npz"
+        model_path.write_bytes(peer_model.to_npz_bytes())
+        _write_json(GENERATIONS_PATH / generation_key / "peer-model-metadata.json", peer_model.metadata)
+        # The local manual-rating route reads these public tier annotations;
+        # the General peer model independently enumerates its current catalog.
+        payload["charts"] = [
+            {key: chart.get(key) for key in RECOMMENDATION_CHART_FIELDS}
+            for chart in annotations
+            if isinstance(chart.get("estimatedDifficulty"), (int, float))
+            and math.isfinite(float(chart["estimatedDifficulty"]))
+        ]
+        _write_json(OUTPUT_PATH, payload)
+        print(f"Built Phoenix 2 PIUScores recommendations for {len(payload['players']):,} players; tier analyses preserved.")
+        return 0
+
 
     phoenix1 = (
         sanitize_snapshot({

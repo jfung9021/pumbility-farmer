@@ -25,6 +25,11 @@ OFFICIAL_DIFFICULTY_RE = re.compile(r"^[SD][1-9][0-9]?$", re.IGNORECASE)
 MIN_RECOMMENDATION_LEVEL = 16
 RECOMMENDATION_OFFICIAL_LEVEL_RADIUS = 2
 RECOMMENDATION_DISPLAY_COUNT = 50
+GENERAL_PUMBILITY_METHOD = "general-piuscores-p50-modes-overall-top50-phoenix2-v3"
+OVERALL_OVERRIDE_FIELDS = frozenset({
+    "projectedGain", "modeProjectedGain", "replacedPumbility",
+    "scoreAtOrAboveTargetCount", "gainRank", "scoreCountRank", "rankScore", "recommendationRank",
+})
 
 
 class RecommendationArtifactQueryError(ValueError):
@@ -134,7 +139,9 @@ def _bounded_standard_mode(
 ) -> dict[str, Any]:
     """Clip current and legacy candidate lists to the persisted skill window."""
     mode = dict(raw_mode)
-    bounds = recommendation_official_level_range(mode.get("scoringRating"))
+    bounds = ((MIN_RECOMMENDATION_LEVEL, math.inf)
+              if mode.get("skillMethod") == GENERAL_PUMBILITY_METHOD
+              else recommendation_official_level_range(mode.get("scoringRating")))
     bounded_lists: dict[str, list[dict[str, Any]]] = {}
     for field in ("filterCandidates", "topRecommendations"):
         raw_candidates = mode.get(field, [])
@@ -157,6 +164,7 @@ def _bounded_standard_mode(
     # Phoenix 1 top-50 exceptions. That exception flag is intentionally private,
     # so preserve the authoritative count rather than trying to infer it here.
     return mode
+
 
 
 def _bounded_modes(raw_modes: Mapping[str, Any]) -> dict[str, Any]:
@@ -238,10 +246,10 @@ def compact_player_recommendation_cache(
             candidate_without_gain = {
                 key: value
                 for key, value in candidate.items()
-                if key != "projectedGain"
+                if key not in OVERALL_OVERRIDE_FIELDS
             }
             source_without_gain = {
-                key: value for key, value in source.items() if key != "projectedGain"
+                key: value for key, value in source.items() if key not in OVERALL_OVERRIDE_FIELDS
             }
             if candidate_without_gain != source_without_gain:
                 raise ValueError(
@@ -250,7 +258,7 @@ def compact_player_recommendation_cache(
             references.append(
                 {
                     "chartId": chart_id,
-                    "projectedGain": candidate.get("projectedGain"),
+                    **{key: candidate[key] for key in OVERALL_OVERRIDE_FIELDS if key in candidate},
                 }
             )
             seen.add(chart_id)
@@ -282,6 +290,7 @@ def compact_player_recommendation_cache(
     result["player"] = player
     result[PLAYER_CACHE_STORAGE_SCHEMA_FIELD] = PLAYER_CACHE_STORAGE_SCHEMA_VERSION
     return result
+
 
 
 def _materialized_overall(
@@ -338,7 +347,7 @@ def _materialized_overall(
             candidates.append(
                 {
                     **source,
-                    "projectedGain": raw_reference.get("projectedGain"),
+                    **{key: raw_reference[key] for key in OVERALL_OVERRIDE_FIELDS if key in raw_reference},
                 }
             )
             if limit is not None and len(candidates) >= limit:
@@ -392,6 +401,7 @@ def _materialized_overall(
         overall["filterCandidateCount"] = len(valid_filter_reference_ids)
     overall["filterCandidates"] = candidates
     return overall
+
 
 
 def _project_legacy_overall(

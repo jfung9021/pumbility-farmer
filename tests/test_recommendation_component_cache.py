@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from analysis_runtime import MemoryBlobStore
+from general_pumbility import GeneralPumbilityModel
 from piu_recommendations import (
     ScoreResponseModel, fit_score_response_model_mode_from_frames,
 )
@@ -119,7 +120,7 @@ class RecommendationComponentCacheTests(unittest.TestCase):
         for player in first["players"]:
             player["lastSyncedAtUtc"] = first["generatedAtUtc"]
             player["username"] = "changed-label"
-        with patch("recommendation_refresh.fit_score_response_model_mode_from_frames",
+        with patch("recommendation_refresh.GeneralPumbilityModel.from_snapshot",
                    side_effect=AssertionError("unchanged mode was fitted again")):
             actual = build_recommendation_score_mode_artifact(copy.deepcopy(p1), first, **kwargs)
         self.assertEqual(actual, expected)
@@ -136,12 +137,12 @@ class RecommendationComponentCacheTests(unittest.TestCase):
                            if path.startswith(PREFIX + "modes/") and path.endswith(".json"))
         marker = self.store.get_json(marker_path)
         self.store.binary_values.pop(marker["path"])
-        with patch("recommendation_refresh.fit_score_response_model_mode_from_frames",
-                   wraps=fit_score_response_model_mode_from_frames) as fitted:
+        with patch("recommendation_refresh.GeneralPumbilityModel.from_snapshot",
+                   wraps=GeneralPumbilityModel.from_snapshot) as fitted:
             self.assertEqual(build(), expected)
         fitted.assert_called_once()
         with patch.object(self.store, "get_bytes", side_effect=TimeoutError("storage unavailable")), \
-             patch("recommendation_refresh.fit_score_response_model_mode_from_frames") as fitted:
+             patch("recommendation_refresh.GeneralPumbilityModel.from_snapshot") as fitted:
             with self.assertRaisesRegex(TimeoutError, "storage unavailable"):
                 build()
         fitted.assert_not_called()
@@ -190,7 +191,7 @@ class RecommendationComponentCacheTests(unittest.TestCase):
         changed = build(snapshot, "changed", snapshot["generatedAtUtc"])
         self.assertNotEqual(first[0]["players"][0]["playerInputIdentity"], changed[0]["players"][0]["playerInputIdentity"])
         # A serving dependency can change without changing the numeric NPZ.
-        with patch("recommendation_refresh._recommendation_method", return_value={"changed-policy": True}):
+        with patch("recommendation_refresh.general_recommendation_method", return_value={"changed-policy": True}):
             changed_policy = build(fixture.snapshot, "policy", snapshot["generatedAtUtc"])
         self.assertEqual(first[2], changed_policy[2])
         self.assertNotEqual(first[0]["numericalModelIdentity"], changed_policy[0]["numericalModelIdentity"])

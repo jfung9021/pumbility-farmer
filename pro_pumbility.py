@@ -13,16 +13,18 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Mapping, Sequence
 
-from phoenix2_pumbility import GRADE_BANDS, grade_for_score, phoenix2_pumbility
+from phoenix2_pumbility import grade_for_score, phoenix2_pumbility
 from piu_recommendations import _top50_marginal_gain
+from pumbility_peer_policy import linear_median, projected_target as _policy_target, select_pumbility_peers
+from recommendation_ranking import RANKING_METHOD, rank_recommendations
 
 
 SCHEMA_VERSION = 1
-METHOD = "pro-pumbility-p50-adaptive-overall-phoenix2-v2"
+METHOD = "pro-pumbility-p50-adaptive-overall-phoenix2-v4"
 MIX = "Phoenix2"
 MINIMUM_PEERS = 10
 UPWARD_WINDOWS = (100, 150, 200)
-MAXIMUM_RANK = 300
+MAXIMUM_RANK = 500
 
 
 class ProPumbilityError(ValueError):
@@ -84,27 +86,7 @@ def _rankings(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _cohort(rows: Sequence[Mapping[str, Any]], subject: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], dict[str, Any]]:
-    rating, player_id = subject["rating"], subject["playerId"]
-    peers: list[Mapping[str, Any]] = []
-    window = UPWARD_WINDOWS[-1]
-    for window in UPWARD_WINDOWS:
-        peers = [row for row in rows if row["playerId"] != player_id
-                 and rating <= row["rating"] <= rating + window]
-        if len(peers) >= MINIMUM_PEERS:
-            break
-    backfill_count = 0
-    if len(peers) < MINIMUM_PEERS:
-        lower = sorted((row for row in rows if row["playerId"] != player_id and row["rating"] < rating),
-                       key=lambda row: (-row["rating"], row["rank"], row["playerId"]))
-        addition = lower[:MINIMUM_PEERS - len(peers)]
-        peers.extend(addition)
-        backfill_count = len(addition)
-    values = [row["rating"] for row in peers]
-    return peers, {"minimumPlayers": MINIMUM_PEERS, "upwardWindow": window,
-                   "backfillCount": backfill_count, "playerCount": len(peers),
-                   "minimumPumbility": float(min(values)) if values else None,
-                   "maximumPumbility": float(max(values)) if values else None,
-                   "limitedData": len(peers) < MINIMUM_PEERS}
+    return select_pumbility_peers(rows, subject, tie_key=lambda row: (row["rank"], row["playerId"]))
 
 
 def select_peer_cohort(rankings: Sequence[Mapping[str, Any]], official_player_id: str | int) -> tuple[list[str], dict[str, Any]]:
@@ -124,10 +106,7 @@ def _percentile(scores: Sequence[int]) -> Decimal:
     ordered = sorted(scores)
     if any(type(score) is not int or not 0 <= score <= 1_000_000 for score in ordered):
         raise ProPumbilityError("An official peer score is outside the expected range.")
-    position = Decimal(len(ordered) - 1) * Decimal("0.5")
-    lower = int(position)
-    upper = min(lower + 1, len(ordered) - 1)
-    return Decimal(ordered[lower]) + (Decimal(ordered[upper]) - Decimal(ordered[lower])) * (position - lower)
+    return linear_median(ordered)
 
 
 def percentile50(scores: Sequence[int]) -> float:
@@ -140,12 +119,7 @@ def projected_target(raw_score: Any) -> dict[str, Any]:
     value = _decimal(raw_score)
     if value is None or not 0 <= value <= 1_000_000:
         raise ProPumbilityError("A projected score is outside the expected range.")
-    plate = "PG" if value == 1_000_000 else "SG" if value > 995_000 else "MG"
-    grade = grade_for_score(value)
-    boundary = next(threshold for threshold, label, _ in GRADE_BANDS if label == grade)
-    return {"rawPercentileScore": float(value), "gradeBoundaryScore": boundary,
-            "targetScore": 1_000_000 if plate == "PG" else boundary,
-            "targetGrade": grade, "assumedPlate": plate}
+    return _policy_target(value)
 
 
 @dataclass(frozen=True)
@@ -186,7 +160,7 @@ def _prepare(snapshot: Mapping[str, Any]) -> _Context:
         if cid in charts:
             raise ProPumbilityError("The Phoenix2 chart catalog repeats a chart ID.")
         charts[cid] = chart
-        if (kind == "Single" and level >= 24) or (kind == "Double" and level >= 25):
+        if (kind == "Single" and level >= 23) or (kind == "Double" and level >= 24):
             candidates.append(chart)
     boards: dict[str, Mapping[str, Any]] = {}
     for board in snapshot.get("boards", []):
@@ -210,7 +184,7 @@ def _prepare(snapshot: Mapping[str, Any]) -> _Context:
             entries[peer_id] = max(score, entries.get(peer_id, -1))
         boards[cid] = {**board, "scores": entries}
     if any(chart["chartId"] not in boards for chart in candidates):
-        raise ProPumbilityError("The official capture is incomplete for S24+ and D25+ charts.")
+        raise ProPumbilityError("The official capture is incomplete for S23+ and D24+ charts.")
     by_player = {row["playerId"]: row for row in ranking_rows}
     official_profiles: dict[str, Mapping[str, Any]] = {}
     for profile in snapshot.get("officialProfiles", []):
@@ -316,7 +290,8 @@ def _build(context: _Context, profile: Mapping[str, Any], generation: str, gener
               "overallRank": subject["rank"] if subject else None,
               "overallPumbility": float(subject["rating"]) if subject else None}
     payload: dict[str, Any] = {"schemaVersion": SCHEMA_VERSION, "method": METHOD, "mix": MIX,
-        "scope": "overall", "generation": generation, "snapshotAt": context.snapshot["snapshotAt"],
+        "scope": "overall", "rankingMethod": RANKING_METHOD,
+        "generation": generation, "snapshotAt": context.snapshot["snapshotAt"],
         "fetchedAtUtc": context.snapshot["fetchedAtUtc"], "generatedAtUtc": generated_at,
         "status": "ready", "message": None, "eligible": False, "player": player,
         "cohort": None, "baseline": None, "recommendations": [],
@@ -325,7 +300,7 @@ def _build(context: _Context, profile: Mapping[str, Any], generation: str, gener
         payload.update(status="identity-unresolved", message="Link your official Phoenix 2 game tag by importing scores on PIUScores.")
         return payload
     if subject is None or subject["rank"] > MAXIMUM_RANK:
-        payload.update(status="ineligible", message="Pro Farming is available to the official overall Pumbility top 300.")
+        payload.update(status="ineligible", message="Pro Farming is available to the official overall Pumbility top 500.")
         return payload
     payload["eligible"] = True
     peers, cohort = _cohort(context.rankings, subject)
@@ -363,10 +338,10 @@ def _build(context: _Context, profile: Mapping[str, Any], generation: str, gener
             "currentPumbility": old_value, "currentPlate": old.get("plate") if old else None,
             "currentPlateEstimated": bool(old and old.get("plateEstimated")),
             "peerScoreCount": len(observed), "cohortPlayerCount": len(peers),
+            "scoreAtOrAboveTargetCount": sum(score >= target["targetScore"] for score in observed),
             "boardPossiblyTruncated": bool(board.get("possiblyTruncated")),
             "limitedData": len(observed) < MINIMUM_PEERS or bool(board.get("possiblyTruncated"))})
-    payload["recommendations"] = sorted(rows, key=lambda row: (-row["projectedGain"], -row["expectedPumbility"],
-                                                               row["songName"].casefold(), row["chartId"]))
+    payload["recommendations"] = rank_recommendations(rows)
     if not rows:
         payload["message"] = "No observed peer targets currently improve this player's Phoenix 2 overall Top 50."
     if cohort["limitedData"]:

@@ -21,6 +21,8 @@ from recommendation_artifacts import (
 )
 from pumbility_contract import (
     PLAYER_REFRESH_FRESHNESS,
+    RECOMMENDATION_SCHEMA_VERSION,
+    MODEL_ARTIFACT_SCHEMA_VERSION,
     cached_player_is_fresh,
     find_player_metadata,
     player_refresh_job_id,
@@ -77,16 +79,20 @@ def _player_score_progress(player: Mapping) -> dict[str, dict[str, int]]:
             details = modes.get(mode)
         if not isinstance(details, Mapping):
             continue
-        projection_ready = bool(details.get("projectionAvailable"))
-        valid = (
-            details.get("projectionRatingSourceScoreCount")
-            if projection_ready
-            else details.get("phoenix2ScoreCount", details.get("validScoreCount"))
-        )
-        required = details.get(
-            "projectionRatingRequiredScoreCount",
-            details.get("requiredScoreCount"),
-        )
+        if details.get("skillMethod") == "general-piuscores-p50-modes-overall-top50-phoenix2-v3" or "requiredScoreCount" in details and "validScoreCount" in details and stored is not None:
+            valid = details.get("validScoreCount")
+            required = details.get("requiredScoreCount", 50)
+        else:
+            projection_ready = bool(details.get("projectionAvailable"))
+            valid = (
+                details.get("projectionRatingSourceScoreCount")
+                if projection_ready
+                else details.get("phoenix2ScoreCount", details.get("validScoreCount"))
+            )
+            required = details.get(
+                "projectionRatingRequiredScoreCount",
+                details.get("requiredScoreCount"),
+            )
         if (
             isinstance(valid, bool)
             or not isinstance(valid, int)
@@ -101,6 +107,7 @@ def _player_score_progress(player: Mapping) -> dict[str, dict[str, int]]:
             "requiredScoreCount": required,
         }
     return result
+
 
 
 def _read_player(store: PrivateBlobStore, payload: dict, player_key: str) -> dict | None:
@@ -528,11 +535,20 @@ def rollback_recommendation_generation(
                 content={"error": "The requested recommendation generation was not found."},
                 headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
             )
+        if target.get("schemaVersion") != RECOMMENDATION_SCHEMA_VERSION:
+            return JSONResponse(
+                status_code=409,
+                content={"error": "This generation requires its matching application version."},
+                headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+            )
         storage_schema = int(target.get("storageSchemaVersion") or 0)
         if storage_schema >= 3:
             shard_count = int(target.get("inputShardCount") or 0)
+            target_model = store.get_json(recommendation_model_path(generation))
             complete = (
-                store.get_json(recommendation_model_path(generation)) is not None
+                isinstance(target_model, Mapping)
+                and target_model.get("artifactSchemaVersion") == MODEL_ARTIFACT_SCHEMA_VERSION
+                and target_model.get("recommendationSchemaVersion") == RECOMMENDATION_SCHEMA_VERSION
                 and store.get_bytes(recommendation_score_model_path(generation)) is not None
                 and shard_count > 0
                 and all(
