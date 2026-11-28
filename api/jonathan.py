@@ -151,6 +151,19 @@ def refresh_from_jonathan(
         )
 
 
+@router.post("/api/jonathan/cancel")
+def cancel_from_jonathan(request: Request, job_id: str = Query(default="", alias="jobId")):
+    denial = _tier_fit_denial(request)
+    if denial is not None:
+        return denial
+    from api.analyze import cancel_analysis_job
+    result = cancel_analysis_job(job_id)
+    if isinstance(result, JSONResponse):
+        result.headers["Cache-Control"] = "no-store"
+        return result
+    return _response(200, result)
+
+
 def enqueue_tier_publication(job_id: str) -> None:
     from worker.tasks import publish_tiers
     from worker.constants import QUEUE_NAME
