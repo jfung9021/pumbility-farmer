@@ -73,7 +73,8 @@ class GeneralPumbilityTests(unittest.TestCase):
             self.assertEqual(result["modePumbility"], 5000)
             self.assertEqual(result["requiredScoreCount"], 50)
             self.assertEqual(result["cohort"]["playerCount"], 11)
-            self.assertEqual(result["cohort"]["upwardWindow"], 100)
+            self.assertEqual(result["cohort"]["upwardWindow"], 200)
+            self.assertEqual(result["cohort"]["minimumPlayers"], 20)
             row = candidates(result)[cid]
             self.assertEqual(row["projectedScore"], 995000)
             self.assertEqual(row["projectedPlateCode"], "MG")
@@ -333,7 +334,7 @@ class GeneralPumbilityTests(unittest.TestCase):
         with np.load(io.BytesIO(full.to_npz_bytes()), allow_pickle=False) as saved:
             arrays = {key: saved[key] for key in saved.files}
         header = json.loads(arrays["header"].tobytes().decode("utf-8"))
-        for version in (1, 2):
+        for version in (1, 2, 3):
             header["method"] = f"general-piuscores-p50-modes-overall-top50-phoenix2-v{version}"
             arrays["header"] = np.frombuffer(json.dumps(header).encode("utf-8"), dtype=np.uint8)
             old_identity = io.BytesIO()
@@ -371,6 +372,101 @@ class GeneralPumbilityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             model.count_scores_at_least("p00", "coop", 995000.5)
 
+    def test_local_200_window_retains_extra_peers_after_default_100_succeeds(self):
+        from pro_pumbility import _cohort
+
+        snapshot = fixture(players=13, modes=("Single",))
+        for row in snapshot["scores"]:
+            if row["playerId"] in {"p11", "p12"} and row["chartId"].startswith("s-base"):
+                row["pumbility"] = 103
+        default = GeneralPumbilityModel.from_snapshot(snapshot, peer_windows=(100, 150, 200), minimum_peers=10)
+        local = GeneralPumbilityModel.from_snapshot(snapshot, peer_windows=(200,), minimum_peers=10)
+        default_mode = default.build_player("p00", include_candidates=True)["modes"]["singles"]
+        local_mode = local.build_player("p00", include_candidates=True)["modes"]["singles"]
+        self.assertEqual(default.metadata["peerWindows"], [100, 150, 200])
+        self.assertEqual(local.metadata["peerWindows"], [200])
+        self.assertEqual(default_mode["cohort"]["upwardWindow"], 100)
+        self.assertEqual(default_mode["cohort"]["playerCount"], 10)
+        self.assertEqual(local_mode["cohort"]["upwardWindow"], 200)
+        self.assertEqual(local_mode["cohort"]["playerCount"], 12)
+        self.assertEqual(candidates(default_mode)["s-target"]["peerScoreCount"], 10)
+        self.assertEqual(candidates(local_mode)["s-target"]["peerScoreCount"], 12)
+        self.assertEqual(local_mode["modePumbility"], default_mode["modePumbility"])
+        official_subject = {"playerId": "self", "rank": 1, "rating": Decimal(5000)}
+        official_peers = [{"playerId": f"peer-{index}", "rank": index + 1,
+                           "rating": Decimal(5000 if index <= 10 else 5150)} for index in range(1, 13)]
+        self.assertEqual(_cohort(official_peers, official_subject)[1]["upwardWindow"], 100)
+        self.assertEqual(_cohort(official_peers, official_subject)[1]["playerCount"], 10)
+
+    def test_local_window_policy_roundtrips_merges_and_older_npz_defaults(self):
+        snapshot = fixture()
+        local = GeneralPumbilityModel.from_snapshot(snapshot, peer_windows=(200,))
+        restored = GeneralPumbilityModel.from_npz_bytes(local.to_npz_bytes())
+        parts = [GeneralPumbilityModel.from_snapshot(snapshot, mode_types=(kind,), peer_windows=(200,))
+                 for kind in ("Single", "Double")]
+        merged = GeneralPumbilityModel.merge_models(parts)
+        for model in (restored, merged):
+            self.assertEqual(model.peer_windows, (200,))
+            self.assertEqual(model.metadata["peerWindows"], [200])
+            self.assertEqual(model.build_player("p00", include_candidates=True), local.build_player("p00", include_candidates=True))
+        default = GeneralPumbilityModel.from_snapshot(snapshot, peer_windows=(100, 150, 200), minimum_peers=10)
+        with self.assertRaisesRegex(ValueError, "peer window"):
+            GeneralPumbilityModel.merge_models([default, local])
+        with np.load(io.BytesIO(default.to_npz_bytes()), allow_pickle=False) as saved:
+            arrays = {key: saved[key] for key in saved.files}
+        header = json.loads(arrays["header"].tobytes().decode("utf-8"))
+        header.pop("peerWindows")
+        header.pop("minimumPeers")
+        arrays["header"] = np.frombuffer(json.dumps(header).encode("utf-8"), dtype=np.uint8)
+        previous = io.BytesIO()
+        np.savez_compressed(previous, **arrays)
+        old = GeneralPumbilityModel.from_npz_bytes(previous.getvalue())
+        self.assertEqual(old.peer_windows, (100, 150, 200))
+        self.assertEqual(old.minimum_peers, 10)
+        self.assertEqual(old.build_player("p00", include_candidates=True), default.build_player("p00", include_candidates=True))
+
+    def test_local_minimum_20_backfills_15_upper_peers_but_retains_more_than_20(self):
+        from pro_pumbility import _cohort
+
+        snapshot = fixture(players=21, modes=("Single",))
+        for row in snapshot["scores"]:
+            if row["playerId"] >= "p16" and row["chartId"].startswith("s-base"):
+                row["pumbility"] = 99
+        local = GeneralPumbilityModel.from_snapshot(snapshot, peer_windows=(200,), minimum_peers=20)
+        result = local.build_player("p00", include_candidates=True)["modes"]["singles"]
+        self.assertEqual(result["cohort"]["minimumPlayers"], 20)
+        self.assertEqual(result["cohort"]["playerCount"], 20)
+        self.assertEqual(result["cohort"]["backfillCount"], 5)
+        self.assertFalse(result["cohort"]["limitedData"])
+        self.assertEqual(candidates(result)["s-target"]["peerScoreCount"], 20)
+        larger = GeneralPumbilityModel.from_snapshot(fixture(players=24, modes=("Single",)), peer_windows=(200,), minimum_peers=20)
+        larger_result = larger.build_player("p00")["modes"]["singles"]
+        self.assertEqual(larger_result["cohort"]["playerCount"], 23)
+        self.assertEqual(larger_result["cohort"]["backfillCount"], 0)
+        official_subject = {"playerId": "self", "rank": 1, "rating": Decimal(5000)}
+        official_peers = [{"playerId": f"peer-{index}", "rank": index + 1,
+                           "rating": Decimal(5000 if index <= 15 else 4950)} for index in range(1, 21)]
+        official_cohort = _cohort(official_peers, official_subject)[1]
+        self.assertEqual(official_cohort["minimumPlayers"], 10)
+        self.assertEqual(official_cohort["playerCount"], 15)
+        self.assertEqual(official_cohort["backfillCount"], 0)
+
+    def test_local_minimum_peer_policy_roundtrips_merges_and_rejects_mixed_parts(self):
+        snapshot = fixture()
+        local = GeneralPumbilityModel.from_snapshot(snapshot, peer_windows=(200,), minimum_peers=20)
+        restored = GeneralPumbilityModel.from_npz_bytes(local.to_npz_bytes())
+        parts = [GeneralPumbilityModel.from_snapshot(snapshot, mode_types=(kind,), peer_windows=(200,), minimum_peers=20)
+                 for kind in ("Single", "Double")]
+        merged = GeneralPumbilityModel.merge_models(parts)
+        for model in (restored, merged):
+            self.assertEqual(model.minimum_peers, 20)
+            self.assertEqual(model.metadata["minimumPeers"], 20)
+            self.assertEqual(model.build_player("p00", include_candidates=True), local.build_player("p00", include_candidates=True))
+            self.assertTrue(model.build_player("p00")["modes"]["singles"]["cohort"]["limitedData"])
+        default_minimum = GeneralPumbilityModel.from_snapshot(snapshot, peer_windows=(200,), minimum_peers=10)
+        with self.assertRaisesRegex(ValueError, "minimum peer"):
+            GeneralPumbilityModel.merge_models([default_minimum, local])
+
     def test_zero_positive_gains_is_ready_and_has_observed_projections(self):
         modes = build(fixture(base=1000))
         self.assertTrue(modes["singles"]["eligible"])
@@ -400,6 +496,14 @@ class PeerPolicyTests(unittest.TestCase):
         peers, meta = select_pumbility_peers([subject, rows[0]], subject)
         self.assertEqual(len(peers), 1)
         self.assertTrue(meta["limitedData"])
+
+    def test_single_configured_window_skips_earlier_windows(self):
+        subject = {"playerId": "self", "rating": Decimal(1000)}
+        rows = [{"playerId": f"peer-{index}", "rating": Decimal(1050 if index < 10 else 1150)} for index in range(12)]
+        self.assertEqual(select_pumbility_peers(rows, subject)[1]["playerCount"], 10)
+        peers, metadata = select_pumbility_peers(rows, subject, upward_windows=(200,))
+        self.assertEqual(len(peers), 12)
+        self.assertEqual(metadata["upwardWindow"], 200)
 
     def test_shared_policy_matches_pro_wrappers(self):
         from pro_pumbility import _cohort, percentile50, projected_target as pro_target

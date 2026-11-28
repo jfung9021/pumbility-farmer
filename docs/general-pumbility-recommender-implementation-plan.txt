@@ -1,6 +1,15 @@
 GENERAL RECOMMENDER: PIUSCORES PUMBILITY IMPLEMENTATION PLAN
 November 28, 2026 (JST)
 
+Production amendment: General now starts directly with all peers in [P,P+200].
+If fewer than 20 qualify, backfill to 20 using the nearest lower mode totals.
+Retain all qualifying upper peers when more than 20 exist. Pro keeps its staged
++100/+150/+200 windows and ten-peer minimum. This replaces the earlier General
+cohort rule documented below. General method v4, public schema 30 and outer
+model artifact schema 9 invalidate prior policy generations and personal caches.
+The local +200/20 generation was verified across all 1,064 captured profiles
+before the user requested production promotion.
+
 Status: implemented and verified locally. Three requested subagents inspected
 and implemented the original plan. The user confirmed adopting Pro's skill and
 peer methodology, then explicitly requested actual PIUScores peer plates for

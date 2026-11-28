@@ -25,7 +25,7 @@ OFFICIAL_DIFFICULTY_RE = re.compile(r"^[SD][1-9][0-9]?$", re.IGNORECASE)
 MIN_RECOMMENDATION_LEVEL = 16
 RECOMMENDATION_OFFICIAL_LEVEL_RADIUS = 2
 RECOMMENDATION_DISPLAY_COUNT = 50
-GENERAL_PUMBILITY_METHOD = "general-piuscores-p50-modes-overall-top50-phoenix2-v3"
+GENERAL_PUMBILITY_METHOD = "general-piuscores-p50-modes-overall-top50-phoenix2-v4"
 OVERALL_OVERRIDE_FIELDS = frozenset({
     "projectedGain", "modeProjectedGain", "replacedPumbility",
     "scoreAtOrAboveTargetCount", "gainRank", "scoreCountRank", "rankScore", "recommendationRank",

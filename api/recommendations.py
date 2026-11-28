@@ -79,7 +79,7 @@ def _player_score_progress(player: Mapping) -> dict[str, dict[str, int]]:
             details = modes.get(mode)
         if not isinstance(details, Mapping):
             continue
-        if details.get("skillMethod") == "general-piuscores-p50-modes-overall-top50-phoenix2-v3" or "requiredScoreCount" in details and "validScoreCount" in details and stored is not None:
+        if details.get("skillMethod") == "general-piuscores-p50-modes-overall-top50-phoenix2-v4" or "requiredScoreCount" in details and "validScoreCount" in details and stored is not None:
             valid = details.get("validScoreCount")
             required = details.get("requiredScoreCount", 50)
         else:

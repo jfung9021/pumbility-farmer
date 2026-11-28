@@ -86,8 +86,8 @@ class GeneralPumbilityIntegrationTests(unittest.TestCase):
             store, client, index_path=self.index_path, player_key=expected["playerKey"],
             now=lambda: datetime(2026, 11, 28, tzinfo=timezone.utc),
         )
-        self.assertEqual(full["schemaVersion"], 29)
-        self.assertEqual(model["artifactSchemaVersion"], 8)
+        self.assertEqual(full["schemaVersion"], 30)
+        self.assertEqual(model["artifactSchemaVersion"], 9)
         self.assertEqual(index["method"]["id"], METHOD)
         for mode in ("singles", "doubles", "overall"):
             result = actual["player"]["modes"][mode]
@@ -105,7 +105,7 @@ class GeneralPumbilityIntegrationTests(unittest.TestCase):
         peer_model = GeneralPumbilityModel.from_snapshot(self.snapshot)
         player = peer_model.build_player("subject", include_candidates=True)
         player["playerKey"] = public_player_key("subject")
-        payload = {"schemaVersion": 29, "player": player}
+        payload = {"schemaVersion": 30, "player": player}
         cached = compact_player_recommendation_cache(payload)
         materialized = materialize_player_recommendation_cache(cached)
         self.assertEqual(materialized, payload)
@@ -147,7 +147,7 @@ class GeneralPumbilityIntegrationTests(unittest.TestCase):
             snapshot["scores"].append(self.score("subject", cid, low_expected - 25))
         player = GeneralPumbilityModel.from_snapshot(snapshot).build_player("subject", include_candidates=True)
         player["playerKey"] = public_player_key("subject")
-        payload = {"schemaVersion": 29, "player": player}
+        payload = {"schemaVersion": 30, "player": player}
         single = {row["chartId"]: row for row in player["modes"]["singles"]["filterCandidates"]}
         overall = {row["chartId"]: row for row in player["modes"]["overall"]["filterCandidates"]}
         self.assertEqual(single["low-target"]["recommendationRank"], 1)

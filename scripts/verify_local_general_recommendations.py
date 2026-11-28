@@ -49,11 +49,13 @@ def verify_ranking(result: dict) -> None:
 def verify() -> dict:
     snapshot = _read_snapshot("phoenix2")
     index = json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
-    assert index["schemaVersion"] == RECOMMENDATION_SCHEMA_VERSION == 29
+    assert index["schemaVersion"] == RECOMMENDATION_SCHEMA_VERSION == 30
     assert index["method"]["id"] == METHOD
     generation = GENERATIONS_PATH / index["generationKey"]
     restored = GeneralPumbilityModel.from_npz_bytes((generation / "peer-model.npz").read_bytes())
-    fresh = GeneralPumbilityModel.from_snapshot(snapshot)
+    fresh = GeneralPumbilityModel.from_snapshot(
+        snapshot, peer_windows=restored.peer_windows, minimum_peers=restored.minimum_peers,
+    )
     assert restored.charts == fresh.charts
     assert restored.facts == fresh.facts
     assert restored.metadata == fresh.metadata

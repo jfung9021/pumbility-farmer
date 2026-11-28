@@ -858,7 +858,7 @@ export interface ClearingSkillMetadata {
 
 export interface RecommendationModeResult {
   eligible: boolean;
-  skillMethod?: "general-piuscores-p50-modes-overall-top50-phoenix2-v3";
+  skillMethod?: "general-piuscores-p50-modes-overall-top50-phoenix2-v4";
   rankingMethod?: "equal-weight-gain-and-target-score-count-competition-ranks-v1";
   skillSource?: "piuscores-submitted";
   modePumbility?: number | null;
@@ -913,7 +913,7 @@ export interface RecommendationModeResult {
     | "similar-skill-pumbility-11-30-q50-v6"
     | "similar-skill-pumbility-11-30-weighted-q50-v8"
     | "similar-skill-pumbility-11-30-weighted-q50-v9"
-    | "general-piuscores-p50-modes-overall-top50-phoenix2-v3"
+    | "general-piuscores-p50-modes-overall-top50-phoenix2-v4"
     | "chart-population-q75-v1"
     | "estimated-difficulty-master-grade-ladder-v1"
     | "estimated-difficulty-master-grade-ladder-v2"
