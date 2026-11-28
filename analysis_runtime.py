@@ -874,6 +874,7 @@ def new_job(
     attempt: int = 0,
     full_sync: bool = False,
     reanalyze_only: bool = False,
+    recommendations_only: bool = False,
     trigger: str = "manual",
     mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> dict[str, Any]:
@@ -898,7 +899,8 @@ def new_job(
         "error": None,
         "attempt": attempt,
         "fullSync": full_sync,
-        "reanalyzeOnly": reanalyze_only,
+        "reanalyzeOnly": reanalyze_only or recommendations_only,
+        **({"recommendationsOnly": True} if recommendations_only else {}),
         "trigger": trigger,
         "mix": mix_spec.key,
     }
@@ -1003,12 +1005,13 @@ def request_refresh(
     deterministic_job_id: str | None = None,
     full_sync: bool = False,
     reanalyze_only: bool = False,
+    recommendations_only: bool = False,
     trigger: str = "manual",
     mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> tuple[int, dict[str, Any]]:
     """Apply freshness, global-active, and failed-retry rules before enqueueing."""
-    if full_sync and reanalyze_only:
-        raise ValueError("A refresh cannot be both a full sync and reanalysis-only.")
+    if full_sync and (reanalyze_only or recommendations_only):
+        raise ValueError("A refresh cannot be both a full sync and a stored-input rebuild.")
     mix_spec = resolve_mix(mix)
     if mix_spec.archived:
         return 409, {
@@ -1124,7 +1127,9 @@ def request_refresh(
         )
         requeue = getattr(jobs, "requeue", None)
         if (
-            checkpoint_phase
+            not recommendations_only
+            and not previous.get("cancelRequested")
+            and checkpoint_phase
             in {
                 TYPED_CHECKPOINT_DATABASE_MODEL_PHASE,
                 TYPED_CHECKPOINT_DATABASE_POINTERS_PHASE,
@@ -1193,6 +1198,7 @@ def request_refresh(
         attempt=attempt,
         full_sync=full_sync,
         reanalyze_only=reanalyze_only,
+        recommendations_only=recommendations_only,
         trigger=trigger,
         mix=mix_spec,
     )
@@ -1200,6 +1206,7 @@ def request_refresh(
     # generation that may already have pinned its official evidence.
     job["refreshOfficialSources"] = (
         mix_spec.key == DEFAULT_MIX_KEY
+        and not recommendations_only
         and os.getenv("PIU_OFFICIAL_CROSS_LEVEL_SCORING", "") == "1"
     )
     jobs.save(job)
@@ -4634,6 +4641,8 @@ def execute_analysis_job(
                 "total": 0,
                 "percent": 0,
                 "message": (
+                    "Loading published inputs for recommendation-only refresh."
+                    if existing.get("recommendationsOnly") else
                     f"Loading the stored {mix_spec.label} snapshot for model reanalysis."
                     if existing.get("reanalyzeOnly")
                     else f"Reading the consented-player list and {mix_spec.label} catalog."
@@ -4667,6 +4676,13 @@ def execute_analysis_job(
     try:
         lease_heartbeat = _start_job_lease_heartbeat(job_store, job_id)
         _pulse_job_lease(lease_heartbeat)
+        if existing.get("recommendationsOnly"):
+            from recommendation_model_refresh import execute_recommendation_model_refresh
+            return execute_recommendation_model_refresh(
+                blob_store=blob_store, job_store=job_store, job_id=job_id,
+                now=now, lease_heartbeat=lease_heartbeat,
+                yield_after_checkpoint=yield_after_typed_checkpoint,
+            )
         captured_bundle = None
         if existing.get("capturedRunBundleId"):
             if not typed_persistence_enabled:

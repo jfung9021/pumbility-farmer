@@ -47,6 +47,13 @@ model remain under `.local-data/piu-scores/recommendations`. Existing tier
 estimates are display annotations with their own source policy. The peer model
 is Phoenix 2 only and uses no Phoenix 1 fallback or official score reconstruction.
 
+To rebuild the production recommendation model from already published inputs,
+use the password-protected `POST /api/jonathan/refresh?mode=recommendations`.
+It reuses stored snapshots and current tier annotations, binds the model to the
+existing published analysis run, and advances only the recommendation pointer.
+See the [recommendations-only operator runbook](docs/recommendations-only-refresh.md)
+for admission, cancellation, and verification steps.
+
 ## Pro Farming recommendations
 
 Open `/recommendations?view=pro&mode=overall` for Phoenix 2 recommendations for
@@ -928,7 +935,8 @@ Phoenix 2 remains the default. The Python function at `/api/analyze` supports:
 - `GET /api/analyze?mix=phoenix2`: load the latest successful `AnalysisPayload`.
 - `GET /api/analyze?mix=phoenix2&jobId=...`: load a matching 24-hour queue-job status.
 - `POST /api/analyze?mix=phoenix2`: protected administrator trigger; requires `X-Analysis-Run-Secret` matching `CRON_SECRET` and queues or follows a Phoenix 2 refresh. Add `fullSync=true` to discard the incremental watermark and refetch every consented player's complete score history.
-- `POST /api/jonathan/refresh?mode=incremental|full|reanalyze|official`: protected operator trigger; requires `X-Jonathan-Password` matching `JONATHAN_PASSWORD`. Incremental refresh ignores the freshness cooldown but retains the score watermark; full refresh discards it. Reanalysis rebuilds results from the stored production snapshots without fetching upstream scores or replacing the snapshots. With cross-level Scoring enabled, `official` captures current official leaderboards in private storage and advances the complete manifest only after validation. Run it before an incremental refresh or reanalysis to use fresh official evidence; it does not publish tiers itself.
+- `POST /api/jonathan/refresh?mode=incremental|full|reanalyze|recommendations|official`: protected operator trigger; requires `X-Jonathan-Password` matching `JONATHAN_PASSWORD`. Incremental refresh ignores the freshness cooldown but retains the score watermark; full refresh discards it. Reanalysis rebuilds results from the stored production snapshots without fetching upstream scores or replacing the snapshots. `recommendations` rebuilds only recommendation models and input shards from published snapshots and current tier annotations, retaining the published tier analysis run. With cross-level Scoring enabled, `official` captures current official leaderboards in private storage and advances the complete manifest only after validation. Run it before an incremental refresh or reanalysis to use fresh official evidence; it does not publish tiers itself.
+- `POST /api/jonathan/cancel?jobId=...`: uses the same operator password to request cancellation of an analysis job. Cancellation acceptance does not prove a running invocation has drained; follow the [recommendations-only runbook](docs/recommendations-only-refresh.md) before starting replacement work.
 - `POST /api/jonathan/refresh?mode=official-status`: uses the same operator password and returns only source dates and fetch timestamps from the last complete official manifest. This read-only check can confirm completion after a long capture connection disconnects.
 
 Official capture runs in bounded batches and returns `official-sources-progress`

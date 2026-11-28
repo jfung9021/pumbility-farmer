@@ -70,7 +70,7 @@ def cache_tier_fit(request: Request, payload: dict):
 @router.post("/api/jonathan/refresh")
 def refresh_from_jonathan(
     request: Request,
-    mode: Literal["incremental", "full", "reanalyze", "official", "official-status", "tiers", "scoring-goal-backfill"] = Query(default="incremental"),
+    mode: Literal["incremental", "full", "reanalyze", "recommendations", "official", "official-status", "tiers", "scoring-goal-backfill"] = Query(default="incremental"),
 ):
     password = os.getenv("JONATHAN_PASSWORD", "").strip()
     if not password:
@@ -129,8 +129,9 @@ def refresh_from_jonathan(
             mix=resolve_mix("phoenix2"),
             force_refresh=True,
             full_sync=full_sync,
-            reanalyze_only=mode == "reanalyze",
+            reanalyze_only=mode in {"reanalyze", "recommendations"},
             trigger="jonathan",
+            **({"recommendations_only": True} if mode == "recommendations" else {}),
         )
         return _response(status, payload)
     except ValueError as exc:
