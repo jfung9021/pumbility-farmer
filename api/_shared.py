@@ -23,6 +23,7 @@ def start_or_reuse_analysis(
     deterministic_job_id: str | None = None,
     full_sync: bool = False,
     reanalyze_only: bool = False,
+    recommendations_only: bool = False,
     trigger: str = "manual",
     mix: str | MixSpec = DEFAULT_MIX_KEY,
 ) -> tuple[int, dict[str, Any]]:
@@ -43,4 +44,5 @@ def start_or_reuse_analysis(
         reanalyze_only=reanalyze_only,
         trigger=trigger,
         mix=mix_spec,
+        **({"recommendations_only": True} if recommendations_only else {}),
     )

@@ -126,6 +126,45 @@ def _tier_publication_revisions(cursor: Any) -> dict[str, dict[str, Any]]:
             for row in cursor.fetchall()}
 
 
+def _recommendation_refresh_boundary(cursor: Any) -> dict[str, Any]:
+    """Pin serving context and submitted-input epochs without changing any head."""
+    from pumbility_contract import (
+        combined_tier_blob_path, phoenix1_snapshot_path,
+        recommendation_blob_path, recommendation_model_path,
+    )
+
+    paths = {"base": "analysis/phoenix2/latest.json", "tiers": combined_tier_blob_path(),
+             "recommendations": recommendation_blob_path(), "phoenix1": phoenix1_snapshot_path(),
+             "phoenix2": "analysis/private/phoenix2-current.json"}
+    cursor.execute("""select payload_json ->> 'generationKey' from pumbility.artifacts
+        where object_key=%s and payload_json is not null for update""", (paths["recommendations"],))
+    row = cursor.fetchone()
+    generation = str(row[0] or "").strip() if row else ""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", generation):
+        raise RuntimeError("The published recommendation generation is unavailable.")
+    cursor.execute("""select mg.id::text,mg.analysis_run_id::text,mg.status,ar.status,
+        artifact.object_key from pumbility.model_generations mg
+        join pumbility.analysis_runs ar on ar.id=mg.analysis_run_id
+        join pumbility.artifacts artifact on artifact.id=mg.artifact_id
+        where mg.generation_key=%s for share of mg,ar""", (generation,))
+    typed = cursor.fetchone()
+    if (typed is None or typed[2] != "published" or typed[3] != "published"
+            or str(typed[4]) != recommendation_model_path(generation)):
+        raise RuntimeError("Recommendations-only refresh requires an existing published analysis and model.")
+    paths["model"] = str(typed[4])
+    keys = sorted({*paths.values(), _source_revision_path("phoenix1"), _source_revision_path("phoenix2"),
+                   "analysis/private/phoenix1-current.json"})
+    cursor.execute("""select object_key,sha256,byte_size,xmin::text from pumbility.artifacts
+        where object_key=any(%s) order by object_key for update""", (keys,))
+    revisions = {key: None for key in keys}
+    revisions.update({str(item[0]): {"sha256": str(item[1]), "byteSize": int(item[2]), "revision": str(item[3])}
+                      for item in cursor.fetchall()})
+    if any(revisions[paths[key]] is None for key in ("base", "tiers", "recommendations", "model")):
+        raise RuntimeError("The published base, tier, or recommendation context is incomplete.")
+    return {"analysisRunId": str(typed[1]), "previousModelGenerationId": str(typed[0]),
+            "previousGenerationKey": generation, "expectedRevisions": revisions, "artifactPaths": paths}
+
+
 def _validate_captured_publication_guard(cursor: Any, guard: Mapping[str, Any]) -> None:
     """Fence only explicit recovery publications in the pointer transaction."""
     from pumbility_contract import official_tier_snapshot_path
@@ -2070,6 +2109,85 @@ class PumbilityArtifactStore:
             "snapshotSha256": str(row[3]), "schemaVersion": str(row[4]),
             "jobId": str(row[5]), "mix": str(row[6]),
         }
+
+    def recommendation_refresh_boundary(self) -> dict[str, Any]:
+        """Resolve a published analysis binding and pin current serving/input rows."""
+        with _connect(self.database_url) as connection:
+            with connection.transaction(), connection.cursor() as raw_cursor:
+                cursor = _PublicationDeadlineCursor(raw_cursor)
+                _assert_schema(cursor)
+                cursor.execute("select pg_advisory_xact_lock(hashtextextended(%s,0))", (TIER_PUBLICATION_LOCK,))
+                return _recommendation_refresh_boundary(cursor)
+
+    def publish_recommendation_refresh(
+        self, index: Mapping[str, Any], *, job_id: str, lease_owner: str,
+        analysis_run_id: str, model_generation_id: str,
+        expected_revisions: Mapping[str, Any], completed_job: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Promote only recommendation artifacts/model under pinned inputs and lease."""
+        from pumbility_contract import recommendation_blob_path, recommendation_index_path
+        from psycopg.types.json import Jsonb
+
+        generation = str(index.get("generationKey") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", generation):
+            raise ValueError("The recommendation refresh generation identity is invalid.")
+        if not isinstance(expected_revisions, Mapping) or not expected_revisions:
+            raise ValueError("The recommendation refresh requires pinned revisions.")
+        if completed_job is not None and (completed_job.get("id") != job_id or completed_job.get("status") != "completed"):
+            raise ValueError("The recommendation completion payload does not match its job.")
+        lease_query = """select job.id from pumbility.jobs job
+            join pumbility.job_heads head on head.job_id=job.id and head.name='active:analysis'
+            where job.external_key=%s and job.status='running' and job.lease_owner=%s
+              and job.lease_expires_at >= clock_timestamp() and job.cancellation_requested_at is null
+            for update of job,head"""
+        _publication_io_timeouts()
+        with _connect(self.database_url) as connection:
+            with connection.transaction(), connection.cursor() as raw_cursor:
+                cursor = _PublicationDeadlineCursor(raw_cursor)
+                _assert_schema(cursor)
+                cursor.execute("select pg_advisory_xact_lock(hashtextextended(%s,0))", (TIER_PUBLICATION_LOCK,))
+                cursor.execute("""select ar.status,mg.status,mg.generation_key,mg.analysis_run_id::text
+                    from pumbility.analysis_runs ar
+                    join pumbility.model_generations mg on mg.id=%s::uuid
+                    where ar.id=%s::uuid for update of mg""", (model_generation_id, analysis_run_id))
+                typed = cursor.fetchone()
+                if (typed is None or typed[0] != "published" or typed[1] not in {"shadow", "published"}
+                        or str(typed[2]) != generation or str(typed[3]) != analysis_run_id):
+                    raise RuntimeError("The recommendation model must bind the existing published analysis.")
+                boundary = _recommendation_refresh_boundary(cursor)
+                # Resolve an interrupted response after commit without rewriting
+                # either serving rows or the completed job's released lease.
+                if (typed[1] == "published" and boundary["previousGenerationKey"] == generation
+                        and boundary["previousModelGenerationId"] == model_generation_id
+                        and boundary["analysisRunId"] == analysis_run_id):
+                    return
+                cursor.execute(lease_query, (job_id, lease_owner))
+                if cursor.fetchone() is None:
+                    raise JobLeaseLostError("The recommendations-only publication lease changed or was cancelled.")
+                if boundary["analysisRunId"] != analysis_run_id or boundary["expectedRevisions"] != dict(expected_revisions):
+                    raise JobLeaseLostError("The recommendations-only publication inputs or serving context changed.")
+                self._put_json_row(cursor, recommendation_index_path(generation), index)
+                self._put_json_row(cursor, recommendation_blob_path(), index)
+                cursor.execute("""update pumbility.model_generations set status='published'
+                    where id=%s::uuid and analysis_run_id=%s::uuid and status in ('shadow','published')""",
+                    (model_generation_id, analysis_run_id))
+                if cursor.rowcount != 1:
+                    raise RuntimeError("The recommendation model generation was not promoted.")
+                if completed_job is None:
+                    cursor.execute(lease_query, (job_id, lease_owner))
+                    if cursor.fetchone() is None:
+                        raise JobLeaseLostError("The recommendations-only lease expired during publication.")
+                else:
+                    cursor.execute("""update pumbility.jobs set status='completed',stage=%s,payload=%s,
+                        completed_at=clock_timestamp(),updated_at=clock_timestamp(),lease_owner=null,lease_expires_at=null
+                        where external_key=%s and status='running' and lease_owner=%s
+                          and lease_expires_at >= clock_timestamp() and cancellation_requested_at is null returning id""",
+                        (str(completed_job.get("stage") or "publishing"), Jsonb(dict(completed_job)), job_id, lease_owner))
+                    finished = cursor.fetchone()
+                    if finished is None:
+                        raise JobLeaseLostError("The recommendations-only lease expired before completion.")
+                    cursor.execute("delete from pumbility.job_heads where name='active:analysis' and job_id=%s", (finished[0],))
+                cursor.prepare()
 
     def publish_generation(
         self,
