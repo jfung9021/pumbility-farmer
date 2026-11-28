@@ -126,11 +126,16 @@ def cancel_analysis(
             status_code=401,
             content={"error": "Unauthorized analysis cancellation request."},
         )
+    return cancel_analysis_job(job_id)
+
+
+def cancel_analysis_job(job_id: str, *, jobs=None):
+    """Share cancellation after the caller has verified its authentication."""
     normalized_id = job_id.strip()
     if not normalized_id:
         return JSONResponse(status_code=400, content={"error": "A jobId is required."})
     try:
-        jobs = RuntimeJobStore()
+        jobs = jobs if jobs is not None else RuntimeJobStore()
         job = jobs.get(normalized_id)
         if job is None:
             return JSONResponse(
