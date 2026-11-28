@@ -36,6 +36,8 @@ class ProRuntimeTests(unittest.TestCase):
 
     def test_wrong_mix_scope_and_mismatched_profile_are_unavailable(self):
         for field, value in (("mix", "Phoenix"), ("scope", "singles"),
+                             ("method", "pro-pumbility-p50-modes-overall-top50-phoenix2-v6"),
+                             ("method", "pro-pumbility-p50-modes-overall-top50-phoenix2-v7"),
                              ("method", "pro-pumbility-p80-adaptive-overall-phoenix2-v1"),
                              ("method", "pro-pumbility-p50-adaptive-overall-phoenix2-v1")):
             with self.subTest(field=field):

@@ -57,7 +57,8 @@ def computation_code_identity() -> str:
     names = ("recommendation_component_cache.py", "recommendation_refresh.py",
              "piu_recommendations.py", "piu_misgrade_analyzer.py", "phoenix1_score_overrides.py",
              "phoenix2_pumbility.py", "player_skill_ratings.py", "recommendation_artifacts.py",
-             "pumbility_contract.py", "phoenix2_sync.py", "mix_registry.py", "analysis_runtime.py")
+             "pumbility_contract.py", "phoenix2_sync.py", "mix_registry.py", "analysis_runtime.py",
+             "general_pumbility.py", "pumbility_peer_policy.py", "recommendation_ranking.py")
     return canonical_digest({
         "sources": {name: hashlib.sha256((root / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
                     for name in names},
@@ -115,7 +116,36 @@ def mode_input_identity(phoenix1_scores, catalog, phoenix2_scores, combined_char
     }
 
 
+def general_mode_input_identity(snapshot: Mapping[str, Any], chart_type: str) -> dict[str, Any]:
+    """All submitted facts and the shared raw-score support index are inputs."""
+    from general_pumbility import METHOD
+    if chart_type not in ("Single", "Double"):
+        raise ValueError("The cached recommendation mode is invalid.")
+
+    def exact(value):
+        if isinstance(value, Mapping):
+            return {str(key): exact(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [exact(item) for item in value]
+        return _scalar(value)
+
+    return {"version": CACHE_VERSION, "code": computation_code_identity(),
+            "method": METHOD, "chartType": chart_type, "mix": snapshot.get("mix", "Phoenix2"),
+            "catalog": canonical_digest(exact(snapshot.get("charts", []))),
+            "scores": _frame_digest(pd.DataFrame(snapshot.get("scores", [])),
+                ("playerId", "chartId", "pumbility", "score", "plate", "recordedAt", "isBroken", "mix"))}
+
+
 def _validate_mode(payload: bytes, metadata: Mapping[str, Any], chart_type: str) -> None:
+    from general_pumbility import GeneralPumbilityModel, METHOD
+    if metadata.get("skillMethod") == METHOD:
+        try:
+            restored = GeneralPumbilityModel.from_npz_bytes(payload)
+        except (ValueError, OSError, EOFError, BadZipFile) as error:
+            raise InvalidComponentCache("The cached General Pumbility arrays are invalid.") from error
+        if restored.mode_types != (chart_type,) or metadata != restored.metadata:
+            raise InvalidComponentCache("The cached General Pumbility mode or metadata is incompatible.")
+        return
     from piu_recommendations import ScoreResponseModel, SCORE_RESPONSE_FOLDS
     mode = "singles" if chart_type == "Single" else "doubles"
     try:
@@ -180,10 +210,17 @@ def save_mode(store, identity, payload, metadata):
 
 
 def serving_identity(model: Mapping[str, Any], score_bytes: bytes) -> str:
-    ignored = {"generationKey", "generatedAtUtc", "scoreResponseModelPath",
+    ignored = {"generationKey", "generatedAtUtc", "scoreResponseModelPath", "pumbilityPeerModelPath",
+               "peerGenerationAtUtc", "peerSourceAtUtc",
                "numericalModelIdentity", "modelComputedAtUtc", "sourceCheckedAtUtc"}
+    def numerical(value):
+        if isinstance(value, Mapping):
+            return {key: numerical(item) for key, item in value.items() if key != "sourceTimestamp"}
+        if isinstance(value, list):
+            return [numerical(item) for item in value]
+        return value
     return canonical_digest({"version": CACHE_VERSION, "code": computation_code_identity(),
-                             "model": {k: v for k, v in model.items() if k not in ignored},
+                             "model": numerical({k: v for k, v in model.items() if k not in ignored}),
                              "numericSha256": hashlib.sha256(score_bytes).hexdigest()})
 
 

@@ -61,6 +61,11 @@ class ModeEngineTests(unittest.TestCase):
             self.assertEqual(row["targetGrade"], "SS+")
             self.assertEqual(row["targetScore"], 985000)
             self.assertEqual(row["assumedPlate"], "MG")
+            self.assertEqual(row["scoreAtOrAboveTargetCount"], 2)
+            self.assertEqual(row["gainRank"], 1)
+            self.assertEqual(row["scoreCountRank"], 1)
+            self.assertEqual(row["rankScore"], 2)
+            self.assertEqual(row["recommendationRank"], 1)
             overall_row = next(r for r in result["overall"]["recommendations"] if r["chartId"] == row["chartId"])
             self.assertEqual(overall_row["rawPercentileScore"], row["rawPercentileScore"])
             self.assertEqual(overall_row["modeProjectedGain"], row["projectedGain"])
@@ -86,6 +91,36 @@ class ModeEngineTests(unittest.TestCase):
         self.assertEqual(len(result["overall"]["recommendations"]), 2)
         self.assertEqual(result["overall"]["baseline"]["scoreCount"], 100)
         self.assertEqual(len(result["overall"]["baseline"]["top50"]), 50)
+        for row in result["overall"]["recommendations"]:
+            self.assertEqual(row["scoreAtOrAboveTargetCount"], 11)
+        self.assertEqual([row["recommendationRank"] for row in result["overall"]["recommendations"]], [1, 2])
+
+    def test_full_mode_rank_aggregation_promotes_supported_target_and_overall_reranks(self):
+        snapshot, profile = fixture()
+        base_board = snapshot["boards"][0]
+        for cid, level, count in (("s25-high-gain", 25, 1), ("s23-lower-gain", 23, 10)):
+            snapshot["charts"].append({"id": cid, "type": "Single", "level": level, "songName": cid})
+            snapshot["boards"].append({**base_board, "chartId": cid, "entries": copy.deepcopy(base_board["entries"][:count])})
+        result = build(snapshot, [profile])
+        rows = result["modes"]["singles"]["recommendations"]
+        self.assertEqual([row["chartId"] for row in rows], ["s24", "s25-high-gain", "s23-lower-gain"])
+        self.assertEqual([(row["gainRank"], row["scoreCountRank"], row["rankScore"]) for row in rows], [(2, 1, 3), (1, 3, 4), (3, 2, 5)])
+        overall = {row["chartId"]: row for row in result["overall"]["recommendations"]}
+        self.assertEqual(overall["s24"]["scoreAtOrAboveTargetCount"], 11)
+        self.assertNotEqual(overall["s25-high-gain"]["scoreCountRank"], rows[1]["scoreCountRank"])
+        self.assertEqual([row["recommendationRank"] for row in result["overall"]["recommendations"]], [1, 2, 3, 4])
+
+    def test_score_count_is_at_target_not_total_observed_or_plate_threshold(self):
+        snapshot, profile = fixture()
+        board = snapshot["boards"][0]
+        board["entries"] = board["entries"][:4]
+        for row, score in zip(board["entries"], (995000, 995001, 995002, 1000000)):
+            row["score"] = score
+        result = build(snapshot, [profile])["modes"]["singles"]["recommendations"][0]
+        self.assertEqual(result["assumedPlate"], "SG")
+        self.assertEqual(result["targetScore"], 995000)
+        self.assertEqual(result["peerScoreCount"], 4)
+        self.assertEqual(result["scoreAtOrAboveTargetCount"], 4)
 
     def test_overall_uses_combined_cutoff_without_mutating_mode_gains(self):
         snapshot, profile = fixture()
@@ -162,12 +197,28 @@ class ModeEngineTests(unittest.TestCase):
 
     def test_lower_overall_rank_can_be_a_mode_peer_and_not_a_recipient(self):
         snapshot, profile = fixture()
-        snapshot["rankings"]["data"][1]["rank"] = 301
-        snapshot["officialProfiles"][1]["rank"] = 301
+        snapshot["rankings"]["data"][1]["rank"] = 501
+        snapshot["officialProfiles"][1]["rank"] = 501
         result = build(snapshot, [profile])
         self.assertEqual(result["modes"]["singles"]["cohort"]["playerCount"], 11)
         profile["officialPlayerId"] = "official:2"
         self.assertEqual(build(snapshot, [profile])["status"], "ineligible")
+
+    def test_rank_500_receives_new_s23_and_d24_mode_targets(self):
+        snapshot, profile = fixture()
+        snapshot["rankings"]["data"][0]["rank"] = 500
+        snapshot["officialProfiles"][0]["rank"] = 500
+        for chart in snapshot["charts"][:2]:
+            chart["level"] -= 1
+            chart["difficulty"] = ("S" if chart["type"] == "Single" else "D") + str(chart["level"])
+        result = build(snapshot, [profile])
+        self.assertTrue(result["eligible"])
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["modes"]["singles"]["recommendations"][0]["level"], 23)
+        self.assertEqual(result["modes"]["doubles"]["recommendations"][0]["level"], 24)
+        snapshot["rankings"]["data"][0]["rank"] = 501
+        snapshot["officialProfiles"][0]["rank"] = 501
+        self.assertFalse(build(snapshot, [profile])["eligible"])
 
     def test_duplicate_account_links_do_not_inflate_peer_population(self):
         snapshot, profile = fixture()

@@ -805,6 +805,7 @@ class ApiRouteTests(unittest.TestCase):
     def test_protected_recommendation_rollback_repoints_the_stable_index(self) -> None:
         blobs = MemoryBlobStore()
         target = {
+            "schemaVersion": RECOMMENDATION_SCHEMA_VERSION,
             "storageSchemaVersion": 2,
             "generationKey": "legacy-target",
             "generatedAtUtc": isoformat_utc(NOW - timedelta(days=1)),
@@ -1406,13 +1407,13 @@ def _combined_tier_payload_fixture(*_args, generated_at_utc: str, **_kwargs):
 def _recommendation_mode_artifact_fixture(
     *_args, chart_type: str, **_kwargs
 ):
-    mode = "singles" if chart_type == "Single" else "doubles"
-    model = ScoreResponseModel({}, {}, frozenset())
-    return model.to_npz_bytes(), {
-        "model": "fixture",
-        "phoenix2OverlapRowsRemovedFromPhoenix1": 0,
-        "modes": {mode: {}},
-    }
+    from general_pumbility import GeneralPumbilityModel
+
+    model = GeneralPumbilityModel.from_snapshot(
+        {"mix": "Phoenix2", "charts": [], "scores": []},
+        mode_types=(chart_type,),
+    )
+    return model.to_npz_bytes(), model.metadata
 
 
 class WorkerTests(unittest.TestCase):

@@ -41,6 +41,7 @@ from phoenix1_score_overrides import (
     phoenix1_score_overrides_metadata,
 )
 from phoenix2_pumbility import PlateProjectionModel
+from general_pumbility import GeneralPumbilityModel
 from phoenix2_sync import (
     attach_song_bpm_metadata,
     isoformat_utc,
@@ -81,6 +82,7 @@ from piu_recommendations import (
     _recommendation_chart_rows,
     _omit_unavailable_bpm_fields,
     build_player_recommendation,
+    general_recommendation_method,
     fit_score_response_model_mode_from_frames,
     fit_score_response_model_from_frames,
     public_player_key,
@@ -346,7 +348,7 @@ def build_recommendation_model_artifacts(
     generation_key: str,
     generated_at_utc: str,
     consume_phoenix1_snapshot: bool = False,
-    score_model_artifact: tuple[ScoreResponseModel, Mapping[str, Any]] | None = None,
+    score_model_artifact: tuple[GeneralPumbilityModel, Mapping[str, Any]] | None = None,
     component_store: JsonStore | None = None,
 ) -> tuple[
     dict[str, Any],
@@ -355,100 +357,70 @@ def build_recommendation_model_artifacts(
     list[dict[str, Any]],
     list[dict[str, Any]],
 ]:
-    """Build a global model, compact index, and per-player input shards."""
+    """Build immutable submitted-score peers and private selected-player inputs."""
     charts_for_players = _recommendation_chart_rows(combined_charts)
-    # Rating frames drop valid zero-Pumbility clears, and compact plate rows
-    # deliberately omit Pumbility. Capture validated membership before either
-    # normalization or destructive snapshot consumption makes it unrecoverable.
+    if score_model_artifact is None:
+        score_model = GeneralPumbilityModel.from_snapshot(phoenix2_snapshot)
+    else:
+        score_model, _ = score_model_artifact
+        if not isinstance(score_model, GeneralPumbilityModel):
+            raise TypeError("General recommendations require a submitted Pumbility peer model.")
+    peer_source_at = next((phoenix2_snapshot.get(key) for key in
+        ("completedAtUtc", "generatedAtUtc", "fetchedAtUtc", "snapshotAt") if phoenix2_snapshot.get(key)), generated_at_utc)
+    score_model.source_timestamp = peer_source_at
+    score_metadata = score_model.metadata
+    slopes = dict(phoenix2_slopes)
+    method = general_recommendation_method(score_model)
+    phoenix2_catalog, _ = _clean_snapshot_frames(phoenix2_snapshot)
+    model_catalog = _model_catalog_records(phoenix2_snapshot, phoenix2_catalog)
+    valid_model_chart_ids = {str(row.get("chartId") or "") for row in model_catalog}
+    normalizations = build_phoenix1_score_normalizations(
+        [row for row in phoenix1_snapshot.get("charts", []) if isinstance(row, Mapping)],
+        [row for row in phoenix2_snapshot.get("charts", []) if isinstance(row, Mapping)],
+    )
+    # Historical compact inputs retain their existing Co-op/archive contract;
+    # they never contribute to the General Singles/Doubles peer model.
     p1_cleared_by_player = cleared_chart_ids_by_player(
-        phoenix1_snapshot,
-        [
-            row
-            for row in phoenix2_snapshot.get("charts", [])
-            if isinstance(row, Mapping)
-        ],
+        phoenix1_snapshot, phoenix2_snapshot.get("charts", []),
     )
-    phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(phoenix2_snapshot)
-    score_normalizations = build_phoenix1_score_normalizations(
-        [
-            row
-            for row in phoenix1_snapshot.get("charts", [])
-            if isinstance(row, Mapping)
-        ],
-        [
-            row
-            for row in phoenix2_snapshot.get("charts", [])
-            if isinstance(row, Mapping)
-        ],
-    )
-    plate_model = PlateProjectionModel(phoenix1_snapshot, phoenix2_snapshot)
-    plate_model_payload = plate_model.global_payload()
-    phoenix1_cap = plate_model.phoenix1_cap
-    del plate_model
     if consume_phoenix1_snapshot:
         if not isinstance(phoenix1_snapshot, dict):
             raise TypeError("An owned Phoenix 1 snapshot must be mutable.")
         phoenix1_scores, p1_plate_by_player = _consume_phoenix1_artifact_inputs(
-            phoenix1_snapshot,
-            phoenix2_catalog,
-            score_normalizations,
+            phoenix1_snapshot, phoenix2_catalog, normalizations,
         )
     else:
-        _, phoenix1_scores = _prepare_phoenix1_rating_frames(
-            phoenix1_snapshot, phoenix2_catalog
-        )
-        p1_rating_keys = {
-            (str(row.playerId), str(row.chartId))
-            for row in phoenix1_scores[["playerId", "chartId"]].itertuples(
-                index=False
-            )
-        }
+        _, phoenix1_scores = _prepare_phoenix1_rating_frames(phoenix1_snapshot, phoenix2_catalog)
+        p1_keys = {(str(row.playerId), str(row.chartId))
+                   for row in phoenix1_scores[["playerId", "chartId"]].itertuples(index=False)}
         p1_plate_by_player = _raw_scores_by_player(
-            phoenix1_snapshot,
-            set(phoenix2_catalog["chartId"].astype(str)),
-            compact_plate=True,
-            normalizations=score_normalizations,
-            excluded_score_keys=p1_rating_keys,
+            phoenix1_snapshot, set(phoenix2_catalog["chartId"].astype(str)),
+            compact_plate=True, normalizations=normalizations, excluded_score_keys=p1_keys,
         )
-        del p1_rating_keys
-
-    if score_model_artifact is None:
-        score_model, score_metadata = fit_score_response_model_from_frames(
-            phoenix1_scores,
-            phoenix2_catalog,
-            phoenix2_scores,
-            charts_for_players,
-        )
-    else:
-        score_model, raw_score_metadata = score_model_artifact
-        score_metadata = dict(raw_score_metadata)
-    slopes = dict(phoenix2_slopes)
-    method = _recommendation_method(
-        slopes,
-        score_metadata,
-        phoenix1_cap,
-        score_normalizations,
-    )
-
-    model_catalog = _model_catalog_records(phoenix2_snapshot, phoenix2_catalog)
+    p1_groups = phoenix1_scores.groupby("playerId", sort=False)
+    p1_group_ids = {str(player_id) for player_id in p1_groups.groups}
+    p2_by_player = _raw_scores_by_player(phoenix2_snapshot, valid_model_chart_ids)
     model = {
         "artifactSchemaVersion": MODEL_ARTIFACT_SCHEMA_VERSION,
         "recommendationSchemaVersion": RECOMMENDATION_SCHEMA_VERSION,
         "generationKey": generation_key,
         "generatedAtUtc": generated_at_utc,
+        "peerGenerationAtUtc": generated_at_utc,
+        "peerSourceAtUtc": peer_source_at,
         "catalog": model_catalog,
         "recommendationCharts": [dict(row) for row in charts_for_players],
         "phoenix2Slopes": slopes,
-        "scoreResponseModelPath": recommendation_score_model_path(generation_key),
+        "pumbilityPeerModelPath": recommendation_score_model_path(generation_key),
         "scoreProjectionMetadata": score_metadata,
-        "plateModel": plate_model_payload,
         "method": method,
     }
-    from recommendation_component_cache import (
-        player_input_identity, serving_computed_at, serving_identity,
-    )
+    from copy import copy
+    from recommendation_component_cache import player_input_identity, serving_computed_at, serving_identity
 
-    score_model_bytes = score_model.to_npz_bytes()
+    numeric_model = copy(score_model)
+    if component_store is not None:
+        numeric_model.source_timestamp = None
+    score_model_bytes = numeric_model.to_npz_bytes()
     numerical_identity = serving_identity(model, score_model_bytes)
     computed_at = serving_computed_at(component_store, numerical_identity,
         isoformat_utc(utc_now()) if component_store is not None else generated_at_utc)
@@ -456,19 +428,6 @@ def build_recommendation_model_artifacts(
                   "modelComputedAtUtc": computed_at, "sourceCheckedAtUtc": generated_at_utc}
     model.update(provenance)
 
-    p1_counts = _mode_counts(phoenix1_scores, phoenix2_catalog)
-    p2_counts = _mode_counts(phoenix2_scores, phoenix2_catalog)
-    p1_groups = phoenix1_scores.groupby("playerId", sort=False)
-    p1_group_ids = {str(player_id) for player_id in p1_groups.groups}
-    valid_model_chart_ids = {
-        str(row.get("chartId") or "") for row in model_catalog
-    }
-    p2_by_player = {
-        str(player_id): [dict(row) for row in group]
-        for player_id, group in _raw_scores_by_player(
-            phoenix2_snapshot, valid_model_chart_ids
-        ).items()
-    }
     metadata_by_player = {
         str(row.get("playerId") or row.get("userId")): row
         for row in phoenix2_snapshot.get("players", [])
@@ -507,24 +466,11 @@ def build_recommendation_model_artifacts(
                 if username_counts[username.casefold()] > 1
                 else username
             )
-            eligibility = {
-                mode: bool(
-                    p1_counts.get(player_id, {}).get(mode, 0)
-                    or p2_counts.get(player_id, {}).get(mode, 0)
-                )
-                for mode in ("singles", "doubles")
-            }
+            counts = score_model.player_counts(player_id)
+            eligibility = {mode: counts.get(mode, 0) >= 50 for mode in ("singles", "doubles")}
             eligibility["coop"] = True
             score_progress = {
-                mode: {
-                    "validScoreCount": (
-                        PROJECTION_RATING_SCORE_THRESHOLD
-                        if int(p1_counts.get(player_id, {}).get(mode, 0))
-                        >= PROJECTION_RATING_SCORE_THRESHOLD
-                        else int(p2_counts.get(player_id, {}).get(mode, 0))
-                    ),
-                    "requiredScoreCount": PROJECTION_RATING_SCORE_THRESHOLD,
-                }
+                mode: {"validScoreCount": counts.get(mode, 0), "requiredScoreCount": 50}
                 for mode in ("singles", "doubles")
             }
             index_players.append(
@@ -540,20 +486,15 @@ def build_recommendation_model_artifacts(
             )
             if player_id in p1_group_ids:
                 score_columns, score_rows = _columnar_frame_records(
-                    p1_groups.get_group(player_id),
-                    omitted_columns=frozenset({"playerId"}),
+                    p1_groups.get_group(player_id), omitted_columns=frozenset({"playerId"}),
                 )
             else:
                 score_columns, score_rows = [], []
-            p1_players.append(
-                {
-                    "playerId": player_id,
-                    "scoreColumns": score_columns,
-                    "scoreRows": score_rows,
-                    "plateScores": p1_plate_by_player.get(player_id, []),
-                    "clearedChartIds": sorted(p1_cleared_by_player.get(player_id, set())),
-                }
-            )
+            p1_players.append({
+                "playerId": player_id, "scoreColumns": score_columns, "scoreRows": score_rows,
+                "plateScores": p1_plate_by_player.get(player_id, []),
+                "clearedChartIds": sorted(p1_cleared_by_player.get(player_id, set())),
+            })
             p2_players.append(
                 {
                     "playerId": player_id,
@@ -599,6 +540,7 @@ def build_recommendation_model_artifacts(
     return index, model, score_model_bytes, p1_shards, p2_shards
 
 
+
 def build_recommendation_score_mode_artifact(
     phoenix1_snapshot: Mapping[str, Any],
     phoenix2_snapshot: Mapping[str, Any],
@@ -608,56 +550,26 @@ def build_recommendation_score_mode_artifact(
     consume_snapshots: bool = False,
     component_store: JsonStore | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
-    """Fit one mode in isolation for a fresh-process model continuation."""
-    charts_for_players = _recommendation_chart_rows(combined_charts)
-    if consume_snapshots:
-        if not isinstance(phoenix1_snapshot, dict) or not isinstance(
-            phoenix2_snapshot, dict
-        ):
-            raise TypeError("Owned recommendation snapshots must be mutable.")
-        phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames_consuming(
-            phoenix2_snapshot
-        )
-        phoenix1_catalog, raw_phoenix1_scores = _clean_snapshot_frames_consuming(
-            phoenix1_snapshot
-        )
-        _, phoenix1_scores = _prepare_phoenix1_rating_frames_from_frames(
-            phoenix1_catalog,
-            raw_phoenix1_scores,
-            phoenix2_catalog,
-        )
-        del phoenix1_catalog, raw_phoenix1_scores
-        gc.collect()
-    else:
-        phoenix2_catalog, phoenix2_scores = _clean_snapshot_frames(
-            phoenix2_snapshot
-        )
-        _, phoenix1_scores = _prepare_phoenix1_rating_frames(
-            phoenix1_snapshot, phoenix2_catalog
-        )
-    from recommendation_component_cache import InvalidComponentCache, load_mode, mode_input_identity, save_mode
-
+    """Reuse exact submitted-score peer indexes across unchanged publications."""
+    from recommendation_component_cache import (
+        InvalidComponentCache, general_mode_input_identity, load_mode, save_mode,
+    )
     identity = None
     if component_store is not None:
-        identity = mode_input_identity(phoenix1_scores, phoenix2_catalog, phoenix2_scores,
-                                       charts_for_players, chart_type)
+        identity = general_mode_input_identity(phoenix2_snapshot, chart_type)
         try:
             cached = load_mode(component_store, identity)
         except InvalidComponentCache:
             cached = None
         if cached is not None:
             return cached
-    score_model, score_metadata = fit_score_response_model_mode_from_frames(
-        phoenix1_scores,
-        phoenix2_catalog,
-        phoenix2_scores,
-        charts_for_players,
-        chart_type,
-    )
-    score_bytes = score_model.to_npz_bytes()
+    peer_model = GeneralPumbilityModel.from_snapshot(phoenix2_snapshot, mode_types=(chart_type,))
     if component_store is not None:
-        save_mode(component_store, identity, score_bytes, score_metadata)
-    return score_bytes, score_metadata
+        peer_model.source_timestamp = None
+    payload, metadata = peer_model.to_npz_bytes(), peer_model.metadata
+    if component_store is not None:
+        save_mode(component_store, identity, payload, metadata)
+    return payload, metadata
 
 
 def _raw_scores_by_player(
@@ -903,12 +815,12 @@ def _resolve_score_catalog(
 
 
 _MODEL_CACHE_LOCK = threading.RLock()
-_MODEL_CACHE: dict[str, tuple[dict[str, Any], ScoreResponseModel]] = {}
+_MODEL_CACHE: dict[str, tuple[dict[str, Any], GeneralPumbilityModel]] = {}
 
 
 def _load_model(
     store: JsonStore, generation: str
-) -> tuple[dict[str, Any], ScoreResponseModel]:
+) -> tuple[dict[str, Any], GeneralPumbilityModel]:
     with _MODEL_CACHE_LOCK:
         cached = _MODEL_CACHE.get(generation)
         if cached is not None:
@@ -925,13 +837,15 @@ def _load_model(
             "The recommendation model must be rebuilt from stored snapshots "
             "for the current skill calculation."
         )
-    restored = ScoreResponseModel.from_npz_bytes(score_bytes)
+    restored = GeneralPumbilityModel.from_npz_bytes(score_bytes)
+    restored.source_timestamp = model.get("peerSourceAtUtc") or restored.source_timestamp or model.get("generatedAtUtc")
     value = (model, restored)
     with _MODEL_CACHE_LOCK:
         _MODEL_CACHE[generation] = value
         while len(_MODEL_CACHE) > 2:
             del _MODEL_CACHE[next(iter(_MODEL_CACHE))]
     return value
+
 
 
 def _prepared_frames(
@@ -964,7 +878,7 @@ def player_recommendation_response(
     *,
     metadata: Mapping[str, Any],
     model: Mapping[str, Any],
-    score_model: ScoreResponseModel,
+    score_model: GeneralPumbilityModel,
     phoenix1_scores: Sequence[Mapping[str, Any]],
     phoenix1_plate_scores: Sequence[Mapping[str, Any]],
     phoenix1_cleared_chart_ids: set[str],
@@ -980,27 +894,7 @@ def player_recommendation_response(
         row for row in phoenix2_state.get("scores", [])
         if isinstance(row, Mapping) and str(row.get("chartId") or "") in catalog_ids
     ]
-    catalog, p2_scores = _prepared_frames(
-        catalog_rows,
-        resolved_scores,
-    )
-    _, p1_scores = _prepared_frames(catalog_rows, phoenix1_scores)
-    catalog_types = dict(zip(catalog["chartId"].astype(str), catalog["type"].astype(str)))
-    p1_snapshot = {
-        "scores": [
-            *[dict(row) for row in phoenix1_scores],
-            *[dict(row) for row in phoenix1_plate_scores],
-        ]
-    }
-    p2_snapshot = {
-        "scores": [dict(row) for row in resolved_scores]
-    }
-    plate_model = PlateProjectionModel.from_global_payload(
-        model.get("plateModel", {}),
-        p1_snapshot,
-        p2_snapshot,
-        catalog_types,
-    )
+    p1_snapshot = {"scores": [*[dict(row) for row in phoenix1_scores], *[dict(row) for row in phoenix1_plate_scores]]}
     recommendation = build_player_recommendation(
         player_id,
         {
@@ -1012,18 +906,15 @@ def player_recommendation_response(
                 for row in catalog_rows
             ],
             "scores": [dict(row) for row in resolved_scores],
+            "lastSyncedAtUtc": phoenix2_state.get("lastSyncedAtUtc"),
         },
         model.get("recommendationCharts", []),
         model.get("phoenix2Slopes", {}),
         score_model,
-        prepared_phoenix2=(catalog, p2_scores),
-        prepared_phoenix1=(catalog, p1_scores),
-        phoenix1_cleared_chart_ids=phoenix1_cleared_chart_ids,
         phoenix1_goals=_phoenix1_goals_by_player(
             p1_snapshot["scores"],
-            set(catalog["chartId"].astype(str)),
+            catalog_ids,
         ).get(player_id, {}),
-        plate_model=plate_model,
         include_candidates=True,
     )
     recommendation.update(
@@ -1041,6 +932,7 @@ def player_recommendation_response(
         "modelGeneratedAtUtc": model_generated,
         "playerSyncedAtUtc": player_synced,
         "modelGeneration": model.get("generationKey"),
+        "peerGenerationAtUtc": model_generated,
         "numericalModelIdentity": model.get("numericalModelIdentity"),
         "playerInputIdentity": metadata.get("playerInputIdentity"),
         "modelComputedAtUtc": model.get("modelComputedAtUtc") or model_generated,
@@ -1049,6 +941,7 @@ def player_recommendation_response(
         "method": model.get("method", {}),
         "player": recommendation,
     }
+
 
 
 def refresh_player_recommendations(

@@ -14,6 +14,7 @@ function fixture(): {index:ProPlayersResponse;profile:ProRecommendationsResponse
   const row:ProRecommendationChart={chartId:"chart-a",songName:"Example",chartLabel:"S24",type:"Single",level:24,sourceMode:"singles",
     rawPercentileScore:996000,gradeBoundaryScore:995000,targetScore:995000,targetGrade:"SSS+",assumedPlate:"SG",expectedPumbility:392.08,
     projectedGain:34.88,currentScore:null,currentPumbility:null,currentPlate:null,currentPlateEstimated:false,
+    scoreAtOrAboveTargetCount:7,gainRank:1,scoreCountRank:1,rankScore:2,recommendationRank:1,
     peerScoreCount:12,cohortPlayerCount:15,boardPossiblyTruncated:false,limitedData:false};
   const states={singles:{status:"ready" as const,modePumbility:17860},doubles:{status:"insufficient-data" as const,modePumbility:null}};
   return {index:{...metadata,players:[{...player,status:"ready",eligible:true,modes:states}]},profile:{...metadata,player,status:"ready",message:null,eligible:true,
@@ -43,11 +44,33 @@ test("Pro contracts accept independent modes and reject legacy or mixed calculat
   assert.equal(validateProRecommendationsResponse(profile,index),profile);
   assert.throws(()=>validateProRecommendationsResponse({...profile,schemaVersion:1}));
   assert.throws(()=>validateProRecommendationsResponse({...profile,method:"pro-pumbility-p75-modes-consolidated-phoenix2-v3"}));
+  assert.throws(()=>validateProRecommendationsResponse({...profile,method:"pro-pumbility-p50-modes-overall-top50-phoenix2-v6"}));
+  assert.throws(()=>validateProRecommendationsResponse({...profile,method:"pro-pumbility-p50-modes-overall-top50-phoenix2-v7"}));
   assert.throws(()=>validateProRecommendationsResponse({...profile,scope:"overall"}));
   assert.throws(()=>validateProRecommendationsResponse({...profile,mix:"Phoenix"}));
   assert.throws(()=>validateProRecommendationsResponse({...profile,baseline:{}}));
-  assert.throws(()=>validateProRecommendationsResponse({...profile,player:{...profile.player,overallRank:301}}));
-  assert.throws(()=>validateProRecommendationsResponse(withRow(profile,{...profile.modes.singles.recommendations[0],level:23})));
+  assert.throws(()=>validateProRecommendationsResponse({...profile,player:{...profile.player,overallRank:501}}));
+  assert.throws(()=>validateProRecommendationsResponse(withRow(profile,{...profile.modes.singles.recommendations[0],level:22})));
+});
+test("Pro accepts rank 500 with S23 and D24 targets and rejects rank 501 or lower chart floors",()=>{
+  const {profile}=fixture();
+  const ranked={...profile,player:{...profile.player,overallRank:500}};
+  const single={...profile.modes.singles.recommendations[0],chartLabel:"S23",level:23};
+  assert.doesNotThrow(()=>validateProRecommendationsResponse(withRow(ranked,single)));
+  assert.throws(()=>validateProRecommendationsResponse(withRow({...ranked,player:{...ranked.player,overallRank:501}},single)));
+  const double:ProRecommendationChart={...single,chartLabel:"D24",level:24,type:"Double",sourceMode:"doubles"};
+  const ready={...profile.modes.singles,mode:"doubles" as const,
+    baseline:{...profile.modes.singles.baseline!,mode:"doubles" as const,
+      top50:profile.modes.singles.baseline!.top50.map(row=>({...row,type:"Double" as const,chartLabel:"D20"}))},
+    recommendations:[double]};
+  const doubles:ProRecommendationsResponse={...ranked,modes:{singles:{...profile.modes.doubles,mode:"singles"},doubles:ready},
+    overall:{...profile.overall,availableModes:["doubles"],unavailableModes:["singles"],
+      baseline:{...profile.overall.baseline!,top50:ready.baseline.top50},
+      recommendations:[{...double,modeProjectedGain:double.projectedGain,replacedPumbility:357.2}]}};
+  assert.doesNotThrow(()=>validateProRecommendationsResponse(doubles));
+  const tooLow={...double,chartLabel:"D23",level:23};
+  assert.throws(()=>validateProRecommendationsResponse({...doubles,modes:{...doubles.modes,doubles:{...ready,recommendations:[tooLow]}},
+    overall:{...doubles.overall,recommendations:[{...tooLow,modeProjectedGain:tooLow.projectedGain,replacedPumbility:357.2}]}}));
 });
 test("Overall must preserve mode targets and use the reconstructed combined Top 50 for gains",()=>{
   const {profile}=fixture();
@@ -57,6 +80,58 @@ test("Overall must preserve mode targets and use the reconstructed combined Top 
   assert.throws(()=>validateProRecommendationsResponse({...profile,overall:{...profile.overall,recommendations:[{...row,modeProjectedGain:row.modeProjectedGain+1}]}}));
   assert.throws(()=>validateProRecommendationsResponse({...profile,overall:{...profile.overall,baseline:null}}));
   assert.throws(()=>validateProRecommendationsResponse({...profile,modes:{...profile.modes,singles:{...profile.modes.singles,generation:"stale"}}}));
+});
+test("Pro validates equal-weight rank sums instead of requiring decreasing projected gain",()=>{
+  const {profile}=fixture();const base=profile.modes.singles.recommendations[0];
+  const rows:ProRecommendationChart[]=[
+    {...base,chartId:"supported",songName:"Supported",projectedGain:40,expectedPumbility:397.2,
+      scoreAtOrAboveTargetCount:10,gainRank:2,scoreCountRank:1,rankScore:3,recommendationRank:1},
+    {...base,chartId:"high-gain",songName:"High gain",projectedGain:50,expectedPumbility:407.2,
+      scoreAtOrAboveTargetCount:6,gainRank:1,scoreCountRank:3,rankScore:4,recommendationRank:2},
+    {...base,chartId:"third",songName:"Third",projectedGain:30,expectedPumbility:387.2,
+      scoreAtOrAboveTargetCount:8,gainRank:3,scoreCountRank:2,rankScore:5,recommendationRank:3},
+  ];
+  const result={...profile,modes:{...profile.modes,singles:{...profile.modes.singles,recommendations:rows}},
+    overall:{...profile.overall,recommendations:rows.map(row=>({...row,modeProjectedGain:row.projectedGain,replacedPumbility:357.2}))}};
+  assert.doesNotThrow(()=>validateProRecommendationsResponse(result));
+  const invalid=structuredClone(result);invalid.modes.singles.recommendations[0].rankScore=4;
+  assert.throws(()=>validateProRecommendationsResponse(invalid),/ranks/);
+  const wrongOrder=structuredClone(result);
+  wrongOrder.modes.singles.recommendations=[rows[1],rows[0],rows[2]].map((row,index)=>({...row,recommendationRank:index+1}));
+  assert.throws(()=>validateProRecommendationsResponse(wrongOrder),/combined ranks/);
+});
+test("Pro competition ties share ranks and skip the tied places",()=>{
+  const {profile}=fixture();const base=profile.modes.singles.recommendations[0];
+  const rows:ProRecommendationChart[]=[
+    {...base,chartId:"a",songName:"A",projectedGain:50,expectedPumbility:407.2,
+      scoreAtOrAboveTargetCount:10,gainRank:1,scoreCountRank:1,rankScore:2,recommendationRank:1},
+    {...base,chartId:"b",songName:"B",projectedGain:50,expectedPumbility:407.2,
+      scoreAtOrAboveTargetCount:10,gainRank:1,scoreCountRank:1,rankScore:2,recommendationRank:2},
+    {...base,chartId:"c",songName:"C",projectedGain:30,expectedPumbility:387.2,
+      scoreAtOrAboveTargetCount:6,gainRank:3,scoreCountRank:3,rankScore:6,recommendationRank:3},
+  ];
+  const result={...profile,modes:{...profile.modes,singles:{...profile.modes.singles,recommendations:rows}},
+    overall:{...profile.overall,recommendations:rows.map(row=>({...row,modeProjectedGain:row.projectedGain,replacedPumbility:357.2}))}};
+  assert.doesNotThrow(()=>validateProRecommendationsResponse(result));
+  const invalid=structuredClone(result);Object.assign(invalid.modes.singles.recommendations[2],{gainRank:2,rankScore:5});
+  assert.throws(()=>validateProRecommendationsResponse(invalid),/full candidate pool/);
+});
+test("Pro Overall recalculates ranks while preserving the mode target-score counts",()=>{
+  const {profile}=fixture();const single=profile.modes.singles.recommendations[0];
+  const double:ProRecommendationChart={...single,chartId:"double",chartLabel:"D24",type:"Double",level:24,sourceMode:"doubles",
+    expectedPumbility:400,projectedGain:300,scoreAtOrAboveTargetCount:10};
+  const doubleBaseline={...profile.modes.singles.baseline!,mode:"doubles" as const,top50Pumbility:5000,cutoffPumbility:100,
+    top50:profile.modes.singles.baseline!.top50.map(row=>({...row,chartId:`double-${row.chartId}`,type:"Double" as const,chartLabel:"D20",pumbility:100}))};
+  const result:ProRecommendationsResponse={...profile,
+    modes:{...profile.modes,doubles:{...profile.modes.singles,mode:"doubles",modePumbility:5000,baseline:doubleBaseline,recommendations:[double]}},
+    overall:{...profile.overall,availableModes:["singles","doubles"],unavailableModes:[],
+      baseline:{...profile.overall.baseline!,scoreCount:200},recommendations:[
+        {...double,projectedGain:42.8,modeProjectedGain:300,replacedPumbility:357.2},
+        {...single,gainRank:2,scoreCountRank:2,rankScore:4,recommendationRank:2,modeProjectedGain:single.projectedGain,replacedPumbility:357.2},
+      ]}};
+  assert.doesNotThrow(()=>validateProRecommendationsResponse(result));
+  const invalid=structuredClone(result);invalid.overall.recommendations[1].scoreAtOrAboveTargetCount=8;
+  assert.throws(()=>validateProRecommendationsResponse(invalid),/preserve mode targets/);
 });
 test("Pro plate thresholds use raw q50 and preserve exact-million PG",()=>{
   const {profile}=fixture();

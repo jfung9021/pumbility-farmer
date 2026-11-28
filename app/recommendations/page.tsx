@@ -42,7 +42,9 @@ import { gradeForScore } from "../../lib/score-appearance";
 import { top50ExportDownloadFilename } from "../../lib/top50-export";
 import {
   ALL_DIFFICULTIES,
+  isGeneralPumbilityMode,
   recommendationDifficultyOptions,
+  recommendationScoreProgress,
   visibleRecommendations as recommendationsForDifficulty,
 } from "../../lib/recommendation-filters";
 import type {
@@ -70,7 +72,6 @@ const INITIAL_DIFFICULTY_FILTERS: Record<RecommendationModeKey, string> = {
   doubles: ALL_DIFFICULTIES,
   coop: ALL_DIFFICULTIES,
 };
-const DEFAULT_RECOMMENDATION_SCORE_TARGET = 30;
 type StandardModeKey = Exclude<ModeKey, "coop">;
 type CachedModePayload = {
   activeCacheKeys: Record<string, string>;
@@ -199,20 +200,7 @@ function scoreProgressForMode(
 ): RecommendationScoreProgress {
   const summaryProgress = summary?.scoreProgress?.[mode];
   const modeResult = payload?.player.modes[mode];
-  const required = summaryProgress?.requiredScoreCount
-    ?? modeResult?.projectionRatingRequiredScoreCount
-    ?? modeResult?.requiredScoreCount
-    ?? DEFAULT_RECOMMENDATION_SCORE_TARGET;
-  const valid = summaryProgress?.validScoreCount
-    ?? (modeResult?.projectionAvailable
-      ? modeResult.projectionRatingSourceScoreCount
-      : modeResult?.phoenix2ScoreCount)
-    ?? modeResult?.validScoreCount
-    ?? 0;
-  return {
-    validScoreCount: Math.max(0, Number.isFinite(valid) ? valid : 0),
-    requiredScoreCount: Math.max(1, Number.isFinite(required) ? required : 1),
-  };
+  return recommendationScoreProgress(modeResult, summaryProgress);
 }
 
 function RecommendationReadiness({
@@ -232,7 +220,7 @@ function RecommendationReadiness({
       <h2>{allModesReady ? "Recommendations are being prepared" : "Play more charts to unlock recommendations"}</h2>
       <p>{detail || (allModesReady
         ? "Your score history is ready. Recommendations will appear after the next player refresh."
-        : "Build a larger score history in Singles and Doubles so we can calculate a reliable route for each mode.")}</p>
+        : "Record 50 unique usable Phoenix 2 results in a mode to unlock its Pumbility recommendations. Missing results remain unknown.")}</p>
       <div className="recommendation-readiness-grid">
         {(["singles", "doubles"] as StandardModeKey[]).map((modeKey) => {
           const modeProgress = progress[modeKey];
@@ -288,9 +276,11 @@ function RecommendationCard({
 }) {
   const bpm = formatBpm(chart.bpmMin, chart.bpmMax);
   const isCoop = chart.type === "CoOp";
-  const estimate = isCoop
-    ? formatCoopEstimatedDifficulty(chart.estimatedDifficulty)
-    : `${chart.type === "Single" ? "S" : "D"}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
+  const estimate = chart.estimatedDifficulty === null
+    ? null
+    : isCoop
+      ? formatCoopEstimatedDifficulty(chart.estimatedDifficulty)
+      : `${chart.type === "Single" ? "S" : "D"}${formatEstimatedDifficulty(chart.estimatedDifficulty)}`;
   const goal = chart.projectedGrade && chart.projectedPlateCode
     ? `Goal: ${chart.projectedGrade} ${chart.projectedPlateCode}`
     : null;
@@ -331,7 +321,7 @@ function RecommendationCard({
   return (
     <article className="recommendation-card">
       <div className="recommendation-leading">
-        <span className="recommendation-rank">{String(rank).padStart(2, "0")}</span>
+        <span className="recommendation-rank">{String(chart.recommendationRank ?? rank).padStart(2, "0")}</span>
         <ChartVideoLink
           chartId={chart.chartId}
           difficulty={chart.difficulty}
@@ -348,11 +338,13 @@ function RecommendationCard({
       <div className="recommendation-copy">
         <div className="recommendation-title">
           <h3>{chart.songName}</h3>
-          {hasLimitedData(chart.nContributors) ? (
+          {(chart.limitedData || (chart.nContributors !== null && hasLimitedData(chart.nContributors))) ? (
             <span
               aria-label="Limited data"
               className="limited-data-warning"
-              title={`Limited data: ${chart.nContributors} unique player observations`}
+              title={chart.peerScoreCount !== undefined
+                ? `Limited target support: ${chart.peerScoreCount} peer ${chart.peerPairedScoreCount !== undefined ? "score and plate pairs" : "scores"}`
+                : `Limited data: ${chart.nContributors} unique player observations`}
             >
               <b aria-hidden="true">!</b>
               <span>Limited data</span>
@@ -362,12 +354,24 @@ function RecommendationCard({
         <p>
           {chart.stepArtist || "Unknown step artist"}
           {bpm ? <> · {bpm}</> : null}
-          <b> · {estimate} estimate</b>
+          <b> · {estimate === null ? "Estimate unavailable" : `${estimate} estimate`}</b>
         </p>
         <div className="recommendation-tags">
+          {chart.scoreAtOrAboveTargetCount !== undefined ? (
+            <span title="Peer results at or above this recommended target score">
+              {chart.scoreAtOrAboveTargetCount} at or above target
+            </span>
+          ) : null}
           <span>{chart.played
             ? `Current ${currentRating?.toFixed(2) ?? "-"} ${isCoop ? "Co-op Rating contribution" : "PB"}`
             : "Unplayed in Phoenix 2"}</span>
+          {chart.peerScoreCount !== undefined ? (
+            <span title={chart.peerPairedScoreCount !== undefined
+              ? `${chart.peerPairedScoreCount} complete score and plate pairs; ${chart.peerMissingPlateCount ?? 0} valid peer scores excluded for missing or invalid plates`
+              : undefined}>
+              {chart.peerScoreCount} peer {chart.peerPairedScoreCount !== undefined ? "pair" : "score"}{chart.peerScoreCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
         </div>
       </div>
       <div className="recommendation-value">
@@ -406,6 +410,7 @@ function RecommendationCard({
             >
               <span>{projectedRatingLabel}</span>
               <strong>{pumbilityLabel(expectedRating)}</strong>
+              {chart.rankScore !== undefined ? <small>Gain rank {chart.gainRank} + target-count rank {chart.scoreCountRank} = {chart.rankScore}</small> : null}
             </div>
           ) : null}
         </div>
@@ -426,7 +431,7 @@ function topScoreRating(score: RecommendationTopScore): number | null {
 }
 
 function topScoreValue(score: RecommendationTopScore): string {
-  return score.score === undefined ? "—" : score.score.toLocaleString("en-US");
+  return score.score === undefined || score.score === null ? "—" : score.score.toLocaleString("en-US");
 }
 
 function TopScoreCard({
@@ -1134,8 +1139,9 @@ export default function RecommendationsPage() {
           activeMode,
           mode?.filterCandidates ?? [],
           mode?.scoringRating,
+          mode?.skillMethod,
         ),
-    [activeMode, mode?.difficultyOptions, mode?.filterCandidates, mode?.scoringRating],
+    [activeMode, mode?.difficultyOptions, mode?.filterCandidates, mode?.scoringRating, mode?.skillMethod],
   );
   const selectedDifficulty = difficultyFilters[activeMode];
   const effectiveDifficulty = selectedDifficulty === ALL_DIFFICULTIES
@@ -1180,7 +1186,7 @@ export default function RecommendationsPage() {
             delayedAfterMs={MODEL_DELAY_THRESHOLD_MS}
             generatedAtUtc={modelGeneratedAt}
             freshnessAtUtc={playerPayload?.stale ? modelGeneratedAt : availableModelGeneratedAt}
-            label="Model updated"
+            label={isGeneralPumbilityMode(mode) ? "Peer model updated" : "Model updated"}
             loading={loadingPlayers}
             loadingLabel="Loading recommendations..."
             nowMs={nowMs}
@@ -1269,6 +1275,15 @@ export default function RecommendationsPage() {
             >
               {mode && (mode.eligible || recommendationView === "top50") ? (
                 <ProgressStat mode={activeMode} value={modeRating} />
+              ) : null}
+
+              {recommendationView === "recommendations" && isGeneralPumbilityMode(mode) && mode?.cohort ? (
+                <div className="recommendation-notice" role="status">
+                  <span>PIUScores Phoenix 2 · {mode.cohort.playerCount} same-mode peers
+                    {mode.cohort.limitedData ? " · Limited cohort support" : ""}
+                    {mode.cohort.backfillCount ? ` · ${mode.cohort.backfillCount} lower-total peers included` : ""}.
+                    Targets use observed median scores and recorded peer plates.</span>
+                </div>
               ) : null}
 
               {recommendationView === "recommendations" ? unavailableOverallModes.map((modeKey) => {

@@ -1,0 +1,472 @@
+GENERAL RECOMMENDER: PIUSCORES PUMBILITY IMPLEMENTATION PLAN
+November 28, 2026 (JST)
+
+Status: implemented and verified locally. Three requested subagents inspected
+and implemented the original plan. The user confirmed adopting Pro's skill and
+peer methodology, then explicitly requested actual PIUScores peer plates for
+General in this build. That amendment replaces the fixed target-plate rule below;
+personal baselines already retain actual recorded plates and Pumbility.
+
+The user also expanded Pro recipients to the official overall Top 500 and its
+candidate floors to S23+/D24+. General remains Phoenix2 submitted PIUScores only.
+An additional confirmed requirement combines projected-gain rank and the rank
+of peer results meeting or exceeding the target score. This final ordering
+applies to Overall, Singles, Doubles and Co-op in Recommendations, and all Pro
+Farming modes. The details in section 8 supersede gain-only sorting below.
+
+1. Outcome and boundary
+
+Use independent Singles and Doubles Top 50 Pumbility totals to select peers and
+derive General recommendation targets from submitted PIUScores Phoenix2 scores.
+Follow Pro's mode Top 50 and peer methodology, with General's existing level-16
+display minimum and without Pro's official-account/rank requirements or S23+/D24+
+candidate floors. General derives target plates from its peers' recorded
+PIUScores plates. Overall retains mode targets and measures their gain against
+the combined Singles+Doubles Top 50.
+
+Reference implementation:
+  pro_pumbility_modes.py:13,32,85,152
+  pro_pumbility.py:86,138
+  tests/test_pro_pumbility_modes.py
+
+The original reference was pro-pumbility-p50-modes-overall-top50-phoenix2-v6,
+schema 2. Its November 23 implementation record describes a local implementation,
+not a production deployment. The authorized Top 500/S23+/D24+ expansion uses v7.
+The opening v6 amendment in
+docs/pro-pumbility-mode-consolidation-implementation-plan.txt supersedes that
+document's older proposal for calculation-free Overall consolidation.
+
+Score evidence and chart metadata are separate inputs. PIUScores-only here
+means the player's chart results, mode ratings, peer population, observed peer
+scores, and gain baselines. Existing chart-tier estimates may remain display
+annotations with their existing provenance; this task does not refit tiers or
+replace the evidence used to build those annotations. Current catalog levels
+still supply chart labels and the Phoenix2 projected-Pumbility formula.
+
+Keep Co-op, tier fitting, Skill Radar, Phoenix1 archives, Pro target calculation,
+and the explicitly entered manual difficulty-rating route at their existing
+behavior. Apply only the authorized Pro rank/floor expansion. Shared player-skill
+calculations needed by those features remain.
+
+2. Current behavior that must change
+
+General currently uses three different player-skill calculations:
+  - Candidate skill: mean Top 20 chart Pumbility, converted into the continuous
+    chart level that would earn S with Fair Game.
+  - Projection skill: mean Pumbility at ranks 11-30, converted into the same
+    level units, including leave-one-out adjustments.
+  - Clearing skill: average current official level of the hardest 50 unique
+    successful clears, calculated separately.
+
+Relevant locations:
+  piu_recommendations.py:3076-3173,4214-4705
+  player_skill_ratings.py:82
+
+The first two skills also drive floor(skill) +/-2 official-level candidate
+windows and the skill+1 estimated-difficulty ceiling. Those bounds cannot accept
+a raw Pumbility total and must be removed from the new General path throughout
+backend generation, cache projection, local readers, and frontend filtering.
+The new General S/D path should not calculate these three skills for its output.
+Do not globally replace/remove shared helpers such as _rating_lookup,
+_player_mode_scoring_ratings, or clearing_skill_for_chart_ids: other analysis
+paths still use them.
+
+3. PIUScores input and baseline contract
+
+Use the existing current Phoenix2 submitted-score snapshot and authorized
+individual-player refresh. Build the peer population from available PIUScores
+accounts, with no official ID mapping, official ranking, official board fetch,
+official missing-score reconstruction, or top-300 gate.
+
+Use a General-specific normalization path before legacy frame cleaning drops
+zero values. _clean_snapshot_dataframes currently requires pumbility >0
+(piu_recommendations.py:830), whereas a known valid zero-Pumbility result must
+remain distinguishable from an unknown result.
+
+Normalize as follows:
+  - Match a nonempty PIUScores account ID and chart ID to the current catalog.
+  - Keep current Singles and Doubles charts, including levels below 16 when
+    constructing histories and Top 50 baselines.
+  - Exclude broken records and nonfinite/negative Pumbility; preserve valid zero.
+  - Recorded PIUScores chart Pumbility is authoritative for actual results.
+  - Retain one deterministic best observation per account/chart, preferring
+    chart Pumbility, then raw score, then timestamp. Do not count duplicates.
+  - A baseline observation may have known Pumbility without a usable raw score
+    or plate. Such a row remains known baseline history but cannot supply a
+    paired target observation. Do not fabricate missing values.
+  - Normalize finite, exactly integral raw scores in [0,1000000] to integers;
+    sanitized snapshots store numbers such as 995000.0. Reject booleans,
+    fractional scores, and out-of-range values as peer-score observations.
+  - Normalize actual recorded plates with normalize_plate, accepting existing
+    full-name and code aliases. Store the normalized plate with its raw score
+    and chart identity. Missing/invalid plates are excluded from target pairs.
+    Actual-baseline Pumbility remains the submitted value even if plate is absent.
+
+Deduplicate players by existing PIUScores account ID. Do not infer that two
+accounts are the same person from their display names or require an official
+identity join. Duplicate real-person accounts cannot be resolved by this plan's
+account-only inputs.
+
+For each account and each mode independently:
+  - Order chart contributions by descending Pumbility cents, then chart ID.
+  - Sum the best 50 with decimal/cents arithmetic; preserve two-decimal values.
+  - Retain chart contributors, known-result count, cutoff, and source dates.
+  - Require at least 50 usable unique observations for mode skill/cohort/gain
+    availability. Expose an insufficient-history state at 49; show known Top 50
+    history without treating missing entries as zero-valued empty slots.
+  - Neither an overall profile total nor the other mode's total replaces this
+    mode's rating. Do not convert totals back into difficulty-level units.
+
+Use Phoenix2 only for the new S/D calculation, matching the reference method.
+Remove Phoenix1 rating fallback, Phoenix-source weighting, Phoenix1 personal-best
+target floors, and personal/population plate projections from this branch.
+Existing archive, tier, and Co-op paths retain their own Phoenix1 behavior.
+
+4. Exact peer, target, and gain policy
+
+For a subject with mode Top 50 total P:
+  a. Exclude the subject's account. Other accounts need 50 known results in the
+     same mode; no overall or opposite-mode skill may substitute.
+  b. Try inclusive [P,P+100], then [P,P+150], then [P,P+200]. Stop at the first
+     window with at least ten peers and retain ALL peers in that window.
+  c. If +200 has fewer than ten, keep those peers and backfill with the nearest
+     strictly lower mode totals until ten. Break equal-total backfill ties by
+     stable PIUScores account ID; this replaces Pro's official-rank tie-breaker.
+  d. If the available population still has fewer than ten, retain its actual
+     count and flag limited support. Do not invent peers or pad with self.
+
+These windows are upward-only, not symmetric +/-100. Select one cohort per mode
+per subject, not a new cohort for each chart. A chart with no observations in
+that cohort is unobserved; missing chart scores cause no further widening.
+
+For each current General-supported mode chart at official level >=16:
+  - Take one complete submitted raw-score/actual-plate pair per selected peer
+    on that exact chart. Both target statistics use this same paired sample.
+    A valid raw score with a missing or invalid plate supplies no target pair.
+  - Compute the unweighted linear score median (n-1)*0.5; preserve fractional
+    results until grade decisions. No Phoenix-source weighting, response-surface
+    fallback, ranks-11-30 restriction, or individual PB floor applies.
+  - Compute the ordinal median of those actual plates in this fixed order:
+    RG < FG < TG < MG < SG < EG < UG < PG. For an even number of observations,
+    choose the lower middle plate (index floor((n-1)/2)); do not interpolate a
+    synthetic plate or use the most frequent category instead of the median.
+  - No complete pairs: omit the target. One to nine pairs: permit the observed
+    medians but mark chart support as limited. Report paired support and the
+    count of otherwise usable score observations excluded for missing plates.
+  - General no longer derives plate from 995000/1000000 score thresholds. A
+    recorded FG/TG/EG/UG median is retained regardless of the score grade.
+    Pro keeps its own existing score-to-plate target policy.
+  - Truncate the score target to the lower boundary of its earned Phoenix2
+    grade; when the selected actual median plate is PG, request 1000000.
+  - Reuse phoenix2_pumbility(type,current_level,grade,plate) for expected chart
+    Pumbility, including its mode rules and two-decimal truncation.
+  - A chart already in the mode Top 50 replaces its own recorded contribution;
+    any other chart replaces the known mode 50th cutoff. Retain positive gains.
+  - Retain the count of complete peer observations whose raw score is >= the
+    displayed target score. Rank the full viable pool using section 8's combined
+    gain/count policy. Estimated difficulty is no longer a tie-breaker.
+
+Enumerate eligible charts from the current catalog and attach available tier
+annotations. Missing/unrated estimated difficulty must not suppress a chart
+with an observed peer target and positive gain. Preserve the level-16 display
+floor; do not copy Pro's S24+/D25+ floor or keep a hidden skill-derived ceiling.
+
+For Overall:
+  - Construct the strongest combined 50 from known Singles and Doubles facts,
+    including known facts from a mode with fewer than 50 results.
+  - Require a known combined 50 before estimating overall replacement gains.
+  - Opportunities come from ready source modes, preserving their median, grade,
+    plate, expected value, and evidence. Recompute only overall replacement gain
+    against the combined pool, retaining original mode gain separately.
+  - Use a chart's own contribution when already in the combined Top 50, otherwise
+    its combined cutoff; retain only positive overall gains.
+  - Consolidate complete source lists before the 50-row display cap. One ready
+    mode may supply Overall while the other mode is insufficient.
+
+5. Implementation sequence and concrete touch points
+
+Step A: Isolate source-neutral policy.
+  Add a small pure helper module, e.g. pumbility_peer_policy.py, for cohort
+  selection, median/target boundaries, and Top 50 replacement math. Expose a
+  deterministic tie key rather than requiring official rank/ID fields.
+  Reuse/extract the corresponding Pro cohort and score-median helpers through
+  behavior-preserving wrappers. Add General's actual-plate median separately;
+  do not alter Pro plate targets or use its official-specific _prepare.
+  General must not import pro_pumbility directly: it already imports
+  piu_recommendations, so doing so would introduce a circular dependency.
+
+Step B: Add a General PIUScores peer model.
+  Add general_pumbility.py (or an equivalently scoped module) containing input
+  normalization, mode baseline indexes, peer-score indexes, serialization, and
+  the new builder. Store account keys, same-mode totals, and chart observations
+  privately. Expose only the selected player's details and aggregate peer
+  metadata in public responses.
+  Build population indexes once per source generation, not once per player.
+
+Step C: Route General builds and individual refresh through that builder.
+  piu_recommendations.py:
+    build_player_recommendation (:4214), build_recommendation_index (:4839),
+    and method metadata (:4990). Preserve the independent Co-op builder.
+  recommendation_refresh.py:
+    _recommendation_method (:126), build_recommendation_model_artifacts (:340),
+    build_recommendation_score_mode_artifact (:586), _load_model (:877), and
+    player_recommendation_response (:931), including publishing/rollback checks.
+  scripts/build_local_recommendations.py:
+    local generation and its recommendation-chart overlay at :326-335.
+  api/recommendations.py:
+    eligibility/readiness summaries (:53,71), generation/schema handling, and
+    rollback artifact validation (:515).
+
+  Replace the General response-surface/plate-model artifact with a versioned
+  Pumbility peer index, reusing the existing binary artifact location if useful.
+  Keep legacy score-response helpers available for unrelated tier consumers.
+  Update split-mode workers/callers and binary deserialization together; do not
+  store new coordinates under an old ScoreResponseModel identity.
+
+  Individual refresh recomputes the subject's baseline from its latest submitted
+  scores against the immutable published peer population, excluding its account
+  from that population. Reuse the exact full-build algorithm. Record distinct
+  player-sync and peer-generation dates. Do not relabel stale peers as refreshed.
+
+Step D: Migrate public fields, cache projection, and filtering together.
+  lib/types.ts:789:
+    Add an explicit method identity, modePumbility, baseline status/counts,
+    cohort window/count/backfill, chart observation count, limited-data flags,
+    raw median, and modeProjectedGain for Overall. Reuse currentTop50Pumbility
+    and topScores for existing display/export compatibility; define their
+    relationship to modePumbility rather than two conflicting calculations.
+    Set plateProjectionSource to piuscores-peer-median and expose the actual
+    selected plate/code plus complete-pair and missing-plate support counts.
+    General must not emit an assumedPlate field or fixed-policy source label.
+    Remove old scoring/projection/clearing skill fields from new S/D
+    output while keeping types needed by manual/Co-op/legacy responses.
+    Permit missing tier annotations for the new row type and render them as
+    unavailable; do not invent a fitted estimatedDifficulty to satisfy a type.
+  recommendation_artifacts.py:97-175 and lib/local-recommendations.ts:24:
+    Branch explicitly on the new method instead of deriving S/D windows from
+    scoringRating. Preserve compact Overall references, projection limits,
+    difficulty slices, and top-score/export fields.
+  lib/recommendation-filters.ts:13-130:
+    For the new method filter by chart mode, level-16 floor, and explicit user
+    difficulty selection. Use the same gain-first ordering for filtered lists.
+    Retain difficulty-unit bounds only for the explicit manual-rating route.
+  app/recommendations/page.tsx:72,195,1060,1134:
+    Use the 50-result readiness metadata; replace scoringRating-based difficulty
+    options and filters. Existing Pumbility display already reads the Top 50
+    total, so a stats redesign is unnecessary. Show insufficient history,
+    cohort/paired-observation support, recorded-peer target plates, and unavailable
+    annotations. Display the target's plate code without an extra qualifier.
+  lib/local-recommendations.ts:675, api/recommendations.py:71, and
+  recommendation_refresh.py:493:
+    Give dropdown summaries and full responses the same mode count/requirement.
+  app/about/page.tsx:
+    Update only General recommendation methodology text, preserving unrelated
+    tier and clearing-method descriptions.
+
+Step E: Version and publish one coherent generation when implementation is ready.
+  Current recommendation schema is 28 and model artifact schema is 6
+  (pumbility_contract.py:23-24). The implementation bumps these to 29 and 8, plus a new
+  method ID general-piuscores-p50-modes-overall-top50-phoenix2-v3. The second
+  method revision introduced actual peer plates; the third adds combined-rank
+  ordering and the P2-only Co-op support index (inner binary schema 2, outer
+  model artifact schema 8). Coordinate serialization and split-mode workers. Rebuild a new
+  immutable local generation and reject earlier method identities. Pro's new
+  combined-rank method is pro-pumbility-p50-modes-overall-top50-phoenix2-v8.
+  Update the hardcoded local schema at lib/local-recommendations.ts:216 and
+  affected fixtures/validators. Keep compact player-cache schema 3 unless its
+  actual reference structure changes.
+
+  Rebuild peer artifacts, player shards, index metadata, and cached-player
+  responses from the same source/method generation. Stage and validate artifacts
+  before switching the existing published generation pointer. Ensure stale
+  schema-28 responses cannot masquerade as the new method and mixed-generation
+  refreshes switch all inputs consistently. Retain the prior coherent generation
+  for a rollback supported by the matching application version. This plan does
+  not deploy or publish anything.
+
+6. Acceptance criteria and bounded verification
+
+Required algorithm cases:
+  - PIUScores-only results with no official identity/rank/board dependency;
+    changes to official capture data or Phoenix1 inputs do not change new S/D
+    ratings, targets, or gains with catalog/display annotations held constant.
+  - Exactly 49/50 unique results; duplicate, broken, zero-Pumbility, invalid raw
+    score, missing raw score, removed-chart, and below-16 baseline handling.
+  - Mode independence; inclusive +100/+150/+200 boundaries; all peers in the
+    first successful window; deterministic lower backfill; self exclusion and
+    genuinely small populations.
+  - No per-chart cohort widening or missing-score zero fill; exact raw medians
+    and grade boundaries at 995000, 995000.5, and 1000000. Actual plate medians
+    include all eight plate categories, aliases, odd/even sample sizes, lower
+    middle ties, missing/invalid plate exclusion, and no complete-pair targets.
+    Changing peer plates while holding raw scores constant must affect the
+    selected plate, expected Pumbility, and gain when its ordinal median changes.
+  - Own-chart versus cutoff replacement, positive-gain filtering, deterministic
+    ordering, combined Overall gains, one-mode readiness, and display limits
+    applied after consolidation.
+  - Equivalent mode totals yield the same pure peer selection as Pro, except
+    the account-ID tie-breaker when official ranks differ. Score medians agree
+    on the same samples; General's actual-plate target policy is intentionally
+    separate. Pro rank500/501 and S23/D24 versus S22/D23 boundaries are covered.
+  - A positive-gain S16/D16 candidate and one beyond the old skill window survive
+    Python cache projection, API reads, local TS reads, and UI difficulty filters;
+    an unrated tier annotation does not silently discard an eligible target.
+  - Full build versus persisted-model refresh parity for identical inputs;
+    model serialization round-trip; stale-schema rejection; generation switch.
+  - Existing Top 50 export fields, Co-op, manual rating, tier calculations, and
+    official Pro results retain their existing behavior where touched.
+
+Put focused Python cases in tests/test_general_pumbility.py and extend existing
+integration cases in tests/test_recommendations.py and
+tests/test_clearing_skill_refresh.py. Add/update relevant frontend cases in
+tests/frontend-api.test.ts and tests/pro-recommendations.test.ts as needed.
+Use existing Pro tests to validate extracted shared policy rather than creating
+another unrelated review exercise.
+
+Run the affected Python suites, npm run test:frontend, npm run typecheck, and
+npm run build for the implementation's TS/Next changes. Before writing Next
+code, read the relevant installed node_modules/next/dist/docs guides per AGENTS.
+Check one local ready profile, one insufficient profile, one single-ready-mode
+profile, and one cached refresh. Perform at most one general review pass. Repair
+only a proven regression from this implementation, rerun affected verification,
+and stop once these acceptance criteria pass.
+
+7. Planning evidence, impact, and outstanding items
+
+Three read-only subagent investigations covered the algorithm, current Pro
+criteria, and integration/validation. References above use the current working
+tree, which contains substantial pre-existing changes; implementation must
+preserve those changes rather than reset to HEAD.
+
+A read-only count of the cached Phoenix2 submitted snapshot completed
+2026-10-02T18:35:08Z found 217 Singles accounts and 163 Doubles accounts with at
+least 50 known unique current-catalog nonbroken results; 125 met both thresholds.
+All qualifying accounts also had at least 50 usable integral raw-score values.
+For comparison, 276 Singles and 200 Doubles accounts had at least 30 known
+results. These are historical planning counts, not current live coverage or a
+promise that every cohort/chart has adequate observations. Recompute coverage
+once on the implementation's chosen snapshot and report it with validation.
+
+The 50-result rule intentionally reduces availability relative to the current
+30-result projection requirement. Show usable-history progress and preserve
+known score history; do not silently reinstate the old skill or official
+fallback to conceal insufficient PIUScores evidence.
+
+The original planning pass found no blocker and made no application changes.
+Implementation has since passed the initial 265-test Python batch, focused Pro
+checks, TypeScript checks, a production build, all-player General serialization
+and calculation parity (1064 profiles), and all generated General/Pro public
+contracts. The actual-peer-plate and combined-rank amendments have now been
+rebuilt and verified as recorded in section 9. Unrelated tier test failures found
+during broad checks were reported separately rather than repaired.
+
+8. Combined gain and target-score support ranking (user amendment)
+
+Apply this ordering to every scored-profile recommendation mode in both views.
+Keep each mode's existing viability rules and its full candidate pool. Perform
+the ranking after target construction and active-pool gain calculation, before
+any display limit. Exact difficulty filters retain those global ranks and order;
+they do not rerank a difficulty subset.
+
+Define scoreAtOrAboveTargetCount using actual eligible raw observations:
+  - General Singles/Doubles: count complete same-chart score/plate pairs from
+    the selected mode cohort whose score is >= targetScore. These are the same
+    eligible pairs used by the score and plate target medians.
+  - General Overall: preserve each source mode's target-score count and targets,
+    recompute gains against the combined Top 50, then rank the full combined
+    viable opportunity pool independently.
+  - General Co-op: the existing target ladder has no mode peer cohort. Count
+    other PIUScores accounts' valid nonbroken Phoenix2 scores on that exact
+    chart at or above the selected target, excluding the selected account.
+    Store this population support index privately with the immutable model;
+    do not introduce Phoenix1 observations into the new support model or change
+    Co-op's independent existing goal construction.
+  - Pro Singles/Doubles: count raw official scores from the selected mode cohort
+    at or above that chart's targetScore. Overall preserves those counts and
+    reranks after its combined-pool gains are recalculated.
+
+For a viable list of N charts, use descending competition ranks:
+  gainRank(i) = 1 + count(charts with strictly greater projectedGain)
+  scoreCountRank(i) = 1 + count(charts with strictly greater
+                              scoreAtOrAboveTargetCount)
+  rankScore(i) = gainRank(i) + scoreCountRank(i)
+
+Both components have equal weight. Equal metric values share a rank; do not
+introduce arbitrary differences between equal support counts or equal gains.
+Sort by rankScore ascending, then projectedGain descending, score count
+descending, expected chart Pumbility (or Co-op Rating) descending, case-folded
+song title, and chart ID. Assign recommendationRank=1..N to that final order.
+Expose both component ranks, their sum, final rank, and score count as public
+calculation metadata. The rank sum has no Pumbility or chart-level units.
+
+Use the same source-independent Python ranking helper for General, Co-op and
+Pro. Update TypeScript readers/validators/filtering to preserve the new order;
+they must not silently restore the previous gain-only sort. Include all rank
+overrides in compact Overall references, because an Overall chart's component
+and final ranks can differ from the same chart's source-mode ranks. Preserve
+the explicitly entered manual difficulty route as its existing separate path,
+without fabricated peer counts.
+
+Verification cases:
+  - A smaller-gain chart with stronger target-score support can outrank a
+    higher-gain chart when its combined rank is better.
+  - Equality at the target score counts; a score just below does not.
+  - Equal gains/counts share competition ranks, sums are correct, and final
+    tie-breaking is deterministic and independent of input order.
+  - Counts exclude self and use the declared eligible population; General's
+    target samples require valid actual plates, while Pro retains its policy.
+  - Overall recomputes ranks after gain replacement, compact round-trips retain
+    overrides, and filtering or truncating lists cannot change global ranks.
+  - Co-op counts survive private model serialization, split-mode merging, full
+    builds and individual refreshes, using only Phoenix2 score evidence.
+  - All Recommendations and Pro mode readers accept the new method identities
+    and reject incompatible prior-order artifacts.
+
+9. Completed local implementation and verification
+
+Implemented General v3 with actual paired peer plates and combined-rank sorting,
+private model artifact schema 8 / inner NPZ schema 2, and public schema 29.
+Implemented Pro v8 with Top 500 recipients, S23+/D24+ candidates, and the same
+combined-rank ordering. All recommendation modes rank their full viable pool
+before display limits and retain those ranks through difficulty filtering.
+Co-op goals remain independent; its ranking support is Phoenix2 PIUScores only.
+
+Fresh General capture completed November 28, 2026 at 16:14 JST:
+  1,064 accounts; 4,940 charts; 129,268 best-score records.
+  Final General generation: fa35345bab6ffdca095b.
+  381 Singles, 280 Doubles and 414 Overall profiles meet the mode-history rules.
+  All 1,064 profiles passed persisted-model/direct-build parity, exact rank
+  calculations, Co-op support-count checks, and public data/Top 50 validation.
+
+Pro capture was refreshed November 28 using the latest available mirrored
+official snapshot, November 23 at 02:33 JST. It contains all 1,000 ranked peer
+histories, 226,030 official placements and 387 candidate boards (71 S23 and
+139 D24). Nine unmirrored boards are explicitly unobserved and supply no targets.
+  Final Pro generation:
+    4e36f1509f03e16976f5b908407ecb2303c11f87c18db5829e7bcb5af3796ed7.
+  All 1,493 public profiles passed full-pool rank and response validation.
+  497 are ready, including 196 profiles at overall ranks 301-500.
+  Generated mode lists include 11,471 S23 and 18,175 D24 recommendations.
+
+Verification completed:
+  - 284 affected Python tests passed.
+  - 15 focused General/Pro frontend tests passed; TypeScript and Next production
+    build passed. The full frontend suite has 349 passes and two pre-existing
+    tier source-assertion failures.
+  - Local HTTP checks passed for ready/insufficient/one-ready-mode profiles,
+    Singles/Doubles/Overall/Co-op ranked responses, Overall difficulty slices,
+    player directory, and the retained manual-rating route.
+  - Browser checks confirmed recorded FG/TG/MG targets, support-based changes
+    to gain-only ordering, preserved global ranks after filtering, Co-op support
+    ordering, and rank-500 Pro Overall results containing S23/D24 targets.
+  - Existing tier artifact and Phoenix1 snapshot manifest hashes are unchanged.
+
+No recommender blocker remains. Incidental failures left unchanged:
+  - Frontend: tier labels share Pumbility dispatch and distinguish Scoring
+    interval methods.
+  - Frontend: tier list chart details provide local mode-specific what-if
+    estimates.
+  - Earlier broad API check: test_tier_response_matches_fastapi_dict_contract_exactly
+    in tests/test_api_latency_optimizations.py.
+Existing pandas/Node warnings were not acted on. Nothing was deployed or
+published remotely. The local production server runs at http://127.0.0.1:3000.

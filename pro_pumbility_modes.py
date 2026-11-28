@@ -8,9 +8,11 @@ from typing import Any, Mapping, Sequence
 
 from phoenix2_pumbility import grade_for_score, phoenix2_pumbility
 from pro_pumbility import ProPumbilityError, _cohort, _decimal, _digest, _instant, _official_id, _prepare, projected_target
+from pumbility_peer_policy import linear_median
+from recommendation_ranking import RANKING_METHOD, rank_recommendations
 
 SCHEMA_VERSION = 2
-METHOD = "pro-pumbility-p50-modes-overall-top50-phoenix2-v6"
+METHOD = "pro-pumbility-p50-modes-overall-top50-phoenix2-v8"
 SCOPE = "mode-consolidated"
 MODES = {"singles": "Single", "doubles": "Double"}
 
@@ -18,11 +20,7 @@ MODES = {"singles": "Single", "doubles": "Double"}
 def percentile50(scores: Sequence[int]) -> Decimal:
     if not scores or any(type(score) is not int or not 0 <= score <= 1_000_000 for score in scores):
         raise ProPumbilityError("A q50 target requires valid official scores.")
-    ordered = sorted(scores)
-    position = Decimal(len(ordered) - 1) * Decimal("0.5")
-    lower = int(position)
-    upper = min(lower + 1, len(ordered) - 1)
-    return Decimal(ordered[lower]) + (ordered[upper] - ordered[lower]) * (position - lower)
+    return linear_median(scores)
 
 
 def _sort_key(row: Mapping[str, Any]) -> tuple:
@@ -68,10 +66,10 @@ def consolidate_pro_modes(modes: Mapping[str, Mapping[str, Any]], generation: st
             if gain > 0:
                 overall_rows.append({**row, "projectedGain": gain, "modeProjectedGain": row["projectedGain"],
                                      "replacedPumbility": replacement})
-    return {"kind": "overall-top50", "generation": generation, "baseline": baseline,
+    return {"kind": "overall-top50", "rankingMethod": RANKING_METHOD, "generation": generation, "baseline": baseline,
             "sourceGenerations": {mode: modes[mode]["generation"] for mode in MODES},
             "availableModes": available, "unavailableModes": unavailable,
-            "recommendations": sorted(overall_rows, key=_sort_key)}
+            "recommendations": rank_recommendations(overall_rows)}
 
 
 def _fact(chart: Mapping[str, Any], score: int | float | None, value: float, plate: Any, estimated: bool) -> dict:
@@ -151,7 +149,7 @@ def _mode_indexes(context: Any, profiles: Sequence[Mapping[str, Any]]) -> dict[s
 
 def _build_mode(context: Any, indexes: Mapping[str, Any], subject: Mapping[str, Any] | None,
                 mode: str, generation: str, status: str) -> dict:
-    result = {"mode": mode, "generation": generation, "status": status, "message": None,
+    result = {"mode": mode, "rankingMethod": RANKING_METHOD, "generation": generation, "status": status, "message": None,
               "modePumbility": None, "baseline": None, "cohort": None, "recommendations": [],
               "candidateCount": sum(chart["type"] == MODES[mode] for chart in context.candidates),
               "unobservedChartCount": 0}
@@ -194,15 +192,16 @@ def _build_mode(context: Any, indexes: Mapping[str, Any], subject: Mapping[str, 
             "currentScore": old["score"] if old else None, "currentPumbility": old["pumbility"] if old else None,
             "currentPlate": old["plate"] if old else None, "currentPlateEstimated": bool(old and old["plateEstimated"]),
             "peerScoreCount": len(scores), "cohortPlayerCount": len(peers),
+            "scoreAtOrAboveTargetCount": sum(score >= target["targetScore"] for score in scores),
             "boardPossiblyTruncated": bool(board.get("possiblyTruncated")),
             "limitedData": len(scores) < 10 or bool(board.get("possiblyTruncated"))})
-    result["recommendations"].sort(key=_sort_key)
+    result["recommendations"] = rank_recommendations(result["recommendations"])
     return result
 
 
 def _build(context: Any, indexes: Mapping[str, Any], profile: Mapping[str, Any], generation: str, at: str) -> dict:
     subject = context.by_player.get(_official_id(profile["officialPlayerId"])) if profile.get("officialPlayerId") is not None else None
-    status = "identity-unresolved" if profile.get("officialPlayerId") is None else "ineligible" if subject is None or subject["rank"] > 300 else "ready"
+    status = "identity-unresolved" if profile.get("officialPlayerId") is None else "ineligible" if subject is None or subject["rank"] > 500 else "ready"
     player = {"playerKey": str(profile["playerKey"]), "displayName": str(profile.get("displayName") or profile.get("username") or "Player"),
               "officialDisplayName": subject["gameTag"] if subject else None,
               "overallRank": subject["rank"] if subject else None, "overallPumbility": float(subject["rating"]) if subject else None}
@@ -211,10 +210,10 @@ def _build(context: Any, indexes: Mapping[str, Any], profile: Mapping[str, Any],
     if status == "ready" and not overall["availableModes"]:
         status = "insufficient-data"
     message = ("Link your official Phoenix 2 game tag by importing scores on PIUScores." if status == "identity-unresolved"
-               else "Pro Farming requires official overall rank 1-300." if status == "ineligible" else None)
-    return {"schemaVersion": SCHEMA_VERSION, "method": METHOD, "scope": SCOPE, "mix": "Phoenix2",
+               else "Pro Farming requires official overall rank 1-500." if status == "ineligible" else None)
+    return {"schemaVersion": SCHEMA_VERSION, "method": METHOD, "rankingMethod": RANKING_METHOD, "scope": SCOPE, "mix": "Phoenix2",
             "generation": generation, "snapshotAt": context.snapshot["snapshotAt"], "fetchedAtUtc": context.snapshot["fetchedAtUtc"],
-            "generatedAtUtc": at, "player": player, "eligible": bool(subject and subject["rank"] <= 300),
+            "generatedAtUtc": at, "player": player, "eligible": bool(subject and subject["rank"] <= 500),
             "status": status, "message": message, "modes": modes, "overall": overall}
 
 
@@ -224,7 +223,7 @@ def build_pro_artifacts(snapshot: Mapping[str, Any], profiles: Sequence[Mapping[
     inputs = list(profiles)
     represented = {_official_id(profile["officialPlayerId"]) for profile in inputs if profile.get("officialPlayerId") is not None}
     for subject in context.rankings:
-        if subject["rank"] <= 300 and subject["playerId"] not in represented:
+        if subject["rank"] <= 500 and subject["playerId"] not in represented:
             inputs.append({"mix": "Phoenix2", "playerKey": "op_" + hashlib.sha256(subject["playerId"].encode()).hexdigest(),
                            "displayName": subject["gameTag"] or "Official player", "officialPlayerId": subject["playerId"]})
     keys = [str(profile.get("playerKey") or "") for profile in inputs]
@@ -239,6 +238,6 @@ def build_pro_artifacts(snapshot: Mapping[str, Any], profiles: Sequence[Mapping[
                  for payload in payloads.values()]
     summaries.sort(key=lambda row: (row["overallRank"] or 1_000_000, row["displayName"].casefold(), row["playerKey"]))
     index = {key: value for key, value in next(iter(payloads.values())).items() if key in
-             ("schemaVersion", "method", "scope", "mix", "generation", "snapshotAt", "fetchedAtUtc", "generatedAtUtc")}
+              ("schemaVersion", "method", "rankingMethod", "scope", "mix", "generation", "snapshotAt", "fetchedAtUtc", "generatedAtUtc")}
     index["players"] = summaries
     return index, payloads
