@@ -11,9 +11,8 @@ their highest 50 chart Pumbility contributions, including charts below level 16.
 A mode requires 50 known unique nonbroken results. Valid zero-Pumbility results
 remain known observations; missing results never become empty Top 50 slots.
 
-For a mode total P, select other accounts in [P,P+100], widening to +150 and then
-+200 until at least ten peers are available. Keep every peer in the first
-successful window. Otherwise backfill with the nearest lower totals, breaking
+For a mode total P, select every other account in [P,P+200]. If fewer than
+20 peers qualify, backfill to 20 with the nearest lower totals, breaking
 ties by stable PIUScores account ID. Each chart uses peers with both a valid raw
 score and a recorded plate on that chart. The target uses the score median and
 the lower ordinal median of their actual plates, ordered RG, FG, TG, MG, SG, EG,

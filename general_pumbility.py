@@ -14,12 +14,12 @@ import numpy as np
 
 from phoenix2_pumbility import GRADE_BANDS, PLATE_CODES, grade_for_score, normalize_plate, phoenix2_pumbility
 from pumbility_peer_policy import (
-    decimal_number, linear_median, marginal_gain_cents,
+    decimal_number, linear_median, marginal_gain_cents, normalize_minimum_peers, normalize_peer_windows,
     pumbility_cents, select_pumbility_peers,
 )
 from recommendation_ranking import RANKING_METHOD, rank_recommendations
 
-METHOD = "general-piuscores-p50-modes-overall-top50-phoenix2-v3"
+METHOD = "general-piuscores-p50-modes-overall-top50-phoenix2-v4"
 MODEL_SCHEMA_VERSION = 2
 TOP_COUNT = 50
 MINIMUM_LEVEL = 16
@@ -162,11 +162,14 @@ class GeneralPumbilityModel:
 
     def __init__(self, charts: Mapping[str, Mapping[str, Any]], facts: Mapping[str, Mapping[str, Mapping[str, Any]]], *,
                  source_timestamp: str | None = None, mode_types: Sequence[str] = ("Single", "Double"),
-                 support_scores: Mapping[str, Mapping[str, int]] | None = None):
+                 support_scores: Mapping[str, Mapping[str, int]] | None = None,
+                 peer_windows: Sequence[int] = (200,), minimum_peers: int = 20):
         self.charts = {str(key): dict(value) for key, value in charts.items()}
         self.facts = {str(player): {str(cid): dict(row) for cid, row in rows.items()} for player, rows in facts.items()}
         self.source_timestamp = source_timestamp
         self.mode_types = tuple(kind for kind in MODES.values() if kind in mode_types)
+        self.peer_windows = normalize_peer_windows(peer_windows)
+        self.minimum_peers = normalize_minimum_peers(minimum_peers)
         self._ratings: dict[str, list[dict[str, Any]]] = {mode: [] for mode in MODES}
         self._scores: dict[str, dict[str, tuple[int, str | None]]] = {}
         for player_id, rows in self.facts.items():
@@ -185,21 +188,23 @@ class GeneralPumbilityModel:
                                 {cid: {pid: observation[0] for pid, observation in values.items()} for cid, values in self._scores.items()})
 
     @classmethod
-    def from_snapshot(cls, snapshot: Mapping[str, Any], *, mode_types: Sequence[str] = ("Single", "Double")) -> "GeneralPumbilityModel":
+    def from_snapshot(cls, snapshot: Mapping[str, Any], *, mode_types: Sequence[str] = ("Single", "Double"),
+                      peer_windows: Sequence[int] = (200,), minimum_peers: int = 20) -> "GeneralPumbilityModel":
         if snapshot.get("mix", "Phoenix2") != "Phoenix2":
             raise ValueError("General Pumbility requires submitted Phoenix2 scores.")
         charts = _catalog(snapshot.get("charts", []), mode_types)
         support_chart_ids = set(_catalog(snapshot.get("charts", []), ("Single", "Double", "CoOp")))
         timestamp = next((snapshot.get(key) for key in ("completedAtUtc", "generatedAtUtc", "fetchedAtUtc", "snapshotAt") if snapshot.get(key)), None)
         return cls(charts, _facts(snapshot.get("scores", []), charts), source_timestamp=timestamp, mode_types=mode_types,
-                   support_scores=_raw_score_support(snapshot.get("scores", []), support_chart_ids))
+                   support_scores=_raw_score_support(snapshot.get("scores", []), support_chart_ids),
+                   peer_windows=peer_windows, minimum_peers=minimum_peers)
 
     @property
     def metadata(self) -> dict[str, Any]:
         return {"id": METHOD, "method": METHOD, "skillMethod": METHOD, "skillSource": "piuscores-submitted", "mix": "Phoenix2",
                 "modelSchemaVersion": MODEL_SCHEMA_VERSION, "skillMetric": "mode-top50-pumbility",
                 "requiredScoreCount": TOP_COUNT, "topPumbilityCount": TOP_COUNT, "minimumLevel": MINIMUM_LEVEL,
-                "peerWindows": [100, 150, 200], "minimumPeers": 10, "peerQuantile": 0.5,
+                "peerWindows": list(self.peer_windows), "minimumPeers": self.minimum_peers, "peerQuantile": 0.5,
                 "targetObservationPolicy": "paired-valid-score-and-recorded-plate",
                 "plateProjection": "lower-ordinal-median-of-paired-peer-plates",
                 "rankingMethod": RANKING_METHOD,
@@ -228,9 +233,15 @@ class GeneralPumbilityModel:
             raise ValueError("No General Pumbility model parts were supplied.")
         charts, facts, kinds, support = {}, {}, set(), {}
         timestamp = models[0].source_timestamp
+        peer_windows = models[0].peer_windows
+        minimum_peers = models[0].minimum_peers
         for model in models:
             if model.source_timestamp != timestamp:
                 raise ValueError("General model parts have different source timestamps.")
+            if model.peer_windows != peer_windows:
+                raise ValueError("General model parts have different peer window policies.")
+            if model.minimum_peers != minimum_peers:
+                raise ValueError("General model parts have different minimum peer policies.")
             kinds.update(model.mode_types)
             for cid, chart in model.charts.items():
                 if cid in charts and charts[cid] != chart:
@@ -248,7 +259,8 @@ class GeneralPumbilityModel:
                     if pid in target and target[pid] != score:
                         raise ValueError("General model parts disagree on raw support scores.")
                     target[pid] = score
-        return cls(charts, facts, source_timestamp=timestamp, mode_types=tuple(kinds), support_scores=support)
+        return cls(charts, facts, source_timestamp=timestamp, mode_types=tuple(kinds), support_scores=support,
+                   peer_windows=peer_windows, minimum_peers=minimum_peers)
 
     def to_npz_bytes(self) -> bytes:
         players, chart_ids = sorted(self.facts), sorted(self.charts)
@@ -260,7 +272,8 @@ class GeneralPumbilityModel:
                 plates.append(fact["plate"] or "")
                 dates.append(fact["recordedAt"])
         header = {"schemaVersion": MODEL_SCHEMA_VERSION, "method": METHOD, "sourceTimestamp": self.source_timestamp,
-                  "modeTypes": list(self.mode_types), "charts": [self.charts[cid] for cid in chart_ids]}
+                  "modeTypes": list(self.mode_types), "peerWindows": list(self.peer_windows), "minimumPeers": self.minimum_peers,
+                  "charts": [self.charts[cid] for cid in chart_ids]}
         encoded = json.dumps(_safe(header), ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         support_players = sorted({pid for scores in self._support_scores.values() for pid in scores})
         support_charts = sorted(self._support_scores)
@@ -310,7 +323,9 @@ class GeneralPumbilityModel:
                     support.setdefault(support_charts[ci], {})[support_players[pi]] = score
         except (KeyError, TypeError, IndexError, OSError, json.JSONDecodeError) as exc:
             raise ValueError("Invalid General Pumbility model artifact.") from exc
-        return cls(charts, facts, source_timestamp=header.get("sourceTimestamp"), mode_types=header["modeTypes"], support_scores=support)
+        return cls(charts, facts, source_timestamp=header.get("sourceTimestamp"), mode_types=header["modeTypes"],
+                   support_scores=support, peer_windows=header.get("peerWindows", (100, 150, 200)),
+                   minimum_peers=header.get("minimumPeers", 10))
 
     def build_player(self, player_id: Any, *, scores: Sequence[Mapping[str, Any]] | None = None,
                      chart_annotations: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
@@ -334,7 +349,8 @@ class GeneralPumbilityModel:
             missing_plate_count = 0
             if base["eligible"]:
                 peers, cohort = select_pumbility_peers(self._ratings[mode],
-                    {"playerId": player_id, "rating": Decimal(sum(row["cents"] for row in ordered[:TOP_COUNT])) / 100})
+                    {"playerId": player_id, "rating": Decimal(sum(row["cents"] for row in ordered[:TOP_COUNT])) / 100},
+                    upward_windows=self.peer_windows, minimum_peers=self.minimum_peers)
                 peer_ids = {row["playerId"] for row in peers}
                 top = {row["chartId"]: row["cents"] for row in ordered[:TOP_COUNT]}
                 cutoff = ordered[TOP_COUNT - 1]["cents"]

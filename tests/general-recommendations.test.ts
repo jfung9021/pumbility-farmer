@@ -53,8 +53,8 @@ function mode(candidates: RecommendationChart[], count = 50): RecommendationMode
     currentTop50Pumbility: 20_000, currentTop50Count: Math.min(count, 50),
     topScores: [], topRecommendations: ranked, filterCandidates: ranked,
     candidateCount: candidates.length,
-    cohort: { minimumPlayers: 10, upwardWindow: 100, backfillCount: 0,
-      playerCount: 10, limitedData: false },
+    cohort: { minimumPlayers: 20, upwardWindow: 200, backfillCount: 0,
+      playerCount: 20, limitedData: false },
   };
 }
 
@@ -105,7 +105,7 @@ test("local General projection preserves full candidates and distinct Overall ga
   overall.sourceModeEligibility = { singles: true, doubles: false };
   const player: RecommendationPlayer = { playerKey: "opaque", username: "Test", displayName: "Test",
     modes: { singles, doubles, overall } };
-  const index = { schemaVersion: 29, generatedAtUtc: "2026-11-28T00:00:00Z", method: {},
+  const index = { schemaVersion: 30, generatedAtUtc: "2026-11-28T00:00:00Z", method: {},
     charts: candidates, players: [player] };
   const response = recommendationsForPlayer(index, "opaque");
   assert.ok(response);
@@ -160,10 +160,10 @@ test("schema 29 retains known Pumbility history without a fabricated raw score o
     rankScore: _rankScore, recommendationRank: _recommendationRank,
     ...publicTopScore } = topScore as RecommendationTopScore & RecommendationChart;
   const singles = { ...mode([candidate]), topScores: [publicTopScore] };
-  const payload = { schemaVersion: 29, generatedAtUtc: "2026-11-28T00:00:00Z", method: {},
+  const payload = { schemaVersion: 30, generatedAtUtc: "2026-11-28T00:00:00Z", method: {},
     charts: [candidate], players: [{ playerKey: "opaque", username: "Test", displayName: "Test",
       modes: { singles, doubles: mode([], 49) } }] };
-  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 29);
+  assert.equal(validateLocalRecommendationIndex(payload).schemaVersion, 30);
   const invalidRank = structuredClone(payload);
   invalidRank.players[0].modes.singles.topRecommendations[0].rankScore = 3;
   assert.throws(() => validateLocalRecommendationIndex(invalidRank));
@@ -175,7 +175,7 @@ test("schema 29 retains known Pumbility history without a fabricated raw score o
 
 test("sharded General index includes public chart annotations for the manual difficulty route", () => {
   const annotation = { ...chart("manual-chart", 20), estimatedDifficulty: 19.5 };
-  const index = { schemaVersion: 29, storageSchemaVersion: 2,
+  const index = { schemaVersion: 30, storageSchemaVersion: 2,
     generationKey: "a".repeat(20), generatedAtUtc: "2026-11-28T00:00:00Z",
     method: { skillMethod: GENERAL_PUMBILITY_METHOD }, charts: [annotation],
     players: [{ playerKey: "opaque", username: "Test", displayName: "Test", shard: 0,

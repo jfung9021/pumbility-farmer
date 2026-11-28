@@ -10,6 +10,19 @@ MINIMUM_PEERS = 10
 UPWARD_WINDOWS = (100, 150, 200)
 
 
+def normalize_peer_windows(values: Sequence[int]) -> tuple[int, ...]:
+    windows = tuple(values)
+    if not windows or any(type(value) is not int or value <= 0 for value in windows) or any(left >= right for left, right in zip(windows, windows[1:])):
+        raise ValueError("Peer windows must be positive, strictly increasing integers.")
+    return windows
+
+
+def normalize_minimum_peers(value: int) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError("The minimum peer count must be a positive integer.")
+    return value
+
+
 def decimal_number(value: Any) -> Decimal | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -30,30 +43,34 @@ def pumbility_cents(value: Any) -> int | None:
 def select_pumbility_peers(
     rows: Sequence[Mapping[str, Any]], subject: Mapping[str, Any], *,
     tie_key: Callable[[Mapping[str, Any]], Any] | None = None,
+    upward_windows: Sequence[int] = UPWARD_WINDOWS,
+    minimum_peers: int = MINIMUM_PEERS,
 ) -> tuple[list[Mapping[str, Any]], dict[str, Any]]:
     """Choose one upward-window cohort, then the nearest lower-rated backfill."""
     rating, player_id = subject["rating"], subject["playerId"]
+    windows = normalize_peer_windows(upward_windows)
+    minimum_peers = normalize_minimum_peers(minimum_peers)
     tie_key = tie_key or (lambda row: str(row["playerId"]))
     peers: list[Mapping[str, Any]] = []
-    window = UPWARD_WINDOWS[-1]
-    for window in UPWARD_WINDOWS:
+    window = windows[-1]
+    for window in windows:
         peers = [row for row in rows if row["playerId"] != player_id
                  and rating <= row["rating"] <= rating + window]
-        if len(peers) >= MINIMUM_PEERS:
+        if len(peers) >= minimum_peers:
             break
     backfill_count = 0
-    if len(peers) < MINIMUM_PEERS:
+    if len(peers) < minimum_peers:
         lower = sorted((row for row in rows if row["playerId"] != player_id and row["rating"] < rating),
                        key=lambda row: (-row["rating"], tie_key(row)))
-        addition = lower[:MINIMUM_PEERS - len(peers)]
+        addition = lower[:minimum_peers - len(peers)]
         peers.extend(addition)
         backfill_count = len(addition)
     values = [row["rating"] for row in peers]
-    return peers, {"minimumPlayers": MINIMUM_PEERS, "upwardWindow": window,
+    return peers, {"minimumPlayers": minimum_peers, "upwardWindow": window,
                    "backfillCount": backfill_count, "playerCount": len(peers),
                    "minimumPumbility": float(min(values)) if values else None,
                    "maximumPumbility": float(max(values)) if values else None,
-                   "limitedData": len(peers) < MINIMUM_PEERS}
+                   "limitedData": len(peers) < minimum_peers}
 
 
 def linear_median(scores: Sequence[int]) -> Decimal:

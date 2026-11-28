@@ -10,7 +10,7 @@ export const ALL_DIFFICULTIES = "All";
 export const RECOMMENDATION_DISPLAY_COUNT = 50;
 export const MIN_RECOMMENDATION_LEVEL = 16;
 export const RECOMMENDATION_OFFICIAL_LEVEL_RADIUS = 2;
-export const GENERAL_PUMBILITY_METHOD = "general-piuscores-p50-modes-overall-top50-phoenix2-v3";
+export const GENERAL_PUMBILITY_METHOD = "general-piuscores-p50-modes-overall-top50-phoenix2-v4";
 export const RECOMMENDATION_RANKING_METHOD = "equal-weight-gain-and-target-score-count-competition-ranks-v1";
 
 export function isGeneralPumbilityMode(mode: RecommendationModeResult | null | undefined): boolean {
